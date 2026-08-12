@@ -370,3 +370,66 @@ test('a failed boot recovery warns once and releases the capture gate', async ()
   assert.equal(session.title, 'Still usable', 'recovery failure does not deadlock later capture calls');
   assert.deepEqual(warnings, ['[meetings] capture recovery failed: record reconciliation failed']);
 });
+
+/**
+ * D6 — the retention window over the wire.
+ *
+ * The store's own rules are driven in `meetingCapture.test.ts`; what these ask
+ * is whether the WIRE carries them: does the renderer see the window in force,
+ * does changing it delete on the spot rather than at the next launch, and does
+ * the sweep that runs before an offer refuse a capture this process is writing.
+ */
+test('D6 — the window is readable, settable, and the setting sweeps immediately', async () => {
+  const harness = wire();
+  const window = harness.window('wr-only');
+  const read = await harness.call(window, 'meetings:retentionRead') as { days: number; choices: number[]; description: string };
+  assert.equal(read.days, 30);
+  assert.ok(read.choices.includes(7));
+  assert.match(read.description, /30 days/);
+
+  // One abandoned capture, older than the window about to be chosen.
+  const abandoned = await harness.store.begin({ scope: { orgId: null }, title: 'Abandoned' });
+  await harness.store.writeSegment(abandoned.id, 0, new Uint8Array([1, 2, 3]));
+  await harness.store.persist({ ...abandoned, startedAt: '2020-01-01T00:00:00.000Z' });
+
+  const written = await harness.call(window, 'meetings:retentionWrite', 7) as { days: number; deleted: number; description: string };
+  assert.equal(written.days, 7);
+  assert.equal(written.deleted, 1, 'a shortened window deletes now, not at the next launch');
+  assert.match(written.description, /7 days/);
+  assert.equal(fs.existsSync(captureDirectory(harness.home, abandoned.id)), false);
+  // The offer every window is rendering just got shorter, so they are told.
+  assert.ok(harness.published.includes(MEETING_CAPTURE_WRITERS_CHANNEL));
+  // …and it is what the next read reports, from the store rather than from memory.
+  assert.equal((await harness.call(window, 'meetings:retentionRead') as { days: number }).days, 7);
+});
+
+test('D6 — a window out of range is clamped on the way in', async () => {
+  const harness = wire();
+  const window = harness.window('wr-only');
+  assert.equal((await harness.call(window, 'meetings:retentionWrite', 99_999) as { days: number }).days, 365);
+  assert.equal((await harness.call(window, 'meetings:retentionWrite', -4) as { days: number }).days, 1);
+  assert.equal((await harness.call(window, 'meetings:retentionWrite', 'soon') as { days: number }).days, 30);
+});
+
+test('D6 — the sweep before an offer cannot delete the capture this window is recording', async () => {
+  const harness = wire();
+  const window = harness.window('wr-live');
+  const live = await record(harness, window);
+  await harness.call(window, 'meetings:captureAppend', live.id, new Uint8Array([1, 2, 3]), 3_000);
+  // Aged past every window, while the microphone is still open on it.
+  const held = await harness.store.stored(live.id);
+  await harness.store.persist({ ...held.session, startedAt: '2020-01-01T00:00:00.000Z' });
+  await harness.call(window, 'meetings:retentionWrite', 1);
+
+  assert.ok(fs.existsSync(captureDirectory(harness.home, live.id)), 'liveness comes from the process, and the process is writing');
+  // The offer, which sweeps before it answers, leaves it alone too — and does
+  // not offer a recording in progress back to anyone.
+  const offers = await harness.call(window, 'meetings:captureResumable', { orgId: null }) as { sessionId: string }[];
+  assert.deepEqual(offers.map((offer) => offer.sessionId), []);
+  assert.ok(fs.existsSync(captureDirectory(harness.home, live.id)));
+
+  // Once that window is gone, the same capture is exactly what the sweep is for.
+  window.destroy();
+  await harness.call(harness.window('wr-next'), 'meetings:captureResumable', { orgId: null });
+  assert.equal(fs.existsSync(captureDirectory(harness.home, live.id)), false);
+});

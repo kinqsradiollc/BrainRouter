@@ -767,3 +767,80 @@ test('the boot pass leaves a capture that is being recorded into exactly as it f
   assert.deepEqual(corrected.reaped, [arming.id]);
   assert.equal((await record(next, live.id)).status, 'stopped');
 });
+
+/**
+ * D6's third deletion trigger — the retention window.
+ *
+ * The other two are transitions a person makes, so they are exercised above by
+ * pressing them. This one runs unattended, which is why the tests below are
+ * mostly about what it must REFUSE: a capture somebody is recording into, a
+ * record it cannot read, and a window a torn settings file supplied.
+ */
+test('D6 — a capture nobody filed is deleted once it has outlived the window', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const old = await store.begin({ scope: { orgId: null }, title: 'Abandoned' });
+  await append(store, old.id, new Uint8Array([1, 2]), 20_000);
+  const young = await store.begin({ scope: { orgId: null }, title: 'Yesterday' });
+  await append(store, young.id, new Uint8Array([3, 4]), 20_000);
+  const day = 86_400_000;
+  const now = Date.now();
+  await store.persist({ ...(await record(store, old.id)), startedAt: new Date(now - 40 * day).toISOString() });
+  await store.persist({ ...(await record(store, young.id)), startedAt: new Date(now - 1 * day).toISOString() });
+
+  const deleted = await store.sweepExpired({ days: 30, nowMs: now });
+
+  assert.deepEqual(deleted, [old.id]);
+  // D6 asks for a real deletion: the directory and the audio in it, not a flag.
+  assert.equal(fs.existsSync(path.join(captureRoot(home), old.id)), false);
+  assert.ok(fs.existsSync(path.join(captureRoot(home), young.id)));
+  assert.deepEqual((await store.resumable()).map((offer) => offer.sessionId), [young.id]);
+});
+
+test('D6 — the sweep never deletes a capture a window is recording into', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const live = await store.begin({ scope: { orgId: null }, title: 'Still going' });
+  await append(store, live.id, new Uint8Array([1, 2]), 20_000);
+  await store.persist({ ...(await record(store, live.id)), startedAt: '2020-01-01T00:00:00.000Z' });
+
+  assert.deepEqual(await store.sweepExpired({ days: 1, isWriting: (id) => id === live.id }), []);
+  assert.ok(fs.existsSync(path.join(captureRoot(home), live.id)));
+  // …and the same capture with nobody recording is exactly what the pass is for,
+  // so the guard cannot be "never delete anything".
+  assert.deepEqual(await store.sweepExpired({ days: 1 }), [live.id]);
+});
+
+test('D6 — a record the sweep cannot read is not authority to delete its audio', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const torn = await store.begin({ scope: { orgId: null }, title: 'Torn' });
+  await append(store, torn.id, new Uint8Array([1, 2]), 20_000);
+  fs.writeFileSync(path.join(captureRoot(home), torn.id, 'session.json'), '{ not json');
+
+  assert.deepEqual(await store.sweepExpired({ days: 1 }), []);
+  assert.ok(fs.existsSync(path.join(captureRoot(home), torn.id)), 'a damaged record is quarantined, not reaped by the clock');
+});
+
+test('D6 — the window is stored, clamped, and survives a torn settings file', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  assert.equal(await store.retentionDays(), 30, 'the default the ADR names');
+  assert.equal(await store.setRetentionDays(7), 7);
+  assert.equal(await new MeetingCaptureStore(home).retentionDays(), 7, 'and it is what the next launch sweeps by');
+  assert.equal(await store.setRetentionDays(5_000), 365);
+  assert.equal(await store.setRetentionDays(0), 1);
+
+  fs.writeFileSync(path.join(captureRoot(home), 'retention.json'), 'not json at all');
+  assert.equal(await store.retentionDays(), 30, 'a window nobody can read is the default, never "delete everything"');
+});
+
+test('D6 — the stored window is written 0600 inside the 0700 capture directory', { skip: !POSIX }, async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  await store.setRetentionDays(14);
+  const file = path.join(captureRoot(home), 'retention.json');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(captureRoot(home)).mode & 0o777, 0o700);
+  assert.deepEqual(fs.readdirSync(captureRoot(home)).filter((entry) => entry.endsWith('.tmp')), [], 'and nothing half-written is left behind');
+});

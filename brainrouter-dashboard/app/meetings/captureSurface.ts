@@ -97,7 +97,10 @@ import {
   finalizeCapture,
   foldTranscript,
   initializationSegmentLength,
+  isEscrowWorthKeeping,
+  MEETING_RETENTION_DEFAULT_DAYS,
   MEETING_TRANSCRIPTION_LATENCY_MODES,
+  normalizeCaptureEscrow,
   reconcileCaptureDraft,
   reduceStreamingTranscript,
   sealDueUnits,
@@ -107,6 +110,7 @@ import {
   stopCapture,
   unitPolicyFor,
   unsettledSegments,
+  type MeetingCaptureEscrow,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
   type MeetingDrainPhase,
@@ -139,6 +143,12 @@ import {
   type ResumableCapture,
 } from "../../lib/meetings/capturePayload";
 import { createCaptureQueue, DEFAULT_CAPTURE_MIME_TYPE, type SegmentTranscriber } from "../../lib/meetings/captureQueue";
+import {
+  isReservedCaptureId,
+  readCaptureRetentionDays,
+  sweepExpiredCaptures,
+  writeCaptureRetentionDays,
+} from "../../lib/meetings/captureRetention";
 import { newCaptureSessionId, type CaptureChunkRef } from "../../lib/meetings/captureStorage";
 import { MEETING_CAPTURE_TIMESLICE_MS, type CaptureSessionRecord, type MeetingCaptureStore } from "../../lib/meetings/captureStore";
 import {
@@ -152,7 +162,7 @@ import {
   type MeetingDraft,
 } from "../../lib/meetings/meetingDraft";
 import { captureFallbackNotice, type OpenedCaptureStore } from "../../lib/meetings/openCaptureStore";
-import { isStorageQuotaError } from "../../lib/meetings/storageBudget";
+import { describeCapturePromise, isStorageQuotaError } from "../../lib/meetings/storageBudget";
 
 export const CAPTURE_TEMPLATES: readonly MeetingCaptureTemplate[] = ["general", "standup", "one-on-one", "retrospective"];
 
@@ -314,6 +324,8 @@ export interface CaptureSurfacePorts {
   openStream(request: CaptureStreamRequest): Promise<CaptureStream>;
   createTranscriber(language: string | undefined): SegmentTranscriber;
   createMeeting(input: CreateMeetingInput): Promise<{ readonly id: string }>;
+  /** ADR-035 D11 — where the transcript goes so an evicted origin cannot lose it. */
+  escrow: CaptureEscrowPort;
   /** D8 — the import path, which really can be handed an hour of audio in one piece. */
   transcribeFile(blob: Blob, language: string): Promise<string>;
   legacyDraftStorage(): LegacyDraftStorage | null;
@@ -327,6 +339,32 @@ export interface CaptureSurfacePorts {
   /** Whether the page is running something of its own — the submit guard reads it. */
   otherBusy(): boolean;
   onCreated(meetingId: string): void;
+}
+
+/**
+ * ADR-035 D11 — the server's copy of a capture that is still being made.
+ *
+ * Three calls and no state: the surface decides WHEN to push, WHAT the record
+ * is and what a failure means, so this port cannot quietly become a second
+ * opinion about any of them. Every call takes the workspace explicitly rather
+ * than reading the switcher, because a push belongs to the recording's frozen
+ * one and a read belongs to the one being looked at.
+ */
+export interface CaptureEscrowPort {
+  put(record: MeetingCaptureEscrow, orgId: string): Promise<void>;
+  list(orgId: string): Promise<readonly MeetingCaptureEscrow[]>;
+  remove(sessionId: string, orgId: string): Promise<void>;
+}
+
+/** One server-held capture, with the workspace it was listed under. */
+export interface EscrowedCapture {
+  readonly capture: MeetingCaptureEscrow;
+  /**
+   * Carried rather than re-read at the click: ADR-019's switcher can move
+   * between the list and the Restore, and a delete sent to the workspace that
+   * happens to be selected then would either miss or reach somebody else's.
+   */
+  readonly orgId: string;
 }
 
 export type CaptureBusy = "" | "transcribe" | "preview" | "create";
@@ -459,6 +497,43 @@ export interface CaptureSurfaceState {
   readonly recoveryError: string;
   readonly retained: readonly RetainedAudio[];
   readonly preview: CapturePreview | null;
+  /**
+   * ADR-035 D6 — the window after which audio nobody filed is deleted from this
+   * origin, in whole days.
+   *
+   * Read from the store at `init` and re-read after every change, so the number
+   * on screen is the number the sweep will use rather than a default the surface
+   * assumed. The SENTENCE beside it is `describeMeetingRetention`'s, shared with
+   * the desktop: two hosts wording one policy differently is how they come to
+   * enforce two.
+   */
+  readonly retentionDays: number;
+  /**
+   * ADR-035 D11 — captures the SERVER is holding that this device cannot offer.
+   *
+   * Empty is the ordinary answer: a capture still on this device is offered from
+   * the device, because that offer has the audio behind it. These are the ones
+   * whose local copy is gone — an evicted origin, a cleared browser, another
+   * machine — which is precisely the case D11 exists for.
+   */
+  readonly escrowed: readonly EscrowedCapture[];
+  /**
+   * D11 / ADR-028 — WHICH durability promise this recording has, in a sentence.
+   *
+   * A standing line, not an alert: "persisted" and "best-effort" are different
+   * guarantees and the surface used to show the same face for both. Empty until
+   * a store has been opened, because before that there is nothing true to say.
+   */
+  readonly durability: string;
+  /**
+   * D6 — what the last sweep deleted, so the setting is an event and not a
+   * claim.
+   *
+   * Zero for "nothing was old enough", which is the ordinary answer and is why
+   * this is a count rather than a message: the surface says "3 recordings were
+   * deleted" only when three were.
+   */
+  readonly retentionSwept: number;
 }
 
 const EMPTY_STATE: CaptureSurfaceState = {
@@ -491,6 +566,10 @@ const EMPTY_STATE: CaptureSurfaceState = {
   recoveryError: "",
   retained: [],
   preview: null,
+  retentionDays: MEETING_RETENTION_DEFAULT_DAYS,
+  escrowed: [],
+  durability: "",
+  retentionSwept: 0,
 };
 
 /** How long a keystroke waits before the draft is written down. */
@@ -526,6 +605,27 @@ const DISCARD_QUESTION = "Discard this unfinished recording? Its audio is delete
  */
 const DISCARD_HELD_QUESTION =
   "Discard this recording? Its audio is deleted from this device, and the title and transcript in this box are cleared with it.";
+
+/**
+ * ADR-035 D11 — and the question for a capture only the SERVER still has.
+ *
+ * Its own sentence because the consequence is different in the one way that
+ * matters: the device's rows can be discarded knowing the words are also held on
+ * the server, and this one is the last copy there is.
+ */
+const DISCARD_ESCROWED_QUESTION =
+  "Delete this unfinished recording from the server? Its transcript is the only copy left — this device no longer has the audio.";
+
+/**
+ * D11 — the least time between two pushes of one capture to the server.
+ *
+ * Five seconds: short enough that a kill costs a sentence rather than a meeting,
+ * long enough that a streaming transcript committing an utterance a second does
+ * not turn into a request a second. It is a throttle and not a debounce, so the
+ * FIRST change of a quiet period goes immediately and this only bounds the ones
+ * behind it.
+ */
+const ESCROW_PUSH_INTERVAL_MS = 5_000;
 
 /**
  * ADR-035 D10 / golden rule 23 — the sentences that say WHICH transcription path
@@ -750,6 +850,29 @@ export class MeetingCaptureSurface {
 
   #previewRef: { readonly sessionId: string; readonly url: string } | null = null;
 
+  /**
+   * ADR-035 D11 — the state of the SERVER's copy of the capture in hand.
+   *
+   * `at` is when the last push started, `busy` whether one is in flight, `again`
+   * whether the transcript moved while it was, and `ok` what the last attempt
+   * proved: `null` before anything has been tried, `false` for a server that
+   * refused or could not be reached. That last one is not bookkeeping — it is
+   * the difference between the two promises D11 says the surface must
+   * distinguish, and `#durability` is the sentence it becomes.
+   */
+  #escrow: { at: number; busy: boolean; again: boolean; ok: boolean | null } = { at: 0, busy: false, again: false, ok: null };
+
+  #escrowTimer: number | null = null;
+
+  /**
+   * A capture RESTORED from the server, which this tab has no audio for.
+   *
+   * Held because the create path releases what it filed, and there is nothing
+   * local to release: the row on the server is the only thing left to delete
+   * when the meeting exists, and the id it is filed under is not `#queue`'s.
+   */
+  #restored: { readonly sessionId: string; readonly orgId: string } | null = null;
+
   /** The settle in flight, so `dispose` can wait for the recording to finish landing. */
   #finishing: Promise<void> | null = null;
 
@@ -859,6 +982,7 @@ export class MeetingCaptureSurface {
     // draft has not been tested.
     this.#disposed = false;
     let draft: MeetingDraft | null = null;
+    let retentionDays = this.#state.retentionDays;
     try {
       const storage = this.#ports.legacyDraftStorage();
       if (storage) draft = takeLegacyMeetingDraft(storage);
@@ -872,6 +996,12 @@ export class MeetingCaptureSurface {
         const stored = await readMeetingDraft(store);
         draft = isEmptyMeetingDraft(stored) ? null : stored;
       }
+      // D6 — the window in force, read from the store rather than assumed. It
+      // shares this try with the draft because both are records in the same
+      // store and neither is a reason to fail the page: a window we cannot read
+      // leaves the shared default on screen, which is also the one the sweep
+      // will use, so the control and the deletion still agree.
+      retentionDays = await readCaptureRetentionDays(store);
     } catch {
       // No durable store here; there is simply no draft to restore.
     }
@@ -891,6 +1021,7 @@ export class MeetingCaptureSurface {
       language: this.#state.language,
       template: this.#state.template,
     };
+    this.#patch({ retentionDays });
     if (draft && isEmptyMeetingDraft(box)) {
       this.#patch({
         ...(draft.title ? { title: draft.title } : {}),
@@ -1464,6 +1595,14 @@ export class MeetingCaptureSurface {
     // chunk or a hundred — leaves this tab's hands right here, exactly as it
     // used to. One that is not finished waits for the drain below.
     this.#handBackIfQuiet();
+    // D11 — forced, not scheduled. Stop is the moment the throttle above is
+    // exactly wrong about: nothing else is coming to trigger the trailing push,
+    // and what it is holding is the end of the meeting.
+    if (this.#escrowTimer !== null) {
+      this.#ports.clearTimer(this.#escrowTimer);
+      this.#escrowTimer = null;
+    }
+    await this.#pushEscrow();
     await this.refreshRecoverable();
     // Transcription continues out here, with the Create guard released: the
     // audio is on the device and that guard's sentence has stopped being true.
@@ -1978,6 +2117,12 @@ export class MeetingCaptureSurface {
   #publishSession(session: MeetingCaptureSession): void {
     this.#patch({ session });
     this.#compose();
+    // D11 — every change to the session is a change to what the server should be
+    // holding: a settled segment, a stated gap, a committed stream checkpoint.
+    // Hooked here rather than at each of those call sites so a new one cannot be
+    // added without the escrow following it, which is how the browser's copy
+    // would silently become the only one again.
+    this.#scheduleEscrow();
   }
 
   /** D5 — a person can see this gap and is asking for it again, bound or no bound. */
@@ -2020,6 +2165,10 @@ export class MeetingCaptureSurface {
       // No durable store here, or none we could open. This is NOT "there is
       // nothing to recover": audio already written is still written.
       this.#patch({ recoveryError: `Recordings saved on this device could not be checked — ${describe(caught, "this browser would not open its durable store.")}` });
+      // D11 — and this is the case the server's copy exists for. A browser with
+      // no durable store at all is the extreme of the one D11 describes, so the
+      // escrow is read here rather than skipped along with everything else.
+      await this.#refreshEscrowed([]);
       return;
     }
     let records: readonly CaptureSessionRecord[];
@@ -2027,12 +2176,58 @@ export class MeetingCaptureSurface {
       records = await store.list();
     } catch (caught) {
       this.#patch({ recoveryError: `Recordings saved on this device could not be checked — ${describe(caught, "the capture store did not answer.")} Any audio already written is still there.` });
+      await this.#refreshEscrowed([]);
       return;
     }
     // The live set comes from the BROWSER, not from this tab's memory and not
     // from the records: a second tab's recording is invisible to both, and the
     // lock table is the one place every tab of this origin agrees.
     const writers = await this.#ports.locks.writers();
+    // D6 — the retention sweep, BEFORE the offer is computed and before the
+    // reap. Before the offer because this is the one moment an expired capture
+    // would otherwise be put back in front of somebody, and an offer listing a
+    // recording the policy has already condemned is a surface disagreeing with
+    // the store about what exists. Before the reap because the reap is about
+    // what a directory CONTAINS and this is about how old it is: a capture that
+    // is both can be deleted once, by whichever pass gets there first, and this
+    // one has the more specific reason to log.
+    //
+    // Its own try, like the reap's: a sweep that could not run must not be
+    // reported as an empty device, and the audio it did not delete is still
+    // there to be swept on the next pass.
+    let swept: readonly string[] = [];
+    let retentionDays = this.#state.retentionDays;
+    try {
+      // Read from the STORE on every pass, never from the published state. Two
+      // reasons and both are deletions: this can run before `init` has restored
+      // the window, so a person who chose a year would have their audio swept at
+      // the default thirty days; and the setting is origin-wide, so a second tab
+      // that lengthened it is the current policy for this one.
+      retentionDays = await readCaptureRetentionDays(store);
+      swept = await sweepExpiredCaptures(store, records, {
+        nowMs: this.#ports.now(),
+        days: retentionDays,
+        keep: [...(active ? [active] : []), ...writers.ids],
+        // Asked again, of the BROWSER, immediately before each delete. An
+        // unknown answer spares the capture: a browser with no Web Locks cannot
+        // tell a killed tab from a live recording, and D6a's rule is that where
+        // we cannot tell, we do not act as though it were dead — least of all on
+        // a pass nobody pressed a button for.
+        writing: async (sessionId) => {
+          const now = await this.#ports.locks.writers();
+          return !now.known || now.ids.has(sessionId);
+        },
+      });
+      if (swept.length) {
+        // D6 asks for the reap to be logged, and this deletes MORE than the reap
+        // does: a reaped record held nothing anybody would be offered, and this
+        // one held a whole recording that simply got old.
+        this.#ports.warn(`[meetings] deleted ${swept.length} recording(s) older than the ${retentionDays}-day retention window.`);
+        records = records.filter((record) => !swept.includes(record.sessionId));
+      }
+    } catch (caught) {
+      this.#ports.warn("[meetings] the retention sweep could not run.", caught);
+    }
     // D6 — the reap gets its own try. It is housekeeping, and a failed tidy-up
     // must not be reported as an empty device.
     try {
@@ -2053,7 +2248,12 @@ export class MeetingCaptureSurface {
         // reclaims neither. The cost is metadata left behind on such a browser;
         // the alternative cost is somebody's meeting.
         abandoned: async (record) => {
-          if (record.sessionId === MEETING_DRAFT_CAPTURE_ID) return false;
+          // The draft and the retention window are both chunk-less manifests
+          // that are never closed, which is exactly the shape this predicate
+          // reclaims. Asked as one question because forgetting either is silent:
+          // one loses what somebody typed, the other resets the policy that
+          // decides when their audio is deleted.
+          if (isReservedCaptureId(record.sessionId)) return false;
           const now = await this.#ports.locks.writers();
           return now.known && !now.ids.has(record.sessionId);
         },
@@ -2093,7 +2293,46 @@ export class MeetingCaptureSurface {
       // somebody's live meeting.
       writersKnown: writers.known,
       recoveryError: "",
+      retentionDays,
+      retentionSwept: swept.length,
     });
+    // D11 — last, and against what this device actually holds: a capture that is
+    // still here is offered from here, because that offer has the audio behind
+    // it. The server's list is what is left when the local copy is not.
+    await this.#refreshEscrowed(records.map((record) => record.sessionId));
+  }
+
+  /**
+   * D6 — the window the person just chose, applied and swept in one call.
+   *
+   * Swept immediately rather than at the next page load, because the control
+   * that shortens a window is being pressed by somebody who wants audio gone: a
+   * setting that only takes effect next time is a promise with a delay in it,
+   * and this is the decision about deleting microphone recordings.
+   *
+   * The store is opened WITHOUT asking for persistence — writing a preference is
+   * not a reason to raise a storage prompt at somebody who has not asked to
+   * record anything. And the number is patched from what was STORED, so a
+   * clamped value shows as the value in force rather than as the one typed.
+   */
+  async setRetentionDays(days: number): Promise<void> {
+    let store: MeetingCaptureStore;
+    try {
+      store = await this.#store(false);
+    } catch (caught) {
+      this.#patch({ createError: describe(caught, "This browser would not open its durable store, so the retention window was not changed.") });
+      return;
+    }
+    try {
+      this.#patch({ retentionDays: await writeCaptureRetentionDays(store, days) });
+    } catch (caught) {
+      this.#patch({ createError: describe(caught, "The retention window could not be saved.") });
+      return;
+    }
+    // The refresh is what sweeps, so the new window is enforced by the same pass
+    // that enforces it on every other occasion — one sweep, not two spellings of
+    // one — and the offer above is recomputed over what survived it.
+    await this.refreshRecoverable();
   }
 
   /**
@@ -2257,6 +2496,10 @@ export class MeetingCaptureSurface {
       }
       const store = await this.#store(false);
       await store.delete(record.sessionId);
+      // D6/D11 — the audio is gone from this device, so the server's copy goes
+      // with it. Its workspace comes from the RECORD, which is the one the
+      // recording was made in; the switcher may be showing another.
+      await this.#dropEscrow(record.sessionId, parseCapturePayload(record.payload).session?.scope.orgId ?? this.#ports.activeOrgId());
     } catch (caught) {
       this.#patch({ createError: describe(caught, "The recording could not be deleted.") });
     } finally {
@@ -2311,6 +2554,10 @@ export class MeetingCaptureSurface {
    */
   async #fileDiscarded(): Promise<void> {
     await this.#release(false);
+    // A restored transcript that is being thrown away is not this tab's capture
+    // any more either — leaving the pointer would delete the server's copy of
+    // somebody else's meeting on the NEXT create.
+    this.#restored = null;
     this.#patch({ title: "", transcript: "", draftRecovered: false });
     // A discarded meeting starts a new box, so it starts a new fold.
     this.#fold = EMPTY_TRANSCRIPT_FOLD;
@@ -2364,6 +2611,13 @@ export class MeetingCaptureSurface {
       // could never be read.
       this.#retainAudio(sessionId, caught);
     } finally {
+      // D6/D11 — and so does the server's copy, whichever way this went. On a
+      // create the meeting now exists and the escrow was only ever insurance
+      // against not getting here; on a discard, "deletion is a real deletion"
+      // has to mean the transcript too, or the one thing a person asked to be
+      // rid of is the copy they cannot see. Awaited before the lock goes back so
+      // another tab cannot pick the capture up and re-escrow it underneath this.
+      await this.#dropEscrow(sessionId, queue.session.scope.orgId ?? "");
       // This capture has left this tab's hands whichever way the delete went, so
       // the lock goes back even on the failure path — a retained recording that
       // no tab could ever pick up again would be the audio nobody can reach.
@@ -2446,6 +2700,213 @@ export class MeetingCaptureSurface {
     this.#ports.revokeObjectUrl(this.#previewRef.url);
     this.#previewRef = null;
     this.#patch({ preview: null });
+  }
+
+  // ——————————————————————————————————————————————— D11 · the server's copy
+
+  /**
+   * ADR-035 D11 — push what this tab has to the server, throttled.
+   *
+   * **Why there is a push at all.** D7 made the local store the system of record
+   * and the network an accelerator, and D11 says that is wrong for the one host
+   * whose storage can be taken away from it: `navigator.storage.persist()` is
+   * granted on engagement heuristics rather than on asking, and eviction is
+   * per-origin, so a long meeting can be evicted mid-recording however early
+   * anything warned. Warning earlier does not fix it; it narrates it. What fixes
+   * it is that the words are already somewhere else.
+   *
+   * **Throttled, not debounced.** A debounce always defers the most recent
+   * state, and D1b is explicit that "a closing tab gets very little time" — the
+   * text that would be lost is exactly the text the last debounce was holding.
+   * So the first change pushes immediately and later ones are coalesced behind a
+   * fixed interval, which bounds what a kill costs by the interval rather than
+   * by the meeting. `#finishCapture` forces one at Stop.
+   */
+  #scheduleEscrow(): void {
+    if (!this.#escrowRecord()) return;
+    if (this.#escrow.busy) {
+      this.#escrow.again = true;
+      return;
+    }
+    const since = this.#ports.now() - this.#escrow.at;
+    if (since >= ESCROW_PUSH_INTERVAL_MS) {
+      void this.#pushEscrow();
+      return;
+    }
+    if (this.#escrowTimer !== null) return;
+    this.#escrowTimer = this.#ports.setTimer(() => {
+      this.#escrowTimer = null;
+      void this.#pushEscrow();
+    }, ESCROW_PUSH_INTERVAL_MS - since);
+  }
+
+  /**
+   * What the server should be holding for the capture in hand, or `null`.
+   *
+   * The TRANSCRIPT is the compose box, not the session's own text: the box is
+   * what Create would post, including a correction the person has just typed
+   * over a mis-heard name, and escrowing the raw session would hand back a
+   * recovered meeting that had lost their edits. The workspace is the one frozen
+   * at Record (open question 5), never the switcher's current one.
+   */
+  #escrowRecord(): { readonly record: MeetingCaptureEscrow; readonly orgId: string } | null {
+    const session = this.#queue?.session;
+    if (!session) return null;
+    const record = normalizeCaptureEscrow({
+      sessionId: session.id,
+      title: this.#state.title,
+      template: this.#state.template,
+      language: this.#state.language === "auto" ? "" : this.#state.language,
+      startedAt: session.startedAt,
+      transcript: this.#state.transcript,
+      // How much of the recording the text accounts for — the last settled unit's
+      // end, not the elapsed length. The difference is what an eviction would
+      // cost, which is a fact the offer prints rather than one it rounds away.
+      coverageMs: session.segments.reduce((covered, segment) => (segment.state === "done" ? Math.max(covered, segment.endMs) : covered), 0),
+      retentionDays: this.#state.retentionDays,
+    });
+    if (!record || !isEscrowWorthKeeping(record)) return null;
+    return { record, orgId: session.scope.orgId ?? "" };
+  }
+
+  /**
+   * Send it, and publish whether it arrived.
+   *
+   * A failure is not retried on a timer of its own: the next settled segment
+   * schedules another push, and a recording that has stopped producing text has
+   * nothing new to escrow. What a failure DOES do is change the promise on
+   * screen, because a browser whose escrow is unreachable is back to being the
+   * host whose storage can be taken away from it — and D11's second obligation
+   * is that those two states do not wear the same face.
+   */
+  async #pushEscrow(): Promise<void> {
+    const pending = this.#escrowRecord();
+    if (!pending || this.#escrow.busy) return;
+    this.#escrow = { ...this.#escrow, busy: true, again: false, at: this.#ports.now() };
+    try {
+      await this.#ports.escrow.put(pending.record, pending.orgId);
+      this.#escrow = { ...this.#escrow, ok: true };
+    } catch (caught) {
+      this.#escrow = { ...this.#escrow, ok: false };
+      this.#ports.warn("[meetings] this recording's transcript could not be held on the server.", caught);
+    } finally {
+      this.#escrow = { ...this.#escrow, busy: false };
+      this.#publishDurability();
+      if (this.#escrow.again) this.#scheduleEscrow();
+    }
+  }
+
+  /**
+   * D6/D11 — the capture is filed or thrown away, so the server's copy goes too.
+   *
+   * Never fatal to the caller: the meeting has been created, or the audio has
+   * been deleted, and a row the server keeps a little longer is deleted by its
+   * own retention window. Reporting a failure here would attach an error to a
+   * create that succeeded.
+   */
+  async #dropEscrow(sessionId: string, orgId: string): Promise<void> {
+    try {
+      await this.#ports.escrow.remove(sessionId, orgId);
+    } catch (caught) {
+      this.#ports.warn("[meetings] the server's copy of this capture could not be deleted.", caught);
+    }
+  }
+
+  /**
+   * D11 — what the server is holding that this device cannot offer.
+   *
+   * Filtered against the local listing on purpose: a capture that is still on
+   * this device is offered from the device, because that offer has the AUDIO
+   * behind it and can be picked up and carried on with. The server's copy is the
+   * one that matters exactly when the local one is gone — an evicted origin, a
+   * different machine, a cleared browser — and showing both would ask somebody
+   * to choose between two rows describing one meeting.
+   */
+  async #refreshEscrowed(local: readonly string[]): Promise<void> {
+    const orgId = this.#ports.activeOrgId();
+    let captures: readonly MeetingCaptureEscrow[];
+    try {
+      captures = await this.#ports.escrow.list(orgId);
+    } catch (caught) {
+      // Not an error banner: the device's own offer is unaffected, and this list
+      // is additive. The promise sentence already says whether the server is
+      // reachable for the recording in hand.
+      this.#ports.warn("[meetings] the server's unfinished recordings could not be read.", caught);
+      return;
+    }
+    // The capture this tab holds, and the one whose text is ALREADY in the box:
+    // both are excluded for the same reason the local offer excludes what is in
+    // hand. A Restore button beside a transcript the person is looking at is the
+    // surface offering them something they have.
+    const held = [this.#queue?.session.id, this.#restored?.sessionId].filter((id): id is string => Boolean(id));
+    this.#patch({
+      escrowed: captures
+        .filter((capture) => !held.includes(capture.sessionId) && !local.includes(capture.sessionId))
+        .map((capture) => ({ capture, orgId })),
+    });
+  }
+
+  /**
+   * D11 — take a server-held capture into the compose box.
+   *
+   * There is no audio to pick up and this is deliberately not `pickUp`: nothing
+   * is adopted, no lock is taken and no queue is attached, because the thing
+   * being restored is TEXT. What it becomes is a meeting the person can create,
+   * which is what §6 asks for when the origin's copy has been evicted.
+   *
+   * Refused while a capture is in hand, by the same rule every other path that
+   * fills this box follows: two meetings in one box are posted as one.
+   */
+  async restoreEscrowed(entry: EscrowedCapture): Promise<void> {
+    if (this.#captureInHand) {
+      this.#patch({ createError: this.#inHandNote("Restoring another recording's transcript would fold the two meetings into one box.") });
+      return;
+    }
+    this.#restored = { sessionId: entry.capture.sessionId, orgId: entry.orgId };
+    this.#patch({
+      createOpen: true,
+      title: entry.capture.title,
+      transcript: entry.capture.transcript,
+      template: captureTemplate(entry.capture.template),
+      language: entry.capture.language || "auto",
+      draftRecovered: false,
+      createError: "",
+      escrowed: this.#state.escrowed.filter((other) => other.capture.sessionId !== entry.capture.sessionId),
+    });
+    // A restored transcript is a draft like any other: the tab can die again
+    // before the meeting is created, and the box has to survive that.
+    this.#fold = EMPTY_TRANSCRIPT_FOLD;
+    this.#scheduleDraftSave();
+  }
+
+  /**
+   * D6 — delete the server's copy of a capture this device no longer has.
+   *
+   * The only deletion path there is for it: the row is not on this device, so
+   * the offer's Discard cannot reach it and the retention window would be the
+   * only thing that ever removed it. The question names what is being deleted,
+   * because unlike the device's own rows this one is the LAST copy.
+   */
+  async discardEscrowed(entry: EscrowedCapture): Promise<void> {
+    if (!this.#ports.confirm(DISCARD_ESCROWED_QUESTION)) return;
+    await this.#dropEscrow(entry.capture.sessionId, entry.orgId);
+    if (this.#restored?.sessionId === entry.capture.sessionId) this.#restored = null;
+    this.#patch({ escrowed: this.#state.escrowed.filter((other) => other.capture.sessionId !== entry.capture.sessionId) });
+  }
+
+  /**
+   * ADR-035 D11 / ADR-028 — WHICH promise this recording has, in one sentence.
+   *
+   * "Persisted" and "best-effort" are different guarantees and this surface used
+   * to show the same face for both: `storageBudget` knew the difference
+   * internally and said it only inside a quota warning nobody sees until the
+   * disk is nearly full. Golden rule 23 wants the mode stated while everything
+   * is working, so it is a standing line rather than an alert — and it is not
+   * only about the origin any more, because with the escrow reachable a refused
+   * persistence stops being able to lose the meeting.
+   */
+  #publishDurability(): void {
+    this.#patch({ durability: describeCapturePromise({ persisted: this.#opened?.persisted ?? false, escrowed: this.#escrow.ok }) });
   }
 
   // ————————————————————————————————————————————————————————————— the POST
@@ -2535,6 +2996,17 @@ export class MeetingCaptureSurface {
       // the meeting exists on the server, so a failed create leaves the
       // recording on the device to be offered back rather than throwing it away.
       await this.#release(true);
+      // D11 — and the same for a capture that came BACK from the server: there
+      // is no local audio to release, so `#release` returned without doing
+      // anything, and the escrow row is the only thing left that says this
+      // meeting is unfinished. Cleared before the box is, so a create that
+      // succeeded cannot leave the offer that produced it on screen.
+      const restored = this.#restored;
+      this.#restored = null;
+      if (restored) {
+        await this.#dropEscrow(restored.sessionId, restored.orgId);
+        this.#patch({ escrowed: this.#state.escrowed.filter((other) => other.capture.sessionId !== restored.sessionId) });
+      }
       this.#patch({ createOpen: false, title: "", transcript: "", draftRecovered: false });
       this.#fold = EMPTY_TRANSCRIPT_FOLD;
       try {
@@ -2617,6 +3089,15 @@ export class MeetingCaptureSurface {
     // left. The audio and the session are already written; nothing durable is
     // deferred to this line.
     this.#closeStream();
+    // D11 — a pending trailing push belongs to the page that is going away, and
+    // the timer would fire into a surface nothing is reading. Nothing is lost by
+    // dropping it: what it was holding is at most one interval of transcript,
+    // and the recording it belongs to is still on the device and still offered
+    // back — which is the same bound `#scheduleEscrow` is throttled against.
+    if (this.#escrowTimer !== null) {
+      this.#ports.clearTimer(this.#escrowTimer);
+      this.#escrowTimer = null;
+    }
     this.#flushDraftSave();
     this.#revokePreview();
     const recorder = this.#recorder;
@@ -2696,6 +3177,12 @@ export class MeetingCaptureSurface {
       }
     }
     this.#opened = opened;
+    // D11 — the promise this browser is making, said as soon as there is
+    // something true to say. Here rather than at Record because a person looking
+    // at the recovery offer is looking at recordings held under exactly this
+    // promise, and ADR-028 asks the surface to state its mode while things are
+    // working rather than once they are not.
+    this.#publishDurability();
     // Read the budget on EVERY Record, including the one that reused an
     // already-open store: tying the notice to the open meant the second
     // recording of a session heard nothing until the first chunk landed.

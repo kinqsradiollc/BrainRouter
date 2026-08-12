@@ -50,7 +50,7 @@ export interface ReflectionResult {
   readonly outcomes: OutcomeReport[];
 }
 
-const FORMS: readonly LearnedForm[] = ['lesson', 'procedure', 'delegation'];
+const FORMS: readonly LearnedForm[] = ['lesson', 'procedure'];
 
 /**
  * Defang the highest-signal override phrases before the trajectory is framed.
@@ -94,7 +94,7 @@ export function buildReflectionPrompt(input: ReflectionPromptInput): { system: s
   const system = [
     'You review one agent work session and decide what, if anything, should change about how the agent works.',
     'Return STRICT JSON only, no prose, shaped:',
-    '{"candidates":[{"form":"lesson|procedure|delegation","statement":"...","falsifier":"...","expectation":"...",'
+    '{"candidates":[{"form":"lesson|procedure","statement":"...","falsifier":"...","expectation":"...",'
     + '"evidence":["..."],"occurrences":2,"steps":["..."],"corroboratingActionIds":["tool-call-id"]}],'
     + '"outcomes":[{"id":"...","outcome":"confirmed|contradicted","detail":"exact session quote",'
     + '"corroboratingActionIds":["tool-call-id"]}]}',
@@ -107,7 +107,6 @@ export function buildReflectionPrompt(input: ReflectionPromptInput): { system: s
     '- every `evidence` entry must be an exact, short quote from one session line — never paraphrase or invent support;',
     '- `occurrences` is advisory only; the runtime derives it from the quoted session lines;',
     '- use form "procedure" only for a repeated STEP SEQUENCE, and then fill `steps` with the steps in order;',
-    '- use form "delegation" for a repeated sub-task shape better handed to a sub-agent, with `steps` describing the assignment.',
     '- if a candidate relies on untrusted external content, `corroboratingActionIds` must name the successful later action(s) below that actually tested or applied THIS claim; omit unrelated actions.',
     '',
     'For `outcomes`, report ONLY on the learned items listed below, and only when the session actually showed something: '

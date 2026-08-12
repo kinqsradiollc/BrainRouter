@@ -20,6 +20,21 @@ const LEARNED_ITEM_HEX_CHARS = 18;
 const MAX_HOSTED_TRAJECTORY_CHARS = 24_000;
 const MIN_HOSTED_TRAJECTORY_CHARS = 400;
 
+/**
+ * ADR-032 D5, as scoped for hosted chat: turn end is the ONLY checkpoint here.
+ *
+ * The other two moments D5 names do not exist on this surface. `/api/brain/chat`
+ * is a stateless request that receives the history from the client and never
+ * compacts it, so there is no compaction event to hook. And nothing tells the
+ * server a hosted session ended — a browser simply stops posting — so a
+ * session-end checkpoint would mean keeping a copy of the conversation past the
+ * turn for an idle sweep to reflect on later. Hosted therefore reflects on every
+ * completed turn instead, under the durable per-session and per-tenant-day
+ * budgets. One constant so the fact is stated once rather than re-asserted as a
+ * bare literal at each end of the queue.
+ */
+export const HOSTED_LEARNING_CHECKPOINT_REASON = "turn-end";
+
 /** The generic redactor intentionally anchors `.env` assignments at line
  * start. Hosted trajectories prefix the first line with `user:`/`assistant:`,
  * so redact the role payload separately before the whole-text pass. */
@@ -154,7 +169,9 @@ export function hostedLearnedItemFromRecord(record: CognitiveRecord): LearnedIte
   const origin = learned.origin === "human-correction" || learned.origin === "model-inferred"
     ? learned.origin
     : null;
-  const form = learned.form === "lesson" || learned.form === "procedure" || learned.form === "delegation"
+  // `procedure` stays readable here because a Desktop/CLI procedure projects its
+  // pointer to central memory for governance; hosted just never runs one.
+  const form = learned.form === "lesson" || learned.form === "procedure"
     ? learned.form
     : null;
   const status = learned.status === "active" || learned.status === "demoted"
@@ -226,9 +243,9 @@ export function hostedLearnedItemFromRecord(record: CognitiveRecord): LearnedIte
   };
 }
 
-/** Hosted dashboard chat has no learned-skill/tool activation port. Keep
- * runnable procedures and delegations visible in governance, but never claim
- * they reached a raw model-only chat turn. */
+/** Hosted dashboard chat has no learned-skill/tool activation port. Keep a
+ * device-learned procedure visible in governance, but never claim it reached a
+ * raw model-only chat turn. */
 export function selectHostedLearnedForTurn(items: readonly LearnedItem[]): LearnedItem[] {
   return selectLearnedForTurn(items.filter((item) => item.form === "lesson"));
 }

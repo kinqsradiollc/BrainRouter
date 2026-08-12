@@ -23,6 +23,7 @@ export {
   MAX_STATEMENT_CHARS, MIN_FALSIFIER_CHARS, MIN_STATEMENT_CHARS,
   reviewLearningCandidate,
   type GateRule, type GateVerdict, type LearningCandidate,
+  type LearningHostCapabilities,
 } from './gate.js';
 
 export {

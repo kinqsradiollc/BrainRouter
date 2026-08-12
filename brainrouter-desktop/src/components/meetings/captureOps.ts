@@ -29,14 +29,18 @@
  * meeting content to the store D6 named, which is the defect, not the degraded
  * mode.
  */
-import type {
-  MeetingCaptureScope,
-  MeetingCaptureSession,
-  MeetingCaptureTemplate,
-  MeetingDrainPhase,
-  MeetingLiveUtterance,
-  MeetingRecoverySummary,
-  MeetingTranscriptionMode,
+import {
+  describeMeetingRetention,
+  MEETING_RETENTION_DAY_CHOICES,
+  MEETING_RETENTION_DEFAULT_DAYS,
+  normalizeMeetingRetentionDays,
+  type MeetingCaptureScope,
+  type MeetingCaptureSession,
+  type MeetingCaptureTemplate,
+  type MeetingDrainPhase,
+  type MeetingLiveUtterance,
+  type MeetingRecoverySummary,
+  type MeetingTranscriptionMode,
 } from "@kinqs/brainrouter-core/meetings";
 import { captureHolderId } from "./captureHolder.js";
 
@@ -232,6 +236,40 @@ export interface MeetingCaptureOps {
   readDraft(): Promise<MeetingComposeDraft | null>;
   writeDraft(draft: MeetingComposeDraft): Promise<void>;
   clearDraft(): Promise<void>;
+  /**
+   * D6 — whether this preload can change the retention window.
+   *
+   * Separate from `available` because it degrades differently: a build with no
+   * capture channels cannot record at all, while one that predates these two
+   * still records and sweeps by the built-in default — it just cannot be told a
+   * different number. The surface shows the window either way and hides only the
+   * control, because a disabled control over a policy that IS in force reads as
+   * "no retention", which is the opposite of the truth.
+   */
+  readonly retentionAvailable: boolean;
+  /** D6 — the window in force, the ladder to offer, and the sentence that describes it. */
+  readRetention(): Promise<MeetingRetentionSetting>;
+  /** D6 — set the window and sweep now. `deleted` is how many recordings that removed. */
+  writeRetention(days: number): Promise<MeetingRetentionSetting>;
+}
+
+/**
+ * D6 — the retention window as a surface renders it.
+ *
+ * `description` and `choices` come from the host rather than being composed
+ * here, because both belong to the shared rule (`retention.ts`): the browser
+ * shows the same ladder and prints the same sentence, and two hosts wording one
+ * policy independently is how they come to describe two policies.
+ *
+ * `deleted` is present only on the answer to a WRITE, and it is the difference
+ * between a setting and a promise kept: shortening the window to a day and being
+ * told nothing is what a control that does not sweep also looks like.
+ */
+export interface MeetingRetentionSetting {
+  days: number;
+  choices: readonly number[];
+  description: string;
+  deleted?: number;
 }
 
 interface CaptureBridge {
@@ -250,6 +288,8 @@ interface CaptureBridge {
   draftRead?(): Promise<unknown>;
   draftWrite?(draft: { title?: string; transcript?: string; template?: string; language?: string }): Promise<unknown>;
   draftClear?(): Promise<unknown>;
+  retentionRead?(): Promise<unknown>;
+  retentionWrite?(days: number): Promise<unknown>;
 }
 
 const TEMPLATES: readonly MeetingCaptureTemplate[] = ["general", "standup", "one-on-one", "retrospective"];
@@ -356,6 +396,30 @@ function liveUtterances(value: unknown): readonly MeetingLiveUtterance[] | null 
   return rows;
 }
 
+/**
+ * D6 — the host's retention answer, re-validated on the way in.
+ *
+ * A host that says nothing usable is not a host with no retention policy: the
+ * store's own default is already in force and the sweep is already running by
+ * it. So the fallback is the SHARED default with the shared sentence, which is
+ * what will actually happen — rendering "unknown" here would be the surface
+ * disclaiming a deletion the device is going to perform anyway.
+ */
+function retentionSetting(value: unknown): MeetingRetentionSetting {
+  const raw = (value ?? {}) as { days?: unknown; choices?: unknown; description?: unknown; deleted?: unknown };
+  const days = normalizeMeetingRetentionDays(typeof raw.days === "number" ? raw.days : MEETING_RETENTION_DEFAULT_DAYS);
+  const choices = Array.isArray(raw.choices)
+    ? raw.choices.filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry) && entry > 0)
+    : [];
+  const deleted = typeof raw.deleted === "number" && Number.isInteger(raw.deleted) && raw.deleted >= 0 ? raw.deleted : undefined;
+  return {
+    days,
+    choices: choices.length ? choices : MEETING_RETENTION_DAY_CHOICES,
+    description: typeof raw.description === "string" && raw.description.trim() ? raw.description : describeMeetingRetention(days),
+    ...(deleted === undefined ? {} : { deleted }),
+  };
+}
+
 function unavailable(): never { throw new MeetingCaptureUnavailableError(); }
 
 export function createMeetingCaptureOps(): MeetingCaptureOps {
@@ -389,6 +453,12 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
       readDraft: async () => null,
       writeDraft: async () => undefined,
       clearDraft: async () => undefined,
+      // No capture store means no captured audio, so there is nothing for a
+      // window to apply. The shared default is still what this build would
+      // sweep by if it could record, which is the truthful thing to show.
+      retentionAvailable: false,
+      readRetention: async () => retentionSetting({}),
+      writeRetention: async () => retentionSetting({}),
     };
   }
   return {
@@ -496,5 +566,16 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
     readDraft: async () => api.draftRead ? draft(await api.draftRead()) : null,
     writeDraft: async (value) => { await api.draftWrite?.(value); },
     clearDraft: async () => { await api.draftClear?.(); },
+    // D6 — the WRITE channel is what makes the control usable; a preload with
+    // only the read still shows the window that is in force.
+    retentionAvailable: Boolean(api.retentionWrite),
+    readRetention: async () => retentionSetting(api.retentionRead ? await api.retentionRead() : {}),
+    writeRetention: async (days) => {
+      // Normalized on the way out as well as in main. The host is the authority
+      // and re-normalizes, but a surface that sent 5,000 and rendered 5,000 back
+      // from its own optimism would show a window nothing enforces.
+      if (!api.retentionWrite) return retentionSetting(api.retentionRead ? await api.retentionRead() : {});
+      return retentionSetting(await api.retentionWrite(normalizeMeetingRetentionDays(days)));
+    },
   };
 }

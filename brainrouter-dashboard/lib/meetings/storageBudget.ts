@@ -149,6 +149,45 @@ export function isStorageQuotaError(caught: unknown): boolean {
   return error.code === 22 && typeof error.name === "string";
 }
 
+/**
+ * ADR-035 D11 — WHICH durability promise this recording has, in one sentence.
+ *
+ * D11's second obligation, and the one this module was already half-doing: it
+ * has always known whether the origin's storage is persisted or best-effort, and
+ * it only ever said so inside a quota warning — a message that appears when the
+ * disk is nearly full, which is to say after the difference has stopped being
+ * actionable. So the two guarantees wore the same face for the whole of an
+ * ordinary recording, which is exactly what ADR-028 forbids.
+ *
+ * Three states, not two, because the escrow changes the answer:
+ *
+ * - **the server has it** — a refused persistence can no longer lose the
+ *   meeting, so this is the strongest sentence and it says why;
+ * - **only this device has it, persisted** — the origin will not be evicted
+ *   under ordinary pressure, and the meeting lives exactly here;
+ * - **only this device has it, best-effort** — the case D11 was written about.
+ *   Named plainly rather than dressed as a warning: it is the truth about a
+ *   recording that is working, and a red banner over a working meeting is how
+ *   people learn to ignore the one that matters.
+ *
+ * `escrowed` is a tri-state on purpose. `null` is "nothing has been sent yet",
+ * which is every moment before the first settled segment, and calling that a
+ * failure would put a false sentence in front of somebody for the first minute
+ * of every meeting.
+ */
+export function describeCapturePromise(input: { readonly persisted: boolean; readonly escrowed: boolean | null }): string {
+  const local = input.persisted
+    ? "This browser has granted persistent storage, so the audio on this device is not evicted under ordinary storage pressure."
+    : "This browser has NOT granted persistent storage, so the audio on this device can be evicted under storage pressure.";
+  if (input.escrowed === true) {
+    return `${local} The transcript so far is also held on the server, so the meeting survives even if this browser's copy is lost.`;
+  }
+  if (input.escrowed === false) {
+    return `${local} The server is not holding a copy of this transcript right now — this device is the only place it exists.`;
+  }
+  return local;
+}
+
 /** A short, non-technical size. Deliberately coarse — this appears mid-sentence. */
 export function formatCaptureBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";

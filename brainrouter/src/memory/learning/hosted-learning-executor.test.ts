@@ -147,6 +147,54 @@ describe("hosted learning checkpoint executor", () => {
     );
   });
 
+  it("refuses a runnable procedure by name because hosted chat has nowhere to run it", async () => {
+    const h = harness(JSON.stringify({
+      candidates: [{
+        form: "procedure",
+        statement: "Stop the worker, apply the schema migration, then restart the worker.",
+        falsifier: "the migration succeeds while the worker still holds the schema lock",
+        expectation: "schema migrations stop failing on the worker lock",
+        evidence: [quote],
+        steps: ["Stop the worker", "Apply the migration", "Restart the worker"],
+      }],
+      outcomes: [],
+    }));
+
+    const result = await runHostedLearningCheckpoint(job(), {
+      store: h.store,
+      engine: { modelRunner: h.modelRunner, recordLesson: h.recordLesson },
+      jobId: "job-procedure",
+    });
+
+    // Counted apart from ordinary gate noise: the durable job output has to show
+    // a withdrawn capability being exercised, not a candidate quietly demoted to
+    // a "lesson" that still reads like it runs.
+    expect(result).toMatchObject({ admitted: 0, rejected: 1, refusedNoExecutionPort: 1 });
+    expect(h.recordLesson).not.toHaveBeenCalled();
+  });
+
+  it("rejects any checkpoint reason but the one hosted actually has", async () => {
+    const h = harness(JSON.stringify({ candidates: [], outcomes: [] }));
+
+    // D5, as scoped for hosted: turn end is the only checkpoint on this surface,
+    // and the durable schema is where that decision is enforced rather than
+    // merely typed. A session-end enqueue added later fails closed here instead
+    // of arriving as a reason no branch handles.
+    await expect(runHostedLearningCheckpoint(job({ reason: "session-end" }), {
+      store: h.store,
+      engine: { modelRunner: h.modelRunner, recordLesson: h.recordLesson },
+      jobId: "job-session-end",
+    })).rejects.toThrow();
+    await expect(runHostedLearningCheckpoint(job({ reason: "compaction" }), {
+      store: h.store,
+      engine: { modelRunner: h.modelRunner, recordLesson: h.recordLesson },
+      jobId: "job-compaction",
+    })).rejects.toThrow();
+    // It fails before it spends a model call on a job it cannot account for.
+    expect(h.modelRunner).not.toHaveBeenCalled();
+    expect(h.run).not.toHaveBeenCalled();
+  });
+
   it("cannot persist a candidate derived from untrusted content without a runtime action trace", async () => {
     const h = harness(JSON.stringify({
       candidates: [{

@@ -41,6 +41,23 @@
 // contain the transcript. That second one is why a recovered meeting used to be
 // summarized twice on BOTH hosts.
 //
+// `retention` is D6's third deletion trigger, and it is here for the reason the
+// other two are not: accepting a meeting and discarding one are transitions, so
+// each host performs them at its own store, while "this capture has outlived
+// the window" is a comparison against a number a person chose — one rule, two
+// stores, and a third (the browser's server-side escrow, D11) that has no
+// session model at all. So the module takes `{ id, at }` and returns names, and
+// every host keeps the deleting.
+//
+// `escrow` is D11's record, and it is shared for a reason `retention` only
+// half-shares: this one is a WIRE. The browser builds it and the server accepts
+// it, so a second validator on either side is how a client comes to send a
+// field the other end silently drops — and the field it would drop is the
+// transcript of somebody's meeting. `recorderProfile` is beside it for the same
+// D11 argument at the other end of the pipe: the bitrate a recording is made at
+// decides what an origin's quota can evict AND what the escrow has to carry, so
+// it is one constant rather than a literal in each host's recorder.
+//
 // `capturePhase` is the sixth and the plainest: the one sentence a live panel
 // prints about the queue. It is surface WORDING, which is why it took two
 // rounds to arrive here — but it is a rule (which state outranks which) and it
@@ -77,7 +94,10 @@ export * from './captureSession.js';
 export * from './chunkLedger.js';
 export * from './sessionValidation.js';
 export * from './transcript.js';
+export * from './escrow.js';
+export * from './recorderProfile.js';
 export * from './recovery.js';
+export * from './retention.js';
 export * from './retryPolicy.js';
 export * from './queuePlan.js';
 export * from './segmentAudio.js';

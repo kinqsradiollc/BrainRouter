@@ -32,6 +32,7 @@
 import {
   DEFAULT_MEETING_UNIT_MS,
   SEGMENTED_TRANSCRIPTION_CAPABILITIES,
+  type MeetingCaptureEscrow,
   type MeetingTranscriptionCapabilities,
   type MeetingTranscriptionStreamChunk,
   type MeetingTranscriptionStreamInitialization,
@@ -104,6 +105,46 @@ export class FakeStream implements CaptureStream {
   /** The endpoint goes away. `kind` is what decides whether this tab tries again. */
   drop(drop: CaptureStreamDrop): void {
     this.request.handlers.onDrop(drop);
+  }
+}
+
+/**
+ * ADR-035 D11 — the SERVER's copy of the captures being made here.
+ *
+ * On the ORIGIN rather than on a tab, because that is what a server is: every
+ * tab pushes into the same one, a killed tab's escrow is still there afterwards,
+ * and §6's "record for an hour with persistence refused" is only checkable if
+ * wiping the origin's storage leaves this standing.
+ *
+ * It keeps every PUT rather than only the last, so a test can ask what the
+ * server was told and when — the throttle is a promise about how much a kill
+ * costs, and a fake that collapsed the pushes could not see it.
+ */
+export class FakeEscrowServer {
+  readonly puts: { readonly record: MeetingCaptureEscrow; readonly orgId: string }[] = [];
+
+  readonly rows = new Map<string, { readonly record: MeetingCaptureEscrow; readonly orgId: string }>();
+
+  readonly removed: string[] = [];
+
+  /** A server that will not take it — the outage D11's promise sentence names. */
+  fails: Error | null = null;
+
+  put(record: MeetingCaptureEscrow, orgId: string): void {
+    if (this.fails) throw this.fails;
+    this.puts.push({ record, orgId });
+    this.rows.set(record.sessionId, { record, orgId });
+  }
+
+  list(orgId: string): readonly MeetingCaptureEscrow[] {
+    if (this.fails) throw this.fails;
+    return [...this.rows.values()].filter((row) => row.orgId === orgId).map((row) => row.record);
+  }
+
+  remove(sessionId: string): void {
+    if (this.fails) throw this.fails;
+    this.removed.push(sessionId);
+    this.rows.delete(sessionId);
   }
 }
 
@@ -208,6 +249,15 @@ export class CaptureOrigin {
    * ordered history of what this origin did.
    */
   readonly locks: FakeLockOrigin;
+
+  /**
+   * ADR-035 D11 — the server every tab of this origin escrows into.
+   *
+   * Deliberately NOT wiped by anything that wipes the browser: that separation is
+   * the whole of D11, and a harness where the two died together could not tell
+   * the decision from the thing it replaced.
+   */
+  readonly escrow = new FakeEscrowServer();
 
   /** A fixed instant, so every stamp in a stored record is checkable. */
   clock = Date.parse("2026-08-01T09:00:00.000Z");
@@ -455,6 +505,11 @@ export class CaptureTab {
         this.posts.push(input);
         if (this.postFails) throw this.postFails;
         return { id: `mtg-${this.posts.length}` };
+      },
+      escrow: {
+        put: async (record, orgId) => origin.escrow.put(record, orgId),
+        list: async (orgId) => origin.escrow.list(orgId),
+        remove: async (sessionId) => origin.escrow.remove(sessionId),
       },
       transcribeFile: async () => this.importText,
       legacyDraftStorage: () => options.legacyDraft ?? null,

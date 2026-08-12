@@ -33,6 +33,13 @@
  *    directory, and the boot pass finishes any delete a kill interrupted — see
  *    `recoverInterrupted`. D6 asks for a real deletion, and one that only
  *    happens when the process survives long enough is not one.
+ * 4b. **And a capture nobody ever made terminal owns them only for a while.**
+ *    D6's third deletion trigger is a retention window, and it exists because
+ *    the first two are transitions a PERSON makes: a recording somebody
+ *    abandoned is never finalized and never discarded, so without `sweepExpired`
+ *    its microphone audio has no expiry at all. The sweep deletes through the
+ *    same `close` an explicit discard uses, so it is the same real deletion and
+ *    not a second, softer one.
  * 5. **This store does not know who is recording, and does not guess.** Liveness
  *    is a question about the PROCESS — which window has a microphone open — and
  *    the process knows it exactly: `MeetingTranscriptionSupervisor` is created
@@ -73,13 +80,17 @@ import {
   adoptCaptureChunks,
   captureChunks,
   capturedByteLength,
+  captureRetentionAt,
   createCaptureSession,
   discardCapture,
+  expiredCaptureIds,
   finalizeCapture,
   isMeetingCaptureSession,
   isMeetingSessionId,
   isTerminalCaptureStatus,
+  MEETING_RETENTION_DEFAULT_DAYS,
   nextChunkSequence,
+  normalizeMeetingRetentionDays,
   orphanCaptureIds,
   recoverCaptureSession,
   resumableSessions,
@@ -95,6 +106,19 @@ import {
 export const MEETING_CAPTURE_DIRECTORY = 'meeting-captures';
 
 const RECORD_FILE = 'session.json';
+/**
+ * D6 — the retention window, beside the audio it governs rather than in the
+ * app's general settings file.
+ *
+ * Two reasons, and the second is the one that matters. It is a property of this
+ * capture store: a user who moves their `userData` directory, or clears it,
+ * moves or clears the policy with the recordings it applies to. And main is the
+ * only process that may read or write inside a `0700` directory holding
+ * microphone audio, so a setting the sweep reads cannot be somewhere a renderer
+ * could rewrite it — a store that took deletion instructions from the window is
+ * not one that can promise a real deletion happens on a schedule the person set.
+ */
+const RETENTION_FILE = 'retention.json';
 const SEGMENT_PREFIX = 'segment-';
 /**
  * A fixed suffix rather than one derived from the recorder's MIME type: the
@@ -117,6 +141,16 @@ export interface BeginCaptureInput {
   readonly language?: string;
   /** The recorder's own MIME type, kept so `read` can describe the bytes truthfully. */
   readonly contentType?: string;
+}
+
+/** What a retention sweep must be told before it deletes anything — see `sweepExpired`. */
+export interface MeetingCaptureRetentionOptions {
+  /** The window in force, in days. Read from `retentionDays()` by the caller, so a test can state one. */
+  readonly days: number;
+  /** D6 — the same per-process liveness answer `recoverInterrupted` takes; defaults to "nobody". */
+  readonly isWriting?: (id: string) => boolean;
+  /** Injected so the sweep can be tested against a stated day rather than against today. */
+  readonly nowMs?: number;
 }
 
 /** What one boot pass must be told before it corrects anything — see `recoverInterrupted`. */
@@ -584,6 +618,96 @@ export class MeetingCaptureStore {
       if (stored) sessions.push(stored.session);
     }
     return resumableSessions(sessions, scope ? { scope } : {}).map(summarizeRecovery);
+  }
+
+  /**
+   * D6 — the retention window in force, in whole days.
+   *
+   * Reads through `normalizeMeetingRetentionDays`, so a torn or hand-edited file
+   * yields the shared default rather than a policy nobody chose. It never
+   * WRITES: a read that repaired the file would make "the user has not set one"
+   * indistinguishable from "the user chose thirty", and the surface says which.
+   */
+  async retentionDays(): Promise<number> {
+    let raw: string;
+    try { raw = await fs.promises.readFile(path.join(this.root, RETENTION_FILE), 'utf8'); }
+    catch { return MEETING_RETENTION_DEFAULT_DAYS; }
+    try {
+      const value = JSON.parse(raw) as { days?: unknown };
+      return normalizeMeetingRetentionDays(value?.days);
+    } catch { return MEETING_RETENTION_DEFAULT_DAYS; }
+  }
+
+  /** D6 — the window the user set, normalized before it is stored and returned as stored. */
+  async setRetentionDays(days: number): Promise<number> {
+    const stored = normalizeMeetingRetentionDays(days);
+    await fs.promises.mkdir(this.root, { recursive: true, mode: DIRECTORY_MODE });
+    await chmodQuiet(this.root, DIRECTORY_MODE);
+    const file = path.join(this.root, RETENTION_FILE);
+    const temporary = `${file}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temporary, `${JSON.stringify({ version: 1, days: stored })}\n`, { mode: FILE_MODE });
+    await chmodQuiet(temporary, FILE_MODE);
+    await fs.promises.rename(temporary, file);
+    return stored;
+  }
+
+  /**
+   * D6 — audio that has outlived the window, deleted for real.
+   *
+   * The third of D6's three deletion triggers, and the only one nobody presses.
+   * The first two are transitions a person makes; this one is what stops a
+   * recording somebody abandoned from sitting in a `0700` directory for ever —
+   * `resumable` will go on offering it, and the boot reap deliberately spares it
+   * because it HAS a record and it HAS bytes.
+   *
+   * Three things it must not touch, and each is the same rule some other pass
+   * here already follows:
+   *
+   * - **a capture somebody is recording into.** `isWriting` is the supervisor's
+   *   per-process writer map (invariant 5), the same answer `recoverInterrupted`
+   *   takes and for the same reason: an unattended pass that can delete is the
+   *   last place to guess about liveness. Note the DEFAULT is "nobody", which is
+   *   only true before any window can press Record — every caller past
+   *   registration must say otherwise.
+   * - **a directory whose record cannot be read.** `loadQuietly` returning null
+   *   covers both the orphan (no record) and the quarantine (unreadable one).
+   *   The first belongs to the orphan sweep and the second is preserved on
+   *   purpose; neither has a date this could age, and a sweep that deleted on a
+   *   date it could not read would be deleting on no evidence at all.
+   * - **anything the shared rule did not name.** The expiry comparison is
+   *   `expiredCaptureIds`, so the desktop and the browser age a capture by the
+   *   same clause rather than by two.
+   *
+   * The delete itself is `close`, which is what an explicit discard uses: the
+   * terminal status is written and only then is the directory removed, so a kill
+   * mid-sweep leaves a record recovery will not offer rather than a live one
+   * missing half its chunks.
+   */
+  async sweepExpired(options: MeetingCaptureRetentionOptions): Promise<readonly string[]> {
+    const isWriting = options.isWriting ?? (() => false);
+    const nowMs = options.nowMs ?? Date.now();
+    const captures: { id: string; at: string }[] = [];
+    for (const id of await this.storedIds()) {
+      const stored = await this.loadQuietly(id);
+      if (!stored) continue;
+      captures.push({ id, at: captureRetentionAt(stored.session) });
+    }
+    const expired = expiredCaptureIds(captures, {
+      nowMs,
+      days: options.days,
+      exclude: captures.map((capture) => capture.id).filter((id) => isWriting(id)),
+    });
+    const deleted: string[] = [];
+    for (const id of expired) {
+      // Asked AGAIN, immediately before the delete, rather than trusted from the
+      // listing above: reading every record on the device is not instant, and a
+      // Record pressed while this pass was reading is exactly the capture whose
+      // directory must not disappear underneath its recorder.
+      if (isWriting(id)) continue;
+      await this.close(id, discardCapture);
+      deleted.push(id);
+    }
+    return deleted;
   }
 
   /**

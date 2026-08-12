@@ -7,6 +7,7 @@ import {
   capturePhaseNote,
   foldTranscript,
   formatCaptureTimestamp,
+  meetingRetentionChoiceLabel,
   reconcileCaptureDraft,
   transcriptSoFar,
   unsettledSegments,
@@ -21,7 +22,7 @@ import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
-import { createMeetingCaptureOps, type MeetingCaptureProgress, type MeetingCaptureWriter, type MeetingTranscriptionStatus } from "./captureOps.js";
+import { createMeetingCaptureOps, type MeetingCaptureProgress, type MeetingCaptureWriter, type MeetingRetentionSetting, type MeetingTranscriptionStatus } from "./captureOps.js";
 import { MeetingCaptureRecorder } from "./captureRecorder.js";
 import { NO_CAPTURE_HOLD, captureInFlight, captureInHand, createCaptureHold, createComposeLife, prepareSubmission, type MeetingCaptureHold } from "./composeSubmit.js";
 import { createLegacyDraftMigration, type LegacyDraftMigration } from "./legacyDraft.js";
@@ -682,6 +683,17 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
   // not about the last thing that was clicked.
   const [recordIssue, setRecordIssue] = useState("");
   const [recovered, setRecovered] = useState(false);
+  /**
+   * ADR-035 D6 — the retention window in force, as the HOST reports it.
+   *
+   * Null until it has answered, and the control is not rendered before then: a
+   * select that shows thirty days while the store is actually sweeping by seven
+   * is the surface lying about a deletion policy, which is a worse failure than
+   * a control that appears a moment late.
+   */
+  const [retention, setRetention] = useState<MeetingRetentionSetting | null>(null);
+  /** What the last change to the window actually deleted, so the setting is not a claim. */
+  const [retentionSwept, setRetentionSwept] = useState("");
   // D6 — false until the host has answered with the saved draft. The autosave is
   // gated on it: an empty form is indistinguishable from an emptied one, and
   // saving it before the restore lands would delete the draft being restored.
@@ -966,6 +978,49 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
    * and no expiry to wait out: main knows, so main says.
    */
   useEffect(() => capture.onWriters(() => setRecoveryRevision((value) => value + 1)), [capture]);
+  /**
+   * D6 — the retention window, read from the host rather than assumed.
+   *
+   * Re-read on `recoveryRevision` because the two answers move together: the
+   * host sweeps before it computes the offer, so a list that just got shorter
+   * and a window that just took effect are the same event. A failure is silent
+   * and leaves the control unrendered — the sweep is the store's and runs
+   * whether or not this window can show it, so an error banner here would be
+   * announcing a problem with the SURFACE as though it were one with the audio.
+   */
+  useEffect(() => {
+    let active = true;
+    void capture.readRetention()
+      .then((setting) => { if (active) setRetention(setting); })
+      .catch(() => { if (active) setRetention(null); });
+    return () => { active = false; };
+  }, [capture, recoveryRevision]);
+  /**
+   * D6 — the window the person just chose, applied and swept in one call.
+   *
+   * `recoveryRevision` is bumped afterwards so the offer above re-reads: a
+   * shortened window can have just deleted a row this form is rendering, and
+   * leaving it on screen with a Play button would be offering audio that no
+   * longer exists.
+   */
+  const changeRetention = useCallback(async (days: number) => {
+    setRetentionSwept("");
+    try {
+      const next = await capture.writeRetention(days);
+      setRetention(next);
+      if (next.deleted) {
+        setRetentionSwept(next.deleted === 1
+          ? "1 recording older than the new window was deleted from this device."
+          : `${next.deleted} recordings older than the new window were deleted from this device.`);
+      }
+      setRecoveryRevision((value) => value + 1);
+    } catch (caught) {
+      // Said out loud, unlike the read: the person pressed something and it did
+      // not happen, and a select that silently springs back to its old value is
+      // the surface pretending a setting was accepted.
+      setRetentionSwept(errorText(caught, "That retention window could not be saved on this device."));
+    }
+  }, [capture]);
 
   /**
    * D6 — the writer that is NOT this window, and what to say about it.
@@ -1428,5 +1483,5 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
    */
   const heldByAnother = hold.inHand.some((id) => lockedIds.has(id));
 
-  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}{captureIssue ? <div className="mv-error" role="alert"><span>{captureIssue} This recording may be incomplete.</span><button type="button" onClick={() => setCaptureIssue("")} aria-label="Dismiss recording warning">×</button></div> : null}{recordIssue ? <div className="mv-error" role="alert"><span>{recordIssue}</span><button type="button" onClick={() => setRecordIssue("")} aria-label="Dismiss transcription warning">×</button></div> : null}{foreign ? <div className="mv-recovery" role="status"><strong>{foreign.note}</strong><p>Its audio stays on this device and cannot be transcribed or deleted from here while that recording is running. This page checks again on its own when the recording stops.</p></div> : null}{recoveryError ? <div className="mv-recovery" role="alert"><strong>Could not check for unfinished recordings</strong><p>{recoveryError} Audio already written to this device is still there.</p><button type="button" className="mv-secondary" onClick={() => setRecoveryRevision((value) => value + 1)}>Check again</button></div> : null}{recoveries.length ? <div className="mv-recovery" role="status"><strong>{recoveries.length === 1 ? "An unfinished recording is still on this device" : `${recoveries.length} unfinished recordings are still on this device`}</strong><p>The audio is here whether the app was killed or the recording was simply never turned into a meeting. Transcribe it, or delete it for good.</p>{recoveries.map((row) => <div className="mv-recovery-item" key={row.sessionId}><div className="mv-recovery-row"><span>{row.title}<small>{new Date(row.startedAt).toLocaleString()} · {minutes(row.durationMs)} · {megabytes(row.byteLength)} · {row.segments} segment{row.segments === 1 ? "" : "s"}</small></span><button type="button" className="mv-secondary" disabled={Boolean(busy) || holding || lockedIds.has(row.sessionId)} onClick={() => void adoptCapture(row.sessionId)}>Transcribe it</button><button type="button" className="mv-ghost" disabled={Boolean(busy)} onClick={() => void playCapture(row.sessionId)}>{busy === `play:${row.sessionId}` ? "Loading…" : "▶ Play"}</button><button type="button" className="mv-ghost" disabled={Boolean(busy) || capturing || lockedIds.has(row.sessionId)} onClick={() => void discardCapture(row.sessionId)}>Delete audio</button></div>{preview?.sessionId === row.sessionId ? <><audio className="mv-recovery-audio" controls autoPlay src={preview.url} />{preview.missing ? <small className="mv-recovery-missing">{preview.missing === 1 ? "1 saved audio chunk could not be read back and is" : `${preview.missing} saved audio chunks could not be read back and are`} missing from what plays here. The rest of the audio is intact.</small> : null}</> : null}</div>)}</div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={() => void stopRecording()}><span /> Stop recording</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy) || capturing}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing the imported file…" : `Audio is saved every ${Math.round(DEFAULT_MEETING_CHUNK_MS / 1000)}s · transcription units are about ${Math.round(DEFAULT_MEETING_UNIT_MS / 1000)}s · imports up to 40 MB`}</span></div>{live ? <LiveTranscript session={live} phase={phase} transcription={transcription} utterances={liveSpeech} retrying={retrying} onRetry={(index) => void retrySegment(index)} /> : null}<div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => editTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy) || capturing || heldByAnother} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : hold.closing ? "Saving the recording…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button>{capturing ? <span className="mv-unresolved">Stop the recording before creating the meeting — creating it releases the captured audio, and the chunk being written right now would have nowhere to land.</span> : unresolved > 0 ? <span className="mv-unresolved">{unresolved === 1 ? "1 segment is still being transcribed" : `${unresolved} segments are still being transcribed`} — creating the meeting now states them as gaps.</span> : null}</div></div></main>;
+  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}{captureIssue ? <div className="mv-error" role="alert"><span>{captureIssue} This recording may be incomplete.</span><button type="button" onClick={() => setCaptureIssue("")} aria-label="Dismiss recording warning">×</button></div> : null}{recordIssue ? <div className="mv-error" role="alert"><span>{recordIssue}</span><button type="button" onClick={() => setRecordIssue("")} aria-label="Dismiss transcription warning">×</button></div> : null}{foreign ? <div className="mv-recovery" role="status"><strong>{foreign.note}</strong><p>Its audio stays on this device and cannot be transcribed or deleted from here while that recording is running. This page checks again on its own when the recording stops.</p></div> : null}{recoveryError ? <div className="mv-recovery" role="alert"><strong>Could not check for unfinished recordings</strong><p>{recoveryError} Audio already written to this device is still there.</p><button type="button" className="mv-secondary" onClick={() => setRecoveryRevision((value) => value + 1)}>Check again</button></div> : null}{recoveries.length ? <div className="mv-recovery" role="status"><strong>{recoveries.length === 1 ? "An unfinished recording is still on this device" : `${recoveries.length} unfinished recordings are still on this device`}</strong><p>The audio is here whether the app was killed or the recording was simply never turned into a meeting. Transcribe it, or delete it for good.</p>{recoveries.map((row) => <div className="mv-recovery-item" key={row.sessionId}><div className="mv-recovery-row"><span>{row.title}<small>{new Date(row.startedAt).toLocaleString()} · {minutes(row.durationMs)} · {megabytes(row.byteLength)} · {row.segments} segment{row.segments === 1 ? "" : "s"}</small></span><button type="button" className="mv-secondary" disabled={Boolean(busy) || holding || lockedIds.has(row.sessionId)} onClick={() => void adoptCapture(row.sessionId)}>Transcribe it</button><button type="button" className="mv-ghost" disabled={Boolean(busy)} onClick={() => void playCapture(row.sessionId)}>{busy === `play:${row.sessionId}` ? "Loading…" : "▶ Play"}</button><button type="button" className="mv-ghost" disabled={Boolean(busy) || capturing || lockedIds.has(row.sessionId)} onClick={() => void discardCapture(row.sessionId)}>Delete audio</button></div>{preview?.sessionId === row.sessionId ? <><audio className="mv-recovery-audio" controls autoPlay src={preview.url} />{preview.missing ? <small className="mv-recovery-missing">{preview.missing === 1 ? "1 saved audio chunk could not be read back and is" : `${preview.missing} saved audio chunks could not be read back and are`} missing from what plays here. The rest of the audio is intact.</small> : null}</> : null}</div>)}</div> : null}{retention ? <div className="mv-retention" role="group" aria-label="Saved audio on this device"><label className="mv-retention-set"><span>Delete unfinished recordings after</span><select value={retention.days} disabled={!capture.retentionAvailable} onChange={(event) => void changeRetention(Number(event.target.value))}>{retention.choices.map((days) => <option key={days} value={days}>{meetingRetentionChoiceLabel(days)}</option>)}</select></label><p>{retention.description}</p>{retentionSwept ? <small role="status">{retentionSwept}</small> : null}{capture.retentionAvailable ? null : <small>This version of the desktop app cannot change that window. It is still being applied at the value shown.</small>}</div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={() => void stopRecording()}><span /> Stop recording</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy) || capturing}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing the imported file…" : `Audio is saved every ${Math.round(DEFAULT_MEETING_CHUNK_MS / 1000)}s · transcription units are about ${Math.round(DEFAULT_MEETING_UNIT_MS / 1000)}s · imports up to 40 MB`}</span></div>{live ? <LiveTranscript session={live} phase={phase} transcription={transcription} utterances={liveSpeech} retrying={retrying} onRetry={(index) => void retrySegment(index)} /> : null}<div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => editTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy) || capturing || heldByAnother} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : hold.closing ? "Saving the recording…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button>{capturing ? <span className="mv-unresolved">Stop the recording before creating the meeting — creating it releases the captured audio, and the chunk being written right now would have nowhere to land.</span> : unresolved > 0 ? <span className="mv-unresolved">{unresolved === 1 ? "1 segment is still being transcribed" : `${unresolved} segments are still being transcribed`} — creating the meeting now states them as gaps.</span> : null}</div></div></main>;
 }

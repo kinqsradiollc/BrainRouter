@@ -13,10 +13,14 @@ import test from "node:test";
 import {
   appendChunk,
   DEFAULT_MEETING_CHUNK_MS,
+  describeMeetingRetention,
+  MEETING_AUDIO_BITS_PER_SECOND,
+  MEETING_RETENTION_DAY_CHOICES,
+  MEETING_RETENTION_DEFAULT_DAYS,
   sealDueUnits,
   type MeetingCaptureSession,
 } from "@kinqs/brainrouter-core/meetings";
-import type { MeetingCaptureOps } from "./captureOps.js";
+import type { MeetingCaptureOps, MeetingRetentionSetting } from "./captureOps.js";
 import { CaptureCancelledError, MeetingCaptureRecorder, MicrophoneUnavailableError } from "./captureRecorder.js";
 
 class FakeRecorder {
@@ -40,6 +44,12 @@ class FakeRecorder {
   }
   emit(bytes: number[]): void { this.ondataavailable?.({ data: new Blob([new Uint8Array(bytes)]) }); }
 }
+
+const RETENTION: MeetingRetentionSetting = {
+  days: MEETING_RETENTION_DEFAULT_DAYS,
+  choices: MEETING_RETENTION_DAY_CHOICES,
+  description: describeMeetingRetention(MEETING_RETENTION_DEFAULT_DAYS),
+};
 
 interface Recorded {
   appended: Array<{ id: string; bytes: number[]; durationMs: number }>;
@@ -88,6 +98,11 @@ function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
       readDraft: async () => null,
       writeDraft: async () => undefined,
       clearDraft: async () => undefined,
+      // D6 — nor the retention window: the recorder writes audio, and how long
+      // that audio is kept is a policy the store applies to it afterwards.
+      retentionAvailable: true,
+      readRetention: async () => RETENTION,
+      writeRetention: async () => RETENTION,
     },
   };
 }

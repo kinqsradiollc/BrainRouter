@@ -43,10 +43,17 @@ export type LearnedOrigin = 'model-inferred' | 'human-correction';
  *
  * `procedure` is §1's first gap — a repeated sequence that should RUN rather
  * than be re-read and re-interpreted every turn, so it promotes to a learned
- * skill (D3). `delegation` is the third gap: a repeated sub-task SHAPE, stored
- * so the next occurrence is handed to a role instead of re-derived.
+ * skill (D3).
+ *
+ * There is deliberately no `delegation` form. §1 listed "a repeated sub-task
+ * shape never becomes a reusable role" as a gap and D3 has since WITHDRAWN it:
+ * a learned role would need a constrained child-authority port that proves and
+ * re-applies a narrower ceiling on every spawn, and no such port is being
+ * built. Carrying the form anyway meant the gate refused it unconditionally —
+ * a branch nobody could ever reach, and a union member that promised a
+ * capability the product does not have.
  */
-export type LearnedForm = 'lesson' | 'procedure' | 'delegation';
+export type LearnedForm = 'lesson' | 'procedure';
 
 /**
  * D6's ladder, and the reason it is a ladder rather than a boolean.

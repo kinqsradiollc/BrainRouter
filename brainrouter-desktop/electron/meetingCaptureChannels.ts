@@ -46,8 +46,25 @@
  * reaped and logged. It runs here, before any window can press Record, and it is
  * handed the supervisor's liveness predicate rather than reading one off the
  * record.
+ *
+ * ## …and the retention sweep, which is not the same pass
+ *
+ * D6's third deletion trigger deletes audio a person still WANTED offered back
+ * yesterday, so it is chained after recovery rather than folded into it: the
+ * reap decides from what a directory contains, the sweep from how old a
+ * capture's record says it is, and running the second over records the first is
+ * still rewriting would age a capture by a date about to change. It runs at
+ * registration, before every recovery offer, and the instant the window is
+ * changed — three moments, no timer, and the same liveness predicate every
+ * destructive pass here takes.
  */
-import type { MeetingCaptureScope, MeetingCaptureTemplate } from '@kinqs/brainrouter-core/meetings';
+import {
+  describeMeetingRetention,
+  MEETING_RETENTION_DAY_CHOICES,
+  normalizeMeetingRetentionDays,
+  type MeetingCaptureScope,
+  type MeetingCaptureTemplate,
+} from '@kinqs/brainrouter-core/meetings';
 import type { MeetingCaptureStore } from './meetingCapture.js';
 import { normalizeComposeDraft, type MeetingDraftStore } from './meetingDraft.js';
 import type { MeetingTranscriptionSupervisor } from './meetingTranscription.js';
@@ -174,7 +191,37 @@ export function registerMeetingCaptureChannels(
     if (report.reaped.length) warn(`[meetings] reaped ${report.reaped.length} capture director(ies) holding no recoverable audio.`);
   }).catch((caught: unknown) => {
     warn(`[meetings] capture recovery failed: ${caught instanceof Error ? caught.message : String(caught)}`);
-  });
+  }).then(() => sweepRetention());
+
+  /**
+   * D6 — delete what has outlived the window, and say how much.
+   *
+   * Chained after the boot pass rather than beside it because both walk the same
+   * directory and the recovery pass REWRITES records: a sweep reading a capture
+   * half-way through its reconciliation would age it by a date that is about to
+   * change. Its own failure is logged and swallowed for the same reason the
+   * recovery's is — a store that cannot be swept must not leave every capture
+   * IPC deadlocked behind it.
+   *
+   * It runs here and before every recovery offer, and that pair is deliberate:
+   * boot covers the app that is opened once a week, and the offer covers the one
+   * that is left running for a month. Neither is a timer, so there is no
+   * schedule to drift and nothing deleting audio while nobody is looking at the
+   * app at all.
+   */
+  async function sweepRetention(): Promise<void> {
+    try {
+      const days = await store.retentionDays();
+      const deleted = await store.sweepExpired({ days, isWriting: (id) => supervisor.isWriting(id) });
+      // D6 asks for the reap to be logged, and this deletes MORE than the reap
+      // does — a reaped directory held nothing anyone would be offered, while
+      // this one held a whole recording that simply got old. Silence about that
+      // would be the retention incident, not the fix for it.
+      if (deleted.length) warn(`[meetings] deleted ${deleted.length} capture(s) older than the ${days}-day retention window.`);
+    } catch (caught) {
+      warn(`[meetings] retention sweep failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+    }
+  }
 
   host.handle('meetings:captureBegin', async (caller, input: unknown) => {
     await bootRecovery;
@@ -248,6 +295,11 @@ export function registerMeetingCaptureChannels(
   });
   host.handle('meetings:captureResumable', async (_caller, scope: unknown) => {
     await bootRecovery;
+    // D6 — swept BEFORE the offer is computed, not after. This is the one moment
+    // an expired capture would otherwise be put back in front of somebody, and
+    // an offer that lists a recording the policy has already condemned is a
+    // surface disagreeing with the store about what exists.
+    await sweepRetention();
     const offers = await store.resumable(scopeOf(scope));
     // D2/D6 — a recording IN PROGRESS is not an unfinished recording to offer
     // back, and the store cannot tell the difference: `isResumableSession`
@@ -280,6 +332,42 @@ export function registerMeetingCaptureChannels(
     const holder = holderOf(holderId);
     if (holder) release(holder);
     return { ok: true };
+  });
+
+  /**
+   * D6 — the retention window, so a surface can show it.
+   *
+   * The choices and the sentence come back with the number because both are the
+   * SHARED rule's (`retention.ts`), and a host that composed its own wording
+   * would be describing a policy the other host enforces differently. `days` is
+   * whatever the store will actually sweep by, never the raw stored byte.
+   */
+  host.handle('meetings:retentionRead', async () => {
+    await bootRecovery;
+    const days = await store.retentionDays();
+    return { days, choices: MEETING_RETENTION_DAY_CHOICES, description: describeMeetingRetention(days) };
+  });
+  /**
+   * D6 — the window the user set, and the sweep it implies, in one call.
+   *
+   * Swept immediately, because the control that shortens a window is being
+   * pressed by somebody who wants audio gone: a setting that only takes effect
+   * at the next launch is a promise with a delay in it, and this is the decision
+   * about deleting microphone recordings. The answer carries what was deleted so
+   * the surface can say it happened rather than implying it.
+   */
+  host.handle('meetings:retentionWrite', async (_caller, days: unknown) => {
+    await bootRecovery;
+    const stored = await store.setRetentionDays(normalizeMeetingRetentionDays(days));
+    const deleted = await store.sweepExpired({ days: stored, isWriting: (id) => supervisor.isWriting(id) });
+    if (deleted.length) {
+      warn(`[meetings] deleted ${deleted.length} capture(s) older than the ${stored}-day retention window.`);
+      // The offer, and every window's disabled state over it, is now wrong. This
+      // is the same push a Stop sends, for the same reason: the set of captures
+      // a surface may render just changed underneath it.
+      announce();
+    }
+    return { days: stored, choices: MEETING_RETENTION_DAY_CHOICES, description: describeMeetingRetention(stored), deleted: deleted.length };
   });
 
   // D6 — the compose draft. It used to be written to `localStorage` from the

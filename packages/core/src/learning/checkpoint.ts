@@ -582,10 +582,7 @@ async function runLearningCheckpointSerialized(
     // Promote only after the central pointer is durable (or in a deliberately
     // local-only host). This prevents a runnable skill whose fact cannot later
     // be located and retired.
-    if (
-      (candidate.form === 'procedure' || candidate.form === 'delegation')
-      && stored.id === item.id
-    ) {
+    if (candidate.form === 'procedure' && stored.id === item.id) {
       const written = promoteToSkill(candidate, stored, input.tenant, input.sessionKey, now);
       if (written) {
         skillsWritten.push(written);

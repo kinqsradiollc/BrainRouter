@@ -17,16 +17,26 @@ fails it with "a new agent was never handed what the last one learned".
 This closes §6 steps 1–4 deterministically. It is NOT the live-model exercise §6 also asks for; that
 remains outstanding and needs an owner-approved run.
 
-**Implementation status (2026-08-09):** PARTIAL — local, CLI, Desktop and hosted chat now have
+**Implementation status (2026-08-12):** PARTIAL — local, CLI, Desktop and hosted chat now have
 tenant-pinned learning, explicit human-correction ingress, reversible central/device governance,
 and bounded automatic checkpoints. Hosted reflection is admitted and enqueued atomically through
-Postgres with per-session and per-user-plus-org budgets, then executed by an internal worker. D3 is
-still incomplete: command-based local procedures do not yet carry a separate runtime-owned ledger
-of the exact successful actions they may need, learned delegation remains deliberately fail-closed,
-and raw hosted chat has no learned-skill execution port. Hosted D5 currently fires at turn-end only;
-there is no server-owned session-end or semantic compaction checkpoint. Deterministic and
-real-Postgres tests exercise the lifecycle, but neither a fresh full-Agent repeated-mistake exercise
-nor a qualifying live-model acceptance run has been recorded.
+Postgres with per-session and per-user-plus-org budgets, then executed by an internal worker.
+
+Three things this ADR used to leave pending are now **withdrawn rather than deferred**, because each
+was a promise with no owner and a branch no execution could reach (see D3 and D5):
+
+- **learned delegation is gone from the model**, not fail-closed. `LearnedForm` is
+  `lesson | procedure`;
+- **procedure learning is withdrawn from hosted chat.** The gate is told what the host can execute
+  and refuses a procedure there by name (`no-execution-port`), counted separately in the job result
+  instead of being filed as a "lesson";
+- **hosted D5 is turn-end, and that is the whole of it.** There is no compaction event and no
+  session-end signal on a stateless chat endpoint to hook one to.
+
+What remains genuinely incomplete: command-based local procedures do not yet carry a separate
+runtime-owned ledger of the exact successful actions they may need. Deterministic and real-Postgres
+tests exercise the lifecycle, but neither a fresh full-Agent repeated-mistake exercise nor a
+qualifying live-model acceptance run has been recorded.
 
 ---
 
@@ -44,7 +54,7 @@ Six gaps, each verified against the code rather than assumed:
 |---|---|
 | **Procedure is prose** | A `reusableWorkflow` is a description the model re-reads and re-interprets every turn. Nothing it learns ever becomes something that *runs*. |
 | **No behavioural persistence** | Nothing writes supplemental instruction. A correction survives as a memory the model may or may not weight. |
-| **No delegation learning** | A repeated sub-task shape never becomes a reusable role. |
+| **No delegation learning** | A repeated sub-task shape never becomes a reusable role. **Withdrawn in D3** — this gap is real and we are not closing it. |
 | **Nothing decides whether to learn** | `reflectSession` stores what it extracts. There is no gate. |
 | **No rollback** | `grep rollback` over `memory/` hits only SQL migrations. A bad lesson has no defined way out. |
 | **Learning is opt-in and manual** | `memory_reflect_session` is an MCP tool the agent must choose to call. There is no turn-end, session-end, or compaction trigger. |
@@ -120,6 +130,28 @@ Consequences to accept deliberately:
 - ADR-031's byte-for-byte drift check keeps applying to the library and must **not** be extended to
   the learned store, or every learned skill fails the build.
 
+#### What D3 does NOT cover, decided rather than deferred
+
+**Learned delegation is withdrawn.** §1 listed "a repeated sub-task shape never becomes a reusable
+role" as a gap, and it is one. Closing it needs a constrained child-authority port that can prove a
+narrower ceiling at spawn time and re-prove it every time the role is reused — a capability nobody
+is building, and one this ADR is in no position to promise. It was carried for a while as a
+`delegation` form the gate refused unconditionally, which is worse than absence: the union advertised
+a capability, the refusal read as temporary, and the promotion branch behind it was unreachable code.
+The form is removed. If the port is ever built, the form comes back with it.
+
+**Procedure learning is withdrawn from hosted chat.** `POST /api/brain/chat` is a model call and
+nothing else — no tool loop, no skill loader, no activation — so a learned procedure there could only
+be stored as prose that claims to run, which is exactly §1's first gap wearing a fix's clothes.
+Rather than persist it under a quieter label, the gate is told what the host can execute and refuses
+a procedure by name: rule `no-execution-port`, a reason that says which port is missing, and its own
+counter in the checkpoint's result so an operator can see a withdrawn capability being exercised
+instead of reading it as ordinary gate noise. Local, CLI and Desktop are unaffected; they have the
+port, so they still learn procedures that run.
+
+> A procedure hosted chat cannot run is not a lesson. Filing it as one is how the store fills with
+> statements that describe a behaviour nothing performs.
+
 ### D4 · Every learned item is reversible, and carries where it came from
 
 A learned item records the session, the trajectory evidence, the gate's reasoning, and a stable id.
@@ -139,6 +171,25 @@ Two constraints:
   reflection;
 - **it is bounded per session.** Reflection is an LLM call; unbounded, it is a cost leak that scales
   with how badly a session is going.
+
+#### Hosted has one of those three checkpoints, and that is the decision
+
+Local, CLI and Desktop fire at all three moments. **Hosted chat reflects at turn end only.** Not as
+a shortfall to be filled later — the other two moments do not occur on that surface:
+
+- **there is no compaction.** `POST /api/brain/chat` receives the history from the client on every
+  request and never compacts it, so there is no event to hook a checkpoint to;
+- **there is no session end.** The server is never told a hosted conversation finished; a browser
+  simply stops posting. The only way to detect one is an idle timer, and that means keeping a copy
+  of the conversation on the server past the turn that needed it, so a sweep can reflect on it
+  minutes later. That is a new retention surface for user conversation content, bought for a
+  marginal gain over a checkpoint that already runs after **every** completed turn under the same
+  budgets.
+
+The exchange is deliberate: hosted trades the whole-session view for reflecting on every turn.
+`HOSTED_LEARNING_CHECKPOINT_REASON` states it once, and the durable job schema validates the same
+constant at the far end of the queue, so a future session-end enqueue fails closed rather than
+arriving as an unhandled reason.
 
 ### D6 · Measure whether it helped, and retire what did not
 
@@ -213,8 +264,9 @@ impossible to take back.
    per-session and per-user-plus-org daily model-call ceilings. An internal executor resolves the
    exact active-org reflection model, admits only falsifiable evidence-tier lessons, applies
    outcomes only to the exact items delivered to that turn, and rotates a persistent bounded cursor
-   across retirement candidates. Hosted chat has no tool/procedure activation port, so procedure
-   and delegation candidates fail closed until that capability exists.
+   across retirement candidates. Hosted chat has no tool/procedure activation port, and D3 now
+   withdraws procedure learning there rather than holding it open: the gate refuses it as
+   `no-execution-port` and the checkpoint reports that refusal on its own counter.
 2. **Retirement has an explicit first policy.** One observed falsifier retires immediately; five
    retrievals without a confirmed outcome demote an item; an unused item demotes after 30 days and
    retires on a later sweep if it remains unused. Re-deriving the same statement is not a
