@@ -32,8 +32,14 @@ so streaming is off in every shipped configuration and an operator opts in by se
   does not; replay resumes exactly one chunk past the checkpoint; coverage beyond the written ledger
   is refused rather than clamped; a reconnecting endpoint cannot un-commit settled audio.
 
-**What is still owed is a CI job** that runs that acceptance against a streaming sidecar, so it
-cannot rot unnoticed. That is release engineering, not a decision in this document.
+**The CI job exists too** (`meeting-streaming-acceptance` in `.github/workflows/docker.yml`). It
+builds the bundled sidecar, runs it on loopback, and drives the acceptance against it on every pull
+request that touches the sidecar, the brain, or the packages. An acceptance that only ever ran on
+one laptop is one refactor away from being decorative, which is the state this decision kept being
+found in; the harness exits non-zero rather than skipping when no sidecar answers, so the job cannot
+go green by testing nothing.
+
+Nothing in this decision is outstanding.
 
 **D6's retention window is built on both hosts** — a default this document names (30 days), a
 control in each capture surface, and a sweep that performs the same deletion an explicit discard

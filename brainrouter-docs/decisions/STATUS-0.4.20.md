@@ -12,11 +12,11 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 
 | ADR | Title | State | What is not closed |
 |---|---|---|---|
-| **028** | Surfaces that tell the truth | **SETTLED** | Nothing. Every decision reaches a user or is retired. |
+| **028** | Surfaces that tell the truth | **SETTLED** (= complete) | Nothing. Every decision reaches a user or is retired. |
 | **032** | An agent that gets better and cannot get worse | **COMPLETE IN CODE** | One acceptance run, which spends your tokens. |
 | **033** | Review that finds things and says where | **PARTIAL** | One number, from a harness that ships and has never been run. |
 | **034** | Messages that arrive | **COMPLETE** | Three exports nothing reaches — see below. |
-| **035** | A meeting you cannot lose | **COMPLETE** | Nothing blocking. A CI job for the streaming acceptance is still owed. |
+| **035** | A meeting you cannot lose | **COMPLETE** | Nothing. |
 | **038** | A planner worth opening | **COMPLETE** | Nothing. |
 
 ---
@@ -111,7 +111,7 @@ inside a merge commit was deliberately not done; each needs wiring or deleting.
 `rejectHeldSessionMessage` looks like a half-wired feature: messages can be held,
 apparently not rejected.
 
-## 035 — A meeting you cannot lose · PARTIAL
+## 035 — A meeting you cannot lose · COMPLETE
 
 - **D9** — destructive acceptance **passes on both hosts by reproduction**: a real
   SIGKILL mid-recording and a real browser, reopened, losing nothing.
@@ -141,8 +141,13 @@ apparently not rejected.
   beyond the written ledger is refused rather than clamped; and a reconnecting
   endpoint cannot un-commit settled audio.
 
-**Not closed:** nothing that blocks the release. The remaining D10 item is a CI job
-that runs this acceptance against a streaming sidecar, so it cannot silently rot.
+- **D10's CI job** — `meeting-streaming-acceptance` in `.github/workflows/docker.yml`
+  builds the sidecar, runs it on loopback, and drives the acceptance on every PR
+  touching the sidecar, the brain, or the packages. The harness exits non-zero
+  rather than skipping when nothing answers, so the job cannot go green by
+  testing nothing.
+
+**Not closed:** nothing.
 
 ## 038 — A planner worth opening · COMPLETE
 

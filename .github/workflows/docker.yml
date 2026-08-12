@@ -46,3 +46,70 @@ jobs:
           load: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  meeting-streaming-acceptance:
+    name: ADR-035 D10 — streaming acceptance
+    runs-on: ubuntu-latest
+    # ADR-035 D10 named this explicitly: the streaming path was built, shipped
+    # OFF by default, and never exercised against a real engine. It has been now
+    # — and an acceptance that only ever ran on one laptop is one refactor away
+    # from being decorative again. This is the job that stops that.
+    #
+    # It builds the bundled sidecar, runs it, and drives the SHIPPED chain
+    # against it: the sidecar's own capability document, through the brain's
+    # gateway probe, into Core's strict v1 reader, into the mode both hosts
+    # select. Then the four ways an incomplete answer must degrade to segmented,
+    # and the checkpoint rules that make a reconnect safe.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build the whisper sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/stt
+          file: deploy/stt/Dockerfile
+          push: false
+          load: true
+          tags: brainrouter-stt:acceptance
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Loopback only. The acceptance drives it from this runner and nothing
+      # else should be able to reach it.
+      - name: Start the sidecar
+        run: |
+          docker run -d --name stt-acceptance \
+            -p 127.0.0.1:3752:3752 \
+            brainrouter-stt:acceptance
+          for i in $(seq 1 40); do
+            if curl -fsS -m 3 http://127.0.0.1:3752/health >/dev/null 2>&1; then
+              echo "sidecar healthy after ~$((i * 3))s"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::the sidecar never became healthy"
+          docker logs stt-acceptance || true
+          exit 1
+
+      - name: Install and build the packages the acceptance imports
+        run: |
+          npm ci
+          npm run build:packages
+
+      # Exits non-zero rather than skipping when the sidecar is absent, so this
+      # job cannot pass by testing nothing — the failure mode D10 kept hitting.
+      - name: Run the acceptance
+        run: npm run acceptance:meeting-streaming
+
+      - name: Sidecar logs on failure
+        if: failure()
+        run: docker logs stt-acceptance || true
+
+      - name: Stop the sidecar
+        if: always()
+        run: docker rm -f stt-acceptance || true
