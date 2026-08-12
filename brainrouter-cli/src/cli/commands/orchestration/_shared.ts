@@ -18,6 +18,15 @@ export interface DmAddressResolution {
   error?: string;
 }
 
+/**
+ * ADR-034 D1 — a full session key is already an address; a short prefix is
+ * only a request to look one up. The two must be answered differently when
+ * discovery comes back without a match.
+ */
+function isLikelyFullSessionKey(target: string): boolean {
+  return target.length >= 32 || target.includes(':child:');
+}
+
 export async function resolveDmAddress(
   mcpClient: CommandContext['mcpClient'],
   target: string,
@@ -57,10 +66,19 @@ export async function resolveDmAddress(
       error: `Ambiguous session prefix "${rawTarget}" matched ${matches.length} sessions (${prefixes}). Use more characters.`,
     };
   }
-  return {
-    to: rawTarget,
-    error: `No active session matched "${rawTarget}". Refresh /agents --remote and choose an exact key or unique prefix.`,
-  };
+  // D1 — only an exact key routes, and discovery is description, not
+  // permission: a listing that did not name this key must not veto an address
+  // the caller already holds, so a full key goes out literally and the send
+  // itself reports whether anyone is there. A prefix that resolved to nothing
+  // is not an address, and sending it literally would address a session that
+  // does not exist.
+  if (!isLikelyFullSessionKey(rawTarget)) {
+    return {
+      to: rawTarget,
+      error: `No active or recently-seen session matched prefix "${rawTarget}". Use /agents --remote to copy a session prefix.`,
+    };
+  }
+  return { to: rawTarget };
 }
 
 /**
