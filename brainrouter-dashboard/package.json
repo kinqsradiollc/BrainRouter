@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test \"app/**/*.test.ts\" \"components/**/*.test.tsx\" \"lib/**/*.test.ts\"",
     "start": "next start",
-    "build:cf": "npm --prefix .. run build:packages:dashboard && opennextjs-cloudflare build",
+    "build:cf": "node scripts/verify-cf-workspace.mjs && npm --prefix .. run build:packages:dashboard && opennextjs-cloudflare build",
     "cf:preview": "npm run build:cf && opennextjs-cloudflare preview",
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },

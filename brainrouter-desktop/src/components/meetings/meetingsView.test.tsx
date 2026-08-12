@@ -166,8 +166,29 @@ interface FakeHost {
    * the window the compose form can disappear in.
    */
   holdRead(): () => void;
-  /** Publish a persisted change, as main's broadcast does. */
-  push(progress: { sessionId?: string; session: MeetingCaptureSession; phase?: string; errors?: string[] }): void;
+  /**
+   * Publish a persisted change, as main's broadcast does.
+   *
+   * D10 — `transcription` and `live` ride the SAME push rather than a second
+   * channel, which is what lets a surface hold one answer about a capture
+   * instead of reconciling two.
+   */
+  push(progress: {
+    sessionId?: string;
+    session: MeetingCaptureSession;
+    phase?: string;
+    errors?: string[];
+    transcription?: { mode: string; live: boolean; notice: string };
+    live?: Array<{
+      kind: "partial" | "final";
+      state: "partial" | "final";
+      utteranceId: string;
+      revision: number;
+      text: string;
+      startMs: number;
+      endMs: number;
+    }>;
+  }): void;
   readonly ops: MeetingsOps;
 }
 
@@ -382,6 +403,66 @@ test("a segment the host persists reaches the transcript box and the live panel"
     // state from the box and rendered from a different value.
     assert.match(screenText(mounted.root), /Live transcript/);
     assert.match(screenText(mounted.root), /1 of 1 transcribed/);
+    mounted.unmount();
+  } finally { restore(); }
+});
+
+test("D10 — a partial is on screen while it is still being spoken, and never in the box", async () => {
+  const { host, restore } = installHost();
+  try {
+    const mounted = await compose(host);
+    await press(mounted, "● Record audio");
+    // The host is streaming and the endpoint has produced mid-utterance text.
+    // Nothing is settled yet: the record still has no segments at all.
+    await mounted.act(() => host.push({
+      session: session(),
+      transcription: { mode: "streaming", live: true, notice: "Live transcription is on — text appears while the meeting is being spoken." },
+      live: [{ kind: "partial", state: "partial", utteranceId: "u0", revision: 1, text: "we should ship on", startMs: 0, endMs: 2_400 }],
+    }));
+
+    const speaking = screenText(mounted.root);
+    assert.match(speaking, /we should ship on/);
+    // D4 — visibly PROVISIONAL, which is the difference between this and a
+    // transcript. And provisional text is not editable text: putting it in the
+    // box would hand someone a sentence that rewrites itself under the cursor.
+    assert.match(speaking, /Still being spoken/);
+    assert.match(speaking, /Live transcription is on/);
+    assert.equal(transcriptBox(mounted), "");
+
+    // Committed: the words leave the live list and arrive as a settled segment,
+    // through the same fold every other segment goes through.
+    await mounted.act(() => host.push({
+      session: session({ segments: [segment(0, { text: "We should ship on Friday." })] }),
+      transcription: { mode: "streaming", live: true, notice: "" },
+      live: [],
+    }));
+    assert.equal(transcriptBox(mounted), "We should ship on Friday.");
+    assert.doesNotMatch(screenText(mounted.root), /Still being spoken/);
+    mounted.unmount();
+  } finally { restore(); }
+});
+
+test("D10/golden rule 23 — a live path that degraded says so on screen", async () => {
+  const { host, restore } = installHost();
+  try {
+    const mounted = await compose(host);
+    await press(mounted, "● Record audio");
+    await mounted.act(() => host.push({
+      session: session(),
+      transcription: {
+        mode: "segmented",
+        live: false,
+        notice: "Live transcription stopped, so the rest of this meeting is being transcribed in segments. The audio is on this device and nothing recorded so far is lost.",
+      },
+    }));
+
+    // A meeting transcribed in segments because streaming was refused must not
+    // look identical to one that never asked. The sentence is main's, printed
+    // rather than inferred from the absence of live rows.
+    const degraded = screenText(mounted.root);
+    assert.match(degraded, /Live transcription stopped/);
+    assert.match(degraded, /transcribed in segments/);
+    assert.match(degraded, /Segments/);
     mounted.unmount();
   } finally { restore(); }
 });

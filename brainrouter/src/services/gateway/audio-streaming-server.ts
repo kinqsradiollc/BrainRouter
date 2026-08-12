@@ -7,9 +7,10 @@
  * isolated in `audio-streaming-connection.ts` so controller cleanup cannot become
  * entangled with attach, chunk, transcript, or finish state.
  *
- * The shipped speech sidecar has no documented persistent protocol. Production
- * therefore injects no streaming port, advertises segmented upload only, and
- * rejects this upgrade without changing the batch POST route.
+ * A streaming port is injected only where a deployment has named a streaming
+ * endpoint (`audio-streaming-endpoint.ts`). Without one, production injects
+ * nothing here, advertises segmented upload only, and rejects this upgrade
+ * without changing the batch POST route.
  */
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";

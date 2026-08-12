@@ -3,10 +3,14 @@
 **Status:** ACCEPTED — owner-approved.
 
 **Implementation status (2026-08-11): PARTIAL** — D9 is implemented with automated host coverage,
-with destructive acceptance still pending. D10's strict capability/checkpoint contract and
-authenticated, bounded gateway transport foundation are implemented but dormant: the bundled
-speech sidecar has no streaming adapter, and Dashboard/Desktop still use segmented uploads. D11
-and D6's accepted-summary retention/deletion policy are not built.
+with destructive acceptance still pending. D10 is implemented end to end and OFF by default: the
+bundled sidecar streams, the gateway adapter is injected only when `BRAINROUTER_STT_STREAM_URL` is
+set, and both hosts discover the capability and consume it. With the variable unset — every shipped
+compose — capabilities advertise `streaming: null`, upgrades are refused, and batch transcription is
+byte-for-byte what it was. What is NOT done is acceptance: no shipped configuration turns streaming
+on, so live-text, reconnect/replay and visible-fallback have never been run against a real whisper
+outside a scratch driver, and no CI job exercises the streaming sidecar. D11 and D6's
+accepted-summary retention/deletion policy are not built.
 
 **Depends on:** ADR-018 (meetings capture/transcribe/summarize), ADR-028 (surfaces that tell the truth),
 ADR-027 D12 (distributed-systems correctness), ADR-029 (one workspace, many surfaces).
@@ -272,19 +276,25 @@ exact v1 capability document promising persistent sessions, partial results, ser
 boundaries, server coverage checkpoints, resumability, supported latency modes, and segmented
 fallback. A host promotes proven coverage to a durable resume checkpoint only after persisting the
 matching transcript state. The authenticated gateway exposes capability discovery and a bounded
-optional WebSocket adapter boundary. Production injects no adapter, so it advertises
-`streaming: null`, rejects stream upgrades, and leaves batch transcription unchanged. Neither host
-discovers or consumes this contract yet. D10 remains incomplete until a real adapter and both hosts
-pass live-text, reconnect/replay, and visible-fallback acceptance.
+optional WebSocket adapter boundary. The adapter is injected only when
+`BRAINROUTER_STT_STREAM_URL` is set; unset — which is every shipped compose — it advertises
+`streaming: null`, rejects stream upgrades, and leaves batch transcription unchanged. Both hosts now
+ask for capabilities at Record and pick a strategy from the answer.
+
+D10 remains incomplete until that acceptance is RUN: a configuration that turns streaming on, and
+both hosts passing live-text, reconnect/replay and visible-fallback against a real engine. Built and
+never exercised is the state this ADR has paid for repeatedly, so it is named here rather than
+implied by a green suite.
 
 | D10 delivery slice | State |
 |---|---|
 | Strict capability schema, strategy selection, checkpoint validation | Implemented |
-| Authenticated capability route and bounded gateway transport seam | Implemented, dormant |
-| Real streaming endpoint adapter | Pending |
-| Desktop main-process integration | Pending |
-| Dashboard integration | Pending |
-| Live text, reconnect/replay, and visible fallback acceptance | Pending |
+| Authenticated capability route and bounded gateway transport seam | Implemented |
+| Real streaming endpoint adapter (sliding-window decode over whisper.cpp) | Implemented, opt-in |
+| Desktop main-process integration | Implemented |
+| Dashboard integration | Implemented |
+| A shipped configuration that turns streaming on | Implemented — `BRAINROUTER_STT_STREAM_URL` in the dev compose, unset by default |
+| Live text, reconnect/replay, and visible fallback acceptance, against a real engine | **Pending** |
 
 ### D11 · In the browser, the server is the system of record — not the origin's quota
 

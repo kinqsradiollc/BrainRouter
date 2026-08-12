@@ -41,6 +41,7 @@ import {
   isTerminalCaptureStatus,
   unitChunkSequences,
   type MeetingCaptureSession,
+  type MeetingTranscriptCommittedCheckpoint,
   type MeetingTranscriptionPorts,
   type MeetingTranscriptionQueue,
 } from "@kinqs/brainrouter-core/meetings";
@@ -138,6 +139,18 @@ export interface CaptureQueueOptions {
    * outage schedule nobody can test is a schedule nobody has checked.
    */
   readonly now?: () => number;
+  /**
+   * ADR-035 D10 — the streaming checkpoint to write DOWN WITH this session.
+   *
+   * A function rather than a value because the checkpoint moves while the queue
+   * lives, and it is read here — inside the persist, after the transition that
+   * settled the units the checkpoint is a claim about — so the two land in one
+   * `setPayload`. Read anywhere earlier and a transition queued behind this one
+   * could flush a newer token beside an older session, which is precisely the
+   * "checkpoint promoted before the transcript state it covers" the contract
+   * forbids.
+   */
+  readonly checkpoint?: () => MeetingTranscriptCommittedCheckpoint | null;
 }
 
 /**
@@ -180,11 +193,14 @@ export function createCaptureQueue(options: CaptureQueueOptions): MeetingTranscr
     transcribe: (audio, type) => options.transcribe(audio, type),
     ...(options.now ? { now: options.now } : {}),
     async persist(next) {
+      // Read HERE, in the same turn as the write. See `checkpoint` on the options.
+      const checkpoint = options.checkpoint?.() ?? null;
       await store.setPayload(
         sessionId,
         serializeCapturePayload({
           ...(options.title ? { title: options.title } : {}),
           mimeType,
+          ...(checkpoint ? { checkpoint } : {}),
           session: next,
         }),
         // D2/D6 — `closed` is what stops a finished or discarded meeting being

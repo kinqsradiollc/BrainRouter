@@ -29,7 +29,15 @@
  *
  * The underscore prefix keeps it out of the `*.test.ts` glob.
  */
-import { DEFAULT_MEETING_UNIT_MS } from "@kinqs/brainrouter-core/meetings";
+import {
+  DEFAULT_MEETING_UNIT_MS,
+  SEGMENTED_TRANSCRIPTION_CAPABILITIES,
+  type MeetingTranscriptionCapabilities,
+  type MeetingTranscriptionStreamChunk,
+  type MeetingTranscriptionStreamInitialization,
+} from "@kinqs/brainrouter-core/meetings";
+
+import type { CaptureStream, CaptureStreamDrop, CaptureStreamHandlers } from "../../lib/meetings/captureStream";
 
 import { FakeCaptureBackend, type FakeCaptureBackendOptions } from "../../lib/meetings/_captureBackendFixture";
 import { FakeLockManager, FakeLockOrigin } from "../../lib/meetings/_captureLockFixture";
@@ -42,10 +50,62 @@ import {
   MeetingCaptureSurface,
   type CaptureMicrophone,
   type CaptureRecorder,
+  type CaptureStreamRequest,
   type CaptureSurfacePorts,
   type CaptureSurfaceState,
   type CreateMeetingInput,
 } from "./captureSurface";
+
+/**
+ * ADR-035 D10 — a persistent transcription session, reduced to what the surface
+ * does with one and what a test needs to do to it.
+ *
+ * The wire is NOT faked here: `captureStream.test.ts` drives the real frame
+ * encoder and the real attach handshake over a socket port. What this stands for
+ * is the endpoint's BEHAVIOUR — when it sends a partial, when it proves
+ * coverage, when it drops and with what kind — because those are the things that
+ * decide whether a meeting keeps its words, and none of them is reachable from a
+ * test that can only assert a socket was opened.
+ */
+export class FakeStream implements CaptureStream {
+  readonly initializations: MeetingTranscriptionStreamInitialization[] = [];
+
+  /** Every durability chunk that reached the endpoint, in the order it arrived. */
+  readonly sent: MeetingTranscriptionStreamChunk[] = [];
+
+  closes = 0;
+
+  /** A connection that accepts audio and then stops taking it. */
+  sendFails: Error | null = null;
+
+  constructor(
+    readonly request: CaptureStreamRequest,
+    readonly acceptedThroughSequence: number | null,
+  ) {}
+
+  initialize(input: MeetingTranscriptionStreamInitialization): void {
+    this.initializations.push(input);
+  }
+
+  send(chunk: MeetingTranscriptionStreamChunk): void {
+    if (this.sendFails) throw this.sendFails;
+    this.sent.push(chunk);
+  }
+
+  close(): void {
+    this.closes += 1;
+  }
+
+  /** The endpoint says something. Handed through unread, as the real client does. */
+  emit(event: unknown): void {
+    this.request.handlers.onEvent(event);
+  }
+
+  /** The endpoint goes away. `kind` is what decides whether this tab tries again. */
+  drop(drop: CaptureStreamDrop): void {
+    this.request.handlers.onDrop(drop);
+  }
+}
 
 /** A `MediaRecorder` reduced to what the surface uses, plus a way to hand it a chunk. */
 export class FakeRecorder implements CaptureRecorder {
@@ -283,6 +343,29 @@ export class CaptureTab {
   /** What the STT endpoint says for each segment; a rejection is an outage. */
   transcribeSegment: () => Promise<string> = async () => "spoken words";
 
+  /**
+   * ADR-035 D10 — what `GET …/capabilities` answers.
+   *
+   * The default is production's answer, so every scenario that says nothing
+   * about streaming is exercising the segmented path exactly as it is deployed
+   * today. A test that wants the live path has to ask for it.
+   */
+  capabilities: MeetingTranscriptionCapabilities = SEGMENTED_TRANSCRIPTION_CAPABILITIES;
+
+  /** Every stream this tab opened, in order — a reconnect is a second entry. */
+  readonly streams: FakeStream[] = [];
+
+  /** An endpoint that advertises a stream and then will not give one. */
+  streamOpenFails: Error | null = null;
+
+  /**
+   * What the endpoint says it already holds when a connection attaches.
+   *
+   * Honouring the request is the ordinary case; answering LESS is the adapter
+   * declining part of a resume, which the host has to replay from the device.
+   */
+  acceptResume: (requested: number | null) => number | null = (requested) => requested;
+
   /** What the import path returns. */
   importText = "pasted words";
 
@@ -356,6 +439,16 @@ export class CaptureTab {
         microphone.recorder.startFails = this.recorderStartFails;
         this.microphones.push(microphone);
         return microphone;
+      },
+      describeEndpoint: async () => this.capabilities,
+      openStream: async (request) => {
+        if (this.streamOpenFails) throw this.streamOpenFails;
+        const stream = new FakeStream(
+          request,
+          this.acceptResume(request.resumeFrom?.acknowledgedThroughSequence ?? null),
+        );
+        this.streams.push(stream);
+        return stream;
       },
       createTranscriber: () => async () => this.transcribeSegment(),
       createMeeting: async (input) => {

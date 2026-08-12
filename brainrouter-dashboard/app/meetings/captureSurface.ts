@@ -92,21 +92,37 @@ import {
   createCaptureSession,
   discardCapture as discardCaptureSession,
   drainWakeDelayMs,
+  EMPTY_STREAMING_TRANSCRIPT,
   EMPTY_TRANSCRIPT_FOLD,
   finalizeCapture,
   foldTranscript,
+  initializationSegmentLength,
+  MEETING_TRANSCRIPTION_LATENCY_MODES,
   reconcileCaptureDraft,
+  reduceStreamingTranscript,
   sealDueUnits,
+  SEGMENTED_TRANSCRIPTION_CAPABILITIES,
+  selectTranscriptionMode,
   settleTranscriptForSubmit,
   stopCapture,
+  unitPolicyFor,
   unsettledSegments,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
   type MeetingDrainPhase,
+  type MeetingLiveUtterance,
+  type MeetingStreamingTranscriptState,
+  type MeetingTranscriptCommittedCheckpoint,
+  type MeetingTranscriptionCapabilities,
+  type MeetingTranscriptionLatencyMode,
+  type MeetingTranscriptionMode,
   type MeetingTranscriptionQueue,
+  type MeetingUnitPolicy,
   type TranscriptFold,
+  commitStreamedCoverage,
 } from "@kinqs/brainrouter-core/meetings";
 
+import type { CaptureStream, CaptureStreamDrop, CaptureStreamHandlers } from "../../lib/meetings/captureStream";
 import {
   captureHeldNote,
   CAPTURE_DISCARD_UNKNOWN,
@@ -119,6 +135,7 @@ import {
   parseCapturePayload,
   resumableCaptures,
   serializeCapturePayload,
+  streamResumeCheckpoint,
   type ResumableCapture,
 } from "../../lib/meetings/capturePayload";
 import { createCaptureQueue, DEFAULT_CAPTURE_MIME_TYPE, type SegmentTranscriber } from "../../lib/meetings/captureQueue";
@@ -256,6 +273,25 @@ export interface CreateMeetingInput {
   readonly orgId: string | null;
 }
 
+/**
+ * ADR-035 D10 — everything a persistent transcription session needs that is not
+ * already on the device.
+ *
+ * `orgId` is the workspace the SESSION was frozen under at Record (open question
+ * 5), never the switcher's current one: a stream is a request made on a tenant's
+ * behalf, and the tenant is the recording's, not the page's.
+ */
+export interface CaptureStreamRequest {
+  readonly sessionId: string;
+  readonly orgId: string;
+  readonly mimeType: string;
+  readonly language?: string;
+  readonly latencyMode: MeetingTranscriptionLatencyMode;
+  /** The last ATOMICALLY PERSISTED checkpoint, or null. Never an unpersisted reducer result. */
+  readonly resumeFrom: MeetingTranscriptCommittedCheckpoint | null;
+  readonly handlers: CaptureStreamHandlers;
+}
+
 export interface CaptureSurfacePorts {
   /**
    * THIS tab's Web Locks (`captureLock.ts`) — the authority on which captures a
@@ -268,6 +304,14 @@ export interface CaptureSurfacePorts {
   /** The switcher's CURRENT workspace. Read at Record, and never again for that recording. */
   activeOrgId(): string;
   openMicrophone(): Promise<CaptureMicrophone>;
+  /**
+   * D10 — what the endpoint says it can do. Asked at Record, never assumed, and
+   * never remembered: a sidecar that came back between two meetings is a fact
+   * this page has to be able to notice.
+   */
+  describeEndpoint(): Promise<MeetingTranscriptionCapabilities>;
+  /** D10 — a persistent session over that endpoint, or a throw. */
+  openStream(request: CaptureStreamRequest): Promise<CaptureStream>;
   createTranscriber(language: string | undefined): SegmentTranscriber;
   createMeeting(input: CreateMeetingInput): Promise<{ readonly id: string }>;
   /** D8 — the import path, which really can be handed an hour of audio in one piece. */
@@ -379,6 +423,33 @@ export interface CaptureSurfaceState {
    * answer that actually decides.
    */
   readonly writersKnown: boolean;
+  /**
+   * ADR-035 D10 — which transcription strategy this capture is actually running,
+   * decided by the ENDPOINT's answer and never by a build-time assumption.
+   *
+   * `"streaming"` means a live connection is open right now, not that one was
+   * offered: a stream that dropped is segmented again from that instant, and the
+   * surface must not keep promising live text over a path that stopped.
+   */
+  readonly transcription: MeetingTranscriptionMode;
+  /**
+   * Golden rule 23 — why the live path is not the one running, in a sentence.
+   *
+   * Its own slot rather than `warning`'s, for the same reason `coordination` has
+   * one: it is a standing statement about this recording's transcription path,
+   * so it must not be erased by the next chunk's storage reading, and it must
+   * not erase a failed write. Empty means the better path IS running.
+   */
+  readonly streamNotice: string;
+  /**
+   * D4 — what the endpoint has said that this device has not settled yet.
+   *
+   * Provisional by construction: everything through the committed checkpoint has
+   * become a `done` unit in the session, so it is already in the compose box and
+   * leaves this list. Nothing here is ever editable text — the reducer that
+   * produces it never sees the draft.
+   */
+  readonly live: readonly MeetingLiveUtterance[];
   readonly createError: string;
   readonly busy: CaptureBusy;
   readonly session: MeetingCaptureSession | null;
@@ -408,6 +479,9 @@ const EMPTY_STATE: CaptureSurfaceState = {
   coordination: "",
   writing: [],
   writersKnown: true,
+  transcription: "segmented",
+  streamNotice: "",
+  live: [],
   createError: "",
   busy: "",
   session: null,
@@ -421,6 +495,17 @@ const EMPTY_STATE: CaptureSurfaceState = {
 
 /** How long a keystroke waits before the draft is written down. */
 const DRAFT_SAVE_DELAY_MS = 250;
+
+/**
+ * How long Record will wait for the endpoint to say what it offers.
+ *
+ * Generous, because the probe overlaps the microphone prompt and answering late
+ * only costs this recording its live text. Bounded, because it is on the path in
+ * FRONT of `recorder.start()`: a proxy that accepts and never answers held the
+ * microphone open and recorded nothing at all, which is the one outcome D1 does
+ * not allow. A timeout here means segmented, and the surface says so.
+ */
+const STRATEGY_PROBE_DEADLINE_MS = 4_000;
 
 /**
  * What a discard asks when this browser CAN say nobody else is writing —
@@ -441,6 +526,53 @@ const DISCARD_QUESTION = "Discard this unfinished recording? Its audio is delete
  */
 const DISCARD_HELD_QUESTION =
   "Discard this recording? Its audio is deleted from this device, and the title and transcript in this box are cleared with it.";
+
+/**
+ * ADR-035 D10 / golden rule 23 — the sentences that say WHICH transcription path
+ * is running, and why the better one is not.
+ *
+ * They are constants because they are the guarantee: "silently falling back to
+ * batch is the exact defect this ADR was written to end", so every route out of
+ * the live path names itself. A degradation nobody can see is indistinguishable
+ * from working, and this product has already paid for that once — a reviewer
+ * that reported success for days while deep review was dead.
+ *
+ * `SEGMENTS_TAIL` is shared so the consequence reads identically whichever
+ * reason preceded it: text a segment at a time, not while you speak.
+ */
+const SEGMENTS_TAIL = "This meeting is being transcribed in segments, so text appears a unit at a time rather than while you speak.";
+
+export const STREAM_UNSUPPORTED_NOTICE = `Live transcription is not offered by this server. ${SEGMENTS_TAIL}`;
+
+export const STREAM_NO_WORKSPACE_NOTICE =
+  `Live transcription needs a workspace and this browser has none selected. ${SEGMENTS_TAIL}`;
+
+/** A drop that may pass: the recorder's own next chunk is what tries again. */
+export function streamOutageNotice(reason: string): string {
+  return `Live transcription stopped — ${reason}. ${SEGMENTS_TAIL} It reconnects on its own if the service comes back.`;
+}
+
+/** A drop that is a verdict on this recording: nothing here will retry it. */
+export function streamRefusedNotice(reason: string): string {
+  return `Live transcription stopped — ${reason}. ${SEGMENTS_TAIL}`;
+}
+
+/**
+ * D10's "explicit latency-versus-accuracy control", answered for a LIVE
+ * transcript.
+ *
+ * §6 asks that text appear while the sentence is still being spoken, so the
+ * lowest latency the endpoint offers is what this asks for and the rest of the
+ * order is only for an endpoint that does not offer it. It is a preference over
+ * what was ADVERTISED and never a request for a mode the endpoint did not name —
+ * the gateway refuses that, and rightly, since a mode nobody promised is a
+ * promise nobody made.
+ */
+export function preferredLatencyMode(
+  offered: readonly MeetingTranscriptionLatencyMode[],
+): MeetingTranscriptionLatencyMode {
+  return MEETING_TRANSCRIPTION_LATENCY_MODES.find((mode) => offered.includes(mode)) ?? offered[0]!;
+}
 
 /** An error's own words when it has any, and a plain sentence when it does not. */
 export function describe(caught: unknown, fallback: string): string {
@@ -540,6 +672,81 @@ export class MeetingCaptureSurface {
    * flag it replaced.
    */
   #fold: TranscriptFold = EMPTY_TRANSCRIPT_FOLD;
+
+  /**
+   * ADR-035 D10 — the live connection for the capture in hand, and `null` the
+   * instant it is not usable.
+   *
+   * It is what `#unitPolicy` reads, so the moment a stream drops the durability
+   * chunks start assembling into segmented units again and the transcript keeps
+   * moving from audio that is already on the device. That is the fallback being
+   * automatic; `streamNotice` is the same fallback being visible.
+   */
+  #stream: CaptureStream | null = null;
+
+  /** Which capture `#stream` belongs to; `""` when there is none. */
+  #streamOf = "";
+
+  /**
+   * Which OPEN of the stream an inbound frame belongs to.
+   *
+   * A dropped connection's last events can arrive after its replacement has
+   * attached, and reducing them into the new one's state would revise text with
+   * words from a session that no longer exists. Every handler closes over the
+   * number it was created under and does nothing when it is no longer current —
+   * the same shape as `#attempt` for the arming path, and for the same reason.
+   */
+  #streamOpen = 0;
+
+  /** The next durability chunk the open stream expects. The gateway requires contiguity. */
+  #streamNext = 0;
+
+  /** Whether an open is in flight, so the chunk cadence cannot start a second one. */
+  #streamEvents: Promise<void> = Promise.resolve();
+
+  #streamOpening = false;
+
+  /** A drop that was a verdict rather than an outage: this capture stops trying. */
+  #streamRefused = false;
+
+  /** Whether the chunk pump is running, and whether a chunk arrived while it was. */
+  #pumping = false;
+
+  #pumpAgain = false;
+
+  /**
+   * D10 — the EPHEMERAL live-display reduction, and the PERSISTED checkpoint
+   * inside it.
+   *
+   * It never holds editable text and is never the draft: `reduceStreamingTranscript`
+   * is handed wire events and the persisted ledger, so a late revision is
+   * structurally unable to reach a word a person has typed.
+   *
+   * **This field is only ever assigned after a write has landed.** That is what
+   * makes its `checkpoint` the reconnect authority the contract asks for, and it
+   * is the whole reason `#commitCoverage` does not adopt the reducer's result
+   * before awaiting the persist: a proof whose write failed must leave the
+   * reconnect asking for the older position and re-sending audio, because
+   * re-sent audio costs a moment while a checkpoint that outran its transcript
+   * costs the words. A second field holding "the persisted one" was tried and
+   * deleted — it could not be told apart from this one by any test, which under
+   * golden rule 29 makes it a guard nobody could keep honest.
+   */
+  #streamState: MeetingStreamingTranscriptState = EMPTY_STREAMING_TRANSCRIPT;
+
+  /**
+   * The checkpoint the NEXT persist writes down, beside the session it covers.
+   *
+   * Read by the queue's `persist` inside the same serialized step as the
+   * transition that settled those units, which is what makes the pair atomic.
+   */
+  #checkpoint: MeetingTranscriptCommittedCheckpoint | null = null;
+
+  /** The container header a reconnect has to bootstrap with, read back from chunk 0. */
+  #initialization: Uint8Array | null = null;
+
+  /** The latency mode this endpoint offered, or null when it offers no stream at all. */
+  #latency: MeetingTranscriptionLatencyMode | null = null;
 
   #previewRef: { readonly sessionId: string; readonly url: string } | null = null;
 
@@ -887,6 +1094,26 @@ export class MeetingCaptureSurface {
       this.#patch({ createError: describe(caught, "This browser cannot store a recording durably.") });
       return;
     }
+    // D10 — the strategy is a property of the ENDPOINT, so it is ASKED. Started
+    // here, in front of the microphone prompt, and awaited after it, so the
+    // round trip overlaps a dialog a person may leave on screen and discovery
+    // costs the recording nothing. Deliberately not remembered between
+    // recordings: a sidecar that came back since the last meeting is a fact this
+    // page has to be able to notice, and a probe that cannot fail (it resolves
+    // to the segmented document) is never a new way to lose one.
+    // `.catch()` covers a probe that FAILS. It does not cover one that hangs,
+    // and a hang is what a proxy that accepts and never answers produces — the
+    // await below sits in front of `recorder.start()`, so an unbounded probe
+    // opened the microphone and then never recorded a byte, silently, for the
+    // whole meeting. The deadline is what makes the sentence above true.
+    // Losing the answer costs this recording its live text; losing the
+    // recording is not on the table (D1).
+    const endpoint = Promise.race([
+      this.#ports.describeEndpoint().catch(() => SEGMENTED_TRANSCRIPTION_CAPABILITIES),
+      new Promise<MeetingTranscriptionCapabilities>((resolve) => {
+        this.#ports.setTimer(() => resolve(SEGMENTED_TRANSCRIPTION_CAPABILITIES), STRATEGY_PROBE_DEADLINE_MS);
+      }),
+    ]);
     let microphone: CaptureMicrophone | undefined;
     try {
       microphone = await this.#ports.openMicrophone();
@@ -903,6 +1130,9 @@ export class MeetingCaptureSurface {
       };
       this.#setActive(capture);
       const queue = this.#attachQueue(store, session, { mimeType: capture.mimeType, title, base: this.#state.transcript });
+      // After `#attachQueue`, which clears the previous capture's answer, and
+      // before the first chunk, which is what opens the connection.
+      this.#selectStrategy(await endpoint, session);
       // Awaited, and before the first chunk: this is the write that puts the
       // recorder's container type in the manifest, and recovery reads the audio
       // back with it. It goes through `apply` because the queue is the single
@@ -1116,11 +1346,20 @@ export class MeetingCaptureSurface {
           const appended = appendCaptureChunk(session, { byteLength: chunk.byteLength, durationMs });
           // The durability write has already happened. Sealing is a separate,
           // policy-sized decision and leaves a short tail open until more audio
-          // arrives or Stop/recovery seals it.
-          return sealDueUnits(appended);
+          // arrives or Stop/recovery seals it — and D10 is which policy: with a
+          // live connection the endpoint owns the boundary and this only holds
+          // the ceilings, without one the segmented target keeps the transcript
+          // moving from audio that is already here.
+          return sealDueUnits(appended, this.#unitPolicy);
         });
         this.#publishSession(queue.session);
         void this.#runDrain();
+        // D10, and the ordering is the contract's: the bytes are on the device
+        // AND in the ledger before a single one of them is sent. This is also
+        // the only thing that opens or reopens a connection — the recorder's own
+        // cadence is the retry schedule, so there is no timer here to tune and
+        // no window in which a dropped stream is quietly not coming back.
+        void this.#feedStream(capture.mimeType);
       } catch (caught) {
         // The audio for this piece is on the device — `appendChunk` resolved —
         // and it is simply unclaimed, which is the safe failure the transition
@@ -1186,6 +1425,11 @@ export class MeetingCaptureSurface {
       // A redundancy no test can tell apart from its absence is not a belt, so
       // it is gone rather than left with a sentence defending it.
       await capture.store.settled(capture.sessionId);
+      // D10 — the audio has ended, so the endpoint is told so here, before the
+      // tail is sealed. Not awaited: `#closeStream` says why, and what it leaves
+      // open is a second or two of chunks the segmented queue transcribes from
+      // the device.
+      this.#closeStream();
       const queue = this.#queue;
       if (!queue || queue.session.id !== capture.sessionId) return;
       // Ordered after the final chunk's own `apply` by the queue's write chain,
@@ -1255,6 +1499,350 @@ export class MeetingCaptureSurface {
     if (this.#wake !== null) return;
     this.#handingBack = null;
     this.#ports.locks.release(sessionId);
+  }
+
+  // ————————————————————————————————————————————————— D10, the live connection
+
+  /**
+   * D9/D10 — how chunks become units for the capture in hand.
+   *
+   * Derived from whether a connection EXISTS rather than from what the endpoint
+   * once advertised, which is the whole of "the fallback is automatic": a
+   * dropped stream is segmented again on the very next chunk instead of leaving
+   * the rest of the meeting in an open run nothing claims. With a stream, the
+   * endpoint owns the boundary and the shared policy holds only its ceilings.
+   */
+  get #unitPolicy(): MeetingUnitPolicy {
+    return unitPolicyFor(this.#stream ? "streaming" : "segmented");
+  }
+
+  /**
+   * D10 — read the strategy out of the ANSWER, and say which one is running.
+   *
+   * Two ways to end up segmented and both are STATED. The endpoint may simply
+   * not offer a stream, which is production today. Or this recording may have no
+   * workspace: the gateway's attach frame names a tenant, and this recording's
+   * tenant was frozen at Record (open question 5), so attaching under whatever
+   * the switcher happens to show would be "the meeting lands in the wrong
+   * workspace" wearing a WebSocket.
+   */
+  #selectStrategy(endpoint: MeetingTranscriptionCapabilities, session: MeetingCaptureSession): void {
+    const streaming = selectTranscriptionMode(endpoint) === "streaming" ? endpoint.streaming : null;
+    this.#latency = null;
+    if (!streaming) {
+      this.#patch({ transcription: "segmented", streamNotice: STREAM_UNSUPPORTED_NOTICE });
+      return;
+    }
+    if (!session.scope.orgId) {
+      this.#patch({ transcription: "segmented", streamNotice: STREAM_NO_WORKSPACE_NOTICE });
+      return;
+    }
+    this.#latency = preferredLatencyMode(streaming.latencyModes);
+    // Still segmented until a connection actually exists — `transcription` is
+    // what IS running, not what was offered. The first durability chunk opens
+    // it, because a stream cannot be bootstrapped before the recording has a
+    // container header to bootstrap it with.
+    this.#patch({ transcription: "segmented", streamNotice: "" });
+  }
+
+  /** One entry point for both "start the connection" and "catch it up". */
+  async #feedStream(mimeType: string): Promise<void> {
+    if (this.#stream) {
+      await this.#pumpStream();
+      return;
+    }
+    await this.#openStream(mimeType);
+  }
+
+  /**
+   * D10 — attach a persistent session, and rejoin it at the position the DEVICE
+   * can prove.
+   *
+   * `resumeFrom` is the checkpoint a write has LANDED: `#streamState` is only
+   * ever assigned after a persist resolves, so a proof whose write failed leaves
+   * this asking for the older position. The endpoint answers with what it will
+   * actually accept — never more than was asked for, which the gateway itself
+   * refuses — and every durability chunk after that is replayed out of the
+   * store. A dropped connection therefore costs a reconnect and some bytes that
+   * are already on disk, which is exactly the trade D10 states.
+   *
+   * The live buffer is reset to that checkpoint on every open. A new connection
+   * mints its own utterance ids, and a retained `final` under a colliding id
+   * would make the reducer drop the new words as a late revision — the one way
+   * a reconnect could quietly lose speech rather than repeat it.
+   */
+  async #openStream(mimeType: string): Promise<void> {
+    const queue = this.#queue;
+    const store = this.#opened?.store;
+    if (!queue || !store || this.#stream || this.#streamOpening || this.#streamRefused || !this.#latency) return;
+    const orgId = queue.session.scope.orgId;
+    if (!orgId) return;
+    const sessionId = queue.session.id;
+    const latencyMode = this.#latency;
+    this.#streamOpening = true;
+    this.#streamOpen += 1;
+    const open = this.#streamOpen;
+    try {
+      const initializationSegment = await this.#initializationSegment(store, sessionId);
+      const stream = await this.#ports.openStream({
+        sessionId,
+        orgId,
+        mimeType,
+        ...(queue.session.language ? { language: queue.session.language } : {}),
+        latencyMode,
+        resumeFrom: this.#streamState.checkpoint,
+        handlers: {
+          onEvent: (event) => {
+            // One chain, for the reason the desktop states at
+            // `meetingStreamSession.ts:511`: `#onStreamEvent` awaits a real
+            // store write when it commits coverage, and the sidecar emits
+            // final -> committed -> partial in a single pass. Dispatched
+            // concurrently, anything arriving during that write reduced from
+            // the PRE-commit state and was then overwritten — the first partial
+            // of every utterance vanished, and a `final` caught the same way
+            // left a unit marked done with no words in it, which is D5's
+            // unmarked hole rather than a gap.
+            this.#streamEvents = this.#streamEvents
+              .then(() => this.#onStreamEvent(open, event))
+              .catch(() => undefined);
+          },
+          onDrop: (drop) => {
+            this.#streamLost(open, drop);
+          },
+        },
+      });
+      // The capture moved on while the connection was being made — a Stop, a
+      // discard, a create. Hand the socket back rather than streaming into a
+      // meeting nobody is holding.
+      if (open !== this.#streamOpen || this.#queue !== queue) {
+        void Promise.resolve(stream.close()).catch(() => undefined);
+        return;
+      }
+      this.#stream = stream;
+      this.#streamOf = sessionId;
+      this.#streamNext = (stream.acceptedThroughSequence ?? -1) + 1;
+      this.#streamState = { utterances: [], checkpoint: this.#streamState.checkpoint };
+      await stream.initialize({ mimeType, initializationSegment });
+      this.#patch({ transcription: "streaming", streamNotice: "", live: [] });
+    } catch (caught) {
+      this.#streamLost(open, { kind: "outage", reason: describe(caught, "the connection could not be opened") });
+      return;
+    } finally {
+      this.#streamOpening = false;
+    }
+    await this.#pumpStream();
+  }
+
+  /**
+   * Send every persisted chunk the open stream has not had yet, in order.
+   *
+   * One loop for the reconnect replay and for the live cadence, because they are
+   * the same thing: the gateway requires strictly contiguous sequences, so
+   * "which chunk is next" is a single number and the only honest source for its
+   * bytes is the store. Re-entrant calls set a flag rather than starting a
+   * second pump — two would interleave frames and the connection would close on
+   * a sequence gap.
+   */
+  async #pumpStream(): Promise<void> {
+    if (this.#pumping) {
+      this.#pumpAgain = true;
+      return;
+    }
+    this.#pumping = true;
+    try {
+      do {
+        this.#pumpAgain = false;
+        await this.#sendPersistedChunks();
+      } while (this.#pumpAgain);
+    } finally {
+      this.#pumping = false;
+    }
+  }
+
+  async #sendPersistedChunks(): Promise<void> {
+    const open = this.#streamOpen;
+    for (;;) {
+      const stream = this.#stream;
+      const queue = this.#queue;
+      const store = this.#opened?.store;
+      if (open !== this.#streamOpen || !stream || !queue || !store || queue.session.id !== this.#streamOf) return;
+      // From the LEDGER, so nothing is sent that the device does not claim to
+      // hold, and with the ledger's own range rather than a clock read here.
+      const entry = captureChunks(queue.session).find((chunk) => chunk.sequence === this.#streamNext);
+      if (!entry) return;
+      let audio: Uint8Array;
+      try {
+        const blob = await store.readSegment(queue.session.id, entry.sequence);
+        if (!blob) {
+          this.#streamLost(open, {
+            kind: "refused",
+            reason: "a piece of this recording could not be read back from this device",
+          });
+          return;
+        }
+        audio = new Uint8Array(await blob.arrayBuffer());
+      } catch (caught) {
+        this.#streamLost(open, {
+          kind: "refused",
+          reason: describe(caught, "this recording could not be read back from this device"),
+        });
+        return;
+      }
+      try {
+        await stream.send({ sequence: entry.sequence, startMs: entry.startMs, endMs: entry.endMs, audio });
+      } catch (caught) {
+        this.#streamLost(open, { kind: "outage", reason: describe(caught, "the connection would not take the audio") });
+        return;
+      }
+      this.#streamNext = entry.sequence + 1;
+    }
+  }
+
+  /** The container header a connection bootstraps with, read back from chunk 0. */
+  async #initializationSegment(store: MeetingCaptureStore, sessionId: string): Promise<Uint8Array> {
+    if (this.#initialization) return this.#initialization;
+    const first = await store.readSegment(sessionId, 0);
+    if (!first) return new Uint8Array(0);
+    const bytes = new Uint8Array(await first.arrayBuffer());
+    // The shared reader owns what a container header IS, and zero is its honest
+    // answer for one it does not recognize. An explicitly empty prefix is a
+    // frame the gateway accepts, not a missing one.
+    this.#initialization = new Uint8Array(bytes.subarray(0, initializationSegmentLength(bytes)));
+    return this.#initialization;
+  }
+
+  /**
+   * Golden rule 23 — the live path stopped, and the surface says so and why.
+   *
+   * The response is the same either way and the SENTENCE is what differs: an
+   * outage is waited out (the next durability chunk retries, so the recorder's
+   * cadence is the schedule and there is no interval here to get wrong), while a
+   * refusal — bad audio, a rejected credential, a protocol disagreement — stops
+   * this capture trying at all. That is D7's distinction, drawn for the live
+   * path: a refusal mistaken for an outage reconnects for ever against an
+   * endpoint that will never take these bytes.
+   */
+  #streamLost(open: number, drop: CaptureStreamDrop): void {
+    if (open !== this.#streamOpen) return;
+    this.#streamOpen += 1;
+    const stream = this.#stream;
+    this.#stream = null;
+    this.#streamOf = "";
+    this.#streamNext = 0;
+    if (drop.kind === "refused") this.#streamRefused = true;
+    this.#patch({
+      transcription: "segmented",
+      live: [],
+      streamNotice: drop.kind === "refused" ? streamRefusedNotice(drop.reason) : streamOutageNotice(drop.reason),
+    });
+    if (stream) void Promise.resolve(stream.close()).catch(() => undefined);
+    // Nothing was lost: every chunk the stream did not cover is on the device and
+    // unclaimed, the segmented policy is in force again from this instant, and
+    // this drains whatever is already due.
+    void this.#runDrain();
+  }
+
+  /**
+   * D4/D10 — one wire event, reduced.
+   *
+   * Text and durability are separate facts and this is where they stay separate:
+   * a partial or a final moves only the ephemeral live buffer, while a coverage
+   * proof is the one thing that can turn audio into durable transcript. Nothing
+   * here reads the event's fields — `reduceStreamingTranscript` is the only
+   * thing that says what one means, so a laxer second reader cannot grow here.
+   */
+  async #onStreamEvent(open: number, event: unknown): Promise<void> {
+    if (open !== this.#streamOpen) return;
+    const queue = this.#queue;
+    if (!queue || queue.session.id !== this.#streamOf) return;
+    const next = reduceStreamingTranscript(this.#streamState, event, captureChunks(queue.session));
+    if (next === this.#streamState) return;
+    const covered = next.checkpoint?.acknowledgedThroughSequence ?? -1;
+    if (covered === (this.#streamState.checkpoint?.acknowledgedThroughSequence ?? -1)) {
+      this.#streamState = next;
+      this.#publishLive();
+      return;
+    }
+    await this.#commitCoverage(open, next, covered);
+  }
+
+  /**
+   * D10 — promote a coverage proof to durable transcript, and only then to
+   * resume authority.
+   *
+   * The two happen in that order and they cannot be reordered by accident: the
+   * session transition and the checkpoint are written in ONE `setPayload`
+   * (`captureQueue.ts`), and `#streamState` — whose checkpoint is the only token
+   * a reconnect may ask for — is assigned only after the write RESOLVES. A
+   * persist that threw therefore leaves the previous position in force, so the
+   * reconnect re-sends audio rather than skipping past words nothing wrote down.
+   */
+  async #commitCoverage(open: number, next: MeetingStreamingTranscriptState, covered: number): Promise<void> {
+    const queue = this.#queue;
+    if (!queue) return;
+    try {
+      await queue.apply((session) => {
+        const committed = commitStreamedCoverage(session, covered, next.utterances);
+        // Set INSIDE the transition — the same serialized step the persist runs
+        // in. Set before this call and a write already queued behind it could
+        // flush the newer token beside the older session, which is exactly the
+        // promotion-before-persistence the contract forbids.
+        this.#checkpoint = next.checkpoint;
+        return committed;
+      });
+    } catch (caught) {
+      this.#patch({ warning: `This recording's live transcript could not be saved on this device — ${describe(caught, "the capture store refused the write.")} The audio itself IS saved, and that stretch is transcribed again from it.` });
+      return;
+    }
+    if (open === this.#streamOpen) {
+      this.#streamState = next;
+      this.#publishLive();
+    } else {
+      // The connection this proof came from has been replaced while the write
+      // was in flight. Its utterances belong to a session that no longer exists
+      // and would collide with the successor's ids — but the checkpoint IS on
+      // the device, so the successor keeps it and resumes from it.
+      this.#streamState = { utterances: this.#streamState.utterances, checkpoint: next.checkpoint };
+    }
+    this.#publishSession(queue.session);
+    void this.#runDrain();
+  }
+
+  /**
+   * D4 — publish the utterances this device has NOT settled yet, and only those.
+   *
+   * Everything through the committed checkpoint is already a `done` unit in the
+   * session, so it is in `transcriptSoFar` and in the compose box. Leaving it
+   * here as well would print the meeting twice and — worse — print a provisional
+   * face over words a person may already have edited.
+   */
+  #publishLive(): void {
+    const queue = this.#queue;
+    const acknowledged = this.#streamState.checkpoint?.acknowledgedThroughSequence;
+    const ledger = queue ? captureChunks(queue.session) : [];
+    const settledThroughMs = acknowledged === undefined ? 0 : ledger[acknowledged]?.endMs ?? 0;
+    this.#patch({ live: this.#streamState.utterances.filter((utterance) => utterance.startMs >= settledThroughMs) });
+  }
+
+  /**
+   * Let go of the live connection, without holding anybody's Stop behind it.
+   *
+   * `close()` tells the endpoint the audio ended and waits for its last word,
+   * which is a network wait, so it is not awaited here. What that leaves is a
+   * short open run of chunks the stream never covered — and those are on the
+   * device, unclaimed, with the segmented policy back in force, so the mandatory
+   * fallback transcribes them. That is the fallback doing its job rather than a
+   * hole: `sealUnit` only ever takes the OPEN suffix, so a coverage proof that
+   * arrives after this can claim nothing and no range is transcribed twice.
+   */
+  #closeStream(): void {
+    const stream = this.#stream;
+    this.#streamOpen += 1;
+    this.#stream = null;
+    this.#streamOf = "";
+    this.#streamNext = 0;
+    this.#patch({ transcription: "segmented", live: [] });
+    if (stream) void Promise.resolve(stream.close()).catch(() => undefined);
   }
 
   // ——————————————————————————————————————————————————————— the shared queue
@@ -1336,6 +1924,10 @@ export class MeetingCaptureSurface {
       mimeType: options.mimeType ?? DEFAULT_CAPTURE_MIME_TYPE,
       ...(options.title ? { title: options.title } : {}),
       transcribe: this.#ports.createTranscriber(sessionLanguage),
+      // D10 — the checkpoint rides in the SAME `setPayload` as the session it is
+      // a claim about, and is read at write time rather than captured here. See
+      // `CaptureQueueOptions.checkpoint`.
+      checkpoint: () => this.#checkpoint,
       // One clock for the host and its scheduler. The desktop's supervisor has
       // always passed this; without it here the queue read `Date.now()` while
       // everything around it read the port, so D7's backoff could not be driven
@@ -1344,6 +1936,17 @@ export class MeetingCaptureSurface {
       now: () => this.#ports.now(),
     });
     this.#queue = queue;
+    // D10 — a new capture is a new connection's worth of state. None of this
+    // belongs to the meeting being adopted: the live buffer is another
+    // recording's utterances, the checkpoint is another recording's proof, and
+    // the header is another recording's container. `pickUp` puts back the token
+    // THIS capture's manifest carries, once it has one to prove it against.
+    this.#streamState = EMPTY_STREAMING_TRANSCRIPT;
+    this.#checkpoint = null;
+    this.#initialization = null;
+    this.#streamRefused = false;
+    this.#latency = null;
+    this.#patch({ transcription: "segmented", streamNotice: "", live: [] });
     const reconciled = reconcileCaptureDraft(options.base, session);
     this.#fold = beginTranscriptFold(reconciled);
     // Reconciliation heals a stated gap the session has since settled in place,
@@ -1580,6 +2183,15 @@ export class MeetingCaptureSurface {
         ...(title ? { title } : {}),
         base: this.#state.transcript,
       });
+      // D10 — the resume token this manifest carries, proved against the ledger
+      // that came back with it. A recovered capture is `stopped`, so nothing
+      // streams into it and the segmented queue drains what is left; the
+      // checkpoint is put back because it is this RECORDING's and not this tab's
+      // to erase — the next persist rewrites the whole payload, and dropping it
+      // here would quietly delete a proof from the record.
+      const resumed = streamResumeCheckpoint(entry.record.payload, entry.session);
+      this.#checkpoint = resumed;
+      this.#streamState = { utterances: [], checkpoint: resumed };
       // Persisted before anything else happens to it, so the recovery stamp this
       // pick-up was judged under is on the device rather than only in this tab.
       await queue.apply((session) => session);
@@ -1729,6 +2341,10 @@ export class MeetingCaptureSurface {
     if (!queue) return;
     this.#queue = null;
     this.#cancelWake();
+    // D10 — this capture is leaving this tab's hands whichever way the delete
+    // goes, so nothing may still be streaming into it.
+    this.#closeStream();
+    this.#patch({ streamNotice: "" });
     const sessionId = queue.session.id;
     this.#revokePreview();
     try {
@@ -1996,6 +2612,11 @@ export class MeetingCaptureSurface {
     this.#disposed = true;
     this.#attempt += 1;
     this.#cancelWake();
+    // D10 — a WebSocket outlives a React tree exactly as a `MediaRecorder` does,
+    // and one left open would go on reducing events into a surface the page has
+    // left. The audio and the session are already written; nothing durable is
+    // deferred to this line.
+    this.#closeStream();
     this.#flushDraftSave();
     this.#revokePreview();
     const recorder = this.#recorder;

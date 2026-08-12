@@ -41,7 +41,7 @@ import {
 } from './meetingCaptureChannels.js';
 import { MeetingDraftStore } from './meetingDraft.js';
 import { MeetingTranscriptionSupervisor } from './meetingTranscription.js';
-import { transcribeCaptureSegment } from './meetingsBridge.js';
+import { meetingTranscriptionStreamPort, transcribeCaptureSegment } from './meetingsBridge.js';
 
 export { MEETING_CAPTURE_PROGRESS_CHANNEL, MEETING_CAPTURE_WRITERS_CHANNEL } from './meetingCaptureChannels.js';
 
@@ -85,6 +85,12 @@ export function registerMeetingCaptureBridge(userDataPath = app.getPath('userDat
   const drafts = new MeetingDraftStore(userDataPath);
   const supervisor = new MeetingTranscriptionSupervisor(store, {
     transcribe: transcribeCaptureSegment,
+    // ADR-035 D10 — the live path is whatever the ENDPOINT answers, asked once
+    // per recording. Against today's production gateway that answer is
+    // `streaming: null`, which selects the segmented upload this line does not
+    // touch; the port exists so the host discovers the difference rather than
+    // assuming either one at build time.
+    streaming: meetingTranscriptionStreamPort,
     publish: (progress) => { broadcast(MEETING_CAPTURE_PROGRESS_CHANNEL, progress); },
   });
 

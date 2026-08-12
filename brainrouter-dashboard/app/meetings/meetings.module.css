@@ -161,6 +161,13 @@ button.chip:disabled{opacity:.6;cursor:default}
 .liveText{font-size:12px;line-height:1.55;color:var(--mv-tx2);min-width:0;overflow-wrap:anywhere}
 /* Provisional is visibly not text yet — never styled as if it had arrived. */
 .liveProvisional{font-size:11.5px;line-height:1.55;color:var(--mv-tx3);font-style:italic}
+/* ADR-035 D4/D10 — live utterances. Both faces are PROVISIONAL: a partial the
+   endpoint may still revise, and a final this device has not saved yet. Neither
+   may be styled like `.liveText`, which is text that has settled. */
+.liveUtterance{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0}
+.liveUtterance span{font-size:12px;line-height:1.55;color:var(--mv-tx3);font-style:italic;overflow-wrap:anywhere}
+.liveUtterance small{font-size:10px;font-family:var(--mv-mono);color:var(--mv-tx3);opacity:.75}
+.liveSettling span{font-style:normal}
 .liveGap{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
 .liveGap b{font-size:11.5px;font-weight:500;font-family:var(--mv-mono);color:var(--warn);overflow-wrap:anywhere}
 .liveGap small{font-size:10.5px;color:var(--mv-tx3);line-height:1.5;overflow-wrap:anywhere}

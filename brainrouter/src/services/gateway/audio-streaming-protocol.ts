@@ -2,9 +2,10 @@
  * ADR-035 D10 — BrainRouter's normalized persistent-transcription wire contract.
  *
  * This module owns the gateway-facing port and the bounded frames around it. It
- * deliberately does not know any provider URL or vendor protocol: the shipped
- * speech sidecar is batch-only, so a streaming adapter must be injected only
- * after it can prove the complete normalized capability contract.
+ * deliberately does not know any provider URL or vendor protocol: the first
+ * implementation lives in `audio-streaming-adapter.ts` and is injected only
+ * after it can prove the complete normalized capability contract, and any other
+ * endpoint must meet the same bar to take its place.
  *
  * Credentials end at gateway authentication. The injected port receives the
  * authenticated identity and immutable meeting metadata, never the bearer that
@@ -37,6 +38,15 @@ export const GATEWAY_AUDIO_STREAM_CLOSE = {
   tooLarge: 1009,
   overloaded: 1013,
   upstreamFailure: 1011,
+  /**
+   * These bytes will never decode. The batch route already answers 422 for the
+   * same fact (`audioRoutes.ts`), and a stream needs the distinction for the same
+   * D7 reason: without it every undecodable container reads as an outage, so the
+   * host reconnects for ever instead of degrading to the segmented path that can
+   * state the gap. 4422 mirrors that status inside the application-defined close
+   * range, so both surfaces answer alike.
+   */
+  undecodableAudio: 4422,
 } as const;
 
 export interface GatewayAudioStreamOwner {
@@ -90,10 +100,22 @@ export type GatewayAudioTranscriptPartial = MeetingTranscriptionPartialEvent;
 export type GatewayAudioTranscriptFinal = MeetingTranscriptionFinalEvent;
 export type GatewayAudioTranscriptCoverage = MeetingTranscriptionCoverageEvent;
 
+/**
+ * Which side a stream failure belongs to — the audio, or the endpoint.
+ *
+ * This is a classification the gateway owns, not upstream detail: it is one of
+ * two fixed values, chosen the way `audioRoutes.ts` chooses between 422 and 502,
+ * and nothing an adapter says travels with it. Absent or unrecognized means
+ * `dependency`, which is the same bias the batch route states — a mistaken
+ * outage only delays a gap, while a mistaken input verdict throws away a live
+ * path that was working.
+ */
+export type GatewayAudioStreamDropKind = "input" | "dependency";
+
 export interface GatewayAudioStreamHandlers {
   onEvent(event: MeetingStreamingTranscriptEvent): void;
   /** Upstream detail is intentionally absent so no adapter error can escape. */
-  onDrop(): void;
+  onDrop(kind?: GatewayAudioStreamDropKind): void;
 }
 
 /** Fixed refusal for a persisted owner/generation conflict; carries no adapter detail. */
