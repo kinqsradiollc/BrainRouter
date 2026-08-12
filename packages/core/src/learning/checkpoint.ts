@@ -47,7 +47,7 @@ import {
 } from './store.js';
 import { applyCentralLearnedRevert, synchronizeLearnedItemLifecycle } from './lifecycle.js';
 import type {
-  LearnedItem, LearnedTenant, LearningCheckpointReason,
+  LearnedItem, LearnedProcedureStep, LearnedTenant, LearningCheckpointReason,
 } from './types.js';
 import { redactText } from '../session/transcript/sessionStore.js';
 import type { LearningOutcomeSyncEvent } from './store.js';
@@ -257,6 +257,48 @@ function learnedToolCeiling(
     .filter((action) => cited.has(action.id) && SAFE_OBSERVED_GRANTS.has(action.toolName))
     .map((action) => action.toolName);
   return [...new Set([...LEARNED_READ_ONLY_TOOLS, ...observed])];
+}
+
+/** The most steps one procedure may carry. A trajectory can cite many more. */
+const MAX_PROCEDURE_LEDGER_STEPS = 24;
+
+/**
+ * D3 — the exact successful actions a procedure may replay.
+ *
+ * Built from what the RUNTIME observed, never from what the model wrote. The
+ * model contributes citations and nothing else, and three properties follow
+ * from that which are the entire reason this is separate from `steps`:
+ *
+ * - a cited id with no matching observed action is DROPPED, so a step cannot be
+ *   invented by naming one;
+ * - the order is the runtime's observation order, not the citation order, so a
+ *   procedure cannot be made to claim things happened in an order they did not;
+ * - a step whose tool is outside the ceiling this same evidence produced is
+ *   dropped, so the ledger can never widen authority — it is bounded BY the
+ *   ceiling rather than sitting beside it.
+ */
+function procedureLedger(
+  candidate: LearningCandidate,
+  input: LearningCheckpointInput,
+  ceiling: readonly string[],
+): LearnedProcedureStep[] {
+  const cited = new Set(candidate.corroboratingActionIds ?? []);
+  if (cited.size === 0) return [];
+  const permitted = new Set(ceiling);
+  const seen = new Set<string>();
+  const steps: LearnedProcedureStep[] = [];
+  for (const action of input.eligibleCorroboratingActions ?? []) {
+    if (steps.length >= MAX_PROCEDURE_LEDGER_STEPS) break;
+    if (!cited.has(action.id) || seen.has(action.id)) continue;
+    if (!permitted.has(action.toolName)) continue;
+    seen.add(action.id);
+    steps.push(Object.freeze({
+      actionId: action.id,
+      toolName: action.toolName,
+      ...(action.summary ? { summary: action.summary } : {}),
+    }));
+  }
+  return steps;
 }
 
 /**
@@ -620,6 +662,11 @@ function buildItem(
   now: Date,
 ): LearnedItem {
   const at = now.toISOString();
+  const allowedTools = learnedToolCeiling(candidate, input);
+  // Only a procedure replays anything, so only a procedure carries the ledger.
+  // A lesson changes what the agent BELIEVES; giving it a list of calls would
+  // imply a replay path that does not exist for it.
+  const ledger = candidate.form === 'procedure' ? procedureLedger(candidate, input, allowedTools) : [];
   return {
     id: newLearnedItemId(),
     tenant: input.tenant,
@@ -645,7 +692,8 @@ function buildItem(
       gateReasoning,
       ...(input.project ? { project: input.project } : {}),
     },
-    allowedTools: learnedToolCeiling(candidate, input),
+    allowedTools,
+    ...(ledger.length > 0 ? { procedureLedger: ledger } : {}),
     status: 'active',
     statusChangedAt: at,
     ...(input.recordToMemory
@@ -677,6 +725,7 @@ function promoteToSkill(
     sessionKey,
     learnedAt: now.toISOString(),
     allowedTools: item.allowedTools ?? LEARNED_READ_ONLY_TOOLS,
+    observedActions: item.procedureLedger ?? [],
   });
   return written ? id : undefined;
 }

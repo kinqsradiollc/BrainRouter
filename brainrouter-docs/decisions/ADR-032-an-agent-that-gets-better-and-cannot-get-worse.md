@@ -27,9 +27,8 @@ inventing product:
   from the gate, from the reflection prompt, and from every schema that enumerated it, including the
   SQL `IN (...)` list. No migration was needed: no row could ever have carried it.
 
-**NOT done:** the live-model §6 acceptance run is still unrecorded, and command-based local
-procedures still carry no separate runtime-owned ledger of the exact successful actions they may
-replay.
+**NOT done:** the live-model §6 acceptance run is still unrecorded. The procedure ledger that was
+also listed here is built — see the implementation status above.
 **Depends on:** ADR-020 (memory self-improvement), ADR-021 (profiles, capabilities), ADR-029 (the workspace address space, the untrusted-content fence), ADR-031 (one skill library, generated copies).
 **§6 acceptance (2026-08-10):** The full-Agent A/B/C exercise §6 asks for now exists
 (`packages/core/src/tests/learning-adr032.test.ts`) and passes. Four separately constructed Agents,
@@ -62,13 +61,30 @@ was a promise with no owner and a branch no execution could reach (see D3 and D5
 - **hosted D5 is turn-end, and that is the whole of it.** There is no compaction event and no
   session-end signal on a stateless chat endpoint to hook one to.
 
-What remains genuinely incomplete, and it is exactly two things:
+**The procedure ledger is now built.** A promoted procedure carries
+`procedureLedger` — the exact calls the RUNTIME watched succeed — alongside the model's `steps`,
+which are its retelling of them. The evidence was already reaching the checkpoint as
+`eligibleCorroboratingActions` and was being thrown away after computing the tool ceiling; it is now
+kept, and three properties come from building it out of runtime observations rather than model text:
 
-1. **Command-based local procedures do not carry a separate runtime-owned ledger** of the exact
-   successful actions they may need. This is missing code, not a missing measurement.
-2. **The live-model §6 run is unrecorded**, and §6 says it needs an owner-approved run. It is not
-   blocked on code: the providers exist and are enabled. It is blocked on a decision that costs
-   someone's tokens, which is the owner's to make and not the agent's to assume.
+- a cited action id matching nothing the runtime observed is **dropped**, so a step cannot be
+  invented by naming one;
+- the order is the **runtime's** observation order, not the citation order, so a procedure cannot be
+  made to claim things happened in an order they did not;
+- a step whose tool falls outside the ceiling this same evidence produced is dropped, so the ledger
+  is bounded BY the ceiling and can never widen authority.
+
+It is **reached**, not merely stored: the promoted skill renders a "What actually ran" section, so
+the agent loading that skill through `get_skill` sees the calls rather than only the prose. A
+summary arrives from a tool result and is rendered into a document the agent reads back as
+instructions, so it is stripped of Markdown structure and bounded — a test drives a heading, a
+fence and a front-matter delimiter through it, and the sanitizer is mutation-checked.
+
+What remains genuinely incomplete is one thing:
+
+- **The live-model §6 run is unrecorded**, and §6 says it needs an owner-approved run. It is not
+  blocked on code: the providers exist and are enabled. It is blocked on a decision that costs
+  someone's tokens, which is the owner's to make and not the agent's to assume.
 
 An earlier revision of this paragraph also claimed no full-Agent repeated-mistake exercise had been
 recorded. That contradicted the two paragraphs above it, which describe exactly such an exercise

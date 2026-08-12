@@ -36,7 +36,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getLearnedItem, learningDir, listLearnedItems } from './store.js';
-import type { LearnedTenant } from './types.js';
+import type { LearnedProcedureStep, LearnedTenant } from './types.js';
 
 /**
  * The prefix that makes a learned skill unmistakable — and unable to shadow a
@@ -110,6 +110,49 @@ export interface WriteLearnedSkillInput {
   readonly sessionKey: string;
   readonly learnedAt: string;
   readonly allowedTools: readonly string[];
+  /**
+   * D3 — the calls the RUNTIME watched succeed, as distinct from `steps`, which
+   * are the model's retelling of them. Rendered as its own section because the
+   * difference matters to a reader: one is evidence, the other is a summary of
+   * evidence, and a skill that blurs them invites the agent to trust prose at
+   * the same level as a recorded fact.
+   */
+  readonly observedActions?: readonly LearnedProcedureStep[];
+}
+
+/**
+ * Render the runtime's ledger, or nothing at all.
+ *
+ * Absent rather than empty when there is no ledger: a "What actually ran"
+ * heading with nothing under it reads as "nothing ran", which is a different
+ * and false claim from "this procedure was learned before ledgers existed".
+ */
+function observedActionsSection(actions: readonly LearnedProcedureStep[]): string[] {
+  if (actions.length === 0) return [];
+  return [
+    '## What actually ran',
+    '',
+    '> Recorded by the runtime from calls it watched succeed — not written by the',
+    '> model. The steps above are its retelling; these are the calls themselves.',
+    '',
+    ...actions.map((action, index) =>
+      `${index + 1}. \`${action.toolName}\`${action.summary ? ` — ${sanitizeSummary(action.summary)}` : ''}`),
+    '',
+  ];
+}
+
+/**
+ * A summary reaches this file from a tool result, and tool results carry
+ * whatever the world put in them. It is rendered into a Markdown document the
+ * agent reads back as instructions, so it cannot be allowed to introduce a
+ * heading, a fence, or a line of its own.
+ */
+function sanitizeSummary(summary: string): string {
+  return summary
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[`*_#[\]<>|\\]/g, '')
+    .trim()
+    .slice(0, 160);
 }
 
 /**
@@ -164,6 +207,7 @@ export function writeLearnedSkill(input: WriteLearnedSkillInput): string | undef
     '',
     ...steps.map((step, index) => `${index + 1}. ${step}`),
     '',
+    ...observedActionsSection(input.observedActions ?? []),
     '## When this stops applying',
     '',
     `${input.falsifier}`,

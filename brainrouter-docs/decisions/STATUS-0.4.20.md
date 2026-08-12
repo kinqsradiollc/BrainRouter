@@ -13,7 +13,7 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 | ADR | Title | State | What is not closed |
 |---|---|---|---|
 | **028** | Surfaces that tell the truth | **SETTLED** | Nothing. Every decision reaches a user or is retired. |
-| **032** | An agent that gets better and cannot get worse | **COMPLETE IN CODE** | Two items, both named below. |
+| **032** | An agent that gets better and cannot get worse | **COMPLETE IN CODE** | One acceptance run, which spends your tokens. |
 | **033** | Review that finds things and says where | **PARTIAL** | One number, from a harness that ships and has never been run. |
 | **034** | Messages that arrive | **COMPLETE** | Nothing. Merged as #1345. |
 | **035** | A meeting you cannot lose | **COMPLETE** | Nothing blocking. A CI job for the streaming acceptance is still owed. |
@@ -47,13 +47,20 @@ them meant inventing product. The hosted chat gate now **refuses a procedure by
 name** (`no-execution-port`) with its own counter, rather than silently downgrading
 it to a lesson — a silent downgrade and an explicit refusal are different promises.
 
-**Not closed:**
+**The procedure ledger is built.** A promoted procedure now carries the exact calls
+the RUNTIME watched succeed, beside the model's prose retelling of them. The
+evidence was already reaching the checkpoint and was being discarded after the tool
+ceiling was computed. Because it is built from runtime observations rather than
+model text: a cited action the runtime never saw is dropped, the order is the
+runtime's and not the model's, and a step outside the tool ceiling is dropped — so
+the model can narrow the ledger and never widen it. It is reached, not merely
+stored: the promoted skill renders a "What actually ran" section that `get_skill`
+serves.
 
-1. Command-based local procedures do not carry a separate runtime-owned ledger of
-   the exact successful actions they may need. **Missing code.**
-2. The live-model §6 run is unrecorded. **Not blocked on code** — providers are
-   configured and enabled. §6 requires an *owner-approved* run, because it spends
-   someone's tokens, and that is not a decision an agent should assume.
+**Not closed:** one thing. The live-model §6 run is unrecorded. **Not blocked on
+code** — providers are configured and enabled. §6 requires an *owner-approved* run,
+because it spends someone's tokens, and that is not a decision an agent should
+assume.
 
 ## 033 — Review that finds things and says where · PARTIAL
 
@@ -136,4 +143,5 @@ neither can be run at zero cost without you.
 | 032 · live-model §6 run | Approval to spend tokens on it |
 | 033 · D7 precision/recall | A provider key supplied to the harness's env var |
 
-032's procedure action ledger is the one genuinely unwritten piece of code.
+Nothing else is outstanding. 032's procedure action ledger — previously the one
+genuinely unwritten piece of code — is built, tested and reached.
