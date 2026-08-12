@@ -104,18 +104,29 @@ test('leaf and browser UI manifest contracts reject dependency drift', () => {
   );
 });
 
-test('shared UI can consume only the browser-safe Notes editing Core seam', () => {
+test('shared UI can consume Core only through the two browser-safe seams', () => {
+  // Both doors are permitted, and BOTH are asserted: a feature whose rules have
+  // no legal shared home gets one copy per host, and they drift. That is what
+  // happened to the planner's sync wording before `planner/presentation` existed.
   assert.equal(
     fixture('ui', 'packages/ui/src/notes/fixture.ts', '@kinqs/brainrouter-core/notes/editing'),
     undefined,
   );
+  assert.equal(
+    fixture('ui', 'packages/ui/src/planner/fixture.ts', '@kinqs/brainrouter-core/planner/presentation'),
+    undefined,
+  );
+  // And the door stays narrow. `./planner` reaches storage and the network, so
+  // letting it in would put node builtins in the dashboard's bundle — the exact
+  // failure this restriction exists to prevent, and the reason the presentation
+  // seam is a separate, pure entrypoint rather than a widening of this one.
   assert.match(
     fixture('ui', 'packages/ui/src/notes/fixture.ts', '@kinqs/brainrouter-core/planner').reason,
-    /only through the browser-safe notes\/editing entrypoint/,
+    /notes\/editing or planner\/presentation entrypoints/,
   );
   assert.match(
     fixture('ui', 'packages/ui/src/notes/fixture.ts', '@kinqs/brainrouter-core').reason,
-    /only through the browser-safe notes\/editing entrypoint/,
+    /notes\/editing or planner\/presentation entrypoints/,
   );
 });
 

@@ -26,6 +26,7 @@ import type {
 import { authFetch } from "../../lib/adminApi";
 import { getJwt } from "../../lib/client-auth";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
+import { ATTEMPTS_BEFORE_SURFACING, describeSyncState } from "@kinqs/brainrouter-ui/planner";
 import {
   type ApiPlannerBlock,
   type ApiPlannerItem,
@@ -35,6 +36,7 @@ import {
   latestPlannerEnvelopeClock,
   latestPlannerWireHlc,
   migratePlannerOutbox,
+  plannerSyncProjection,
   persistPlannerOperations,
   plannerOutboxStorageKey,
   plannerPushBatches,
@@ -64,7 +66,6 @@ interface DashboardPlannerState {
 
 const ACTIVE_REFRESH_MS = 5_000;
 const STALE_SOURCE_MS = 15 * 60_000;
-const ATTEMPTS_BEFORE_SURFACING = 5;
 const PUSH_BATCH_LIMIT = 200;
 const PULL_PAGE_LIMIT = 1_000;
 const MAX_PULL_PAGES = 100;
@@ -231,6 +232,7 @@ export function useDashboardPlanner(): DashboardPlannerState {
     );
     if (pending.length === 0) return false;
     setRetrying(true);
+    let acceptedAnything = false;
     try {
       for (const batch of plannerPushBatches(pending, PUSH_BATCH_LIMIT)) {
         let outcome: PlannerPushOutcome;
@@ -273,9 +275,16 @@ export function useDashboardPlanner(): DashboardPlannerState {
         });
         if (failed.length > 0) persistPlannerOperations(window.localStorage, storageKey, failed);
         if (accepted.size > 0) removePlannerOperations(window.localStorage, storageKey, accepted);
+        if (accepted.size > 0) acceptedAnything = true;
         refreshOutbox();
       }
-      setLastSyncedAt(new Date().toISOString());
+      // Only a cycle that the server ACCEPTED something in. A batch whose every
+      // operation was rejected does not throw — the rejections are persisted with
+      // their reason and the loop moves on — so stamping unconditionally printed
+      // "Last synced seconds ago" over a queue nothing had ever left. A degraded
+      // state wearing a healthy timestamp is the ADR-028 failure this surface
+      // was built to end.
+      if (acceptedAnything) setLastSyncedAt(new Date().toISOString());
       return true;
     } finally {
       if (storageKeyRef.current === requestedScope) setRetrying(false);
@@ -463,28 +472,9 @@ export function useDashboardPlanner(): DashboardPlannerState {
   const itemTitle = useMemo(() => new Map(items.map((item) => [item.id, item.title])), [items]);
   const blockItem = useMemo(() => new Map(blocks.map((block) => [block.id, block.itemId])), [blocks]);
   const sync = useMemo<PlannerSyncView>(() => ({
-    label: outbox.length === 0
-      ? "Everything is synced."
-      : `${outbox.length} change${outbox.length === 1 ? "" : "s"} waiting to sync.`,
-    pendingCount: outbox.length,
+    ...plannerSyncProjection(outbox, { itemTitle, blockItem, now: Date.now(), ageLabel }),
     retrying,
     lastSyncedAt,
-    issues: outbox.map((operation) => {
-      const entity = operation.entity ?? "item";
-      const parentItemId = entity === "block" ? blockItem.get(operation.itemId) : operation.itemId;
-      return {
-        id: operation.idempotencyKey,
-        entity,
-        itemId: parentItemId ?? operation.itemId,
-        itemTitle: parentItemId ? itemTitle.get(parentItemId) : undefined,
-        action: operation.kind,
-        createdAt: new Date(operation.at.physical).toISOString(),
-        ageLabel: ageLabel(Date.now() - operation.at.physical),
-        attempts: operation.attempts ?? 0,
-        lastError: operation.lastError,
-        stuck: (operation.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING,
-      };
-    }),
     onRetry: () => {
       void reconcile(new Set(outboxRef.current.map((operation) => operation.idempotencyKey)));
     },

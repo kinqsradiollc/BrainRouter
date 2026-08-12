@@ -2496,6 +2496,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
                 attempts: detail.attempts,
                 lastError: detail.lastError,
                 stuck: detail.status === 'needs_attention',
+                retryRequested: detail.status === 'retry_requested',
               };
             }),
           },
