@@ -1,7 +1,48 @@
 # ADR-028 — Surfaces that tell the truth about their own state
 
 **Status:** ACCEPTED — approved by the owner 2026-08-04. · **Target:** `release/0.4.20`
-**Implementation:** PARTIAL — audited against the code 2026-08-06; per-decision state in [§2.9](#29--audit--what-is-built-what-is-half-built-what-is-not).
+
+**Implementation status (2026-08-12): SETTLED — every decision now either reaches a user or is
+retired, and none is left in between.**
+
+An audit on 2026-08-11 found **fifteen decisions built, typechecked, tested and called by nothing a
+person could reach** — inside the ADR about surfaces that claim a state they have not established,
+whose own Part E was a sweep written to catch exactly that. Two rounds resolved all of them, and the
+honest answer was usually deletion:
+
+- **Stacked pull requests (A2–A5, A7, A8) are RETIRED.** They could not be wired even in principle:
+  the build loop captures a whole build as ONE squashed patch on ONE throwaway branch, so there was
+  never a second layer to author. The desktop panel's View/Sync/Merge buttons dispatched three
+  channel names that were never registered. What survives is the part that was always real — one
+  capability probe (now checking `git 2.20` as A1 actually specified), one router, and the read
+  model the brain's PR review already calls.
+- **Part F (F1–F6) is RETIRED**, and F4 is the reason. `verificationGate` has enforced "say what you
+  could not check" on every file-writing turn since 0.4.15; `workRecord`'s handoff was a second
+  implementation of a shipped rule with no producer and no panel. That also answers this ADR's own
+  open question — F4 is already mandatory, just not by the module written for it.
+- **C1's graph engine is RETIRED, dropdown included.** `graph` could never be selected, because
+  `allowIncomplete` was passed by nothing but a test — while the desktop offered it in Settings. A
+  control for an engine that cannot run is this ADR's thesis violated inside this ADR.
+- **Four were WIRED, because the export held real behaviour nothing ran.** Most consequentially
+  **D11**: a pulled tombstone was supposed to tombstone its time blocks and the sync loop never
+  called it, so a deletion from another device left orphan blocks that `updateBlock` then refused.
+  That was a live data bug hiding behind an unreached export.
+
+**The sweep that missed them is fixed and now fails on an unreached EXPORT, not only an unreached
+module** — with the count as an equality, so it cannot ratchet the wrong way, mutation-proved in
+both directions.
+
+**Known and NOT closed**, stated here rather than discovered later:
+
+- `workbenchRegistry` has no production caller, so all fifteen workbench control actions are
+  declared and undispatchable. A sixteenth instance of this ADR's defect class that the fifteen-item
+  audit did not name.
+- The export-granularity check cannot catch the class that produced this round's findings; that was
+  demonstrated by mutation, not argued.
+- One "Built" row and one Part header still overstate their state, and a number of `file:line`
+  evidence pointers in §2.9 no longer resolve.
+
+Per-decision detail remains in [§2.9](#29--audit--what-is-built-what-is-half-built-what-is-not).
 **Supersedes:** ADR-027 D13 (stacked PRs), which shipped partial and in one respect incorrect.
 **Builds on:** ADR-027 D1 (debt ledgers, oversight evidence), D2 (execution engines), D6 (control
 layer), D11 (retention), D12 (idempotency, fencing, database clock).

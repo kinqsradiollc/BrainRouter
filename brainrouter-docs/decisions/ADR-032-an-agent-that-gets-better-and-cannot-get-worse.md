@@ -1,6 +1,35 @@
 # ADR-032 — An agent that gets better, and cannot get worse
 
 **Status:** ACCEPTED — approved by the owner for implementation.
+
+**Implementation status (2026-08-12): COMPLETE IN CODE. What remains is one acceptance run, not a
+build.**
+
+The deterministic half is demonstrated, not asserted: 82 tests in
+`packages/core/src/tests/learning-adr032.test.ts`, including the §6 exercise driven through real
+Agents — one learns from its own repetition, a second runs what it learned, a third cannot once it
+is retired.
+
+Three gaps found by a 2026-08-11 audit are **all closed by WITHDRAWAL**, because building them meant
+inventing product:
+
+- **D3 on hosted chat** — hosted hardcoded `form: "lesson"`, so a PROCEDURE (the form that changes
+  what the agent DOES) could never persist there while local, CLI and Desktop could learn one. The
+  gate now takes the host's capabilities and REFUSES a procedure by name, with its own counter that
+  reaches an operator, instead of silently downgrading it to a lesson. A silent downgrade and an
+  explicit refusal are different promises.
+- **D5 on hosted chat** — hosted has one checkpoint where the others have three, and now says so:
+  there is no compaction event on a stateless endpoint, and a session-end sweep would be a new
+  retention surface for user conversation content. A future `session-end` enqueue fails closed at
+  the schema, which this document claimed and nothing tested until it did.
+- **The `delegation` form is withdrawn from D3 entirely.** It returned `non-executable`
+  unconditionally — an honest refusal, but a branch nobody could reach. It is gone from the union,
+  from the gate, from the reflection prompt, and from every schema that enumerated it, including the
+  SQL `IN (...)` list. No migration was needed: no row could ever have carried it.
+
+**NOT done:** the live-model §6 acceptance run is still unrecorded, and command-based local
+procedures still carry no separate runtime-owned ledger of the exact successful actions they may
+replay.
 **Depends on:** ADR-020 (memory self-improvement), ADR-021 (profiles, capabilities), ADR-029 (the workspace address space, the untrusted-content fence), ADR-031 (one skill library, generated copies).
 **§6 acceptance (2026-08-10):** The full-Agent A/B/C exercise §6 asks for now exists
 (`packages/core/src/tests/learning-adr032.test.ts`) and passes. Four separately constructed Agents,

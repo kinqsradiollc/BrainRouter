@@ -1,6 +1,21 @@
 # ADR-033 — Review that finds things, and says where
 
 **Status:** ACCEPTED — approved by the owner for implementation.
+
+**Implementation status (2026-08-12): PARTIAL, and the split is clean rather than ragged.**
+
+**Shipped AND reached** — D1, D2, D3, D4, D5, D8 and D9 are engineering, and every one of them is
+live on a path a user reaches: the bot through the scheduler executors, the CLI `/review` handler,
+and the desktop host. Verified deterministically — `review-orchestration` 8/8, `review-bundles`
+18/18, `review-position-and-reflection` 19/19. D6 is a stance and lives in the prompt.
+
+**The one gap, stated precisely: D7's harness ships and has never produced a number.** It exists, it
+runs, and no evaluation has been recorded against it. That is why this ADR is PARTIAL and not
+COMPLETE, and it is a measurement that has not been taken rather than code that was not written.
+
+This is deliberately not called "the live-model half is unproven" any more, which was the earlier
+wording and was vaguer than the facts deserve: the deterministic engineering is done and reached,
+and exactly one conjunct — a number from the harness — is outstanding.
 **Implementation status (2026-08-12):** PARTIAL, and precisely one conjunct short. The shared
 orchestration, evidence safety and paired fail-closed benchmark harness are implemented and reached
 on a user path; the deterministic COST conjunct of §6 passes: bundled sends **516,672 characters in
