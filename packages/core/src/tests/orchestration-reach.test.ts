@@ -225,6 +225,8 @@ test('investigate refuses a single lens, because one angle is not an investigati
 
 test('the profile-stage description renders fanOut, because the delegated-stage guard conditions on it', () => {
   const described = describeProfileStageTool('BASE', {
+    workspaceProfileId: 'engineering',
+    planProfileId: 'engineering',
     orchestrationProfileId: 'engineering',
     strategyId: 'delivery',
     selectionSource: 'deterministic',
@@ -242,8 +244,7 @@ test('the profile-stage description renders fanOut, because the delegated-stage 
     skippedStages: [],
     effectiveParallel: 4,
     diagnostics: [],
-    activation: 'preview',
-  } as never);
+  });
   assert.match(described, /fan-out: 1-3 children on DISTINCT angles/);
 });
 

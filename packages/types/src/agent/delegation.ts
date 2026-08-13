@@ -19,6 +19,9 @@ export interface DelegatedTaskPacket {
   persona: { id: string };
   orchestration: {
     roleId: string;
+    workspaceProfileId?: string;
+    planProfileId?: string;
+    /** @deprecated Compatibility alias for planProfileId. */
     profileId?: string;
     strategyId?: string;
     stageId?: string;

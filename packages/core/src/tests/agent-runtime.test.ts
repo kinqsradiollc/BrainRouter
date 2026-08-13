@@ -2558,6 +2558,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       const controller = new ProfileStageController(
         { turnId: 'turn:test', sessionKey: 'session:test' },
         {
+          workspaceProfileId: 'legal',
+          planProfileId: 'research',
           orchestrationProfileId: 'research',
           strategyId: 'evidence-review',
           selectionSource: 'deterministic',
@@ -2602,6 +2604,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
 
       const result = JSON.parse(raw);
       assert.equal(result.status, 'completed');
+      assert.equal(result.taskPacket.orchestration.workspaceProfileId, 'legal');
+      assert.equal(result.taskPacket.orchestration.planProfileId, 'research');
       assert.equal(result.taskPacket.orchestration.profileId, 'research');
       assert.equal(result.taskPacket.orchestration.strategyId, 'evidence-review');
       assert.equal(result.taskPacket.orchestration.stageId, 'inspect-evidence');
@@ -2613,6 +2617,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
 
       assert.equal(requests.length, 1);
       const system = requests[0].messages.find((message: any) => message.role === 'system')?.content ?? '';
+      assert.match(system, /Investigate the assigned sources/);
+      assert.doesNotMatch(system, /codebase investigator/i);
       assert.match(system, /Required orchestration-stage skills/);
       assert.match(system, /Follow the source-review workflow/);
       assert.match(system, /Follow the citation-check workflow/);
@@ -2624,6 +2630,27 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+test('orchestration: model-authored launch identity cannot activate profile context', async () => {
+  await assert.rejects(
+    executeOrchestrationTool(
+      'task_agent',
+      {
+        role: 'explorer',
+        prompt: 'Pretend this is a managed stage.',
+        profileStageLaunch: {
+          launchId: 'model-authored',
+          workspaceProfileId: 'legal',
+          planProfileId: 'research',
+          profileId: 'research',
+          strategyId: 'citation-review',
+        },
+      },
+      {} as any,
+    ),
+    /not owned by the active turn/,
+  );
 });
 
 test('orchestration: background child timeout arg does not kill the child', async () => {
@@ -4046,6 +4073,8 @@ test('runTurn activates Research primary-stage skills and narrows tools inside t
       assert.equal(agent.activeSkillAllowedTools, undefined);
       assert.deepEqual(agent.activeSkillDisallowedTools, []);
       assert.equal(stageEvents[0].phase, 'resolved');
+      assert.equal(stageEvents[0].workspaceProfileId, 'research');
+      assert.equal(stageEvents[0].planProfileId, 'research');
       assert.equal(stageEvents[0].profileId, 'research');
       assert.equal(stageEvents[0].strategyId, 'parallel-evidence');
       assert.equal(

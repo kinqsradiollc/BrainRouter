@@ -1,12 +1,12 @@
 /**
- * P23-3 pure orchestration-profile preview resolver.
+ * P23-3 and ADR-040 A40-1 pure orchestration-profile resolver.
  *
- * This module selects and narrows an already validated plan. It does not launch
- * children, mutate a manifest, or make profile JSON authoritative at runtime.
- * Every child stage must survive the workspace, catalog, skill, delegation,
- * and runtime-capacity intersections before it can appear in the preview.
+ * This module compiles one already validated plan into its authority-narrowed
+ * live stage set. It does not launch children or mutate a manifest. Every child
+ * stage must survive workspace, catalog, skill, delegation, and runtime limits.
  */
 import type { WorkspaceManifest } from '../../workspace/manifest.js';
+import { isTrustedBundledOrchestrationPlanAlias } from '../../workspace/orchestrationPlanIdentity.js';
 import {
   evaluateDelegationGate,
   type DelegationPolicy,
@@ -97,6 +97,9 @@ export interface ResolvedOrchestrationStage {
 }
 
 export interface ResolvedWorkspaceOrchestrationPlan {
+  workspaceProfileId: string | null;
+  planProfileId: string | null;
+  /** @deprecated Compatibility alias for planProfileId. */
   orchestrationProfileId: string | null;
   strategyId: string | null;
   selectionSource: OrchestrationSelectionSource;
@@ -105,8 +108,8 @@ export interface ResolvedWorkspaceOrchestrationPlan {
   skippedStages: OrchestrationResolutionDiagnostic[];
   effectiveParallel: number;
   diagnostics: OrchestrationResolutionDiagnostic[];
-  /** P23-3 is preview-only; P23-3a owns the activation lifecycle gate. */
-  activation: 'preview';
+  /** @deprecated Removed live `preview` label; always absent at runtime. */
+  activation?: never;
 }
 
 interface StrategyPreview {
@@ -116,21 +119,25 @@ interface StrategyPreview {
   diagnostics: OrchestrationResolutionDiagnostic[];
 }
 
-/** Resolve a deterministic, authority-narrowed preview or direct-primary fallback. */
+/** Resolve a deterministic, authority-narrowed live plan or direct-primary fallback. */
 export function resolveWorkspaceOrchestrationPlan(
   input: WorkspaceOrchestrationResolutionInput,
 ): ResolvedWorkspaceOrchestrationPlan {
   if (!input.definition) {
-    return directPrimaryFallback('no-plan');
+    return directPrimaryFallback('no-plan', input.manifest?.profile ?? null);
   }
   if (!input.manifest) {
-    return directPrimaryFallback('no-manifest');
+    return directPrimaryFallback('no-manifest', null);
   }
-  if (input.definition.id !== input.manifest.profile) {
-    return directPrimaryFallback('profile-plan-mismatch');
+  if (
+    input.definition.id !== input.manifest.profile
+    && !matchesTrustedBundledAlias(input)
+  ) {
+    return directPrimaryFallback('profile-plan-mismatch', input.manifest.profile);
   }
 
   const definition = input.definition;
+  const workspaceProfileId = input.manifest.profile;
   const effectiveParallel = effectivePlanParallelLimit(
     definition.limits.maxParallel,
     input.manifest.orchestration.maxParallel,
@@ -140,7 +147,7 @@ export function resolveWorkspaceOrchestrationPlan(
     (strategy) => strategy.id === definition.fallbackStrategyId,
   );
   if (!fallback) {
-    return directPrimaryFallback('invalid-plan');
+    return directPrimaryFallback('invalid-plan', workspaceProfileId);
   }
   const fallbackPreview = previewStrategy(fallback, input, effectiveParallel);
   if (!fallbackPreview.available || fallbackPreview.stages.some(
@@ -150,11 +157,13 @@ export function resolveWorkspaceOrchestrationPlan(
       stage.fanOut !== undefined ||
       stage.expectedOutput !== undefined,
   )) {
-    return directPrimaryFallback('invalid-plan');
+    return directPrimaryFallback('invalid-plan', workspaceProfileId);
   }
   const fallbackResult = (
     diagnostics: OrchestrationResolutionDiagnostic[],
   ): ResolvedWorkspaceOrchestrationPlan => ({
+    workspaceProfileId,
+    planProfileId: definition.id,
     orchestrationProfileId: definition.id,
     strategyId: fallback.id,
     selectionSource: 'fallback',
@@ -166,7 +175,6 @@ export function resolveWorkspaceOrchestrationPlan(
       ...diagnostics,
       { code: 'fallback-selected', strategyId: fallback.id },
     ],
-    activation: 'preview',
   });
 
   if (input.manifest.orchestration.mode === 'off') {
@@ -181,6 +189,7 @@ export function resolveWorkspaceOrchestrationPlan(
       const requestedPreview = previewStrategy(requested, input, effectiveParallel);
       if (requestedPreview.available) {
         return resolvedStrategy(
+          workspaceProfileId,
           definition.id,
           requested,
           requestedPreview,
@@ -247,6 +256,7 @@ export function resolveWorkspaceOrchestrationPlan(
       }]);
     }
     return resolvedStrategy(
+      workspaceProfileId,
       definition.id,
       requested,
       selectedPreview,
@@ -265,6 +275,7 @@ export function resolveWorkspaceOrchestrationPlan(
     const preview = previewStrategy(strategy, input, effectiveParallel);
     if (preview.available) {
       return resolvedStrategy(
+        workspaceProfileId,
         definition.id,
         strategy,
         preview,
@@ -280,6 +291,18 @@ export function resolveWorkspaceOrchestrationPlan(
     { code: 'no-eligible-signal-match' },
     ...unavailableMatches,
   ]);
+}
+
+function matchesTrustedBundledAlias(
+  input: WorkspaceOrchestrationResolutionInput,
+): boolean {
+  const definition = input.definition;
+  const manifest = input.manifest;
+  return definition !== null
+    && definition !== undefined
+    && manifest !== null
+    && manifest !== undefined
+    && isTrustedBundledOrchestrationPlanAlias(manifest.profile, definition);
 }
 
 function previewStrategy(
@@ -434,7 +457,8 @@ function stageUnavailableReason(
 }
 
 function resolvedStrategy(
-  orchestrationProfileId: string,
+  workspaceProfileId: string,
+  planProfileId: string,
   strategy: OrchestrationProfileStrategy,
   preview: StrategyPreview,
   selectionSource: Exclude<OrchestrationSelectionSource, 'fallback'>,
@@ -443,7 +467,9 @@ function resolvedStrategy(
 ): ResolvedWorkspaceOrchestrationPlan {
   const retainedStageIds = new Set(preview.stages.map((stage) => stage.id));
   return {
-    orchestrationProfileId,
+    workspaceProfileId,
+    planProfileId,
+    orchestrationProfileId: planProfileId,
     strategyId: strategy.id,
     selectionSource,
     matchedSignalIds: strategy.activation.signals.filter((signal) => signals.has(signal)),
@@ -457,7 +483,6 @@ function resolvedStrategy(
     skippedStages: preview.skippedStages,
     effectiveParallel,
     diagnostics: preview.diagnostics,
-    activation: 'preview',
   };
 }
 
@@ -466,8 +491,11 @@ function directPrimaryFallback(
     OrchestrationResolutionReasonCode,
     'no-plan' | 'no-manifest' | 'invalid-plan' | 'profile-plan-mismatch'
   >,
+  workspaceProfileId: string | null,
 ): ResolvedWorkspaceOrchestrationPlan {
   return {
+    workspaceProfileId,
+    planProfileId: null,
     orchestrationProfileId: null,
     strategyId: null,
     selectionSource: 'fallback',
@@ -484,7 +512,6 @@ function directPrimaryFallback(
     skippedStages: [],
     effectiveParallel: 0,
     diagnostics: [{ code }, { code: 'fallback-selected' }],
-    activation: 'preview',
   };
 }
 

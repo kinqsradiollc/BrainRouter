@@ -267,12 +267,18 @@ export async function runProjectOnboarding(
     sources.orchestrationProfiles,
   );
   if (!edits) return cancelled(print);
-  const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
-  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(
+  const reviewed = finalizeCatalogReviewedProjectOnboarding(
+    draft,
+    edits,
+    catalog,
+    sources.orchestrationProfiles,
+  );
+  const reviewedPreview = buildWorkspaceOnboardingPreview(
     reviewed,
     catalog,
     sources.orchestrationProfiles,
-  ))}\n`);
+  );
+  print(`\n${formatManifestSummary(reviewed, reviewedPreview)}\n`);
 
   const confirm = await prompt({
     id: 'confirm',
@@ -292,11 +298,22 @@ export async function runProjectOnboarding(
     root,
     options.getConfig?.() ?? options.config,
   );
-  if (currentSources.catalog.fingerprint !== catalog.fingerprint) {
+  const currentPreview = buildWorkspaceOnboardingPreview(
+    reviewed,
+    currentSources.catalog,
+    currentSources.orchestrationProfiles,
+  );
+  if (currentPreview.catalogFingerprint !== reviewedPreview.catalogFingerprint) {
     throw new Error('Workspace setup choices changed while setup was open. Reload and review the latest catalog.');
   }
+  const currentReviewed = finalizeCatalogReviewedProjectOnboarding(
+    draft,
+    edits,
+    currentSources.catalog,
+    currentSources.orchestrationProfiles,
+  );
   const committed = commitReviewedWorkspaceOnboarding(root, {
-    manifest: reviewed,
+    manifest: currentReviewed,
     expected: review.revision,
   });
   print(chalk.green(`\n✓ Onboarded — wrote ${path.relative(root, committed.manifestPath)}`));

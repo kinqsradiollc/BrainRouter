@@ -27,7 +27,8 @@ export function createProfileStageControllerForTurn(input: {
   if (
     agent.agentDepth !== 0
     || agent.activeSkill
-    || resolution.plan.orchestrationProfileId === null
+    || resolution.plan.workspaceProfileId === null
+    || resolution.plan.planProfileId === null
     || resolution.plan.strategyId === null
     || resolution.plan.stages.length === 0
   ) {

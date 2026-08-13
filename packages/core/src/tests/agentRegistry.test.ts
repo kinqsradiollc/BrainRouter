@@ -212,6 +212,8 @@ test('workspace definition overrides builtin with same id', () => {
     assert.equal(loaded.source, 'workspace');
     const activeProfile = findById('explorer', workspace, {
       activation: 'active',
+      workspaceProfileId: 'engineering',
+      planProfileId: 'engineering',
       orchestrationProfileId: 'engineering',
       strategyId: 'delivery',
     });

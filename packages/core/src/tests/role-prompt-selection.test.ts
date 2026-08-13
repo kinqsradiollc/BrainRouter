@@ -28,6 +28,8 @@ const ROLE_IDS = [
 ] as const satisfies readonly DomainNeutralRoleId[];
 const ACTIVE_ENGINEERING: ActiveProfilePromptContext = {
   activation: 'active',
+  workspaceProfileId: 'engineering',
+  planProfileId: 'engineering',
   orchestrationProfileId: 'engineering',
   strategyId: 'delivery',
 };
@@ -88,12 +90,34 @@ test('P23-4 compatibility execution preserves the exact bundled Engineering prom
 test('P23-4 preview or malformed profile context cannot activate neutral prompts', () => {
   const preview = {
     activation: 'preview',
+    workspaceProfileId: 'engineering',
+    planProfileId: 'engineering',
     orchestrationProfileId: 'engineering',
     strategyId: 'delivery',
   } as unknown as ActiveProfilePromptContext;
   const malformed = {
     activation: 'active',
+    workspaceProfileId: 'engineering',
+    planProfileId: 'engineering',
     orchestrationProfileId: '../engineering',
+    strategyId: 'delivery',
+  } as ActiveProfilePromptContext;
+  const missingWorkspaceIdentity = {
+    activation: 'active',
+    planProfileId: 'engineering',
+    orchestrationProfileId: 'engineering',
+    strategyId: 'delivery',
+  } satisfies ActiveProfilePromptContext;
+  const legacyContext = {
+    activation: 'active',
+    orchestrationProfileId: 'engineering',
+    strategyId: 'delivery',
+  } satisfies ActiveProfilePromptContext;
+  const mismatchedCompatibilityAlias = {
+    activation: 'active',
+    workspaceProfileId: 'engineering',
+    planProfileId: 'engineering',
+    orchestrationProfileId: 'research',
     strategyId: 'delivery',
   } as ActiveProfilePromptContext;
 
@@ -105,13 +129,44 @@ test('P23-4 preview or malformed profile context cannot activate neutral prompts
     hash(findById('worker', undefined, malformed)!.def.prompt),
     LEGACY_PROMPT_HASHES.worker,
   );
+  assert.equal(
+    hash(findById('worker', undefined, missingWorkspaceIdentity)!.def.prompt),
+    LEGACY_PROMPT_HASHES.worker,
+  );
+  assert.equal(
+    hash(findById('worker', undefined, legacyContext)!.def.prompt),
+    LEGACY_PROMPT_HASHES.worker,
+  );
+  assert.equal(
+    hash(findById('worker', undefined, mismatchedCompatibilityAlias)!.def.prompt),
+    LEGACY_PROMPT_HASHES.worker,
+  );
 });
 
 test('P23-4 active profile selection reuses the same neutral role posture across domains', () => {
   const contexts: ActiveProfilePromptContext[] = [
     ACTIVE_ENGINEERING,
-    { activation: 'active', orchestrationProfileId: 'research', strategyId: 'investigate' },
-    { activation: 'active', orchestrationProfileId: 'study', strategyId: 'guided-session' },
+    {
+      activation: 'active',
+      workspaceProfileId: 'research',
+      planProfileId: 'research',
+      orchestrationProfileId: 'research',
+      strategyId: 'investigate',
+    },
+    {
+      activation: 'active',
+      workspaceProfileId: 'legal',
+      planProfileId: 'research',
+      orchestrationProfileId: 'research',
+      strategyId: 'investigate',
+    },
+    {
+      activation: 'active',
+      workspaceProfileId: 'study',
+      planProfileId: 'study',
+      orchestrationProfileId: 'study',
+      strategyId: 'guided-session',
+    },
   ];
   for (const roleId of ROLE_IDS) {
     const prompts = contexts.map((context) =>

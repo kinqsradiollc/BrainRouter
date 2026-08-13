@@ -1,5 +1,5 @@
 /**
- * P23-3a ephemeral lifecycle for a resolved orchestration-plan preview.
+ * P23-3a ephemeral lifecycle for a resolved orchestration plan.
  *
  * The lifecycle stores only bounded stage identity and state. It deliberately
  * never stores tool arguments or dispatch callbacks, so an unstarted stage

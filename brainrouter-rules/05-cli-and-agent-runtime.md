@@ -211,6 +211,32 @@ and failures as a structured projection.
   `packages/core/src/orchestration/tools/summarize.ts`,
   `packages/core/src/tests/delegated-task-packet.test.ts`
 
+### 11d. Workspace profile identity and reusable plan identity never collapse
+
+The workspace profile owns reviewed domain authority; the plan profile owns only
+the reusable work shape. Active resolution, the turn-owned stage controller,
+controller-owned launches, delegated packets, protocol events, and terminal
+telemetry carry `workspaceProfileId` and `planProfileId` separately. During the
+compatibility window, runtime `profileId`, `orchestrationProfileId`, and
+`orchestration_profile_id` mean the **plan** identity, while onboarding preview's
+legacy `profileId` continues to mean the **workspace** identity. Direct fallback
+with a manifest retains the workspace ID and a null plan ID; no-manifest paths
+carry neither.
+
+Only a launch prepared by the active turn's controller may activate the
+domain-neutral orchestration-role prompt. Model-authored or transported identity
+fields are data, never activation provenance. Call live resolved plans "plans";
+reserve "preview" for read-only, pre-write user-review surfaces.
+
+- **Evidence:** `packages/core/src/workspace/orchestrationPlanIdentity.ts`,
+  `packages/core/src/workspace/activeTurnOrchestration.ts`,
+  `packages/core/src/orchestration/profiles/orchestrationProfileResolver.ts`,
+  `packages/core/src/orchestration/runtime/profileStageController.ts`,
+  `packages/core/src/orchestration/delegation/stageTaskPacket.ts`,
+  `packages/core/src/orchestration/roles/rolePromptSelection.ts`,
+  `packages/agent-protocol/src/events.ts`,
+  `packages/core/src/tests/orchestration-plan-identity.test.ts`
+
 ---
 
 ## TUI (Ink) conventions

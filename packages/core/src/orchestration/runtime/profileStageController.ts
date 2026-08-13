@@ -30,6 +30,9 @@ export interface ProfileStageControllerHooks {
 
 export interface ProfileStageStateEvent {
   phase: 'resolved' | 'updated' | 'terminated';
+  workspaceProfileId: string;
+  planProfileId: string;
+  /** @deprecated Compatibility alias for planProfileId. */
   profileId: string;
   strategyId: string;
   selectionSource: ResolvedWorkspaceOrchestrationPlan['selectionSource'];
@@ -59,6 +62,9 @@ export interface RequiredDelegatedStageAction {
 
 export interface PreparedProfileStageDelegation {
   readonly launchId: string;
+  readonly workspaceProfileId: string;
+  readonly planProfileId: string;
+  /** @deprecated Compatibility alias for planProfileId. */
   readonly profileId: string;
   readonly strategyId: string;
   readonly stage: ResolvedOrchestrationStage;
@@ -111,6 +117,16 @@ interface DelegatedStageRecord {
 }
 
 export class ProfileStageController {
+  readonly owner: Readonly<OrchestrationLifecycleOwner>;
+  readonly plan: Pick<
+    ResolvedWorkspaceOrchestrationPlan,
+    | 'workspaceProfileId'
+    | 'planProfileId'
+    | 'orchestrationProfileId'
+    | 'strategyId'
+    | 'selectionSource'
+    | 'stages'
+  >;
   private readonly lifecycle: EphemeralOrchestrationPlanLifecycle;
   private readonly primaryStages = new Map<string, PrimaryStageRecord>();
   private readonly delegatedStages = new Map<string, DelegatedStageRecord>();
@@ -120,15 +136,22 @@ export class ProfileStageController {
   private activeSkillId?: string;
 
   constructor(
-    readonly owner: Readonly<OrchestrationLifecycleOwner>,
-    readonly plan: Pick<
+    owner: Readonly<OrchestrationLifecycleOwner>,
+    plan: Pick<
       ResolvedWorkspaceOrchestrationPlan,
-      'orchestrationProfileId' | 'strategyId' | 'selectionSource' | 'stages'
+      | 'workspaceProfileId'
+      | 'planProfileId'
+      | 'orchestrationProfileId'
+      | 'strategyId'
+      | 'selectionSource'
+      | 'stages'
     >,
     private readonly hooks: ProfileStageControllerHooks,
   ) {
-    this.lifecycle = new EphemeralOrchestrationPlanLifecycle(owner, plan);
-    for (const stage of plan.stages) {
+    this.owner = Object.freeze({ ...owner });
+    this.plan = canonicalControllerPlan(plan);
+    this.lifecycle = new EphemeralOrchestrationPlanLifecycle(this.owner, this.plan);
+    for (const stage of this.plan.stages) {
       const copied = copyStage(stage);
       if (stage.executor.kind === 'primary') {
         this.primaryStages.set(stage.id, {
@@ -320,24 +343,33 @@ export class ProfileStageController {
         `Delegated stage "${input.stageId}" failed closed because its skills could not be loaded: ${detail}`,
       );
     }
+    for (const skill of skills) {
+      if (skill.allowedTools) Object.freeze(skill.allowedTools);
+      Object.freeze(skill.disallowedTools);
+      Object.freeze(skill);
+    }
+    Object.freeze(skills);
 
-    const profileId = this.plan.orchestrationProfileId;
+    const workspaceProfileId = this.plan.workspaceProfileId;
+    const planProfileId = this.plan.planProfileId;
     const strategyId = this.plan.strategyId;
-    if (!profileId || !strategyId) {
+    if (!workspaceProfileId || !planProfileId || !strategyId) {
       this.settleDelegation(record, launchId, false);
       throw new PrimaryStageActionRejectedError(
         'stage-unavailable',
-        'The active profile plan no longer has a stable profile and strategy id.',
+        'The active profile plan no longer has stable workspace, plan, and strategy ids.',
       );
     }
     const prepared: PreparedProfileStageDelegation = Object.freeze({
       launchId,
-      profileId,
+      workspaceProfileId,
+      planProfileId,
+      profileId: planProfileId,
       strategyId,
-      stage: copyStage(record.stage),
+      stage: freezeStage(copyStage(record.stage)),
       roleId,
       ...(assignment ? { assignment } : {}),
-      skills: Object.freeze(skills),
+      skills,
     });
     this.preparedDelegations.set(launchId, prepared);
     this.publishState('updated');
@@ -664,13 +696,16 @@ export class ProfileStageController {
   }
 
   private publishState(phase: ProfileStageStateEvent['phase']): void {
-    const profileId = this.plan.orchestrationProfileId;
+    const workspaceProfileId = this.plan.workspaceProfileId;
+    const planProfileId = this.plan.planProfileId;
     const strategyId = this.plan.strategyId;
-    if (!profileId || !strategyId) return;
+    if (!workspaceProfileId || !planProfileId || !strategyId) return;
     const states = new Map(this.lifecycle.snapshot().map((stage) => [stage.id, stage]));
     this.hooks.onStateChange?.({
       phase,
-      profileId,
+      workspaceProfileId,
+      planProfileId,
+      profileId: planProfileId,
       strategyId,
       selectionSource: this.plan.selectionSource,
       stages: this.plan.stages.map((stage) => {
@@ -714,6 +749,37 @@ export class ProfileStageController {
   }
 }
 
+function canonicalControllerPlan(
+  plan: Pick<
+    ResolvedWorkspaceOrchestrationPlan,
+    | 'workspaceProfileId'
+    | 'planProfileId'
+    | 'orchestrationProfileId'
+    | 'strategyId'
+    | 'selectionSource'
+    | 'stages'
+  >,
+): Pick<
+  ResolvedWorkspaceOrchestrationPlan,
+  | 'workspaceProfileId'
+  | 'planProfileId'
+  | 'orchestrationProfileId'
+  | 'strategyId'
+  | 'selectionSource'
+  | 'stages'
+> {
+  const stages = plan.stages.map((stage) => freezeStage(copyStage(stage)));
+  Object.freeze(stages);
+  return Object.freeze({
+    workspaceProfileId: plan.workspaceProfileId,
+    planProfileId: plan.planProfileId,
+    orchestrationProfileId: plan.planProfileId,
+    strategyId: plan.strategyId,
+    selectionSource: plan.selectionSource,
+    stages,
+  });
+}
+
 function parseAction(input: Record<string, unknown>): PrimaryStageAction {
   const action = typeof input.action === 'string' ? input.action.trim() : '';
   const stageId = typeof input.stageId === 'string' ? input.stageId.trim() : '';
@@ -755,6 +821,18 @@ function copyStage(stage: ResolvedOrchestrationStage): ResolvedOrchestrationStag
         }
       : {}),
   };
+}
+
+function freezeStage(stage: ResolvedOrchestrationStage): ResolvedOrchestrationStage {
+  Object.freeze(stage.executor);
+  Object.freeze(stage.after);
+  Object.freeze(stage.skillIds);
+  if (stage.fanOut) Object.freeze(stage.fanOut);
+  if (stage.expectedOutput) {
+    Object.freeze(stage.expectedOutput.requiredSections);
+    Object.freeze(stage.expectedOutput);
+  }
+  return Object.freeze(stage);
 }
 
 function boundedAssignment(value?: string): string | undefined {

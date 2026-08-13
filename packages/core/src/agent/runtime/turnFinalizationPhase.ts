@@ -115,17 +115,7 @@ export async function finalizeTurnPhase(
     loops_used: input.loopCount,
     tokens_in: agent.lastTurnUsage.promptTokens,
     tokens_out: agent.lastTurnUsage.completionTokens,
-    orchestration_profile_id:
-      input.activeTurnOrchestration.plan.orchestrationProfileId,
-    orchestration_strategy_id:
-      input.activeTurnOrchestration.plan.strategyId,
-    orchestration_selection_source:
-      input.activeTurnOrchestration.plan.selectionSource,
-    orchestration_stage_count:
-      input.activeTurnOrchestration.plan.stages.length,
-    orchestration_signal_ids:
-      input.activeTurnOrchestration.taskSignalIds.join(','),
-    orchestration_source: input.activeTurnOrchestration.source,
+    ...orchestrationTurnSpanAttributes(input.activeTurnOrchestration),
   });
 
   agent.sessionUsage.promptTokens += agent.lastTurnUsage.promptTokens;
@@ -186,6 +176,23 @@ export async function finalizeTurnPhase(
   }
 
   return finalAnswer;
+}
+
+/** A40-1: project terminal span identity without collapsing workspace and plan profiles. */
+export function orchestrationTurnSpanAttributes(
+  resolution: ActiveTurnOrchestrationResolution,
+): Record<string, unknown> {
+  return {
+    orchestration_workspace_profile_id: resolution.plan.workspaceProfileId,
+    orchestration_plan_profile_id: resolution.plan.planProfileId,
+    // A40-1 compatibility telemetry for one release; this remains plan identity.
+    orchestration_profile_id: resolution.plan.planProfileId,
+    orchestration_strategy_id: resolution.plan.strategyId,
+    orchestration_selection_source: resolution.plan.selectionSource,
+    orchestration_stage_count: resolution.plan.stages.length,
+    orchestration_signal_ids: resolution.taskSignalIds.join(','),
+    orchestration_source: resolution.source,
+  };
 }
 
 type FirstTurnTitleProposalPort = Pick<

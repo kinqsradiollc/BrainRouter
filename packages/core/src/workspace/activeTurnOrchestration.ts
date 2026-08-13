@@ -16,6 +16,7 @@ import { detectOrchestrationTaskSignals } from '../orchestration/profiles/taskSi
 import { readPreferences } from '../session/preferences/preferencesStore.js';
 import { loadWorkspaceManifest, type WorkspaceManifest } from './manifest.js';
 import { buildWorkspaceOnboardingSources } from './onboardingSources.js';
+import { resolveOrchestrationPlanIdentity } from './orchestrationPlanIdentity.js';
 import { resolveWorkspaceProfileOrchestrationDefaults } from './profileOrchestrationDefaults.js';
 import { suggestWorkspaceProfile } from './profileSuggest.js';
 import { getWorkspaceProfile, type WorkspaceProfileId } from './profiles.js';
@@ -83,7 +84,9 @@ export function resolveActiveTurnOrchestration(input: {
   }
 
   const sources = buildWorkspaceOnboardingSources(input.workspaceRoot);
-  const profile = sources.orchestrationProfiles.entries.get(selection.profile);
+  const identity = resolveOrchestrationPlanIdentity(selection.profile, {
+    catalog: sources.orchestrationProfiles,
+  });
   const roleCatalog = new Map(
     loadRegistry(input.workspaceRoot).flatMap((loaded) => {
       try {
@@ -106,7 +109,7 @@ export function resolveActiveTurnOrchestration(input: {
     : inferred?.skillIds ?? [];
   const taskSignalIds = [...detectOrchestrationTaskSignals(input.task)];
   const plan = resolveWorkspaceOrchestrationPlan({
-    definition: profile?.definition,
+    definition: identity.definition,
     manifest: selection,
     taskSignalIds: new Set(taskSignalIds),
     roleCatalog,
@@ -120,7 +123,7 @@ export function resolveActiveTurnOrchestration(input: {
     parentDepth: input.parentDepth ?? 0,
   });
 
-  if (!profile) {
+  if (!identity.definition) {
     return { plan, taskSignalIds, source: 'unavailable' };
   }
   return {
@@ -128,7 +131,7 @@ export function resolveActiveTurnOrchestration(input: {
     taskSignalIds,
     // Telemetry must never present an inferred default as a reviewed workspace
     // choice the user actually made.
-    source: manifest ? profile.source.provenance : 'inferred-default',
+    source: manifest ? identity.source?.provenance ?? 'unavailable' : 'inferred-default',
   };
 }
 

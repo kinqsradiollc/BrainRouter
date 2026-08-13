@@ -791,9 +791,12 @@ accepted decision record checks only A40-0; it makes no implementation claim.
 
 - [x] **A40-0 — Accept this decision.** Owner approved on 2026-08-13. ADR and index only;
   no runtime claims.
-- [ ] **A40-1 — Repair current profile truth.** Resolve exact/aliased plan identity in the active
+- [x] **A40-1 — Repair current profile truth.** Resolve exact/aliased plan identity in the active
   turn, separate workspace/plan IDs, keep invalid higher-precedence claims fail-closed, replace stale
   preview vocabulary, and add the 17-profile default-resolution matrix without changing modes.
+  Local evidence: the 17-profile Core matrix and Core/CLI/Desktop identity, fail-closed,
+  propagation, onboarding, and telemetry suites pass; hosted CI and the automated security review
+  remain this slice's merge gates.
 - [ ] **A40-2 — Add conversational task envelopes, trusted intent, and execution-tree policy.**
   Evaluate every eligible top-level turn from bounded user/confirmed task context, make a normal
   turn the root when no goal exists, define/validate explicit topology and strategy provenance,

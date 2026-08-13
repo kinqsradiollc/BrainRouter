@@ -8,7 +8,12 @@ import {
   updateSession,
   type ChildSessionRecord,
 } from '../session/orchestrator.js';
-import { buildRolePrompt, resolveRole, type AccessMode } from '../roles/roles.js';
+import {
+  buildRolePrompt,
+  resolveRole,
+  type AccessMode,
+  type ActiveProfilePromptContext,
+} from '../roles/roles.js';
 import {
   countRunningChildren,
   effectiveSpawnSlotLimit,
@@ -124,6 +129,16 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   if (suppliedProfileStageLaunch !== undefined && !profileStageLaunch) {
     throw new Error('Delegated profile stage launch is not owned by the active turn.');
   }
+  const activeProfilePromptContext: ActiveProfilePromptContext | undefined =
+    profileStageLaunch
+      ? {
+          activation: 'active',
+          workspaceProfileId: profileStageLaunch.workspaceProfileId,
+          planProfileId: profileStageLaunch.planProfileId,
+          orchestrationProfileId: profileStageLaunch.planProfileId,
+          strategyId: profileStageLaunch.strategyId,
+        }
+      : undefined;
   // Resolve agent definition via agentId (registry) or role (legacy).
   let role: ReturnType<typeof resolveRole>;
   let childTier: Tier | undefined;
@@ -135,9 +150,15 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   let childDefOwnership: string | null | undefined;
 
   if (typeof args.agentId === 'string' && args.agentId.trim()) {
-    const loaded = findById(args.agentId.trim(), ctx.workspaceRoot);
+    const loaded = findById(
+      args.agentId.trim(),
+      ctx.workspaceRoot,
+      activeProfilePromptContext,
+    );
     if (!loaded) {
-      const known = listAll(ctx.workspaceRoot).map((l) => l.def.id).join(', ');
+      const known = listAll(ctx.workspaceRoot, activeProfilePromptContext)
+        .map((l) => l.def.id)
+        .join(', ');
       throw new Error(`Unknown agentId "${args.agentId}". Known agents: ${known}.`);
     }
     role = {
@@ -153,8 +174,12 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   } else {
     const roleName = String(args.role ?? '');
     if (!roleName.trim()) throw new Error('spawn_agent requires either "agentId" or "role".');
-    role = resolveRole(roleName);
-    childTier = findById(role.name, ctx.workspaceRoot)?.def.tier;
+    role = resolveRole(roleName, activeProfilePromptContext);
+    childTier = findById(
+      role.name,
+      ctx.workspaceRoot,
+      activeProfilePromptContext,
+    )?.def.tier;
   }
 
   const prompt = String(args.prompt ?? '');
@@ -385,7 +410,8 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   const taskPacket = profileStageLaunch
     ? buildOrchestrationStageTaskPacket({
         ...packetInput,
-        orchestrationProfileId: profileStageLaunch.profileId,
+        workspaceProfileId: profileStageLaunch.workspaceProfileId,
+        planProfileId: profileStageLaunch.planProfileId,
         strategyId: profileStageLaunch.strategyId,
         stage: profileStageLaunch.stage,
         assignment: profileStageLaunch.assignment,

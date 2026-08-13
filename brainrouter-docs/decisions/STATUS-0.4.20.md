@@ -1,7 +1,7 @@
 # Where the 0.4.20 decisions actually stand
 
-One page, so the state of a release can be read without opening six documents and
-reconciling them. Each ADR's own status block is the authority; this is an index
+One page, so the state of a release can be read without opening every decision
+document and reconciling them. Each ADR's own status block is the authority; this is an index
 that must agree with all of them or be wrong.
 
 **Read the rightmost column first.** "COMPLETE" here means *every decision in the
@@ -18,6 +18,7 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 | **034** | Messages that arrive | **COMPLETE** | Three exports nothing reaches — see below. |
 | **035** | A meeting you cannot lose | **COMPLETE** | Nothing. |
 | **038** | A planner worth opening | **COMPLETE** | Nothing. |
+| **040** | One runtime, graphs of bounded loops | **ACCEPTED · IMPLEMENTATION ACTIVE** | A40-1 is implemented; A40-2–A40-11 remain open. |
 
 ---
 
@@ -173,6 +174,16 @@ many operations were wedged, which is §6's own criterion failing on one host. D
 closed last: the field that sorts the day can now be set from the day, through the
 same outbox as every other planner write.
 
+## 040 — One runtime, graphs of bounded loops · ACCEPTED · IMPLEMENTATION ACTIVE
+
+The decision keeps ADR-028's deletion of the unreachable second turn engine.
+There is one bounded turn engine; Core-owned policy will choose graph-shaped
+orchestration around it, and CLI/Desktop will render one event-derived execution
+map. The implemented A40-1 slice repairs the truth underneath that work: all 17
+workspace profiles resolve exact or declared bundled plan identity without
+changing their reviewed modes, and runtime state carries workspace and plan IDs
+separately. A40-2–A40-11 remain open and this row makes no claim about them.
+
 ---
 
 ## What an owner has to decide
@@ -186,5 +197,7 @@ neither can be run at zero cost without you.
 | 032 · live-model §6 run | Approval to spend tokens on it |
 | 033 · D7 precision/recall | A provider key supplied to the harness's env var |
 
-Nothing else is outstanding. 032's procedure action ledger — previously the one
+Those are the only owner-run acceptance decisions listed here. ADR-040's remaining
+A40-2–A40-11 rows are engineering work, not acceptance that can be inferred from
+the decision being approved. 032's procedure action ledger — previously the one
 genuinely unwritten piece of code — is built, tested and reached.

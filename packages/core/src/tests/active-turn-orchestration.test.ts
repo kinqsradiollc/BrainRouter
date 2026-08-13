@@ -23,7 +23,7 @@ import {
   saveWorkspaceManifest,
   type WorkspaceManifest,
 } from '../workspace/manifest.js';
-import type { WorkspaceProfileId } from '../workspace/profiles.js';
+import { WORKSPACE_PROFILES, type WorkspaceProfileId } from '../workspace/profiles.js';
 import { resolveWorkspaceToolSelection } from '../workspace/toolProfiles.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
@@ -65,6 +65,8 @@ test('an unrecognizable workspace gets no inferred plan, because nothing about i
       task: 'Research this question.',
     });
     assert.equal(resolved.source, 'none');
+    assert.equal(resolved.plan.workspaceProfileId, null);
+    assert.equal(resolved.plan.planProfileId, null);
     assert.equal(resolved.plan.orchestrationProfileId, null);
     assert.equal(resolved.plan.strategyId, null);
     assert.deepEqual(resolved.plan.diagnostics, [
@@ -88,6 +90,8 @@ test('a stock repository routes to the default profile, because onboarding is no
     });
     assert.equal(loadWorkspaceManifest(workspace), null, 'precondition: never onboarded');
     assert.equal(resolved.plan.orchestrationProfileId, 'engineering');
+    assert.equal(resolved.plan.workspaceProfileId, 'engineering');
+    assert.equal(resolved.plan.planProfileId, 'engineering');
     assert.equal(resolved.plan.strategyId, 'delivery');
     assert.equal(resolved.plan.selectionSource, 'deterministic');
     assert.deepEqual(resolved.taskSignalIds, ['bug-fix', 'implementation']);
@@ -334,7 +338,61 @@ test('saved profile manifests resolve distinct live strategies without launching
         `${fixture.profile} should resolve its own strategy`,
       );
       assert.equal(resolved.plan.selectionSource, 'deterministic');
-      assert.equal(resolved.plan.activation, 'preview', 'this slice cannot execute stages');
+      assert.equal('activation' in resolved.plan, false, 'live plans must not claim to be previews');
+    });
+  }
+});
+
+test('ADR-040 A40-1 all 17 default profiles retain mode and resolve exact or bundled plan identity', () => {
+  type Fixture = readonly [
+    workspaceProfileId: WorkspaceProfileId,
+    planProfileId: WorkspaceProfileId,
+    mode: WorkspaceManifest['orchestration']['mode'],
+    fallbackStrategyId: string,
+  ];
+  const cases: readonly Fixture[] = [
+    ['engineering', 'engineering', 'adaptive', 'direct'],
+    ['research', 'research', 'adaptive', 'direct-answer'],
+    ['data-science', 'data-science', 'adaptive', 'direct-analysis'],
+    ['study', 'study', 'explicit', 'direct-tutoring'],
+    ['writing', 'writing', 'explicit', 'direct-writing'],
+    ['product-management', 'engineering', 'adaptive', 'direct'],
+    ['design', 'engineering', 'adaptive', 'direct'],
+    ['education', 'study', 'explicit', 'direct-tutoring'],
+    ['marketing', 'writing', 'explicit', 'direct-writing'],
+    ['sales', 'writing', 'explicit', 'direct-writing'],
+    ['operations', 'engineering', 'adaptive', 'direct'],
+    ['finance', 'data-science', 'adaptive', 'direct-analysis'],
+    ['legal', 'research', 'adaptive', 'direct-answer'],
+    ['people', 'writing', 'explicit', 'direct-writing'],
+    ['healthcare', 'research', 'adaptive', 'direct-answer'],
+    ['consulting', 'research', 'adaptive', 'direct-answer'],
+    ['custom', 'custom', 'off', 'direct'],
+  ];
+
+  assert.deepEqual(
+    cases.map(([workspaceProfileId]) => workspaceProfileId),
+    WORKSPACE_PROFILES.map((profile) => profile.id),
+    'the matrix must cover the live ordered profile catalog exactly',
+  );
+  for (const [workspaceProfileId, planProfileId, mode, fallbackStrategyId] of cases) {
+    withTempWorkspace((workspace) => {
+      const manifest = createWorkspaceManifest({
+        name: workspaceProfileId,
+        profile: workspaceProfileId,
+        by: 'wizard',
+      });
+      assert.equal(manifest.orchestration.mode, mode);
+      saveWorkspaceManifest(workspace, manifest);
+
+      const resolved = resolveActiveTurnOrchestration({
+        workspaceRoot: workspace,
+        task: 'Hello, how are you?',
+      });
+      assert.equal(resolved.plan.workspaceProfileId, workspaceProfileId);
+      assert.equal(resolved.plan.planProfileId, planProfileId);
+      assert.equal(resolved.plan.orchestrationProfileId, planProfileId);
+      assert.equal(resolved.plan.strategyId, fallbackStrategyId);
     });
   }
 });
@@ -380,7 +438,7 @@ test('Agent.runTurn publishes the saved profile resolution on the live turn stat
       });
       assert.equal(agent.activeTurnOrchestration?.plan.orchestrationProfileId, 'research');
       assert.equal(agent.activeTurnOrchestration?.plan.strategyId, 'parallel-evidence');
-      assert.equal(agent.activeTurnOrchestration?.plan.activation, 'preview');
+      assert.equal('activation' in agent.activeTurnOrchestration!.plan, false);
     } finally {
       globalThis.fetch = originalFetch;
     }

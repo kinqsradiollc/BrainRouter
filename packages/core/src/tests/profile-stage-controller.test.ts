@@ -10,6 +10,7 @@ import {
   PrimaryStageActionRejectedError,
   ProfileStageController,
   type PrimaryStageSkillActivation,
+  type ProfileStageStateEvent,
 } from '../orchestration/runtime/profileStageController.js';
 import type {
   ResolvedOrchestrationStage,
@@ -37,9 +38,16 @@ function stage(input: Partial<ResolvedOrchestrationStage> & {
 
 function plan(stages: ResolvedOrchestrationStage[]): Pick<
   ResolvedWorkspaceOrchestrationPlan,
-  'orchestrationProfileId' | 'strategyId' | 'selectionSource' | 'stages'
+  | 'workspaceProfileId'
+  | 'planProfileId'
+  | 'orchestrationProfileId'
+  | 'strategyId'
+  | 'selectionSource'
+  | 'stages'
 > {
   return {
+    workspaceProfileId: 'workspace-profile',
+    planProfileId: 'test-profile',
     orchestrationProfileId: 'test-profile',
     strategyId: 'test-strategy',
     selectionSource: 'deterministic',
@@ -55,6 +63,40 @@ function skill(id: string): PrimaryStageSkillActivation {
     disallowedTools: [],
   };
 }
+
+test('A40-1 stage state canonicalizes and owns workspace/plan identity', () => {
+  const events: ProfileStageStateEvent[] = [];
+  const suppliedPlan = plan([stage({ id: 'frame', executor: { kind: 'primary' } })]);
+  suppliedPlan.orchestrationProfileId = 'stale-legacy-profile';
+  const controller = new ProfileStageController(
+    OWNER,
+    suppliedPlan,
+    {
+      loadSkill: async (id) => skill(id),
+      setActiveSkill: () => {},
+      onStateChange: (event) => events.push(event),
+    },
+  );
+
+  suppliedPlan.workspaceProfileId = 'mutated-workspace';
+  suppliedPlan.planProfileId = 'mutated-plan';
+  suppliedPlan.orchestrationProfileId = 'mutated-legacy-profile';
+  suppliedPlan.strategyId = 'mutated-strategy';
+  suppliedPlan.stages[0]!.id = 'mutated-stage';
+
+  controller.publishResolvedState();
+  assert.equal(controller.plan.workspaceProfileId, 'workspace-profile');
+  assert.equal(controller.plan.planProfileId, 'test-profile');
+  assert.equal(controller.plan.orchestrationProfileId, 'test-profile');
+  assert.equal(controller.plan.strategyId, 'test-strategy');
+  assert.equal(controller.plan.stages[0]?.id, 'frame');
+  assert.equal(Object.isFrozen(controller.plan), true);
+  assert.equal(Object.isFrozen(controller.plan.stages), true);
+  assert.equal(Object.isFrozen(controller.plan.stages[0]), true);
+  assert.equal(events[0].workspaceProfileId, 'workspace-profile');
+  assert.equal(events[0].planProfileId, 'test-profile');
+  assert.equal(events[0].profileId, 'test-profile');
+});
 
 test('primary stage runs every declared skill before unlocking its dependent', async () => {
   let active: PrimaryStageSkillActivation | undefined;
@@ -309,7 +351,13 @@ test('delegated stage validates role, skills, output, and unlocks its dependent'
     requestedRoleId: 'explorer',
     assignment: 'Inspect one source.',
   });
+  assert.equal(Object.isFrozen(launch), true);
+  assert.equal(Object.isFrozen(launch.stage), true);
+  assert.equal(Object.isFrozen(launch.skills), true);
+  assert.equal(Object.isFrozen(launch.skills[0]), true);
   assert.equal(controller.ownsPreparedDelegation(launch), true);
+  assert.equal(launch.workspaceProfileId, 'workspace-profile');
+  assert.equal(launch.planProfileId, 'test-profile');
   assert.equal(launch.profileId, 'test-profile');
   assert.equal(launch.strategyId, 'test-strategy');
   assert.deepEqual(launch.skills.map((entry) => entry.id), ['question', 'source-plan']);

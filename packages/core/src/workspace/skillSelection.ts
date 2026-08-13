@@ -13,6 +13,10 @@ import {
   WORKSPACE_PROFILE_PLUGIN_DEFINITIONS,
   type WorkspaceProfilePluginCatalog,
 } from './profilePlugins.js';
+import {
+  WORKSPACE_PROFILES,
+  type WorkspaceProfileId,
+} from './profiles.js';
 
 export type WorkspaceSkillBundleSource = 'bundled' | 'profile-plugin' | 'capability-plugin';
 
@@ -50,7 +54,34 @@ export interface WorkspaceSkillSelectionInput {
   catalog?: WorkspaceProfilePluginCatalog;
 }
 
-export const BUNDLED_WORKSPACE_SKILL_PACK_IDS: ReadonlySet<string> = new Set(['engineering']);
+/**
+ * Library-backed profile packs declared by the profile presets themselves.
+ *
+ * Package-plugin packs are excluded because their inspected package assets are
+ * authoritative. Every remaining preset pack is a stable ownership label;
+ * starter skills remain explicit manifest selections, preserving the existing
+ * runtime semantics of the bundled Engineering pack.
+ */
+export interface BundledWorkspaceSkillPackDefinition {
+  id: string;
+  profileIds: readonly WorkspaceProfileId[];
+  label: string;
+  description: string;
+  skillIds: readonly string[];
+}
+
+export const BUNDLED_WORKSPACE_SKILL_PACKS: readonly BundledWorkspaceSkillPackDefinition[] =
+  Object.freeze(deriveBundledWorkspaceSkillPacks().map((pack) => Object.freeze({
+    ...pack,
+    profileIds: Object.freeze([...pack.profileIds]),
+    skillIds: Object.freeze([...pack.skillIds]),
+  })));
+export const BUNDLED_WORKSPACE_SKILL_PACK_IDS: ReadonlySet<string> = new Set(
+  BUNDLED_WORKSPACE_SKILL_PACKS.map((pack) => pack.id),
+);
+const BUNDLED_WORKSPACE_SKILL_PACK_BY_ID = new Map(
+  BUNDLED_WORKSPACE_SKILL_PACKS.map((pack) => [pack.id, pack]),
+);
 const PROFILE_PLUGIN_PACK_IDS: ReadonlySet<string> = new Set(
   WORKSPACE_PROFILE_PLUGIN_DEFINITIONS
     .filter((plugin) => plugin.kind === 'profile')
@@ -87,8 +118,9 @@ export function resolveWorkspaceSkillSelection(
   const missing: UnavailableWorkspaceSkillBundle[] = [];
 
   for (const id of unique(manifest.skills.packs)) {
-    if (BUNDLED_WORKSPACE_SKILL_PACK_IDS.has(id)) {
-      bundles.push({ id, source: 'bundled', skillIds: [] });
+    const bundledPack = BUNDLED_WORKSPACE_SKILL_PACK_BY_ID.get(id);
+    if (bundledPack) {
+      bundles.push({ id, source: 'bundled', skillIds: [...bundledPack.skillIds] });
       continue;
     }
     if (CAPABILITY_PLUGIN_IDS.has(id)) {
@@ -128,6 +160,38 @@ export function resolveWorkspaceSkillSelection(
     ambientSkillIds,
     disabledSkillIds,
   };
+}
+
+function deriveBundledWorkspaceSkillPacks(): BundledWorkspaceSkillPackDefinition[] {
+  const packagePackIds = new Set<string>(
+    WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.map((definition) => definition.id),
+  );
+  const owners = new Map<string, {
+    profileIds: WorkspaceProfileId[];
+    labels: string[];
+  }>();
+
+  for (const profile of WORKSPACE_PROFILES) {
+    for (const id of unique(profile.skills.packs)) {
+      if (packagePackIds.has(id)) continue;
+      const existing = owners.get(id) ?? { profileIds: [], labels: [] };
+      existing.profileIds.push(profile.id);
+      existing.labels.push(profile.label);
+      owners.set(id, existing);
+    }
+  }
+
+  return [...owners.entries()].map(([id, owner]) => ({
+    id,
+    profileIds: owner.profileIds,
+    label: owner.labels.join(' / '),
+    description: id === 'engineering'
+      ? 'Bundled skills recommended for this workspace profile.'
+      : owner.labels.length === 1
+      ? `Bundled skills included with the ${owner.labels[0]} workspace profile.`
+      : 'Bundled skills shared by workspace profile presets.',
+    skillIds: [],
+  }));
 }
 
 function selectPluginBundle(

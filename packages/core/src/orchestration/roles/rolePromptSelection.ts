@@ -17,6 +17,11 @@ export type DomainNeutralRoleId =
 
 export interface ActiveProfilePromptContext {
   activation: 'active';
+  /** Optional only so pre-A40-1 callers still compile; absent IDs fail closed. */
+  workspaceProfileId?: string;
+  /** Optional only so pre-A40-1 callers still compile; absent IDs fail closed. */
+  planProfileId?: string;
+  /** @deprecated Compatibility alias for planProfileId. */
   orchestrationProfileId: string;
   strategyId: string;
 }
@@ -176,8 +181,17 @@ export function hasActiveProfilePromptContext(
   context?: ActiveProfilePromptContext,
 ): context is ActiveProfilePromptContext {
   return context?.activation === 'active'
-    && PROFILE_ID.test(context.orchestrationProfileId)
-    && PROFILE_ID.test(context.strategyId);
+    && stableProfileIdentifier(context.workspaceProfileId)
+    && stableProfileIdentifier(context.planProfileId)
+    && stableProfileIdentifier(context.orchestrationProfileId)
+    && context.orchestrationProfileId === context.planProfileId
+    && stableProfileIdentifier(context.strategyId);
+}
+
+function stableProfileIdentifier(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length <= 128
+    && PROFILE_ID.test(value);
 }
 
 export function domainNeutralRolePrompt(
