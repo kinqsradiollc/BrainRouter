@@ -138,7 +138,7 @@ deep dives.
   a separate engine licence that decides, before any engineering, whether this can run against
   customer code at all;
   [ADR-040 one runtime, graphs of bounded loops](decisions/ADR-040-one-runtime-graphs-of-bounded-loops.md) —
-  proposed runtime contract that preserves one bounded turn engine while Core chooses the smallest
+  accepted runtime contract that preserves one bounded turn engine while Core chooses the smallest
   eligible topology on every eligible top-level conversation turn, with or without a goal: direct
   or a validated per-profile stage graph, while durable phase plans and saved graphs remain
   explicit. It repairs shared-plan identity

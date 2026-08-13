@@ -1,6 +1,6 @@
 # ADR-040 — One runtime, graphs of bounded loops
 
-**Status:** PROPOSED — for owner review.
+**Status:** ACCEPTED — owner approved on 2026-08-13.
 
 **Target:** `release/0.4.20` for the decision only. Every implementation slice ships in a separate
 pull request after acceptance.
@@ -786,10 +786,11 @@ Reconsider only if required durability/scale cannot be met after the canonical r
 
 ## 7. Dependency-ordered delivery board
 
-Each row is a separate focused pull request. A checked row requires its own evidence. Opening or
-merging this proposal for review checks nothing; an owner-acceptance update checks only A40-0.
+Each row is a separate focused pull request. A checked row requires its own evidence. Merging the
+accepted decision record checks only A40-0; it makes no implementation claim.
 
-- [ ] **A40-0 — Accept this decision.** ADR and index only; no runtime claims.
+- [x] **A40-0 — Accept this decision.** Owner approved on 2026-08-13. ADR and index only;
+  no runtime claims.
 - [ ] **A40-1 — Repair current profile truth.** Resolve exact/aliased plan identity in the active
   turn, separate workspace/plan IDs, keep invalid higher-precedence claims fail-closed, replace stale
   preview vocabulary, and add the 17-profile default-resolution matrix without changing modes.
