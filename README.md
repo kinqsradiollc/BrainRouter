@@ -4,21 +4,45 @@
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%233178c6.svg)](https://www.typescriptlang.org/)
 [![Protocol: MCP](https://img.shields.io/badge/Protocol-MCP-orange.svg)](https://modelcontextprotocol.io/)
 
-BrainRouter is an open agent operations workspace for moving from intent to verified work without losing the task, project, permissions, connected systems, or useful context along the way.
+**Plan the day, run the meeting, write the doc, ship the change — and keep the thread.**
 
-It combines an agent workbench, model routing, project tracking, account-linked connectors, scoped knowledge, automation, durable memory, code and pull-request review, a terminal client, and an MCP/HTTP brain.
+BrainRouter is one workspace a whole team works in. Six things happen to a piece
+of work every week, and the useful part is not any one of them: it is that the
+sixth still knows what happened in the first.
 
-## Product surfaces
+Engineering is the deepest surface here, not the whole product. The same task
+context runs through planning, meetings, documents, implementation, review, and
+durable knowledge — so this is one workspace rather than six tools that agree to
+share a login.
+
+## The loop
+
+An item enters once and keeps its identity, owner, and evidence all the way
+around. Every stage is a real route in the product, not a diagram:
+
+| # | Stage      | What happens                                                             | Route       |
+| - | ---------- | ------------------------------------------------------------------------ | ----------- |
+| 1 | **Plan**   | Today assembles itself from your items plus whatever your trackers mirror in. | `/planner`  |
+| 2 | **Meet**   | The call is recorded, transcribed segment by segment, and summarized; action items come out with owners. | `/meetings` |
+| 3 | **Write**  | The decision is written down where the work is, with pages, databases, and backlinks. | `/notes`    |
+| 4 | **Build**  | An agent picks the item up with the context, permissions, and repository already in scope. | `/chat`     |
+| 5 | **Verify** | Code review, security review, or both — every finding naming the exact lines it came from. | `/reviews`  |
+| 6 | **Know**   | Next week the thread is still there, attributable rather than vaguely remembered. | `/knowledge`|
+
+**Know feeds Plan.** That is why it is a loop.
+
+## Four ways in
+
+The loop is the product. These are the doors into it, and they share models,
+permissions, connected tools, workflows, and context:
 
 | Surface                       | Use it for                                                                                                                                        |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Desktop**                   | The primary Chat · Code · Track workbench: projects, sessions, files, plans, requirements, tools, terminal, automations, connectors, and reviews. |
 | **CLI (`brainrouter`)**       | A TTY-native coding agent with the same runtime, routing, policy, memory, orchestration, workflows, and goal loop.                                |
-| **Dashboard**                 | Authenticated chat, organizations and projects, account connections, providers, repositories, knowledge, review jobs, and system operations.      |
+| **Dashboard**                 | Authenticated workspace: the loop above, plus organizations, account connections, providers, repositories, knowledge, review jobs, and operations. |
 | **Brain (`brainrouter-mcp`)** | PostgreSQL-backed MCP and REST services for cognition, tenancy, connectors, review jobs, triggers, and other clients.                             |
 | **Shared packages**           | Typed runtime, SDK, hooks, agent protocol, and public contracts used across every interface.                                                      |
-
-All surfaces share one interaction model: **Plan → Build → Connect → Track → Know → Verify**.
 
 ## Architecture
 

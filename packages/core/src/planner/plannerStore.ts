@@ -31,7 +31,7 @@ import {
   type OutboxOperationDetail, type OutboxState,
 } from '../sync/outbox.js';
 import type { PlannerProvenance } from '@kinqs/brainrouter-types/planner';
-import type { TimeBlock } from './timetable.js';
+import { carryOver, type TimeBlock } from './timetable.js';
 
 export interface PlannerState {
   schemaVersion: 1;
@@ -336,8 +336,22 @@ export function updateBlock(
   const parent = state.items[current.itemId];
   if (!parent || parent.deletedAt) return null;
   const at = stamp(state, nowMs);
+  // ADR-028 D5 — moving an unfinished block to a LATER day IS a carry-forward,
+  // so `carryOver` is applied here rather than left to a caller to remember.
+  // Nothing incremented `carriedOver` before this: `needsAttention` and
+  // `describeCarryOver` both read it, both are rendered, and both could
+  // therefore never fire — a "this has moved four times" prompt over a counter
+  // stuck at zero. An explicit `carriedOver` still wins, because a pulled
+  // remote block carries the count the other device already recorded.
+  const carriedForward =
+    input.carriedOver === undefined &&
+    typeof input.scheduledFor === 'string' &&
+    typeof current.scheduledFor === 'string' &&
+    input.scheduledFor.slice(0, 10) > current.scheduledFor.slice(0, 10) &&
+    !current.completedAt;
+  const base = carriedForward ? carryOver([current], input.scheduledFor as string)[0]! : current;
   const next: TimeBlock = {
-    ...current,
+    ...base,
     ...(input.scheduledFor !== undefined
       ? input.scheduledFor === null ? { scheduledFor: undefined } : { scheduledFor: input.scheduledFor }
       : {}),
@@ -358,7 +372,10 @@ export function updateBlock(
     entity: 'block',
     kind: 'update',
     at,
-    payload: input,
+    // The derived count travels with the move. Sending only what the caller
+    // passed would leave the server's copy at the old number, and the next pull
+    // would undo the increment this device just made.
+    payload: carriedForward ? { ...input, carriedOver: next.carriedOver } : input,
     attempts: 0,
   });
   writePlanner(userId, state);

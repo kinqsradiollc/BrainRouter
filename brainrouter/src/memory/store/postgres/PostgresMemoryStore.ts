@@ -145,6 +145,7 @@ import {
   type CcrContext,
 } from "./queries/compressionQueries.js";
 import * as sensory from "./queries/sensoryQueries.js";
+import * as meetingEscrow from "./queries/meetingEscrowQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as track from "./queries/trackQueries.js";
 import * as planner from "./queries/plannerQueries.js";
@@ -592,6 +593,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> { return meetings.setMeetingSummaryRecords(this.exec, id, userId, summaryRecordId, transcriptSourceId); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
   public deleteMeeting(id: string, orgId: string, userId: string): Promise<meetings.DeletedMeetingRefs | null> { return meetings.deleteMeeting(this.exec, id, orgId, userId); }
+
+  // ADR-035 D11 — capture escrow (migration 062). A browser's capture store can be
+  // evicted mid-recording, so the transcript is held here while the recording is made.
+  // Personal, like the meeting it becomes: every statement is keyed by (org, USER).
+  public upsertMeetingEscrow(orgId: string, userId: string, input: meetingEscrow.UpsertMeetingEscrowInput): Promise<void> { return meetingEscrow.upsertMeetingEscrow(this.exec, orgId, userId, input); }
+  public listMeetingEscrow(orgId: string, userId: string, limit: number): Promise<meetingEscrow.MeetingEscrowRow[]> { return meetingEscrow.listMeetingEscrow(this.exec, orgId, userId, limit); }
+  public countMeetingEscrow(orgId: string, userId: string): Promise<number> { return meetingEscrow.countMeetingEscrow(this.exec, orgId, userId); }
+  public meetingEscrowExists(orgId: string, userId: string, sessionId: string): Promise<boolean> { return meetingEscrow.meetingEscrowExists(this.exec, orgId, userId, sessionId); }
+  public deleteMeetingEscrow(orgId: string, userId: string, sessionId: string): Promise<boolean> { return meetingEscrow.deleteMeetingEscrow(this.exec, orgId, userId, sessionId); }
+  public deleteExpiredMeetingEscrow(orgId: string, userId: string): Promise<string[]> { return meetingEscrow.deleteExpiredMeetingEscrow(this.exec, orgId, userId); }
 
   // ── Track (migration 034) — org-scoped, collaborative work items ──
   public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }
@@ -1440,7 +1451,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   /**
    * ADR-027 D11 / P1-6 — one bounded retention pass: fold expired usage events
-   * into their daily rollup and compact old job-progress timelines.
+   * into their daily rollup, compact old job-progress timelines, and minimise
+   * completed planner items past the window (ADR-028 D8).
    */
   public runRetentionPass(
     options?: retention.RetentionOptions,

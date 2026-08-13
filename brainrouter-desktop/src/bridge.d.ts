@@ -144,6 +144,11 @@ declare global {
         captureAdopt?(id: string, holderId?: string): Promise<unknown>;
         captureRetrySegment?(id: string, index: number): Promise<unknown>;
         onCaptureProgress?(listener: (progress: unknown) => void): () => void;
+        /** ADR-035 D6 — the retention window: what it is now, and what to make it.
+         *  Absent on an older preload, where the surface says the window is the
+         *  built-in one and offers no control rather than one that does nothing. */
+        retentionRead?(): Promise<unknown>;
+        retentionWrite?(days: number): Promise<unknown>;
         /** ADR-035 D6 — the compose draft, held by the host in the same 0700
          *  directory as the audio rather than in a renderer-readable store. */
         draftRead?(): Promise<unknown>;

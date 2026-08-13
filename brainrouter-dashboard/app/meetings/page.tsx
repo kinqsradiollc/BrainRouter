@@ -75,7 +75,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
-import { summarizeRecovery } from "@kinqs/brainrouter-core/meetings";
+import { describeMeetingRetention, MEETING_RETENTION_DAY_CHOICES, meetingRetentionChoiceLabel, summarizeRecovery } from "@kinqs/brainrouter-core/meetings";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { InlineLoading } from "../../components/LoadingSpinner";
@@ -523,7 +523,7 @@ export default function MeetingsPage() {
 
   return (
     <AuthGuard>
-      <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      <PageHeader title="Meetings" description="Record the meeting, get a summary, send the follow-ups to the board — and keep what was decided." />
       <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
       {/* D6 — outside the dialog on purpose: this is raised by the same commit
@@ -573,6 +573,18 @@ export default function MeetingsPage() {
           {cap.recoverable.length === 1
             ? "An unfinished recording is still saved on this device."
             : `${cap.recoverable.length} unfinished recordings are still saved on this device.`}{" "}
+          <button type="button" className={styles.track} onClick={() => capture.openDialog()}>Review</button>
+        </div>
+      ) : null}
+      {/* ADR-035 D11 — and the ones this device no longer has. Said out here as
+          well as in the dialog, because the person this is for is somebody whose
+          browser lost the recording: they have no reason to open a compose form
+          to look for a meeting they think is gone. */}
+      {cap.escrowed.length ? (
+        <div className={styles.errorBar} role="status">
+          {cap.escrowed.length === 1
+            ? "An unfinished recording's transcript is held on the server, and this browser no longer has its audio."
+            : `${cap.escrowed.length} unfinished recordings' transcripts are held on the server, and this browser no longer has their audio.`}{" "}
           <button type="button" className={styles.track} onClick={() => capture.openDialog()}>Review</button>
         </div>
       ) : null}
@@ -871,6 +883,59 @@ export default function MeetingsPage() {
                 </div>
               </div>
             ) : null}
+            {/* ADR-035 D11 — what the SERVER is holding that this device cannot
+                offer. Rendered after the device's own list and never instead of
+                it: a capture still here comes back WITH its audio, and these are
+                the ones whose local copy is gone — an evicted origin, a cleared
+                browser, another machine. There is no Play, because there is no
+                audio to play; saying so is the honest version of the offer. */}
+            {cap.escrowed.length ? (
+              <div className={styles.linkzone}>
+                <div className={styles.teamPickH}>Unfinished recordings held on the server</div>
+                {cap.escrowed.map((entry) => (
+                  <div className={styles.recoverRow} key={entry.capture.sessionId}>
+                    <span className={styles.recoverWhat}>
+                      <b>{entry.capture.title || "Untitled recording"}</b>
+                      <span>
+                        {new Date(entry.capture.startedAt).toLocaleString()} · {Math.max(1, Math.round(entry.capture.coverageMs / 60_000))} min transcribed · no audio on this device
+                      </span>
+                    </span>
+                    <span className={styles.recoverActions}>
+                      <button type="button" className={styles.newBtn} disabled={cap.capturing} onClick={() => void capture.restoreEscrowed(entry)}>Restore</button>
+                      <button type="button" className={styles.track} onClick={() => void capture.discardEscrowed(entry)}>Delete</button>
+                    </span>
+                  </div>
+                ))}
+                <div className={styles.teamPickNote}>
+                  Only the transcript is kept on the server — the audio stayed on the browser that made the recording. Restoring puts the text in this form so the meeting can be created.
+                </div>
+              </div>
+            ) : null}
+            {/* ADR-035 D6/D11 — the standing statements about where this
+                recording lives: which promise the storage is making, and how
+                long audio nobody files is kept. Quiet, and always on screen:
+                both used to be sayable only by a warning, which meant they were
+                invisible for the whole of an ordinary meeting. */}
+            <div className={styles.linkzone}>
+              <div className={styles.teamPickH}>Where recordings are kept</div>
+              {cap.durability ? <div className={styles.teamPickNote}>{cap.durability}</div> : null}
+              <label className={styles.captureOptions}>
+                Delete unfinished recordings after
+                <select
+                  value={cap.retentionDays}
+                  aria-label="Delete unfinished recordings after"
+                  onChange={(event) => void capture.setRetentionDays(Number(event.target.value))}
+                >
+                  {MEETING_RETENTION_DAY_CHOICES.map((days) => (
+                    <option key={days} value={days}>{meetingRetentionChoiceLabel(days)}</option>
+                  ))}
+                </select>
+              </label>
+              <div className={styles.teamPickNote}>
+                {describeMeetingRetention(cap.retentionDays)}
+                {cap.retentionSwept ? ` ${cap.retentionSwept} recording${cap.retentionSwept === 1 ? " was" : "s were"} deleted just now.` : ""}
+              </div>
+            </div>
             {cap.session ? (
               <LiveTranscript session={cap.session} phase={cap.phase} retrying={cap.retrying} live={cap.live} mode={cap.transcription} notice={cap.streamNotice} onRetry={(index) => void capture.retrySegment(index)} />
             ) : null}

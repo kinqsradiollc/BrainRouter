@@ -77,7 +77,7 @@ export default function TimelinePage() {
 
         <div className="table-container" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
           {operations.length === 0 && !isLoading ? (
-            <EmptyState title="No Operations" description="Memory operations will appear here after capture, recall, or governance activity." />
+            <EmptyState title="Nothing has happened here yet" description="This page follows what the workspace saved, recalled, updated, or shared, newest first — so you can answer “when did that change?” without asking anyone." />
           ) : (
             <table className="table">
               <thead>

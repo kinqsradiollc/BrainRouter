@@ -239,6 +239,11 @@ test("what starts or adopts a capture reads IN HAND, and only what ends one read
     "get #captureInHand(): boolean {",
     "if (this.#captureInHand) {",
     "if (this.#captureInHand) {",
+    // ADR-035 D11 — and the third thing that fills this box: a transcript
+    // restored from the server's escrow. It takes no lock and adopts no audio,
+    // but it puts a MEETING in the compose box, so it is refused by the same
+    // predicate for the same reason — two meetings in one box are posted as one.
+    "if (this.#captureInHand) {",
     "this.#state = { ...this.#state, capturing: this.#captureInHand, landing: this.#captureLanding };",
   ]);
   assert.deepEqual(codeLines(surface).filter((line) => line.includes("#captureLanding")), [
@@ -289,6 +294,11 @@ test("composition has ONE rule, and the recompose model is gone rather than unus
     // A DISCARDED meeting starts a new box too, and for the same reason: its
     // words leave with its audio, or the next recording folds into a box that
     // still holds the meeting just thrown away.
+    "this.#fold = EMPTY_TRANSCRIPT_FOLD;",
+    // ADR-035 D11 — a transcript restored from the server is a NEW box with no
+    // local session behind it, so it starts a new fold too. Carrying the
+    // previous one would fold the restored words against segments belonging to a
+    // capture this tab no longer has.
     "this.#fold = EMPTY_TRANSCRIPT_FOLD;",
     // Submit's settle, kept, or a create that failed leaves the fold behind the
     // box and the gap markers it just wrote are appended a second time.

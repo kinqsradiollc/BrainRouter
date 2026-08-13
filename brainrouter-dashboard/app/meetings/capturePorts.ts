@@ -24,6 +24,8 @@
  * always reads the CURRENT one without ever being rebuilt. Rebuilding it would
  * drop the recording it is holding, which is the defect it exists to prevent.
  */
+import { meetingRecorderOptions, type MeetingCaptureEscrow } from "@kinqs/brainrouter-core/meetings";
+
 import { authFetch } from "../../lib/adminApi";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
@@ -63,7 +65,12 @@ export async function openBrowserMicrophone(): Promise<CaptureMicrophone> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   let recorder: MediaRecorder;
   try {
-    recorder = new MediaRecorder(stream);
+    // ADR-035 D11 — at a SPEECH bitrate, from the shared constant. With no
+    // options this was the browser's ~128 kbps default: about 60 MB an hour of
+    // origin quota, which is the exact thing D11 says can be evicted out from
+    // under a meeting. A four-fold cut is the cheapest part of that remedy, and
+    // it applies whether or not the escrow below is reachable.
+    recorder = new MediaRecorder(stream, meetingRecorderOptions());
   } catch (caught) {
     stream.getTracks().forEach((track) => track.stop());
     throw caught;
@@ -132,6 +139,33 @@ export function browserCapturePorts(page: PageBridge): CaptureSurfacePorts {
       token: getJwt() || getApiKey() || "",
       ...(language ? { language } : {}),
     }),
+    // ADR-035 D11 — the escrow. Every call carries the workspace explicitly: a
+    // push carries the recording's OWN frozen one (a switcher that moved
+    // mid-meeting must not land an hour of somebody's words in whichever
+    // workspace was selected when a segment happened to settle), and a read or a
+    // delete carries the one the offer it belongs to was listed under.
+    escrow: {
+      put: (record, orgId) => authFetch<unknown>(`/api/meetings/captures/${encodeURIComponent(record.sessionId)}`, {
+        method: "PUT",
+        body: {
+          title: record.title,
+          template: record.template,
+          language: record.language,
+          startedAt: record.startedAt,
+          transcript: record.transcript,
+          coverageMs: record.coverageMs,
+          retentionDays: record.retentionDays,
+        },
+        orgId: orgId || undefined,
+      }).then(() => undefined),
+      list: (orgId) => authFetch<{ captures?: MeetingCaptureEscrow[] }>("/api/meetings/captures", {
+        orgId: orgId || undefined,
+      }).then((answer) => answer.captures ?? []),
+      remove: (sessionId, orgId) => authFetch<unknown>(`/api/meetings/captures/${encodeURIComponent(sessionId)}`, {
+        method: "DELETE",
+        orgId: orgId || undefined,
+      }).then(() => undefined),
+    },
     // Open question 5's last hop. `input.orgId` is the workspace the SURFACE
     // froze when Record was pressed; sending the switcher's current one here
     // would land an hour of somebody's audio in whichever workspace happened to

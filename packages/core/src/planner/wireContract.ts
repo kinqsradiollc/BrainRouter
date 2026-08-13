@@ -410,7 +410,11 @@ export function validatePlannerOperation(raw: unknown): PlannerOperationValidati
   };
 }
 
-/** Narrow a typed value after it crossed an untrusted JSON boundary. */
-export function isPlannerPushOperation(value: unknown): value is PlannerPushOperation {
-  return validatePlannerOperation(value).ok;
-}
+/*
+ * `isPlannerPushOperation` was a `validatePlannerOperation(value).ok` predicate
+ * and was **retired 2026-08-12** with no caller. Every boundary that receives
+ * one of these calls `validatePlannerOperation` itself and needs the NORMALIZED
+ * operation it returns, not a boolean — narrowing to the raw shape and then
+ * trusting its fields would skip exactly the normalization the validator exists
+ * to perform.
+ */

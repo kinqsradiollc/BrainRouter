@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
 import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
-import { LAST_SESSION_PANELS_KEY, migratePanelId, readLastSessionPanels } from './lastSessionPanels.js';
+import { LAST_SESSION_PANELS_KEY, readLastSessionPanels } from './lastSessionPanels.js';
 
 export interface TermTab { id: number; kind: 'shell' | PanelId }
 
@@ -178,7 +178,11 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   function refreshPanelData(id: PanelId): void {
     if (id === 'files') { q('q-list', 'list-files'); q('q-files', 'changed-files'); }
     if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
-    if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
+    // ADR-028 G5 — the Pull request panel renders the review findings inline,
+    // so opening it has to fetch them. This used to key off `review`, an id
+    // that no longer exists, which is how the consolidated panel came to show
+    // Checks and nothing else.
+    if (id === 'stack') q('q-review-current', 'review-current');
     if (id === 'requirements') q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — list on open
     if (id === 'annotations') q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — list on open
     if (id === 'artifacts') { q('q-art', 'artifact-list'); q('q-annot', 'annotation-list'); } // ARTIFACT-RECORDS — list on open (+ annotations so §8 artifact annotations show)
@@ -192,13 +196,15 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
    * Called when a person asked for this panel — a click, a command, a keyboard
    * shortcut, or an interaction request that blocks the turn until they answer.
    */
-  function ensurePanel(rawId: PanelId): void {
-    if (rawId === 'terminal') { openBottomDock(); return; }
-    // Aliased HERE rather than only on restore, so `ensurePanel('review')` from
-    // any of its ten call sites opens the consolidated panel instead of a tab
-    // that no longer exists.
-    const id = migratePanelId(rawId);
-    refreshPanelData(rawId);
+  function ensurePanel(id: PanelId): void {
+    if (id === 'terminal') { openBottomDock(); return; }
+    // ADR-028 G5 — no alias step here. `review` and `ci` are gone from
+    // `PanelId`, so every call site names a panel that renders; aliasing them
+    // at the entry point instead let callers keep asking for a retired panel
+    // and quietly handed them one that could not answer. Migration belongs to
+    // `readLastSessionPanels`, which is the only place a retired id can still
+    // arrive from.
+    refreshPanelData(id);
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -221,10 +227,9 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
    * tab, not whether the panel is open, not its width. The dot is how you learn
    * a diff is waiting without being moved to it.
    */
-  function offerPanel(rawId: PanelId): void {
-    if (rawId === 'terminal') return;
-    const id = migratePanelId(rawId);
-    refreshPanelData(rawId);
+  function offerPanel(id: PanelId): void {
+    if (id === 'terminal') return;
+    refreshPanelData(id);
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setUnreadPanels((u) => (u.has(id) || activeSideTab === id ? u : new Set([...u, id])));
   }

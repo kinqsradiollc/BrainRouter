@@ -1,12 +1,16 @@
 /**
  * Meetings API (ADR-018). Authenticated, org-scoped list/detail/create/scope; plus a
  * separate UNAUTHENTICATED public read for a share token (redacted summary only).
+ *
+ * ADR-035 D11 adds `/captures` — the browser's capture escrow, where the transcript of a
+ * recording that is still being made is held so an evicted origin cannot lose the meeting.
  */
 import { Router } from "express";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { attachOrgContext } from "../middleware/tenancy.js";
 import { roleAtLeast } from "../../tenancy/rbac.js";
 import * as meetings from "../../memory/meetings/backend.js";
+import * as escrow from "../../memory/meetings/escrow.js";
 import { isMeetingVisibility } from "../../memory/meetings/sharing.js";
 
 export const meetingsRouter = Router();
@@ -63,6 +67,40 @@ meetingsRouter.post("/", async (req: AuthedRequest, res) => {
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not create meeting." });
   }
+});
+
+/**
+ * ADR-035 D11 — the browser's capture escrow.
+ *
+ * Declared BEFORE `/:id`, because Express matches in order and `captures` would otherwise
+ * be read as a meeting id. Owner-scoped by construction: every call passes `req.userId`
+ * and `req.orgId` and there is no parameter that can widen either.
+ */
+meetingsRouter.get("/captures", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json(await escrow.listEscrow(req.userId!, req.orgId!));
+});
+
+meetingsRouter.put("/captures/:sessionId", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    // The id in the PATH is the one that counts. A body that named a different capture
+    // would be a client able to overwrite one recording's escrow while pushing another's.
+    res.json(await escrow.putEscrow(req.userId!, req.orgId!, { ...body, sessionId: String(req.params.sessionId) }));
+  } catch (err) {
+    if (err instanceof escrow.MeetingEscrowRejected) { res.status(400).json({ error: err.message }); return; }
+    throw err;
+  }
+});
+
+meetingsRouter.delete("/captures/:sessionId", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  // `ok:false` rather than a 404: the caller's intent is "the server must not be holding
+  // this", and a capture that was already swept, already filed, or never escrowed at all
+  // satisfies it. A discard that reported failure because the row had expired would leave
+  // a surface saying deletion had not happened when it had.
+  res.json({ ok: await escrow.deleteEscrow(req.userId!, req.orgId!, String(req.params.sessionId)) });
 });
 
 meetingsRouter.get("/:id", async (req: AuthedRequest, res) => {

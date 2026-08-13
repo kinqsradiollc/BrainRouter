@@ -1,67 +1,61 @@
 "use client";
 
-import type { Source } from "./landingScience";
-
 /**
- * A small "grounded in <source>" footnote rendered under a slide. Keeps the
- * memory-science claims auditable: every figure on the page links back to the
- * paper or explainer it came from.
+ * Citation — the footnote that keeps the landing page honest.
+ *
+ * It used to cite the papers behind the memory-science slides. The page now
+ * describes a product rather than a theory, so it cites the thing a product
+ * claim has to be backed by: the route that implements it. Same job, same
+ * visual language — a claim on this page should always be one click from the
+ * surface that makes it true.
+ *
+ * Internal routes render as links only when the dashboard is running with a
+ * backend; in presentation-only mode there is nothing behind them, so they
+ * degrade to plain text rather than to a dead link.
  */
-export function Citation({ sources }: { sources: Source[] }) {
+
+import Link from "next/link";
+
+import { STATIC_PRESENTATION } from "../../lib/presentation";
+
+export interface CitationLink {
+  /** How the destination is named in the product's own navigation. */
+  readonly short: string;
+  /** A dashboard route ("/reviews") or an absolute external URL. */
+  readonly href: string;
+}
+
+function isExternal(href: string): boolean {
+  return !href.startsWith("/");
+}
+
+export function Citation({ label = "Grounded in", links }: { label?: string; links: readonly CitationLink[] }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: "8px 14px",
-        marginTop: "6px",
-      }}
-    >
-      <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "10px",
-          letterSpacing: "0.16em",
-          textTransform: "uppercase",
-          color: "var(--text-muted)",
-        }}
-      >
-        Grounded in
-      </span>
-      {sources.map((s) => (
-        <a
-          key={s.url}
-          href={s.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "5px",
-            fontSize: "12px",
-            color: "var(--text-secondary)",
-            textDecoration: "none",
-            borderBottom: "1px dotted var(--border-strong)",
-            paddingBottom: "1px",
-            transition: "color 0.18s ease, border-color 0.18s ease",
-          }}
-          onMouseOver={(e) => {
-            e.currentTarget.style.color = "var(--accent)";
-            e.currentTarget.style.borderColor = "var(--border-hover-accent)";
-          }}
-          onMouseOut={(e) => {
-            e.currentTarget.style.color = "var(--text-secondary)";
-            e.currentTarget.style.borderColor = "var(--border-strong)";
-          }}
-        >
-          {s.short}
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
+    <div className="home-citation">
+      <span className="home-citation-label">{label}</span>
+      {links.map((link) => {
+        const arrow = (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <line x1="7" y1="17" x2="17" y2="7" />
             <polyline points="7 7 17 7 17 17" />
           </svg>
-        </a>
-      ))}
+        );
+        if (isExternal(link.href)) {
+          return (
+            <a key={link.href} className="home-citation-link" href={link.href} target="_blank" rel="noopener noreferrer">
+              {link.short}{arrow}
+            </a>
+          );
+        }
+        if (STATIC_PRESENTATION) {
+          return <span key={link.href} className="home-citation-link home-citation-link--static">{link.short}</span>;
+        }
+        return (
+          <Link key={link.href} className="home-citation-link" href={link.href}>
+            {link.short}{arrow}
+          </Link>
+        );
+      })}
     </div>
   );
 }

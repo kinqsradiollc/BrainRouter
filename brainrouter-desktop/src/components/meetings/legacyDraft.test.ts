@@ -57,6 +57,9 @@ function fakeCapture(options: { draftAvailable?: boolean; stored?: MeetingCompos
       readDraft: async () => options.stored ?? null,
       writeDraft: async (draft) => { writes.push(draft); if (options.write) await options.write(); },
       clearDraft: async () => undefined,
+      retentionAvailable: false,
+      readRetention: async () => { throw new Error('not used'); },
+      writeRetention: async () => { throw new Error('not used'); },
     } as MeetingCaptureOps,
   };
 }

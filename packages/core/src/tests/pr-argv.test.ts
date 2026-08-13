@@ -11,11 +11,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { changeRequestArgv, changeRequestTimeoutMs, type PrRoute } from '../review/prRouter.js';
 
-const stack: PrRoute = { kind: 'stack', layers: [], rationale: 'x' };
+const stack: PrRoute = { kind: 'stack', reason: 'x' };
 const single: PrRoute = { kind: 'single', reason: 'x' };
 const ARGS = { title: 'T', body: 'B' };
 
-/** Verified against `gh stack --help` — see stack-authoring.test.ts. */
+/** Verified against `gh stack --help`. `submit` is the only one we ever run. */
 const REAL_STACK_SUBCOMMANDS = new Set(['init', 'add', 'submit', 'view', 'sync', 'merge', 'rebase']);
 
 test('a stacked route publishes the chain with a REAL subcommand', () => {

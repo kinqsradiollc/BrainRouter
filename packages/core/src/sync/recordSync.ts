@@ -31,7 +31,7 @@
  * stayed where it was. `plannerSync.ts` and `notesSync.ts` are both thin
  * instantiations; neither owns a copy of the loop.
  */
-import { hlcReceive, type Hlc } from './hybridClock.js';
+import { clockSkewMs, describeSkew, hlcReceive, type Hlc } from './hybridClock.js';
 import {
   acknowledge, nextBatch, recordFailure, shed, stuckOperations,
   type OutboxOperation, type OutboxState,
@@ -91,6 +91,17 @@ export interface SyncRecords<S extends SyncState, T> {
   merge(local: T, remote: T, fetchedAt: string): { value: T; conflicted: boolean };
   /** Highest embedded stamp, so a fast peer is absorbed before our next edit. */
   observedClock?(record: T): Hlc | undefined;
+  /**
+   * Reconcile state this record OWNS but does not contain, after it lands.
+   *
+   * The planner's items own their time blocks, and a pulled item tombstone has
+   * to tombstone them too. That cascade existed as `applyRemoteItem`, a wrapper
+   * around `applyRemoteRecord` that the pull loop never called — so a deletion
+   * synced from another device removed the item and left its blocks scheduled
+   * on the day. A surface-specific step the engine cannot see has to be a hook
+   * the engine invokes, not a wrapper the engine can be bypassed by.
+   */
+  afterApply?(state: S, remote: T): void;
 }
 
 export interface SyncResult {
@@ -101,6 +112,14 @@ export interface SyncResult {
   conflicted: string[];
   /** Set when shedding dropped queued work. */
   shedNotice?: string;
+  /**
+   * Set when the server's clock is far enough ahead of this device's to change
+   * how timestamps read (D3). Not an error and not a failure to sync — the HLC
+   * keeps ordering correct either way — but every stamp absorbed in that window
+   * will look like it came from the future, and someone comparing the planner
+   * against their calendar deserves the reason.
+   */
+  clockNotice?: string;
   /** True when nothing could reach the server. Not an error state (D2). */
   offline: boolean;
 }
@@ -124,11 +143,13 @@ export function applyRemoteRecord<S extends SyncState, T>(
   if (!local) {
     // Unseen on this device. A new record, not a deletion to reconcile.
     records.write(state, id, remote);
+    records.afterApply?.(state, remote);
     return { conflicted: false };
   }
 
   const merged = records.merge(local, remote, fetchedAt);
   records.write(state, id, merged.value);
+  records.afterApply?.(state, merged.value);
   return { conflicted: merged.conflicted };
 }
 
@@ -210,6 +231,12 @@ export async function syncRecords<S extends SyncState, T>(
   }
 
   if (pull.serverClock) {
+    // Measure the gap BEFORE absorbing it: `hlcReceive` pulls this device
+    // forward, after which the skew is zero and there is nothing left to
+    // report. D3 says the skew is reported rather than silently absorbed, and
+    // this is the only moment both clocks are still distinguishable.
+    const notice = describeSkew(clockSkewMs(state.clock, pull.serverClock));
+    if (notice) result.clockNotice = notice;
     // Absorb the highest clock seen, so a device whose wall clock is behind
     // stops losing every tie the moment it talks to anyone.
     state.clock = hlcReceive(state.clock, pull.serverClock, nowMs);
@@ -296,8 +323,17 @@ export function describeRecordSync(result: SyncResult, outbox: OutboxState, noun
   if (result.shedNotice) return result.shedNotice;
   const stuck = stuckOperations(outbox).length;
   if (stuck > 0) {
+    // BELOW the failure, deliberately, and the ordering was wrong the other way
+    // round for one commit. A skewed clock is INFORMATION; wedged changes are a
+    // LOSS the person can act on. Ranking the notice first meant a laptop back
+    // from sleep — clock five minutes out, which is ordinary — replaced "3
+    // changes could not be sent" with a sentence about time, and kept replacing
+    // it for as long as the clock stayed wrong. This surface has exactly one
+    // line to say something with, so whatever it says has to be the most
+    // actionable true thing, not the most recently discovered one.
     return `${stuck} change${stuck === 1 ? '' : 's'} could not be sent — open sync to see why.`;
   }
+  if (result.clockNotice) return result.clockNotice;
   if (result.offline) {
     const pending = outbox.operations.length;
     return pending > 0

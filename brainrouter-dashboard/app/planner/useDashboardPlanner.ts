@@ -513,6 +513,33 @@ export function useDashboardPlanner(): DashboardPlannerState {
       : candidate));
   }, [enqueue, rawItems]);
 
+  /**
+   * D3 — the due date, through the same outbox every other edit uses.
+   *
+   * Supplied here and not only on the desktop because the shared surface renders
+   * the control from `ops.setDueDate`: a host that omitted it would show one
+   * planner that can schedule and one that cannot, which is the D1b failure
+   * ADR-038 was written about. The stamp and the optimistic apply match
+   * `updateItem` exactly, so a due date merges by the same rule as everything
+   * else rather than by a second one.
+   */
+  const setDueDate = useCallback((id: string, date: string | null): void => {
+    const at = nextStamp();
+    if (!rawItems.some((candidate) => candidate.id === id)) return;
+    const operation: PlannerItemPushOperation = {
+      idempotencyKey: operationKey(),
+      itemId: id,
+      entity: "item",
+      kind: "update",
+      at,
+      payload: { dueDate: date },
+    };
+    if (!enqueue(operation)) return;
+    setRawItems((current) => current.map((candidate) => candidate.id === id
+      ? { ...candidate, dueDate: { value: date, at } }
+      : candidate));
+  }, [enqueue, rawItems]);
+
   const deleteItem = useCallback((id: string): void => {
     const at = nextStamp();
     if (!rawItems.some((candidate) => candidate.id === id)) return;
@@ -652,6 +679,7 @@ export function useDashboardPlanner(): DashboardPlannerState {
   const ops = useMemo<PlannerOps>(() => ({
     addItem,
     toggleComplete: updateItem,
+    setDueDate,
     deleteItem,
     resolveConflict,
     blockTimeAt,
@@ -661,7 +689,7 @@ export function useDashboardPlanner(): DashboardPlannerState {
       if (!/^https:\/\//i.test(url)) return;
       window.open(url, "_blank", "noopener,noreferrer");
     },
-  }), [addItem, blockTimeAt, deleteItem, recordActual, rescheduleBlock, resolveConflict, updateItem]);
+  }), [addItem, blockTimeAt, deleteItem, recordActual, rescheduleBlock, resolveConflict, setDueDate, updateItem]);
 
   const staleSources = useMemo(() => [...new Set(items.flatMap((item) =>
     item.sourceFreshness?.stale && item.sourceFreshness.label

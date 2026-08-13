@@ -139,7 +139,7 @@ const learnedProjectionSchema = z.object({
   itemId: z.string().regex(/^lrn_[a-f0-9]{18}$/),
   tier: z.enum(["evidence", "instruction"]),
   origin: z.enum(["model-inferred", "human-correction"]),
-  form: z.enum(["lesson", "procedure", "delegation"]),
+  form: z.enum(["lesson", "procedure"]),
   status: z.enum(["active", "demoted", "retired"]),
   statusReason: z.string().max(400).optional(),
   statusChangedAt: z.string().max(80).optional(),

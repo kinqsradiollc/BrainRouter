@@ -48,7 +48,6 @@ export {
   evaluateStackMerge,
   highestMergeableLayer,
   attributeFindingsToLayers,
-  adviseStacking,
   describeStack,
   displayRef,
   REVIEWABLE_LAYER_LINES,
@@ -60,13 +59,9 @@ export {
   type StackAdvice,
 } from './stackedPr.js';
 
-// ADR-028 H1/H2 — the PR create path. Exported so the decision is reachable
-// from the public surface rather than only from inside this folder: a cluster
-// that imports only itself is exactly as inert as an orphan, which is how Part
-// A shipped five modules nobody could get to.
+// ADR-028 H1/H2 — the PR create path: the decision and the argv, in one place.
 export {
   routePullRequest,
-  describeRoute,
   resolveStackingMode,
   type PrRoute,
   changeRequestArgv,
@@ -74,44 +69,13 @@ export {
   type ChangeRequestArgs,
   type StackingMode,
 } from './prRouter.js';
-export { probeStackCapability } from './stackProbe.js';
-export {
-  proposeStackFromPlan,
-  mayProposeStack,
-  type PlanPhaseLike,
-  type StackProposal,
-} from './planToStack.js';
 
-
-// ADR-028 A3 — gh stack exit-code contract.
+// ADR-028 A1 — is `gh stack` usable here?
+export { probeStackCapability, type ProbeRunner } from './stackProbe.js';
 export {
-  classifyStackExit,
-  blocksFurtherMutation,
-  KNOWN_STACK_EXIT_CODES,
-  type StackOutcome,
-  type StackOutcomeKind,
-} from './stackExitCodes.js';
-
-// ADR-028 A1 — gh stack capability detection.
-export {
-  detectStackCapability,
-  stackCapabilityFor,
-  resetStackCapabilityCache,
   parseVersion,
   meetsMinimum,
   MIN_GH,
   MIN_GIT,
   type StackCapability,
-  type CapabilityProbe,
 } from './stackCapability.js';
-
-// ADR-028 S2-1 — gh stack runner.
-export {
-  StackRunner,
-  StackUnavailableError,
-  StackHaltedError,
-  stackActionsAvailable,
-  type StackExec,
-  type StackRunResult,
-  type StackRunnerOptions,
-} from './stackRunner.js';

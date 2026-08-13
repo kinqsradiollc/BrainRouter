@@ -43,10 +43,17 @@ export type LearnedOrigin = 'model-inferred' | 'human-correction';
  *
  * `procedure` is §1's first gap — a repeated sequence that should RUN rather
  * than be re-read and re-interpreted every turn, so it promotes to a learned
- * skill (D3). `delegation` is the third gap: a repeated sub-task SHAPE, stored
- * so the next occurrence is handed to a role instead of re-derived.
+ * skill (D3).
+ *
+ * There is deliberately no `delegation` form. §1 listed "a repeated sub-task
+ * shape never becomes a reusable role" as a gap and D3 has since WITHDRAWN it:
+ * a learned role would need a constrained child-authority port that proves and
+ * re-applies a narrower ceiling on every spawn, and no such port is being
+ * built. Carrying the form anyway meant the gate refused it unconditionally —
+ * a branch nobody could ever reach, and a union member that promised a
+ * capability the product does not have.
  */
-export type LearnedForm = 'lesson' | 'procedure' | 'delegation';
+export type LearnedForm = 'lesson' | 'procedure';
 
 /**
  * D6's ladder, and the reason it is a ladder rather than a boolean.
@@ -145,6 +152,24 @@ export interface LearnedOutcome {
   lastContradictedAt?: string;
 }
 
+/**
+ * One action the runtime watched succeed, recorded so a procedure can replay
+ * the thing that worked rather than a description of it.
+ *
+ * There is no `arguments` field and that is deliberate. Replaying arguments
+ * captured in one session into another would be wrong far more often than
+ * right — paths, ids and revisions do not survive the move — and storing them
+ * would put whatever those calls touched into a record that outlives the
+ * session. What is durable is WHICH tool did the work, in WHAT order.
+ */
+export interface LearnedProcedureStep {
+  /** The runtime's id for the observed action. Ties a step to its evidence. */
+  readonly actionId: string;
+  readonly toolName: string;
+  /** The runtime's own one-line record of the call. Never model prose. */
+  readonly summary?: string;
+}
+
 /** One learned change to how the agent behaves. */
 export interface LearnedItem {
   readonly id: string;
@@ -171,6 +196,19 @@ export interface LearnedItem {
   /** Tool ceiling carried by a promoted learned procedure. This can only
    * subtract from the agent's existing authority. */
   allowedTools?: readonly string[];
+  /**
+   * D3 — the exact successful actions this procedure may replay.
+   *
+   * A procedure's `steps` are the MODEL's retelling: prose it re-reads and
+   * re-interprets every turn, which is §1's "nothing it learns ever becomes
+   * something that runs". This is the other half, and it is deliberately not
+   * the same kind of thing. Every entry is a call the RUNTIME watched succeed;
+   * the model's only influence is citing which observed action ids belong to
+   * the procedure, and a citation matching no observed action is dropped
+   * rather than trusted. So the model can narrow this list and can never
+   * extend it, reorder it, or invent an entry in it.
+   */
+  procedureLedger?: readonly LearnedProcedureStep[];
   /**
    * The memory-engine record this fact was ALSO written to.
    *

@@ -13,7 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   emptyOutbox, enqueue, nextBatch, acknowledge, recordFailure, stuckOperations,
-  shed, replayOrder, describeSyncState,
+  shed, describeSyncState,
   inspectOutbox, requestOperationRetry,
   MAX_OUTBOX_OPERATIONS, ATTEMPTS_BEFORE_SURFACING,
   type OutboxOperation,
@@ -91,17 +91,22 @@ test('a permanently-failing operation becomes visible instead of retrying foreve
   assert.match(describeSyncState(s), /could not be sent/);
 });
 
-test('replay orders per item by stamp, not globally', () => {
-  // A global order would serialise unrelated work behind whichever item
-  // happened to be stamped first.
-  const ordered = replayOrder([
-    op({ idempotencyKey: 'a2', itemId: 'i1', at: { physical: 200, logical: 0, deviceId: 'a' } }),
-    op({ idempotencyKey: 'b1', itemId: 'i2', at: { physical: 50, logical: 0, deviceId: 'a' } }),
-    op({ idempotencyKey: 'a1', itemId: 'i1', at: { physical: 100, logical: 0, deviceId: 'a' } }),
-  ]);
-  const i1 = ordered.filter((o) => o.itemId === 'i1').map((o) => o.idempotencyKey);
-  assert.deepEqual(i1, ['a1', 'a2'], 'one item is in stamp order');
-  assert.equal(ordered[0]!.itemId, 'i1', 'items keep first-seen order, not global stamp order');
+test('a later edit to one item cannot overtake an earlier one', () => {
+  // This was asserted against `replayOrder`, which sorted the queue and which
+  // nothing sent from — retired 2026-08-12. The guarantee is real and it is
+  // kept by `nextBatch`: at most ONE operation per item leaves at a time, so
+  // the second edit to `i1` cannot be in flight beside the first, whatever
+  // order the queue happens to hold. Unrelated items still go in parallel.
+  let s = emptyOutbox();
+  s = enqueue(s, op({ idempotencyKey: 'a1', itemId: 'i1', at: { physical: 100, logical: 0, deviceId: 'a' } }));
+  s = enqueue(s, op({ idempotencyKey: 'b1', itemId: 'i2', at: { physical: 50, logical: 0, deviceId: 'a' } }));
+  s = enqueue(s, op({ idempotencyKey: 'a2', itemId: 'i1', at: { physical: 200, logical: 0, deviceId: 'a' } }));
+
+  const first = nextBatch(s);
+  assert.deepEqual(first.map((o) => o.idempotencyKey), ['a1', 'b1'], 'one per item, in queue order');
+  // `a2` only becomes sendable once `a1` is acknowledged.
+  const after = nextBatch(acknowledge(s, ['a1', 'b1']));
+  assert.deepEqual(after.map((o) => o.idempotencyKey), ['a2']);
 });
 
 test('nothing is shed while the queue is small and fresh', () => {

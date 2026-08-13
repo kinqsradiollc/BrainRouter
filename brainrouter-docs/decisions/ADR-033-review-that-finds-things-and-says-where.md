@@ -1,10 +1,67 @@
 # ADR-033 — Review that finds things, and says where
 
 **Status:** ACCEPTED — approved by the owner for implementation.
-**Implementation status (2026-08-10):** PARTIAL — the shared orchestration, evidence safety and
-paired fail-closed benchmark harness are implemented, and the deterministic COST conjunct of §6 now
-passes: bundled sends **516,672 characters in 16 calls versus legacy's 545,529 in 12** (−28,857,
-−5.29%), down from +33,537 before.
+
+**Implementation status (2026-08-12): PARTIAL, and the split is clean rather than ragged.**
+
+**Shipped AND reached** — D1, D2, D3, D4, D5, D8 and D9 are engineering, and every one of them is
+live on a path a user reaches: the bot through the scheduler executors, the CLI `/review` handler,
+and the desktop host. Verified deterministically — `review-orchestration` 8/8, `review-bundles`
+18/18, `review-position-and-reflection` 19/19. D6 is a stance and lives in the prompt.
+
+**The one gap, stated precisely: D7's harness ships and has never produced a number.** It exists, it
+runs, and no evaluation has been recorded against it. That is why this ADR is PARTIAL and not
+COMPLETE, and it is a measurement that has not been taken rather than code that was not written.
+
+This is deliberately not called "the live-model half is unproven" any more, which was the earlier
+wording and was vaguer than the facts deserve: the deterministic engineering is done and reached,
+and exactly one conjunct — a number from the harness — is outstanding.
+**Implementation status (2026-08-12):** PARTIAL, and precisely one conjunct short. The shared
+orchestration, evidence safety and paired fail-closed benchmark harness are implemented and reached
+on a user path; the deterministic COST conjunct of §6 passes: bundled sends **516,672 characters in
+16 calls versus legacy's 545,529 in 12** (−28,857, −5.29%), down from +33,537 before.
+
+**What D7 still owes is a QUALITY number — precision and recall — and it is blocked on a provider,
+not on code.** The corpus exists and is frozen (`benchmark/data/review-cases.json`, schema 2, 11
+cases: 7 carrying curated known issues, 4 clean with explicit no-linked-fix evidence, observation
+cutoff 2026-08-09, ground-truth bias restated inside the data). The runner exists
+(`npm run bench:review -w @kinqs/brainrouter-mcp-server -- --provider-config=…`) and is
+paired-only by design, because a lone arm cannot prove a delta.
+
+**The harness has now been RUN, and it works** (2026-08-12, against a local `qwen2.5-coder` on
+Ollama through the loopback exemption the provider resolver already allows). That is a change of
+kind: this document previously said the runner "ships and has never produced a number", which left
+open whether it would even execute. It does. It prepared exact-revision evidence from a local
+checkout, executed both arms of case `pr-743` across six model calls, scored them, and wrote its
+machine-readable artifact.
+
+**What it demonstrated is that the number needs a better model than a local one**, and the evidence
+is specific rather than a shrug:
+
+- `qwen2.5-coder:7b` failed on its FIRST call — it could not produce the fenced findings envelope at
+  all (`reviewer returned malformed JSON findings`).
+- `qwen2.5-coder:14b` produces the envelope reliably, completed `pr-743` — and found **nothing**:
+  legacy 0/0, bundled 0/0, on a case carrying curated known issues. It then failed `pr-1242` with
+  `reviewer returned one or more invalid findings`.
+
+Zero recall on a case with planted defects is not a formatting problem, so a third local model is
+not the answer; the wall is reviewing capability. D7's number therefore needs a frontier-class
+provider, which is the owner's key to supply.
+
+**Both failures are evidence FOR the design, and worth keeping.** A malformed envelope and an
+invalid finding each aborted the run and wrote an explicitly FAILED artifact. Neither degraded into
+a zero-finding report that would have read as a clean review — which is exactly the outcome
+`parseReviewFindingsEnvelope`'s strictness exists to prevent, and it was the temptation when the
+first run failed: loosening that parser would have "fixed" the run by turning a loud failure into a
+silent one.
+
+A run was attempted on 2026-08-12 against a local OpenAI-compatible endpoint. It failed — the server
+listed models but served no completions — and that failure is worth recording rather than hiding,
+because it exercised §6's own discipline for the first time against a REAL provider fault instead of
+the synthetic bootstrap case the tests cover: six bounded retries, then a `status: "failed"`
+artifact at mode 0600 carrying corpus identity, zero completed cases and the one attempted model
+call. **It did not become a zero-finding report**, which is the failure mode that would have made
+every other number in this ADR untrustworthy.
 
 What closed it was a mis-scoped budget rather than any relaxation of D2/D3/D5/D9. The
 repository-context cap was applied PER UNIT, so a review's evidence budget grew with how many units

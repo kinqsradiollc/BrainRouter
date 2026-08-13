@@ -18,7 +18,7 @@ import {
   plannerOutboxDetails, retryPlannerOperation,
   canUpdateItemLocally,
 } from '../planner/plannerStore.js';
-import { todayView, findItems, timetableView } from '../planner/plannerService.js';
+import { todayView, findItems } from '../planner/plannerService.js';
 import { plannerFile } from '../planner/plannerStore.js';
 
 const T = Date.parse('2026-08-04T09:00:00.000Z');
@@ -292,14 +292,59 @@ test('search matches titles and notes, and finds completed items too', () => {
   } finally { cleanup(ws); }
 });
 
-test('the timetable resolves item titles so a block is readable', () => {
+test('the day view carries the block and the item it belongs to', () => {
+  // Was asserted against `timetableView`, retired 2026-08-12 with no caller.
+  // `todayView` is what both hosts and the agent tool render, and it answers
+  // the same question: the block, and the item whose title names it.
   const ws = workspace();
   try {
     const item = addItem(ws, { title: 'Ship the panel' }, T);
     scheduleBlock(ws, { itemId: item.id, scheduledFor: '2026-08-04T10:00:00.000Z', estimateMinutes: 60 }, T);
-    const view = timetableView(ws, '2026-08-04');
-    assert.equal(view.blocks.length, 1);
-    assert.equal(view.titles[item.id], 'Ship the panel');
+    const view = todayView(ws, { date: '2026-08-04', nowMs: T });
+    assert.equal(view.scheduled.length, 1);
+    assert.equal(view.scheduled[0]!.itemId, item.id);
+    assert.equal(view.items.find((i) => i.id === item.id)?.title.value, 'Ship the panel');
+  } finally { cleanup(ws); }
+});
+
+test('moving an unfinished block to a later day counts as a carry-forward', () => {
+  // ADR-028 D5. `carriedOver` is what `needsAttention` and `describeCarryOver`
+  // read, and nothing incremented it until `updateBlock` was wired to
+  // `carryOver` on 2026-08-12 — so "this has moved four times" could never be
+  // asked. Three moves must reach the attention threshold.
+  const ws = workspace();
+  try {
+    const item = addItem(ws, { title: 'Rewrite the importer' }, T);
+    const block = scheduleBlock(ws, { itemId: item.id, scheduledFor: '2026-08-04T10:00:00.000Z', estimateMinutes: 60 }, T);
+    assert.equal(block.carriedOver, 0);
+
+    let moved = updateBlock(ws, block.id, { scheduledFor: '2026-08-05T10:00:00.000Z' }, T);
+    assert.equal(moved?.carriedOver, 1);
+    moved = updateBlock(ws, block.id, { scheduledFor: '2026-08-06T10:00:00.000Z' }, T);
+    moved = updateBlock(ws, block.id, { scheduledFor: '2026-08-07T10:00:00.000Z' }, T);
+    assert.equal(moved?.carriedOver, 3);
+
+    // The count travels with the move, or the next pull undoes the increment.
+    const queued = readPlanner(ws).outbox.operations.filter((o) => o.entity === 'block' && o.kind === 'update');
+    assert.equal((queued.at(-1)!.payload as { carriedOver?: number }).carriedOver, 3);
+
+    // And it reaches the surface that reads it.
+    assert.deepEqual(todayView(ws, { date: '2026-08-07', nowMs: T }).stalled.map((b) => b.id), [block.id]);
+  } finally { cleanup(ws); }
+});
+
+test('moving a block EARLIER, or editing it in place, is not a carry-forward', () => {
+  // Otherwise every estimate edit inflates the count and the prompt fires on
+  // work nobody has been avoiding.
+  const ws = workspace();
+  try {
+    const item = addItem(ws, { title: 'Pull it forward' }, T);
+    const block = scheduleBlock(ws, { itemId: item.id, scheduledFor: '2026-08-06T10:00:00.000Z', estimateMinutes: 60 }, T);
+    assert.equal(updateBlock(ws, block.id, { scheduledFor: '2026-08-05T10:00:00.000Z' }, T)?.carriedOver, 0);
+    assert.equal(updateBlock(ws, block.id, { estimateMinutes: 90 }, T)?.carriedOver, 0);
+    // A completed block that gets rescheduled is not being avoided either.
+    updateBlock(ws, block.id, { completedAt: '2026-08-05T11:00:00.000Z' }, T);
+    assert.equal(updateBlock(ws, block.id, { scheduledFor: '2026-08-09T10:00:00.000Z' }, T)?.carriedOver, 0);
   } finally { cleanup(ws); }
 });
 

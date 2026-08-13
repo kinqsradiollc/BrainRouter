@@ -10,7 +10,11 @@ export interface WorkspaceViewContext {
 }
 
 const PROFILE_VIEWS: Readonly<Record<string, readonly PanelId[]>> = {
-  engineering: ['files', 'diff', 'plan', 'tasks', 'artifacts', 'review', 'ci'],
+  // ADR-028 G5 — `stack` (Pull request) carries what `review` and `ci` used to.
+  // Those two ids stayed in this list after the panels were consolidated, so
+  // two of engineering's seven suggestions matched no panel and silently
+  // dropped out of the menu.
+  engineering: ['files', 'diff', 'plan', 'tasks', 'artifacts', 'stack'],
   research: ['knowledge', 'memory', 'context', 'plan', 'tasks', 'artifacts', 'annotations'],
   'data-science': ['files', 'knowledge', 'context', 'plan', 'tasks', 'artifacts'],
   study: ['knowledge', 'memory', 'context', 'plan', 'tasks', 'artifacts'],

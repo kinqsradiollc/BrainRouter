@@ -18,6 +18,13 @@ const VALID_IDS = new Set<PanelId>(PANEL_DEFS.map((panel) => panel.id));
 // answered facets of a single question — can this land, and if not what is
 // stopping it — and `ci` was already titled "PR / Checks", so four tabs meant
 // assembling the real answer yourself from three of them.
+//
+// These two are here for PERSISTED layouts only. They are not members of
+// `PanelId`, so no live call site can reach them: a caller that wants the
+// consolidated panel has to say `stack` and gets a panel that renders. An
+// alias that also caught live callers is how `ReviewPanel` became unreachable
+// while the chooser still offered a "Review" button badged with the findings
+// it was not going to show.
 const PANEL_ID_ALIASES: Record<string, PanelId> = {
   write: 'editor', docs: 'editor', uitest: 'browser',
   review: 'stack', ci: 'stack',

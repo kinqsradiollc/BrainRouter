@@ -27,7 +27,6 @@
  * prioritize one retry without bypassing earlier writes to that same record.
  */
 import type { Hlc } from './hybridClock.js';
-import { compareHlc } from './hybridClock.js';
 
 export interface OutboxOperation {
   /** Unique per operation. A redelivery with the same key is a no-op. */
@@ -247,26 +246,15 @@ export function shed(
   };
 }
 
-/**
- * Sort operations for replay.
- *
- * Per item by stamp; across items, stable. A total order across everything
- * would be simpler and wrong — it would serialise unrelated work behind
- * whichever item happened to be stamped first.
+/*
+ * `replayOrder` sorted the whole queue per-item-by-stamp and was **retired
+ * 2026-08-12** with no caller. The per-item ordering guarantee it existed to
+ * provide is enforced where the queue is actually drained: `nextBatch` takes at
+ * most ONE operation per item, so a later edit physically cannot overtake an
+ * earlier one — the next edit for that item does not ship until the first is
+ * acknowledged. Sorting a queue nobody sends in that order is a guarantee
+ * stated twice and kept once.
  */
-export function replayOrder(operations: readonly OutboxOperation[]): OutboxOperation[] {
-  const byItem = new Map<string, OutboxOperation[]>();
-  const order: string[] = [];
-  for (const op of operations) {
-    if (!byItem.has(op.itemId)) { byItem.set(op.itemId, []); order.push(op.itemId); }
-    byItem.get(op.itemId)!.push(op);
-  }
-  const out: OutboxOperation[] = [];
-  for (const itemId of order) {
-    out.push(...byItem.get(itemId)!.sort((a, b) => compareHlc(a.at, b.at)));
-  }
-  return out;
-}
 
 /**
  * The least this wording needs to know.

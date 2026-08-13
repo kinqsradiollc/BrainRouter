@@ -4,6 +4,7 @@ import type { ModelReasoningEffort } from "@kinqs/brainrouter-types";
 import type { LearnedItem } from "@kinqs/brainrouter-core/learning";
 import type { ScopedGatewayDispatchOptions } from "../../../services/modelGateway/modelGateway.js";
 import {
+  HOSTED_LEARNING_CHECKPOINT_REASON,
   hostedLearnedPromptContext,
   selectHostedLearnedForTurn,
 } from "../../../memory/learning/hosted-learning.js";
@@ -89,7 +90,10 @@ export interface HostedLearningCheckpointRequest {
   userId: string;
   orgId: string;
   sessionKey: string;
-  reason: "turn-end";
+  /** Hosted has exactly one checkpoint; `HOSTED_LEARNING_CHECKPOINT_REASON`
+   * says which and why, and the durable job schema re-validates the same
+   * constant at the far end of the queue. */
+  reason: typeof HOSTED_LEARNING_CHECKPOINT_REASON;
   trajectory: string;
   sawUntrustedContent: boolean;
   corroboratedByTrustedAction: false;
@@ -248,7 +252,7 @@ export async function runBrainChat(input: BrainChatInput, deps: BrainChatDepende
       userId: input.userId,
       orgId: input.orgId,
       sessionKey,
-      reason: "turn-end",
+      reason: HOSTED_LEARNING_CHECKPOINT_REASON,
       trajectory: hostedLearningTrajectory(input.messages, answer),
       // Recalled context is explicitly untrusted in this chat prompt. With no
       // hosted tool/action trace, it cannot be corroborated by a trusted action.

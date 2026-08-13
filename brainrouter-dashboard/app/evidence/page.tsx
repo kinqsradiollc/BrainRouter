@@ -74,7 +74,7 @@ export default function EvidencePage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: "18px", alignItems: "start" }}>
           <div className="table-container" style={{ padding: 0, overflowX: "auto", overflowY: "hidden" }}>
             {evidence.length === 0 && !isLoading ? (
-              <EmptyState title="No Evidence" description="Evidence rows will appear here after references are attached to memories." />
+              <EmptyState title="No evidence yet" description="When something is saved, the files, links, transcripts, and commands behind it are kept here, so a claim can always be traced back." />
             ) : (
               <table className="table">
                 <thead>

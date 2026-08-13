@@ -4,15 +4,13 @@
  * only maps explicit source facts into a mirrored PlannerItem.
  */
 import { createHash } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
 import type {
   ConnectorDocumentRecord,
   ConnectorRecord,
   ConnectorSource,
 } from '@kinqs/brainrouter-types';
-import { hlcReceive, type Hlc } from '../sync/hybridClock.js';
-import { readPlanner, writePlanner } from './plannerStore.js';
-import { refreshMirrored, type PlannerItem } from './itemMerge.js';
+import type { Hlc } from '../sync/hybridClock.js';
+import type { PlannerItem } from './itemMerge.js';
 import type { SourceAdapter } from './sourceAdapter.js';
 
 const SUPPORTED_ISSUE_SOURCES = new Set<ConnectorSource>([
@@ -142,47 +140,19 @@ export function createConnectorIssueSourceAdapter(input: ConnectorIssueProjectio
   };
 }
 
-/**
- * Local/solo projection sink used by production callers that explicitly own a
- * local planner scope. Source refreshes do not enter the outbox: the source is
- * re-readable truth, not an owned edit to replicate back to itself.
+/*
+ * `refreshLocalPlannerFromConnectorIssues` — a local/solo projection sink over
+ * `readPlanner`/`writePlanner` — was **retired 2026-08-12** with no caller. Its
+ * doc comment said "used by production callers that explicitly own a local
+ * planner scope", and there were none: the projection that runs is the SERVER's
+ * (`brainrouter/src/memory/planner/backend.ts:543`), which walks the same
+ * adapter into durable rows under an authenticated scope. A second copy writing
+ * a device-local file would have produced two answers to "what is mirrored
+ * here", and only one of them syncs.
+ *
+ * `PlannerProjectionSummary` stays: it is the shape the server's projection
+ * returns.
  */
-export async function refreshLocalPlannerFromConnectorIssues(
-  userId: string | undefined,
-  input: ConnectorIssueProjectionInput,
-  nowMs = Date.now(),
-): Promise<PlannerProjectionSummary> {
-  const adapter = createConnectorIssueSourceAdapter(input);
-  const projected = await adapter.list();
-  const state = readPlanner(userId);
-  const summary: PlannerProjectionSummary = {
-    created: 0, updated: 0, unchanged: 0,
-    skipped: input.documents.length - projected.length,
-  };
-
-  for (const remote of projected) {
-    const current = state.items[remote.id];
-    if (!current) {
-      state.items[remote.id] = remote;
-      summary.created += 1;
-    } else if (current.origin !== 'mirrored' || current.source !== remote.source) {
-      summary.skipped += 1;
-      continue;
-    } else {
-      const next = refreshMirrored(current, remote, remote.fetchedAt!);
-      if (isDeepStrictEqual(current, next)) {
-        summary.unchanged += 1;
-        continue;
-      }
-      state.items[remote.id] = next;
-      summary.updated += 1;
-    }
-    state.clock = hlcReceive(state.clock, remote.title.at, nowMs);
-  }
-
-  if (summary.created > 0 || summary.updated > 0) writePlanner(userId, state);
-  return summary;
-}
 
 export interface PlannerIssueProjectionRequest {
   connector: ConnectorRecord;

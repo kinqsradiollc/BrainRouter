@@ -1,5 +1,8 @@
 /**
- * ADR-028 D7 + D8 — sources behind one interface, and what happens to old items.
+ * ADR-028 D7 — sources behind one interface.
+ *
+ * (D8's client-side half lived here too and is retired at the foot of the file;
+ * retention runs on the server, which is where the rows are.)
  *
  * Every source does three things: list candidates, map them to a planner item,
  * and report how fresh that answer is. The first set is Track, GitHub issues,
@@ -72,95 +75,20 @@ function describeAge(ms: number): string {
   return `${Math.round(hours / 24)} days`;
 }
 
-/**
- * Collect from every source without letting one failure empty the view.
+/*
+ * `collectFromSources` fanned out over several adapters and folded their
+ * failures into freshness. **Retired 2026-08-12**, with no caller, because
+ * there is nowhere to fan out FROM: one adapter exists
+ * (`createConnectorIssueSourceAdapter`), the server invokes it directly at
+ * `brainrouter/src/memory/planner/backend.ts:547`, and the freshness the model
+ * and the panels actually read is derived from the ITEMS —
+ * `agentContext.sourceFreshnessFromItems`, which runs on every turn. Two ways
+ * to compute freshness, one of them reached; D7 keeps the reached one.
  *
- * A source that throws contributes its error to freshness and nothing to the
- * list. Propagating instead would mean GitHub being down hides your local
- * todos, which is both useless and hard to understand from the outside.
+ * `partitionForRetention`, `CompactedItem` and `DETAIL_RETENTION_DAYS` (D8) go
+ * with it. Retention ships, and it ships server-side:
+ * `compactCompletedPlannerItems` inside `runRetentionPass`, driven hourly by
+ * `MemoryJobRunner.maybeRunRetention`. A second client-side split of the same
+ * rows with its own 90-day constant is the drift D8 warned about, written by
+ * D8.
  */
-export async function collectFromSources(
-  adapters: readonly SourceAdapter[],
-  previous: readonly SourceFreshness[],
-  nowIso: string,
-): Promise<{ items: PlannerItem[]; freshness: SourceFreshness[] }> {
-  const priorById = new Map(previous.map((f) => [f.sourceId, f]));
-  const items: PlannerItem[] = [];
-  const freshness: SourceFreshness[] = [];
-
-  for (const adapter of adapters) {
-    const prior = priorById.get(adapter.id);
-    try {
-      const listed = await adapter.list();
-      items.push(...listed);
-      freshness.push({
-        sourceId: adapter.id,
-        lastFetchedAt: adapter.lastFetchedAt === undefined ? nowIso : adapter.lastFetchedAt,
-        itemCount: listed.length,
-      });
-    } catch (error) {
-      // Keep the last good fetch time: the items on screen ARE that old, and
-      // resetting it to null would say we have nothing when we have something
-      // stale, which is a different and less useful statement.
-      freshness.push({
-        sourceId: adapter.id,
-        lastFetchedAt: prior?.lastFetchedAt ?? null,
-        itemCount: prior?.itemCount ?? 0,
-        lastError: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return { items, freshness };
-}
-
-/* --------------------------------------------------------- D8 · retention */
-
-/**
- * Completed items keep full detail for 90 days, then compact.
- *
- * The planner is a working surface, not an archive. Following ADR-027 D11
- * rather than inventing a second retention policy — two policies for the same
- * kind of data is how one of them ends up wrong and nobody notices.
- */
-export const DETAIL_RETENTION_DAYS = 90;
-
-export interface CompactedItem {
-  id: string;
-  title: string;
-  completedAt: string;
-  /** Kept because drift feeds ADR-027 D1's ledgers. */
-  estimateMinutes?: number;
-  actualMinutes?: number;
-}
-
-/**
- * Split completed items into those keeping detail and those to compact.
- *
- * Compaction keeps the title, the completion date, and the estimate-versus-
- * actual — because consistent overruns are technical-debt evidence, and that
- * signal outlives the notes it came with.
- */
-export function partitionForRetention(
-  items: readonly (PlannerItem & { completedAt?: string; estimateMinutes?: number; actualMinutes?: number })[],
-  nowMs: number,
-  retentionDays = DETAIL_RETENTION_DAYS,
-): { keep: PlannerItem[]; compact: CompactedItem[] } {
-  const cutoff = nowMs - retentionDays * 86_400_000;
-  const keep: PlannerItem[] = [];
-  const compact: CompactedItem[] = [];
-
-  for (const item of items) {
-    if (!item.completedAt || Date.parse(item.completedAt) > cutoff) {
-      keep.push(item);
-      continue;
-    }
-    compact.push({
-      id: item.id,
-      title: item.title.value,
-      completedAt: item.completedAt,
-      ...(item.estimateMinutes !== undefined ? { estimateMinutes: item.estimateMinutes } : {}),
-      ...(item.actualMinutes !== undefined ? { actualMinutes: item.actualMinutes } : {}),
-    });
-  }
-  return { keep, compact };
-}

@@ -7,11 +7,16 @@
 import React, { useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../../icons.js';
 import { PANEL_DEFS, type PanelId } from '../../panels/index.js';
+// ADR-028 G3 — the chooser groups by the CATALOG's taxonomy, deep-imported so
+// this file does not pull the panel barrel's stylesheets. It used to carry its
+// own `['Work','Plan','Knowledge','Quality','Advanced']`, so the app had two
+// panel taxonomies, this was the only one a person ever saw, and the catalog's
+// groups were read by nothing but their test.
+import { PANEL_GROUPS, activeGroups, groupOf, panelsInGroup } from '../../panels/panelCatalog.js';
 import { clampSideRailWidth, sideRailClassName } from '../../lib/panels/sideRailLayout.js';
 import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
 
-const LAUNCHER_GROUPS = ['Work', 'Plan', 'Knowledge', 'Quality', 'Advanced'] as const;
-type LauncherGroup = (typeof LAUNCHER_GROUPS)[number];
+const GROUP_LABELS = new Map(PANEL_GROUPS);
 
 function setQuietDragImage(e: React.DragEvent<HTMLElement>): void {
   const canvas = document.createElement('canvas');
@@ -83,42 +88,57 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
   if (!sideAnim.mounted) return null;
   // §panel-search — the full tools list (badges from live props), filtered by the
   // chooser search box and keyboard-navigable (↑/↓ + Enter).
+  // ADR-028 G5 — ONE Pull request launcher. There used to be two, "Review" and
+  // "PR / Checks", both of which opened this same panel; the Review one carried
+  // a findings badge for a section the panel did not render. A badge counting
+  // what the button will not show you is this ADR's defect in miniature.
+  const prFindings = review?.findings.length ?? 0;
+  const prBadge = [ci.checks.length, prFindings].filter((n) => n > 0).join(' · ');
   const launchers = ([
-    { id: 'files' as PanelId, title: 'Files', hint: fmt('Mod+P'), icon: 'folder', badge: '', group: 'Work' },
-    { id: 'diff' as PanelId, title: 'Changes', hint: fmt('Mod+Shift+D'), icon: 'diff', group: 'Work',
+    { id: 'files' as PanelId, title: 'Files', hint: fmt('Mod+P'), icon: 'folder', badge: '' },
+    { id: 'diff' as PanelId, title: 'Changes', hint: fmt('Mod+Shift+D'), icon: 'diff',
       badge: changedFiles.length ? String(changedFiles.length) : '' },
-    { id: 'terminal' as PanelId, title: 'Terminal', hint: fmt('Ctrl+Backtick'), icon: 'terminal', badge: '', group: 'Work' },
-    { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '', group: 'Work' },
-    { id: 'plan' as PanelId, title: 'Plan', hint: fmt('Mod+Shift+G'), icon: 'review', group: 'Plan',
+    { id: 'terminal' as PanelId, title: 'Terminal', hint: fmt('Ctrl+Backtick'), icon: 'terminal', badge: '' },
+    { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '' },
+    { id: 'plan' as PanelId, title: 'Plan', hint: fmt('Mod+Shift+G'), icon: 'review',
       badge: lastPlan?.items.length ? `${lastPlan.items.filter((it) => it.status === 'completed').length}/${lastPlan.items.length}` : '' },
-    { id: 'tasks' as PanelId, title: 'Tasks', hint: '', icon: 'tasks', group: 'Plan',
+    { id: 'tasks' as PanelId, title: 'Tasks', hint: '', icon: 'tasks',
       badge: backgroundTasks.length ? String(backgroundTasks.length) : '', live: backgroundTasks.length > 0 },
-    { id: 'workflows' as PanelId, title: 'Workflows', hint: '', icon: 'bolt', badge: '', group: 'Plan' },
-    { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock', group: 'Plan',
+    { id: 'workflows' as PanelId, title: 'Workflows', hint: '', icon: 'bolt', badge: '' },
+    { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock',
       badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
-    { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks', group: 'Plan',
-      badge: requirements.length ? String(requirements.length) : '' },
-    { id: 'memory' as PanelId, title: 'Saved knowledge', hint: '', icon: 'pin', badge: '', group: 'Knowledge' },
-    { id: 'knowledge' as PanelId, title: 'Project knowledge', hint: '', icon: 'brain', badge: '', group: 'Knowledge' },
-    { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '', group: 'Knowledge' },
-    { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '', group: 'Knowledge' },
-    { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file', group: 'Knowledge',
-      badge: artifacts.filter((a) => a.status === 'draft').length ? String(artifacts.filter((a) => a.status === 'draft').length) : '' },
-    { id: 'annotations' as PanelId, title: 'Annotations', hint: '', icon: 'review', group: 'Knowledge',
-      badge: annotations.filter((a) => a.status === 'open').length ? String(annotations.filter((a) => a.status === 'open').length) : '' },
-    { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review', group: 'Quality',
-      badge: review?.findings.length ? String(review.findings.length) : '' },
-    { id: 'ci' as PanelId, title: 'PR / Checks', hint: '', icon: 'check-circle', group: 'Quality',
-      badge: ci.checks.length ? String(ci.checks.length) : '' },
-    { id: 'prototype' as PanelId, title: 'Prototype', hint: '', icon: 'bolt', badge: '', group: 'Quality' },
-    { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt', group: 'Advanced',
-      badge: toolLog.length ? String(toolLog.length) : '' },
-    { id: 'peers' as PanelId, title: 'Peers', hint: '', icon: 'bubble', badge: '', group: 'Advanced' },
-    { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch', group: 'Advanced',
+    { id: 'stack' as PanelId, title: 'Pull request', hint: '', icon: 'branch', badge: prBadge },
+    // ADR-034 — messages that arrive. `review` and `ci` are deliberately absent:
+    // ADR-028 G5 retired them into the one `stack` entry above, whose badge
+    // already carries both counts.
+    { id: 'peers' as PanelId, title: 'Peers', hint: '', icon: 'bubble', badge: '' },
+    { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
       badge: worktrees.length ? String(worktrees.length) : '' },
-  ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; group: LauncherGroup; live?: boolean }>);
+    { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks',
+      badge: requirements.length ? String(requirements.length) : '' },
+    { id: 'memory' as PanelId, title: 'Saved knowledge', hint: '', icon: 'pin', badge: '' },
+    { id: 'knowledge' as PanelId, title: 'Project knowledge', hint: '', icon: 'brain', badge: '' },
+    { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file',
+      badge: artifacts.filter((a) => a.status === 'draft').length ? String(artifacts.filter((a) => a.status === 'draft').length) : '' },
+    { id: 'annotations' as PanelId, title: 'Annotations', hint: '', icon: 'review',
+      badge: annotations.filter((a) => a.status === 'open').length ? String(annotations.filter((a) => a.status === 'open').length) : '' },
+    // ADR-028 G4 — the Understand group is one panel, and this is how you reach
+    // it without going through the topbar's overflow menu.
+    { id: 'comprehension' as PanelId, title: 'Understand', hint: '', icon: 'brain', badge: '' },
+    { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
+    { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '' },
+    { id: 'prototype' as PanelId, title: 'Prototype', hint: '', icon: 'bolt', badge: '' },
+    { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt',
+      badge: toolLog.length ? String(toolLog.length) : '' },
+  ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>);
   const cq = chooserQuery.trim().toLowerCase();
-  const shownLaunchers = cq ? launchers.filter((l) => l.title.toLowerCase().includes(cq)) : launchers;
+  const shownLaunchers = cq
+    ? launchers.filter((l) => l.title.toLowerCase().includes(cq) || (GROUP_LABELS.get(groupOf(l.id)) ?? '').toLowerCase().includes(cq))
+    : launchers;
+  // Only the groups that still have a launcher after the filter, in catalog
+  // order — an empty heading is a row that leads nowhere.
+  const shownIds = shownLaunchers.map((l) => l.id);
+  const shownGroups = activeGroups(shownIds);
   const launchSel = shownLaunchers.length ? Math.min(Math.max(chooserSel, 0), shownLaunchers.length - 1) : 0;
   const setVisibleChooserSelection = (next: number): void => {
     setChooserSel(next);
@@ -222,12 +242,13 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
             </button>
           ) : null}
           <div id="side-view-options" className="side-chooser-options" role="listbox" aria-label="Available views">
-            {shownLaunchers.length === 0 ? <div className="chooser-empty" role="status">No views match “{chooserQuery}”.</div> : LAUNCHER_GROUPS.map((group) => {
-              const groupLaunchers = shownLaunchers.filter((launcher) => launcher.group === group);
-              if (!groupLaunchers.length) return null;
+            {shownLaunchers.length === 0 ? <div className="chooser-empty" role="status">No views match “{chooserQuery}”.</div> : shownGroups.map((group) => {
+              const inGroup = new Set(panelsInGroup(group, shownIds));
+              const groupLaunchers = shownLaunchers.filter((launcher) => inGroup.has(launcher.id));
+              const label = GROUP_LABELS.get(group) ?? group;
               return (
-                <div key={group} className="side-launcher-group" data-group={group.toLowerCase()} role="group" aria-label={group}>
-                  <div className="side-launcher-group-title" aria-hidden="true">{group}</div>
+                <div key={group} className="side-launcher-group" data-group={group} role="group" aria-label={label}>
+                  <div className="side-launcher-group-title" aria-hidden="true">{label}</div>
                   {groupLaunchers.map((l) => {
                     const i = shownLaunchers.indexOf(l);
                     return (

@@ -32,7 +32,12 @@
  * clock — so the cadence and the "nothing accumulates" property can be tested
  * without a microphone.
  */
-import { DEFAULT_MEETING_CHUNK_MS, type MeetingCaptureScope, type MeetingCaptureTemplate } from "@kinqs/brainrouter-core/meetings";
+import {
+  DEFAULT_MEETING_CHUNK_MS,
+  meetingRecorderOptions,
+  type MeetingCaptureScope,
+  type MeetingCaptureTemplate,
+} from "@kinqs/brainrouter-core/meetings";
 import type { MeetingCaptureOps } from "./captureOps.js";
 
 export interface StartCaptureInput {
@@ -107,7 +112,13 @@ export class MeetingCaptureRecorder {
     this.onChunkError = options.onChunkError ?? (() => undefined);
     this.chunkMs = options.chunkMs ?? DEFAULT_MEETING_CHUNK_MS;
     this.openStream = options.openStream ?? (() => navigator.mediaDevices.getUserMedia({ audio: true }));
-    this.createRecorder = options.createRecorder ?? ((stream) => new MediaRecorder(stream));
+    // D11 — at a SPEECH bitrate. Constructed with no options this was the
+    // browser's default, roughly 128 kbps and about 60 MB an hour, and every
+    // number that matters about a recording is downstream of that one: what a
+    // crash leaves on the disk, what a retention window is holding, and what a
+    // transcription unit weighs against the endpoint's body limit. The shared
+    // constant is what keeps the browser from answering differently (D1b).
+    this.createRecorder = options.createRecorder ?? ((stream) => new MediaRecorder(stream, meetingRecorderOptions()));
     this.now = options.now ?? (() => Date.now());
   }
 

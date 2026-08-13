@@ -1,26 +1,27 @@
 /**
- * ADR-028 H1 — one create path, and it decides.
+ * ADR-028 H1/H2 — one create path, and the argv it produces.
  *
- * The bug the owner reported: the desktop app and CLI agent still open ordinary
- * pull requests, despite Part A building capability detection, an exit-code
- * contract, a latching runner, a create path, sync, merge and a plan→stack
- * mapping. **Nothing routed through any of it.** Four independent
- * `gh pr create` call sites, none aware the stack machinery existed.
+ * Every pull request BrainRouter opens is assembled here: the decision (stack
+ * or plain) in `routePullRequest`, the command in `changeRequestArgv`. Four
+ * call sites each building their own `gh pr create` is how the stack machinery
+ * stayed unreachable, and the argv is what drifts — `gh stack link` shipped and
+ * survived a ten-code exit contract because an unknown subcommand exits 1
+ * exactly like a real command that failed.
  *
- * That is the sixth instance of this ADR's own pattern and the largest — five
- * modules and eleven decisions reachable by nothing a user could do.
+ * **What this router no longer does: propose a stack.** ADR-028 A2/A7 designed
+ * a create path that authored layers — one plan phase per layer — and an
+ * inference that split an unplanned diff into seams. Neither shipped, and both
+ * are retired rather than finished, because the surfaces that would have to
+ * author the layers cannot: the build-loop emit delivers one squashed patch on
+ * one branch, and there is no per-phase patch to lay down as layer 2. A router
+ * that answered "stack" there would name a five-layer chain and produce one
+ * pull request.
  *
- * This module is the missing decision. Every PR creation asks ONE question in
- * ONE place: should this be a stack? Then it routes.
- *
- * **Plain pull requests stay correct and common.** A one-file fix is not a
- * stack, and a router that stacks everything is worse than one that stacks
- * nothing — it would turn every change into five CI runs and five reviews. The
- * point is not to stack more; it is that the choice is made somewhere that has
- * both options, rather than in four places that each have one.
+ * So stacks are the USER's: `gh stack` creates them, and `cli.stackingMode:
+ * "always"` tells us to publish through `gh stack submit` instead of
+ * `gh pr create`. We read stacks (`stackedPr.ts`, the brain's PR review) and we
+ * submit into one. We do not create, sync or merge them.
  */
-import { adviseStacking, type StackAdvice } from './stackedPr.js';
-import { proposeStackFromPlan, type PlanPhaseLike, type StackProposal } from './planToStack.js';
 import type { StackCapability } from './stackCapability.js';
 
 /**
@@ -36,16 +37,10 @@ export interface PrRouteInput {
   mode: StackingMode;
   /** Present when `gh stack` is usable here (A1). */
   capability: StackCapability;
-  /** The committed plan, when the work was planned (A7). */
-  phases?: readonly PlanPhaseLike[];
-  /** Total changed lines, for the unplanned-work path. */
-  totalChangedLines?: number;
-  /** Files grouped by unit of work, in dependency order. */
-  groups?: ReadonlyArray<{ label: string; files: readonly string[]; changedLines: number }>;
 }
 
 export type PrRoute =
-  | { kind: 'stack'; layers: readonly { phaseId: string; title: string; position: number }[]; rationale: string }
+  | { kind: 'stack'; reason: string }
   | { kind: 'single'; reason: string };
 
 /**
@@ -55,6 +50,12 @@ export type PrRoute =
  * without a git repository and so every caller lands on the same answer for the
  * same inputs — which is the property four independent call sites could not
  * have.
+ *
+ * `always` is the only route to a stack, and it only means one thing: submit
+ * through `gh stack`, which publishes the stack this checkout is already part
+ * of. If it is not part of one, `gh stack submit` says so and nothing is
+ * created — a loud, correct failure, rather than a plain pull request reported
+ * as a layer.
  */
 export function routePullRequest(input: PrRouteInput): PrRoute {
   if (input.mode === 'never') {
@@ -70,60 +71,21 @@ export function routePullRequest(input: PrRouteInput): PrRoute {
     };
   }
 
-  // A committed plan is the better signal, because its seams were RECORDED as
-  // the work was written rather than inferred from a finished diff (A7).
-  if (input.phases && input.phases.length > 0) {
-    const proposal: StackProposal = proposeStackFromPlan(input.phases);
-    if (proposal.stackable) {
-      return {
-        kind: 'stack',
-        layers: proposal.layers.map((l) => ({ phaseId: l.phaseId, title: l.title, position: l.position })),
-        rationale: proposal.rationale,
-      };
-    }
-    if (input.mode === 'always') {
-      // Even forced, an unstackable plan cannot become a stack: fan-out and
-      // fan-in have no linear order, so inventing one would block layers for a
-      // reason no reviewer could act on.
-      return { kind: 'single', reason: proposal.reason };
-    }
-    return { kind: 'single', reason: proposal.reason };
-  }
-
-  // Unplanned work: fall back to inferring seams from the diff.
-  if (typeof input.totalChangedLines === 'number' && input.groups) {
-    const advice: StackAdvice = adviseStacking({
-      totalChangedLines: input.totalChangedLines,
-      groups: input.groups,
-    });
-    if (advice.shouldStack) {
-      return {
-        kind: 'stack',
-        layers: advice.suggestedLayers.map((l, i) => ({
-          phaseId: l.label, title: l.label, position: i + 1,
-        })),
-        rationale: advice.reason,
-      };
-    }
-    return { kind: 'single', reason: advice.reason };
+  if (input.mode === 'always') {
+    return {
+      kind: 'stack',
+      reason:
+        'Stacking is set to `always`, so this is submitted through `gh stack` — it publishes the ' +
+        'stack this branch is part of rather than opening a pull request beside it.',
+    };
   }
 
   return {
     kind: 'single',
-    reason: 'Nothing indicated this change is separable, so it opens as one pull request.',
+    reason:
+      'Stacking is `auto`, and BrainRouter does not decide on its own that a change should become a ' +
+      'stack. Create one with `gh stack` and set `cli.stackingMode` to `always` to publish through it.',
   };
-}
-
-/**
- * The line shown when a route is chosen.
- *
- * Says WHY, both ways. A person who expected a stack and got one pull request
- * needs the reason more than the person who got what they expected — and a
- * silent route is how "why didn't it stack?" becomes a support question.
- */
-export function describeRoute(route: PrRoute): string {
-  if (route.kind === 'single') return `Opening one pull request — ${route.reason}`;
-  return `Opening a ${route.layers.length}-layer stack — ${route.rationale}`;
 }
 
 /** Normalise a configured value; anything unrecognised falls back to `auto`. */
@@ -145,14 +107,6 @@ export interface ChangeRequestArgs {
 
 /**
  * The exact `gh` argv for a routed change request.
- *
- * H2's remaining half. The ROUTE was already decided once by
- * `routePullRequest`, but each call site still assembled its own command — and
- * the argv is precisely what drifts. `gh stack link` shipped and survived a
- * ten-code exit contract, a latching runner and fourteen tests, because an
- * unknown subcommand exits 1 exactly like a real command that failed. Nothing
- * downstream can tell you that you invented a verb; only building the argv in
- * one place can.
  *
  * Returns argv, not a spawned process: the surfaces genuinely differ in how
  * they run commands (an Electron helper, a CLI runner, a worktree-scoped

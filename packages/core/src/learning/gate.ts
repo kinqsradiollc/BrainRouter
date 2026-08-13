@@ -58,7 +58,27 @@ export type GateRule =
   | 'transient'
   | 'one-off'
   | 'untrusted-only'
-  | 'non-executable';
+  | 'non-executable'
+  | 'no-execution-port';
+
+/**
+ * What the HOST asking for this verdict can actually execute.
+ *
+ * D3's claim is that a learned procedure RUNS, so whether it may be admitted
+ * depends on where it would live. Hosted chat answers with a model and nothing
+ * else: it has no learned-skill activation port, so a procedure there could
+ * only be stored as prose that says it runs. That refusal gets its own rule
+ * rather than being folded into `non-executable`, because "this candidate has
+ * no body" and "this host has no way to run any body" are different facts, and
+ * only one of them is fixed by writing a better candidate.
+ *
+ * Omitted means the host can run one — that is local, CLI and Desktop, and
+ * making the capable case the default keeps the refusal an explicit opt-in that
+ * a reader can grep for.
+ */
+export interface LearningHostCapabilities {
+  readonly canRunLearnedProcedures?: boolean;
+}
 
 export type GateVerdict =
   | {
@@ -153,7 +173,10 @@ function matchesAny(text: string, patterns: readonly RegExp[]): boolean {
  * judgement calls, so a malformed candidate is reported as malformed rather
  * than as whichever richer rule happened to fire on its empty fields.
  */
-export function reviewLearningCandidate(candidate: LearningCandidate): GateVerdict {
+export function reviewLearningCandidate(
+  candidate: LearningCandidate,
+  host?: LearningHostCapabilities,
+): GateVerdict {
   const statement = candidate.statement.trim();
   const falsifier = candidate.falsifier.trim();
   const expectation = candidate.expectation.trim();
@@ -181,15 +204,13 @@ export function reviewLearningCandidate(candidate: LearningCandidate): GateVerdi
   }
 
   // D3 is an execution claim, not a prose label. Persisting an executable form
-  // without an executable body creates a lesson that says it runs but never
-  // can. Delegation remains closed until a dedicated runtime-owned child port
-  // can prove and re-apply a narrower child authority; ordinary tool
-  // corroboration is not delegation authority.
-  if (candidate.form === 'delegation') {
+  // without an executable body — or on a host with nothing to execute it with —
+  // creates a lesson that says it runs but never can.
+  if (candidate.form === 'procedure' && host?.canRunLearnedProcedures === false) {
     return {
       admitted: false,
-      rule: 'non-executable',
-      reason: 'delegation learning is unavailable until a constrained runtime delegation port can execute it',
+      rule: 'no-execution-port',
+      reason: 'this host has no learned-skill activation port, so a procedure could only be kept as prose claiming to run',
     };
   }
   if (candidate.form === 'procedure') {

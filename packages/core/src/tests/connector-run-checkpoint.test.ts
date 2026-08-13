@@ -7,8 +7,8 @@ import {
   runConnectorCheckpointCore,
 } from '../connectors/runtime/runCheckpoint.js';
 import { createConnector } from '../connectors/store/connectorStore.js';
-import { refreshLocalPlannerFromConnectorIssues } from '../planner/connectorIssueAdapter.js';
-import { readPlanner } from '../planner/plannerStore.js';
+import { createConnectorIssueSourceAdapter } from '../planner/connectorIssueAdapter.js';
+import { readPlanner, writePlanner } from '../planner/plannerStore.js';
 import type { GithubConnectorClient } from '../connectors/sources/githubConnector.js';
 import type { McpConnectorClient } from '../connectors/sources/mcpConnector.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
@@ -240,14 +240,23 @@ test('a successful connector ingestion invokes the scoped Planner sink and updat
       });
       const result = await runConnectorCheckpointCore(workspace, created.id, {
         githubClient: () => fakeGithubClient,
+        // The sink is supplied by the HOST — the server's scoped projection in
+        // production. `refreshLocalPlannerFromConnectorIssues` used to stand in
+        // for it here and was retired 2026-08-12 as a core export nothing
+        // called; this test's subject was never that function, it is that
+        // `runConnectorCheckpointCore` invokes the sink it was given and counts
+        // what came back.
         projectPlannerIssues: async ({ connector: scopedConnector, documents }) => {
-          const projected = await refreshLocalPlannerFromConnectorIssues('user-1', {
+          const projected = await createConnectorIssueSourceAdapter({
             connectorId: scopedConnector.id,
             source: scopedConnector.source,
             sourceLabel: scopedConnector.name,
             documents,
-          });
-          return projected.created + projected.updated;
+          }).list();
+          const state = readPlanner('user-1');
+          for (const item of projected) state.items[item.id] = item;
+          if (projected.length > 0) writePlanner('user-1', state);
+          return projected.length;
         },
       });
 

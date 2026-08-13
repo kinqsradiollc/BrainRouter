@@ -315,9 +315,9 @@ function Overview() {
     <div className={`settings-page ${styles.page} ${styles.enter}`}>
       <section className={styles.homeHero} aria-labelledby="overview-title">
         <div className={styles.homeHeroCopy}>
-          <span className={styles.eyebrow}><i /> Agent operations command center</span>
+          <span className={styles.eyebrow}><i /> One workspace, one thread</span>
           <h1 id="overview-title">{greeting}, {firstNameOf(user?.displayName, user?.email)}.</h1>
-          <p>Route the next task through the workbench, connected systems, durable knowledge, teams, automation, and verification from one organization-scoped home.</p>
+          <p>Start from whatever needs to move — a meeting, the board, a task for an agent, a review — and the workspace keeps the thread between them.</p>
           <p className={styles.nutshell}>{nutshell}</p>
           <div className={styles.headerActions}>
             <Link href="/chat"><PremiumButton variant="primary">Start a new task</PremiumButton></Link>
@@ -355,7 +355,7 @@ function Overview() {
       </section>
 
       <section className={styles.loopRail} aria-label="BrainRouter operating loop">
-        <span className={styles.loopLabel}>One continuous task</span>
+        <span className={styles.loopLabel}>One workspace, one thread</span>
         <div>
           {PRODUCT_LOOP.map((step) => (
             <span key={step.label} data-tone={step.tone}><i />{step.label}<small>{step.detail}</small></span>

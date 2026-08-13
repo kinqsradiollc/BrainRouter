@@ -9,7 +9,7 @@
  * would rather run it in their own shell must be able to read it first.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import type { ProvisionAction } from '@kinqs/brainrouter-core/tooling';
+import { installPreview, type ProvisionAction } from '@kinqs/brainrouter-core/tooling';
 import { Button } from './primitives/Button.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 
@@ -88,7 +88,14 @@ export function ToolingNoticeBody(p: ToolingNoticeBodyProps): React.ReactElement
       <div className="tool-notice-actions">
         <Button
           variant="default"
-          onClick={() => setShowCommand(showCommand ? null : first.installCommand)}
+          // `installPreview`, not the bare command. It is core's wording for
+          // this exact moment — what runs, what it installs, and that you may
+          // run it yourself — and it had no caller until 2026-08-12 while this
+          // button showed the command with none of that around it. I1's own
+          // sentence is that a one-click install whose command is hidden is
+          // asking for trust it has not earned; a command with no explanation
+          // is most of the way back to hidden.
+          onClick={() => setShowCommand(showCommand ? null : installPreview(first))}
         >
           {showCommand ? 'Hide command' : 'Show command'}
         </Button>

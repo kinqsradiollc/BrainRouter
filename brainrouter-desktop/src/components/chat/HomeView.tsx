@@ -57,7 +57,11 @@ export function HomeView(props: {
         <span className="home-context-label">Open task context</span>
         <button type="button" className="tone-files" onClick={() => props.onOpenView('files')}><Icon name="folder" size={13} /><span><strong>Project files</strong><small>Browse the workspace</small></span><b>→</b></button>
         <button type="button" className="tone-knowledge" onClick={() => props.onOpenView('memory')}><Icon name="pin" size={13} /><span><strong>Saved knowledge</strong><small>Find useful context</small></span><b>→</b></button>
-        <button type="button" className="tone-review" onClick={() => props.onOpenView('review')}><Icon name="review" size={13} /><span><strong>Review</strong><small>Check work before it ships</small></span><b>→</b></button>
+        {/* ADR-028 G5 — one destination, named once. This said "Review" and the
+            view links below said "Checks"; both opened the same consolidated
+            panel, which is the fragmentation G5 removed reappearing as two
+            labels for one place. */}
+        <button type="button" className="tone-review" onClick={() => props.onOpenView('stack')}><Icon name="review" size={13} /><span><strong>Pull request</strong><small>Checks and review findings before it ships</small></span><b>→</b></button>
       </div>
 
       <div className="home-lower-grid">
@@ -78,7 +82,7 @@ export function HomeView(props: {
             <button type="button" className="tone-plan" onClick={() => props.onOpenView('plan')}><Icon name="plan" size={13} />Plan</button>
             <button type="button" className="tone-tasks" onClick={() => props.onOpenView('tasks')}><Icon name="tasks" size={13} />Tasks</button>
             <button type="button" className="tone-automation" onClick={() => props.onOpenView('workflows')}><Icon name="bolt" size={13} />Workflows</button>
-            <button type="button" className="tone-review" onClick={() => props.onOpenView('ci')}><Icon name="review" size={13} />Checks</button>
+            <button type="button" className="tone-review" onClick={() => props.onOpenView('comprehension')}><Icon name="brain" size={13} />Understand</button>
           </div>
           <div className="home-signal-row">
             <span><b>{props.stats?.turns ?? 0}</b> turns</span>

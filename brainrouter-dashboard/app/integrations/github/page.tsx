@@ -99,7 +99,7 @@ function GithubInner() {
 
   return (
     <div className="settings-page">
-      <PageHeader title="GitHub" description="Manage access to private repositories through the BrainRouter GitHub App, then link repos to your memory." />
+      <PageHeader title="GitHub" description="Manage access to private repositories through the BrainRouter GitHub App, then link the repos this workspace should know about." />
       <div className="settings-hint" style={{ marginTop: "calc(-1 * var(--spacing-8))" }}>
         <Link href="/integrations" className="settings-link">← All integrations</Link>
       </div>
@@ -139,7 +139,7 @@ function GithubInner() {
       {/* Repositories */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
         <div className="settings-cardhead">
-          <div><h3>Repositories</h3><div className="settings-hint">Repositories linked to your memory system.</div></div>
+          <div><h3>Repositories</h3><div className="settings-hint">Repositories linked to this workspace.</div></div>
           <PremiumButton size="small" variant="ghost" disabled={!status?.installed} onClick={() => { setAdding((v) => !v); setSearch(""); }}>
             {adding ? "Close" : "+ Add repository"}
           </PremiumButton>

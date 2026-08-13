@@ -125,13 +125,12 @@ export function describeSkew(skewMs: number): string | null {
   );
 }
 
-/** Compact wire form: `physical.logical.device`, sortable as a string per part. */
-export function formatHlc(h: Hlc): string {
-  return `${h.physical}.${h.logical}.${h.deviceId}`;
-}
-
-export function parseHlc(text: string): Hlc | null {
-  const parts = /^(\d+)\.(\d+)\.(.+)$/.exec(text ?? '');
-  if (!parts) return null;
-  return { physical: Number(parts[1]), logical: Number(parts[2]), deviceId: parts[3]! };
-}
+/*
+ * A `formatHlc`/`parseHlc` pair encoded a stamp as `physical.logical.device`
+ * and was **retired 2026-08-12**: no caller, on either side of the wire. Every
+ * stamp that crosses the boundary crosses as an OBJECT, validated by
+ * `planner/wireContract.ts:isPlannerWireHlc` and stored column-per-field by
+ * migration 051 — so the string form was a second encoding of the same value
+ * with nobody to disagree with yet. A `deviceId` containing a dot would have
+ * round-tripped wrong the first time anyone used it.
+ */

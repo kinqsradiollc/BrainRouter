@@ -65,6 +65,14 @@
 /* §6 — what is missing from what just started playing. One unreadable segment
    no longer refuses the whole recording, so the player has to say it is short. */
 .mv-recovery-missing{display:block;margin:0 0 7px;color:color-mix(in srgb,var(--err) 60%,var(--text));font-size:9.5px;line-height:1.45}
+/* ADR-035 D6 — the retention window, beside the recordings it governs. Quiet
+   rather than alarming: it is a standing policy, not an event, so it does not
+   wear the accent border the recovery offer does. */
+.mv-retention{display:flex;flex-direction:column;gap:4px;margin-bottom:11px;padding:9px 11px;border:1px solid var(--border);border-radius:9px}
+.mv-retention-set{display:flex;align-items:center;gap:8px;font-size:11px}
+.mv-retention-set select{padding:3px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11px}
+.mv-retention p{margin:0;color:var(--text-faint);font-size:10px;line-height:1.45}
+.mv-retention small{color:var(--text-faint);font-size:9.5px;line-height:1.45}
 /* ADR-035 A1 — the recording follows the user out of the compose form. Rendered
    above the tab switch, so it is still there on Track and Teams. */
 .mv-recbar{display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 15px;border-bottom:1px solid color-mix(in srgb,var(--brand) 38%,var(--border));background:var(--brand-soft);color:color-mix(in srgb,var(--brand) 70%,var(--text));font-size:11px}

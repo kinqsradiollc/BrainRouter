@@ -7,12 +7,13 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, StackPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, PeersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  // `StackPanel` is deliberately absent: ADR-028 G5 folded it into the `stack`
+  // case below, which renders checks and findings as sections of one answer.
+  // `PeersPanel` arrives with ADR-034.
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, PeersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
-import { partitionBranches } from '../../lib/stack/stackPanelView.js';
-import type { StackLayerView, StackAvailability } from '../../lib/stack/stackPanelView.js';
 import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 import { setEntry } from '../../lib/review/reviewWorkspace.js';
 import type { PlanItem, PlanView, FleetRow, TaskViewState, ChatRow } from '../../types.js';
@@ -45,9 +46,6 @@ type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 export interface RenderPanelBodyCtx {
   /** ADR-028 B2 — the session the Artifacts panel opens scoped to. */
   viewKey?: string | null;
-  /** ADR-028 A8 — the stack on this branch, and whether gh stack is usable. */
-  stackLayers?: StackLayerView[];
-  stackAvailability?: StackAvailability;
   /** Session key → title, for artifact scope chips and provenance labels. */
   sessionTitles?: Record<string, string | undefined>;
   q: Query;
@@ -152,7 +150,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     reviewMyUnderstanding, review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
-    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles, stackLayers, stackAvailability,
+    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles,
   } = ctx;
 
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
@@ -192,14 +190,13 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
             }} />
         </Suspense>
       );
-      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} /></Suspense>;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}
           onPick={(p) => { setDiffTarget(null); q('q-diff', 'file-diff', { path: p }); }}
           onBack={() => { setDiffTarget(null); setDiffView(null); }} onOpenFile={openFile}
           onGit={runGit} onGitBypass={(kind, msg) => runGit(kind, msg, { bypass: true })} gitBusy={gitBusy}
-          reviewGate={reviewGate} onReview={() => ensurePanel('review')}
+          reviewGate={reviewGate} onReview={() => ensurePanel('stack')}
           findingsByFile={reviewFindingsByFile} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
@@ -298,38 +295,6 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onOpen={(path) => openWorktree(path)}
         onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
-      case 'review': {
-        const refresh = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
-        const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
-        return <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
-          onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
-          onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
-          onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
-          onAskFix={(f) => {
-            // T3 — launch a scoped fix agent for THIS finding (not just a draft);
-            // it edits the file, then the review re-runs. Falls back to a draft if
-            // the finding has no id.
-            if (f.id) { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setToast('Fixing this finding — the agent is editing the file…'); q('q-review-fix', 'review-fix-finding', { id: f.id }); }
-            else { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }
-          }}
-          onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
-          onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }}
-          onTriage={(f, status) => { if (f.id) { q('q-review-triage', 'review-set-finding-status', { id: f.id, status }); refresh(); } }}
-          onAnnotate={(f) => {
-            // §9 — capture a review finding as a durable annotation: a review-finding
-            // record referencing the finding by id, anchored to its file/lines, with
-            // the finding's severity. Refreshes the annotation slice afterwards.
-            const sev = (['info', 'low', 'medium', 'high'] as const).includes(f.severity as never) ? f.severity : undefined;
-            q('q-annot-create', 'annotation-create', {
-              type: 'review-finding', targetId: f.id, body: f.summary, severity: sev,
-              anchor: { filePath: f.file, startLine: f.line, endLine: f.endLine },
-            });
-            setTimeout(() => q('q-annot', 'annotation-list'), 150);
-            setToast('Finding saved as an annotation — see the Annotations view.');
-          }}
-          onOpenFile={(f) => openFile(f.file)}
-          onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
-      }
       case 'atlas':
         return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading Atlas…</div>}><AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
           onLoad={() => q('q-atlas', 'atlas-graph')}
@@ -382,41 +347,63 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
       case 'comprehension': return <ComprehensionContainer onStart={reviewMyUnderstanding} />;
       case 'stack': {
         // ADR-028 G5 — one panel, one question: can this land, and if not what
-        // is stopping it. The chain, the checks and the review findings are
-        // sections of the same answer rather than three tabs to assemble it
-        // from. `diff` stays separate: reading a change and deciding to land it
-        // are different activities.
+        // is stopping it. Checks and review findings are sections of the same
+        // answer rather than two tabs to assemble it from. `diff` stays
+        // separate: reading a change and deciding to land it are different
+        // activities.
 
-        // ADR-028 A8 — read-only first. The panel decides nothing; every
-        // judgement comes from stackPanelView, and the host runs the commands.
+        // ADR-028 A8 — the stack CHAIN is not shown here, and that is the
+        // truthful state rather than a gap. The chain view read `stackLayers`
+        // and `stackAvailability` props no caller passed, and its View / Sync /
+        // Merge buttons dispatched host actions that were never registered. It
+        // is retired with the rest of the stack authoring and mutation surface:
+        // BrainRouter does not create, sync or merge stacks, so a panel listing
+        // layers with buttons that cannot act on them was claiming a state it
+        // had not established — this ADR's own defect, inside the surface
+        // written to fix it.
+        const refreshReview = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
+        const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
         return <div className="scroll pr-panel">
-          <StackPanel
-          layers={stackLayers ?? []}
-          availability={stackAvailability ?? { capable: false, halted: false }}
-          onView={() => q('q-stack', 'stack-read')}
-          onSync={(rewrites) => {
-            // Branch names are chosen by whoever pushed them. One shaped like
-            // `--upload-pack=…` is read by git as an option, not a ref, so it
-            // is refused before it reaches the host rather than after.
-            const { safe, refused } = partitionBranches(rewrites);
-            if (refused.length > 0) {
-              setToast(`Refused ${refused.length} branch name(s) that could be read as command options.`);
-              return;
-            }
-            q('q-stack-sync', 'stack-sync', { branches: safe.map((l) => l.branch) });
-            setToast('Syncing the stack…');
-          }}
-          onMerge={(target) => { q('q-stack-merge', 'stack-merge', { number: target.number }); setToast('Merging — a stack merge can take a minute.'); }}
-          onOpenPr={(number) => openUrl(`https://github.com/pulls/${number}`)}
-          />
-          {/* Checks and review findings, in the same scroll. Previously two
-              other tabs, which is why `layerStatus` could not name a failing
-              check as the blocker. */}
           <div className="pr-section">
             <div className="pr-section-head">Checks</div>
             <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}>
               <CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} />
             </Suspense>
+          </div>
+          {/* The review findings, inline — the second half of "can this land".
+              This section is what makes G5 true: for a while the panel carried
+              Checks alone while `review` was aliased onto this id, so the one
+              consolidated panel answered half the question it consolidated. */}
+          <div className="pr-section">
+            <div className="pr-section-head">Review</div>
+            <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
+              onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
+              onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
+              onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refreshReview(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
+              onAskFix={(f) => {
+                // T3 — launch a scoped fix agent for THIS finding (not just a draft);
+                // it edits the file, then the review re-runs. Falls back to a draft if
+                // the finding has no id.
+                if (f.id) { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setToast('Fixing this finding — the agent is editing the file…'); q('q-review-fix', 'review-fix-finding', { id: f.id }); }
+                else { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }
+              }}
+              onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refreshReview(); } }}
+              onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refreshReview(); } }}
+              onTriage={(f, status) => { if (f.id) { q('q-review-triage', 'review-set-finding-status', { id: f.id, status }); refreshReview(); } }}
+              onAnnotate={(f) => {
+                // §9 — capture a review finding as a durable annotation: a review-finding
+                // record referencing the finding by id, anchored to its file/lines, with
+                // the finding's severity. Refreshes the annotation slice afterwards.
+                const sev = (['info', 'low', 'medium', 'high'] as const).includes(f.severity as never) ? f.severity : undefined;
+                q('q-annot-create', 'annotation-create', {
+                  type: 'review-finding', targetId: f.id, body: f.summary, severity: sev,
+                  anchor: { filePath: f.file, startLine: f.line, endLine: f.endLine },
+                });
+                setTimeout(() => q('q-annot', 'annotation-list'), 150);
+                setToast('Finding saved as an annotation — see the Annotations view.');
+              }}
+              onOpenFile={(f) => openFile(f.file)}
+              onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />
           </div>
         </div>;
       }

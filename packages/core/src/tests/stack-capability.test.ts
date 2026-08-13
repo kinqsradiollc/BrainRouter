@@ -1,72 +1,79 @@
 /**
  * ADR-028 A1 — capability is detected, not assumed.
  *
- * The property that matters: when the extension is missing the actions are
- * HIDDEN, and the reason names the specific missing piece. "Stacks are not
- * available" tells a human nothing; "gh is 2.71, stacks need 2.90" tells them
- * exactly what to run, and that is the difference between a feature that looks
- * broken and one that looks like it needs a command.
+ * The property that matters: when a piece is missing the create path opens an
+ * ordinary pull request, and the reason names the specific missing piece.
+ * "Stacks are not available" tells a human nothing; "gh is 2.71, stacks need
+ * 2.90" tells them exactly what to run, and that is the difference between a
+ * feature that looks broken and one that looks like it needs a command.
+ *
+ * There is ONE detector — `probeStackCapability` — and these tests drive it
+ * through its injected runner. The cached async detector that used to sit
+ * beside it was retired: it had no caller outside this file.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  parseVersion,
-  meetsMinimum,
-  detectStackCapability,
-  stackCapabilityFor,
-  resetStackCapabilityCache,
-  MIN_GH,
-  type CapabilityProbe,
-} from '../review/stackCapability.js';
+import { parseVersion, meetsMinimum, MIN_GH, MIN_GIT } from '../review/stackCapability.js';
+import { probeStackCapability, type ProbeRunner } from '../review/stackProbe.js';
 
-function probe(over: Partial<CapabilityProbe> = {}): CapabilityProbe {
-  return {
-    ghVersion: async () => 'gh version 2.91.0 (2026-07-01)',
-    gitVersion: async () => 'git version 2.39.5',
-    hasStackExtension: async () => true,
+/** A machine with everything, overridable one command at a time. */
+function runner(over: Record<string, string | null> = {}): ProbeRunner {
+  const answers: Record<string, string | null> = {
+    'gh --version': 'gh version 2.91.0 (2026-07-01)\nhttps://github.com/cli/cli/releases',
+    'git --version': 'git version 2.39.5 (Apple Git-154)',
+    'gh extension list': 'gh stack\tgithub/gh-stack\tv0.3.0',
     ...over,
   };
+  return (cmd, args) => answers[[cmd, ...args].join(' ')] ?? null;
 }
 
-test('a fully-equipped machine is available', async () => {
-  const cap = await detectStackCapability(probe());
+test('a fully-equipped machine is available', () => {
+  const cap = probeStackCapability('/w', runner());
   assert.equal(cap.available, true);
   assert.equal(cap.extensionInstalled, true);
   assert.equal(cap.reason, undefined);
+  // The release-notes URL `gh --version` prints underneath must not end up in
+  // the reported version.
+  assert.equal(cap.ghVersion, 'gh version 2.91.0 (2026-07-01)');
 });
 
-test('a missing gh binary is reported as such, not as a generic failure', async () => {
-  const cap = await detectStackCapability(probe({ ghVersion: async () => null }));
+test('a missing gh binary is reported as such, not as a generic failure', () => {
+  const cap = probeStackCapability('/w', runner({ 'gh --version': null }));
   assert.equal(cap.available, false);
   assert.match(cap.reason!, /GitHub CLI \(`gh`\) is not installed/);
   assert.equal(cap.remediable, true);
 });
 
-test('too-old gh names the version found AND the version needed', async () => {
+test('too-old gh names the version found AND the version needed', () => {
   // Without both numbers the human cannot tell whether they are close.
-  const cap = await detectStackCapability(probe({
-    ghVersion: async () => 'gh version 2.71.0 (2025-01-01)',
-  }));
+  const cap = probeStackCapability('/w', runner({ 'gh --version': 'gh version 2.71.0 (2025-01-01)' }));
   assert.equal(cap.available, false);
   assert.match(cap.reason!, /2\.71/);
   assert.match(cap.reason!, new RegExp(`${MIN_GH.major}\\.${MIN_GH.minor}`));
 });
 
-test('a missing extension names the exact install command', async () => {
-  const cap = await detectStackCapability(probe({ hasStackExtension: async () => false }));
+test('too-old git is unavailable, even with a new gh and the extension present', () => {
+  // A1 requires git 2.20+ as well as gh 2.90+. `gh stack` drives git's own
+  // rebase machinery, so an old git fails PARTWAY THROUGH a restack rather than
+  // up front — which is the failure that leaves a half-rebased tree behind.
+  const cap = probeStackCapability('/w', runner({ 'git --version': 'git version 2.17.1' }));
+  assert.equal(cap.available, false);
+  assert.match(cap.reason!, /2\.17/);
+  assert.match(cap.reason!, new RegExp(`git ${MIN_GIT.major}\\.${MIN_GIT.minor}`));
+  assert.equal(cap.remediable, true);
+});
+
+test('a git that cannot run at all says it was not found', () => {
+  const cap = probeStackCapability('/w', runner({ 'git --version': null }));
+  assert.equal(cap.available, false);
+  assert.match(cap.reason!, /was not found/);
+});
+
+test('a missing extension names the exact install command', () => {
+  const cap = probeStackCapability('/w', runner({ 'gh extension list': 'gh poi\towner/gh-poi\tv1' }));
   assert.equal(cap.available, false);
   assert.equal(cap.extensionInstalled, false);
   assert.match(cap.reason!, /gh extension install github\/gh-stack/);
-});
-
-test('a probe that throws is unavailable, never an unhandled rejection', async () => {
-  // A missing binary often surfaces as a spawn error rather than a null.
-  const boom = async (): Promise<never> => { throw new Error('ENOENT'); };
-  for (const key of ['ghVersion', 'gitVersion', 'hasStackExtension'] as const) {
-    const cap = await detectStackCapability(probe({ [key]: boom } as Partial<CapabilityProbe>));
-    assert.equal(cap.available, false, `${key} throwing must degrade, not propagate`);
-    assert.ok(cap.reason);
-  }
 });
 
 test('version comparison handles the major boundary', () => {
@@ -85,24 +92,4 @@ test('version parsing tolerates the shapes these tools actually print', () => {
   assert.deepEqual(parseVersion('2.90'), { major: 2, minor: 90 });
   assert.equal(parseVersion('no numbers here'), null);
   assert.equal(parseVersion(''), null);
-});
-
-test('detection is cached per workspace, and the cache is clearable', async () => {
-  // It shells out three times; doing that per turn would tax every session for
-  // an answer that changes when someone installs software.
-  resetStackCapabilityCache();
-  let calls = 0;
-  const counting = probe({ ghVersion: async () => { calls += 1; return 'gh version 2.91.0'; } });
-
-  await stackCapabilityFor('/w/a', counting);
-  await stackCapabilityFor('/w/a', counting);
-  assert.equal(calls, 1, 'second lookup for the same workspace must be cached');
-
-  await stackCapabilityFor('/w/b', counting);
-  assert.equal(calls, 2, 'a different workspace is probed separately');
-
-  resetStackCapabilityCache('/w/a');
-  await stackCapabilityFor('/w/a', counting);
-  assert.equal(calls, 3, 'clearing lets an install be picked up');
-  resetStackCapabilityCache();
 });

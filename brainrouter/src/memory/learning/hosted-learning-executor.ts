@@ -7,11 +7,13 @@ import {
   type LearnedItem,
   type LearnedTransition,
   type LearningCandidate,
+  type LearningHostCapabilities,
 } from "@kinqs/brainrouter-core/learning";
 import type { CognitiveRecord, LLMRunner } from "@kinqs/brainrouter-types";
 import type { LearnedLessonMetadata, RecordLessonOptions } from "../lessons/lessonOps.js";
 import { extractJsonValueOrThrow } from "../util/llm-json.js";
 import {
+  HOSTED_LEARNING_CHECKPOINT_REASON,
   hostedLearnedItemFromRecord,
   hostedLearnedItemId,
   hostedLearnedMetadata,
@@ -22,11 +24,22 @@ import {
 const ITEM_ID = /^lrn_[a-f0-9]{18}$/;
 const MIN_TRAJECTORY_CHARS = 400;
 
+/**
+ * ADR-032 D3, WITHDRAWN for hosted chat.
+ *
+ * This surface answers with a model and nothing else — no tool loop, no skill
+ * loader, no activation — so a learned procedure has nowhere to run. Handing
+ * that fact to the gate makes the refusal a stated rule with its own name and
+ * its own counter, instead of a quiet re-labelling of a step sequence as a
+ * "lesson" that reads like it still runs.
+ */
+const HOSTED_LEARNING_HOST: LearningHostCapabilities = { canRunLearnedProcedures: false };
+
 const HostedCheckpointJob = z.object({
   userId: z.string().trim().min(1).max(200),
   orgId: z.string().trim().min(1).max(200),
   sessionKey: z.string().trim().min(1).max(200),
-  reason: z.literal("turn-end"),
+  reason: z.literal(HOSTED_LEARNING_CHECKPOINT_REASON),
   trajectory: z.string().trim().min(1).max(24_000),
   sawUntrustedContent: z.boolean(),
   corroboratedByTrustedAction: z.literal(false),
@@ -121,9 +134,11 @@ function newCandidateItem(
     tenant,
     tier,
     origin: "model-inferred",
-    // Hosted chat has no trusted procedure/tool execution port. The executor
-    // rejects those forms below rather than persisting prose that pretends to run.
-    form: "lesson",
+    // Whatever the gate admitted under `HOSTED_LEARNING_HOST` — which is a
+    // lesson, because that host cannot run anything else. Carrying the admitted
+    // form rather than a hardcoded one keeps the refusal in the single place
+    // that states it, so this record can never disagree with the verdict above.
+    form: candidate.form,
     statement: candidate.statement,
     falsifier: candidate.falsifier,
     outcome: {
@@ -207,6 +222,10 @@ export async function runHostedLearningCheckpoint(
   skippedReason?: string;
   admitted: number;
   rejected: number;
+  /** How many of `rejected` were refused purely because hosted chat cannot run
+   * a learned procedure. Reported separately so the durable job output shows a
+   * withdrawn capability being exercised rather than ordinary gate noise. */
+  refusedNoExecutionPort: number;
   outcomes: number;
   transitions: number;
 }> {
@@ -234,7 +253,15 @@ export async function runHostedLearningCheckpoint(
   // indefinitely postpone other old or demoted rows in the persistent cursor.
   const transitions = await sweepHostedRetirement(context.store, input.userId, input.orgId, now);
   if (input.trajectory.length < MIN_TRAJECTORY_CHARS) {
-    return { ran: false, skippedReason: "trajectory too short", admitted: 0, rejected: 0, outcomes: 0, transitions };
+    return {
+      ran: false,
+      skippedReason: "trajectory too short",
+      admitted: 0,
+      rejected: 0,
+      refusedNoExecutionPort: 0,
+      outcomes: 0,
+      transitions,
+    };
   }
   const prompt = buildReflectionPrompt({ trajectory: input.trajectory, inContext });
   const runner = await context.engine.modelRunner("learning-reflection", input.orgId);
@@ -267,12 +294,12 @@ export async function runHostedLearningCheckpoint(
   );
   let admitted = 0;
   let rejected = 0;
+  let refusedNoExecutionPort = 0;
   for (const candidate of reflected.candidates) {
-    const verdict = reviewLearningCandidate(candidate);
-    // D3 is "runs", never "stored as prose". Hosted chat cannot execute a
-    // learned procedure/delegation, so keep it out until that port exists.
-    if (!verdict.admitted || candidate.form !== "lesson") {
+    const verdict = reviewLearningCandidate(candidate, HOSTED_LEARNING_HOST);
+    if (!verdict.admitted) {
       rejected += 1;
+      if (verdict.rule === "no-execution-port") refusedNoExecutionPort += 1;
       continue;
     }
     const proposed = newCandidateItem(candidate, verdict.tier, verdict.reasoning, input, now);
@@ -303,6 +330,7 @@ export async function runHostedLearningCheckpoint(
     ran: true,
     admitted,
     rejected,
+    refusedNoExecutionPort,
     outcomes: changedOutcomes.length,
     transitions,
   };

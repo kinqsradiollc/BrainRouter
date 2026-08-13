@@ -37,6 +37,13 @@ import {
   type RequiredSkillPreflightResult,
 } from './requiredSkillPreflight.js';
 import { applyLearnedContext } from './learningPhase.js';
+import {
+  buildPlannerContext,
+  sourceFreshnessFromItems,
+  PLANNER_CONTEXT_TAG,
+} from '../../planner/agentContext.js';
+import { todayView } from '../../planner/plannerService.js';
+import { listBlocks } from '../../planner/plannerStore.js';
 import { callOpenAI } from '../transport/llmTransport.js';
 
 export interface PrepareTurnContextInput {
@@ -173,6 +180,9 @@ export async function prepareTurnContextPhase(
   // ADR-032 D1 — the learned block, attached like every other anchor and
   // never merged into the base prompt.
   applyLearnedContext(agent);
+  // ADR-028 D6 — and the planner block, for the same reason: an agent holding
+  // planner TOOLS but no planner CONTEXT has to ask for what it could be told.
+  applyPlannerContext(agent);
   applyRequiredSkillAnchor(agent, input.requiredSkillActivation);
   applyRequiredSkillWorkflows(agent, input.requiredSkillPreflight);
   appendUserMessage(agent, prompt, input.images);
@@ -183,6 +193,50 @@ export async function prepareTurnContextPhase(
   appendCompletionFeedback(agent);
 
   return { prompt, fanOutHinted };
+}
+
+/**
+ * ADR-028 D6 — put today in front of the model, bounded and summarised.
+ *
+ * The planner is user-scoped, so no workspace is threaded — the same `undefined`
+ * the `planner_*` tool handlers pass, so the block and the tools cannot disagree
+ * about whose planner this is.
+ *
+ * Removed rather than left behind when there is nothing to say: a section that
+ * always appears trains the model to skip it, and a yesterday-shaped block after
+ * everything was completed would be a surface claiming a state that has ended.
+ *
+ * Sub-agents (`silent`) are excluded like the learned block: a bounded,
+ * single-purpose turn spends its context better on the task it was given than on
+ * its operator's day.
+ */
+function applyPlannerContext(agent: Agent): void {
+  if (agent.silent) return;
+  let block: string | null = null;
+  try {
+    const nowMs = Date.now();
+    const view = todayView(undefined, {
+      date: new Date(nowMs).toISOString().slice(0, 10),
+      nowMs,
+    });
+    block = buildPlannerContext({
+      todayItems: view.items,
+      // Every open block, not just today's: `buildPlannerContext` picks the next
+      // one itself, and the carried-over count is about the whole backlog.
+      blocks: listBlocks(undefined),
+      freshness: sourceFreshnessFromItems(view.items),
+      nowMs,
+    });
+  } catch {
+    // A missing, unreadable or corrupt planner cache must never be what fails a
+    // turn. No planner is the common case on a fresh install.
+    block = null;
+  }
+  if (!block) {
+    agent.removeTaggedSystemMessage(PLANNER_CONTEXT_TAG);
+    return;
+  }
+  agent.replaceTaggedSystemMessage(PLANNER_CONTEXT_TAG, block);
 }
 
 function applyRequiredSkillWorkflows(

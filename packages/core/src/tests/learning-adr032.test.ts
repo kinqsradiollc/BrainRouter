@@ -1464,13 +1464,32 @@ test('D2/D3: the gate rejects executable forms that cannot safely run', () => {
     assert.equal(verdict.admitted, false);
     assert.equal(verdict.admitted === false && verdict.rule, 'non-executable');
   }
+});
 
-  const delegation = reviewLearningCandidate(candidate({
-    form: 'delegation',
-    steps: ['Ask a child agent to inspect the migration'],
-  }));
-  assert.equal(delegation.admitted, false);
-  assert.equal(delegation.admitted === false && delegation.rule, 'non-executable');
+test('D3: a host with no activation port refuses the procedure it could not run', () => {
+  const runnable = candidate({
+    form: 'procedure',
+    steps: ['Stop the worker', 'Run the migration', 'Restart the worker'],
+  });
+
+  // The same candidate, judged twice. A host that can run one admits it; the
+  // hosted-chat host refuses it BY NAME rather than filing it as a lesson that
+  // reads as though it still runs.
+  const capable = reviewLearningCandidate(runnable);
+  assert.equal(capable.admitted, true);
+  assert.equal(capable.admitted === true && capable.tier, 'evidence');
+
+  const portless = reviewLearningCandidate(runnable, { canRunLearnedProcedures: false });
+  assert.equal(portless.admitted, false);
+  assert.equal(portless.admitted === false && portless.rule, 'no-execution-port');
+  assert.match(
+    portless.admitted === false ? portless.reason : '',
+    /no learned-skill activation port/,
+  );
+
+  // The refusal is about the FORM, not the host: a lesson still gets in there.
+  const lesson = reviewLearningCandidate(candidate(), { canRunLearnedProcedures: false });
+  assert.equal(lesson.admitted, true);
 });
 
 test('D3/D5: a checkpoint never persists a non-executable procedure', async () => {

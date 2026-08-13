@@ -48,7 +48,7 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <div className="app-notice" role="status">
-            <span>Plan, build, connect, remember, and verify from one workspace.</span>
+            <span>One workspace: plan the day, run the meeting, write the doc, ship the change — and keep the thread.</span>
             <Link href="/status">System status</Link>
           </div>
           <div className="content-scroll">{children}</div>

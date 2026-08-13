@@ -1,6 +1,37 @@
 # ADR-038 — A planner worth opening
 
 **Status:** ACCEPTED — 2026-08-11.
+
+**Implementation status (2026-08-12): COMPLETE, after a repair round that mattered more than the
+build.**
+
+D1's acid test passes: a new block type or an in-block keyboard shortcut is added ONCE and appears
+on both hosts. `packages/ui` exists — the dedicated package this ADR's open question 1 called "the
+obvious answer and the one with the most build-system cost" — the dashboard's notes page went from
+1,788 lines to 64, and `planner.module.css` from 67 to 10. Both hosts render the same surface.
+
+**But the first pass shared the RENDERING and not the PROJECTION, and it had already drifted.** A
+verification found, by running both hosts' logic over identical state:
+
+- the dashboard could not say sync was FAILING — it said "4 changes waiting to sync" no matter how
+  many operations were wedged, which is §6's own criterion failing on one host, with the only other
+  signal being a dot that is `aria-hidden`;
+- "Now · scheduled" contained zero items actually scheduled now, and the same surface filed those
+  items under "No time" on the Calendar tab;
+- "Last synced" printed a fresh timestamp after a cycle in which every write was rejected.
+
+All three are fixed, and the root cause with them: the boundary script let `packages/ui` reach Core
+only through the notes seam, so the planner's projection had **no legal shared home** and each host
+wrote its own. Core now exposes `planner/presentation`, and the merge rule that decides what
+survives a refresh — `PLANNER_OWNED_FIELDS`, which existed twice, five identical entries apart —
+is read from Core rather than copied.
+
+**D3 gained the control the day was missing.** `setDueDate` was declared on the shared contract,
+implemented by the desktop, and called by NO component, while `/planner due` worked from the
+terminal — so the CLI could move work the GUI could not, which is D5 inverted. `dueDate` drives
+`groupFor` and therefore orders the entire Today view. Both hosts now supply it; it is owned-only,
+and a mirrored issue says why rather than offering an edit the next refresh would undo.
+
 **Depends on:** ADR-029 (one workspace, many surfaces), ADR-026 (desktop native visual system),
 ADR-031 (the design skill and the capability it belongs to), ADR-028 (surfaces that tell the truth).
 
