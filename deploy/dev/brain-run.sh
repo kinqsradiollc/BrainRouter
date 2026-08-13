@@ -74,5 +74,53 @@ if [ ! -f packages/types/dist/index.js ] \
   printf '%s\n' "$runtime_source_hash" > "$runtime_hash_marker"
 fi
 
-# 5) Hand off to tsx watch — brainrouter/src edits reflect live, no rebuild.
-exec npm --prefix brainrouter run dev:http
+# 5) Background watcher: rebuild runtime packages when their source drifts.
+#    tsx watch only watches brainrouter/src; without this, a git pull that
+#    changes packages/*/src leaves the brain running against stale dist/ —
+#    the failure that caused the SESSION_MESSAGE_NOTIFICATION_CHANNEL crash.
+#    The watcher reuses the same fingerprint logic as step 3, but runs
+#    continuously. A /tmp marker avoids being clobbered by core's clean step.
+#    After a successful rebuild it touches a sentinel inside brainrouter/src/
+#    so tsx watch restarts the brain — but ONLY after the build is complete,
+#    never during core's clean step (which wipes dist mid-build).
+sentinel=brainrouter/src/.package-rebuild-trigger
+(
+  set +e
+  watcher_marker=/tmp/brain-runtime-source-hash
+  cp "$runtime_hash_marker" "$watcher_marker" 2>/dev/null || true
+  echo "[brain-run] Package source watcher started (poll: 2s)"
+  while true; do
+    sleep 2
+    current_hash=$(
+      {
+        find packages/types/src packages/agent-protocol/src packages/core/src -type f -print0
+        printf '%s\0' \
+          packages/types/package.json packages/types/tsconfig.json \
+          packages/agent-protocol/package.json packages/agent-protocol/tsconfig.json \
+          packages/core/package.json packages/core/tsconfig.json
+      } | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+    )
+    stored_hash=$(cat "$watcher_marker" 2>/dev/null || true)
+    if [ "$current_hash" != "$stored_hash" ]; then
+      echo "[brain-run] Source drift detected, rebuilding runtime packages..."
+      if npm run build -w @kinqs/brainrouter-types \
+        && npm run build -w @kinqs/brainrouter-agent-protocol \
+        && npm run build -w @kinqs/brainrouter-core; then
+        printf '%s\n' "$current_hash" > "$watcher_marker"
+        printf '%s\n' "$current_hash" > "$runtime_hash_marker" 2>/dev/null || true
+        touch "$sentinel"
+        echo "[brain-run] Runtime packages rebuilt. Sentinel touched to restart brain."
+      else
+        echo "[brain-run] Rebuild failed, will retry on next check."
+      fi
+    fi
+  done
+) &
+
+# 6) Hand off to tsx watch — brainrouter/src edits reflect live, no rebuild.
+#    The background watcher in step 5 rebuilds packages/*/src changes into
+#    dist/ and touches a sentinel in brainrouter/src/ to trigger a restart
+#    only after the build is complete.
+cd brainrouter && exec ../node_modules/.bin/tsx watch \
+  --include src/.package-rebuild-trigger \
+  src/index.ts -- --http --port 3747
