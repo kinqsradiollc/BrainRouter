@@ -32,7 +32,13 @@ We will instead make the architecture explicit:
 > shape. Graph nodes that need agency run the same bounded loop. CLI and Desktop render the same
 > execution map produced from actual runtime events.**
 
-For an ordinary turn, the policy chooses either:
+**Normal conversation is the primary entry path.** Every eligible top-level user-authored turn goes
+through the same Core topology policy in CLI and Desktop, whether or not a goal is active. Without
+a goal, the turn itself is the root execution. With a goal, an optional supervisor only links the
+same turn executions across continuations; goal presence alone does not enable routing or create a
+different selection path. Explicit inherited goal ceilings may only narrow authority.
+
+For a top-level conversational turn, the policy chooses either:
 
 1. **direct turn** — one primary bounded loop; or
 2. **profile plan** — a validated per-profile graph whose primary stages are enforced inside the
@@ -46,10 +52,11 @@ spawn children. A direct strategy is a valid graph choice; `custom` remains off/
 and profiles may constrain automatic selection until their own evaluation passes.
 
 The Desktop's existing Workflows panel becomes the broader **Orchestration** surface while retaining
-its stable panel ID. It gains **Runs | Design** views: Design edits definitions; Runs shows the real
-active or retained execution, including nodes, edges, loop iteration and budget, agent/role/skill,
-child transcript links, retries, approvals, guards, fallback, and terminal state. CLI gets the same
-projection as a compact timeline/tree and JSON — not a separate interpretation.
+its stable panel ID. It gains **Runs | Design** views: Design edits definitions; Runs shows normal
+turns as well as goal-linked and explicitly launched work, including nodes, edges, loop iteration
+and budget, agent/role/skill, child transcript links, retries, approvals, guards, fallback, and
+terminal state. CLI gets the same projection as a compact timeline/tree and JSON — not a separate
+interpretation.
 
 This ADR records the target. None of the gaps below is fixed merely because this file exists.
 
@@ -69,16 +76,16 @@ This ADR records the target. None of the gaps below is fixed merely because this
 This is a **hybrid hierarchy**, not an unfinished migration from loop to graph:
 
 ```text
-root request
+top-level conversational turn (goal optional)
   -> topology decision
      -> direct bounded loop
      OR profile stage graph
         -> primary bounded loop
         -> delegated bounded loop(s)
-     OR explicit durable phase plan
-        -> bounded loop node(s)
-     OR explicit saved workflow graph
-        -> deterministic node(s) + bounded loop node(s)
+
+explicit durable launch
+  -> phase plan or saved workflow graph
+     -> deterministic node(s) + bounded loop node(s)
 ```
 
 The one-turn-engine rule is deliberate and pinned by `execution-engine-retired.test.ts`. The deleted
@@ -98,6 +105,12 @@ the design, not a branch at dispatch.
 - The shared agent protocol carries tool, child, plan, and profile-stage events to Desktop. CLI
   receives equivalent Core callbacks directly, which is useful behavior but not yet one shared
   execution projection.
+
+Normal chat already reaches the right architectural boundary: CLI and Desktop both call
+`Agent.runTurn`, and each eligible root turn calls `resolveActiveTurnOrchestration` without requiring
+a goal. The missing work is not a goal bypass. Today that resolver sees only the current prompt,
+does not call the managed adaptive selector, has the profile-identity gaps below, and does not emit
+the canonical execution map required by Runs.
 
 So the answer to “are we already graph engineering?” is **yes at the orchestration layers, no as one
 coherent runtime contract**. The graph shapes do not yet share selection, safety, events, run
@@ -215,21 +228,30 @@ Core owns a single `ExecutionTopologyDecision` with four variants:
 
 | Topology | How an execution begins | Retention | May be selected implicitly? |
 |---|---|---|---|
-| `direct-turn` | Ordinary user turn or safe fallback | Bounded session execution store | Yes |
-| `profile-plan` | Validated strategy for the active workspace profile | Bounded session execution store | Yes, only in adaptive mode |
+| `direct-turn` | Top-level conversational turn or safe fallback | Bounded session execution store | Yes |
+| `profile-plan` | Validated strategy for the active workspace profile on a top-level conversational turn | Bounded session execution store | Yes, only in adaptive mode |
 | `phase-plan` | Explicit workflow launch | Durable workflow run plus protected resume payload | No |
 | `workflow-graph` | Explicit saved-graph launch | Durable workflow run plus protected definition/input snapshot | No |
 
-The topology belongs to **one execution**, not necessarily the entire lifetime of a user request.
-Executions form a tree:
+The topology belongs to **one execution**, not necessarily the entire lifetime of a conversation or
+goal. Normal conversation is the default root; a goal is an optional parent:
 
 ```text
-goal supervisor (when a goal is active)
-  -> turn execution: direct or profile plan
+normal conversation (no active goal)
+  -> turn execution (root): direct or profile plan
      -> explicitly authorized durable child execution, if requested
      -> delegated child turn executions
-  -> continuation edge -> next turn execution
+
+goal-linked conversation (optional)
+  -> goal supervisor
+     -> turn execution: direct or profile plan
+     -> continuation edge -> next turn execution: direct or profile plan
 ```
+
+Starting, continuing, or viewing a normal turn never requires creating or mutating a goal record.
+When a goal exists, its mere presence does not change the per-turn candidate set or selection
+result. It adds parent correlation and continuation decisions; explicit inherited goal ceilings may
+only remove candidates or reduce budgets, never grant eligibility or authority.
 
 A `/workflow`-style command may start a durable execution as the root. A turn may also start one as
 a child only when the request carries trusted explicit intent. It does not replace the running turn's
@@ -241,16 +263,38 @@ its selected definition, but the runtime cannot silently replace the topology mi
 Steering enters at the existing safe boundary and may influence later declared conditional edges; it
 does not rewrite the graph or authority envelope.
 
-An adaptive ordinary turn can choose **direct or a profile plan only**. Automatically discovering
-and launching a phase plan or saved graph is rejected: persistence, resumability, approvals, and
-side effects require explicit intent. The current next-action planner may recommend a workflow, but
-that recommendation is untrusted model output and cannot supply the required provenance.
+An adaptive top-level conversational turn can choose **direct or a profile plan only**.
+Automatically discovering and launching a phase plan or saved graph is rejected: persistence,
+resumability, approvals, and side effects require explicit intent. The current next-action planner
+may recommend a workflow, but that recommendation is untrusted model output and cannot supply the
+required provenance.
 
 A goal supervisor is not a fifth turn engine. It is a Core-owned parent execution that records each
 bounded turn and the content-free continue/stop/budget reason between them. CLI removes its mirrored
 decision and calls the same supervisor service as Desktop.
 
 ### D3 — Make topology selection bounded, explainable, and cheap to fail
+
+Core evaluates topology once at the start of every eligible top-level user-authored conversational
+turn. This is the normal `runTurn` path in both hosts, not a goal-continuation hook. Preplanned and
+nested child turns remain subject to the direct/assigned rules below so a graph cannot recursively
+manufacture more graphs.
+
+Selection reads a bounded `ConversationTaskEnvelope`, not only the latest sentence and not an
+unbounded transcript. The envelope contains:
+
+- the current user-authored message and explicit attachments/references;
+- the last unresolved user-authored task or user-confirmed plan context needed to interpret an
+  elliptical follow-up such as “now implement that”;
+- active workspace profile, admitted capabilities, and runtime ceilings; and
+- a bounded user-authored goal objective and goal identity/budgets only when a goal already exists,
+  with the objective treated like other user-confirmed task context and goal existence itself never
+  treated as an eligibility signal.
+
+Assistant prose, hidden reasoning, model-authored planner output, and arbitrary transcript history
+cannot become durable user intent. Carry-forward context is content- and size-bounded, expires when
+the task resolves or topic changes, and preserves its user/confirmed provenance. If no reliable
+task context exists, an otherwise contextless follow-up takes the direct fallback.
 
 Selection order is authoritative and shared by both hosts:
 
@@ -260,8 +304,9 @@ Selection order is authoritative and shared by both hosts:
    as an agent node. This prevents recursive graph explosion.
 4. `mode: off` selects direct.
 5. `mode: explicit` with no explicit strategy selects direct.
-6. `mode: adaptive` detects registered task signals, resolves the profile's reviewed plan, and
-   computes eligible strategies beneath every authority ceiling.
+6. `mode: adaptive` detects registered task signals from the bounded conversation task envelope,
+   resolves the profile's reviewed plan, and computes eligible strategies beneath every authority
+   ceiling.
 7. The managed selector receives only the direct fallback plus those eligible strategy/stage IDs.
    It may select identifiers, never invent a node, edge, role, skill, tool, budget, or authority.
 8. The deterministic resolver validates the selection again. Timeout, missing model, invalid output,
@@ -271,6 +316,19 @@ The model call is skipped when no non-direct strategy is eligible. Its timeout s
 Persisted explanation is content-free: selection source, matched signal IDs, candidate IDs, chosen
 ID, and fallback/diagnostic reason codes. A short model rationale may be displayed during the turn,
 but is not persisted because it can restate user content.
+
+Expected conversational behavior is deliberately unsurprising:
+
+| Conversation input | Expected topology |
+|---|---|
+| “What does this function do?” | Direct bounded turn |
+| “Fix this bug, test it, and review the result.” | Eligible Engineering profile plan |
+| “Compare these sources and citation-check the report.” | Eligible Research profile plan |
+| “Now implement that plan” after the user confirmed an unresolved implementation plan | Resolve signals from the bounded task envelope; select an eligible profile plan |
+| A contextless “yes” with no unresolved user task | Direct fallback |
+
+These are contract examples, not magic prompt strings. Profile definitions own reviewed signal and
+strategy mappings, and the deterministic resolver remains the authority.
 
 “Trusted explicit” is a typed `ExecutionIntent`, not a Boolean inferred from prose. It contains the
 requested topology/definition/strategy, source (`user-command`, `reviewed-ui`, or
@@ -506,9 +564,11 @@ session authorization as reading it directly. Knowing a child ID grants nothing.
 Core produces every live snapshot through one reducer. Hosts never infer a graph from prose or
 rebuild dependencies from status rows.
 
-- Direct, profile-plan, and goal-supervisor views are retained through a Core-owned session execution
-  store port as bounded control-plane metadata. They do not create durable workflow artifacts or
-  replay raw tool calls.
+- Every top-level conversational turn, including a normal turn with no active goal, retains its
+  direct or profile-plan view through a Core-owned session execution store port as bounded
+  control-plane metadata. An optional goal-supervisor view links such turns when a goal exists.
+  Neither case creates a durable workflow artifact or replays raw tool calls, and normal turns do
+  not create a goal as a side effect.
 - A session fork references immutable pre-fork views and writes new executions under the forked
   session. Archive/delete follows the transcript's retention policy. Workspace switch closes the
   active subscription and cannot expose a prior workspace's map through the new session. Compaction
@@ -572,8 +632,8 @@ The Desktop keeps one tabbed side-panel system. The existing `workflows` panel I
 session/layout compatibility, its visible title becomes **Orchestration**, and it gains two internal
 views:
 
-- **Runs** — current and recent execution trees across all four topologies and active goal
-  supervisors;
+- **Runs** — current and recent executions across all four topologies, with normal no-goal turns as
+  first-class roots and goal-supervisor grouping when a goal is active;
 - **Design** — the existing saved WorkflowGraph editor.
 
 Runs uses the existing graph canvas primitives but is read-only. It shows:
@@ -733,9 +793,11 @@ merging this proposal for review checks nothing; an owner-acceptance update chec
 - [ ] **A40-1 — Repair current profile truth.** Resolve exact/aliased plan identity in the active
   turn, separate workspace/plan IDs, keep invalid higher-precedence claims fail-closed, replace stale
   preview vocabulary, and add the 17-profile default-resolution matrix without changing modes.
-- [ ] **A40-2 — Add trusted execution intent and execution-tree policy.** Define/validate explicit
-  topology and strategy provenance, reject planner/model self-authorization, parent durable child
-  executions, and make Core's goal supervisor own continuation for both hosts.
+- [ ] **A40-2 — Add conversational task envelopes, trusted intent, and execution-tree policy.**
+  Evaluate every eligible top-level turn from bounded user/confirmed task context, make a normal
+  turn the root when no goal exists, define/validate explicit topology and strategy provenance,
+  reject planner/model self-authorization, parent durable children, and keep the Core goal
+  supervisor an optional continuation parent for both hosts.
 - [ ] **A40-3 — Make saved graph execution fail closed and bounded.** Wire the shared approval port,
   block when absent, enforce agent-node role/access configuration, propagate cancellation, apply
   cumulative execution budgets and required/optional failure rules, and prove bounded loop/
@@ -744,8 +806,9 @@ merging this proposal for review checks nothing; an owner-acceptance update chec
   nodes plus occurrence/traversal identities, execution-scoped event sequence/version fields,
   redaction/size bounds, and compatibility records for current profile-stage consumers.
 - [ ] **A40-5 — Add the Core reducer and bounded session store.** Idempotent/gap-aware reduction,
-  snapshot watermarks, direct/profile/goal instrumentation, stage-child correlation, loop budgets,
-  fork/archive/delete/workspace-switch behavior, and existing-event compatibility projection.
+  snapshot watermarks, no-goal direct/profile instrumentation plus optional goal grouping,
+  stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behavior, and
+  existing-event compatibility projection.
 - [ ] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.
@@ -753,14 +816,16 @@ merging this proposal for review checks nothing; an owner-acceptance update chec
   traversals, attempts and decisions; preserve typed compatibility failure mappings; and prove
   resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests.
 - [ ] **A40-8 — Activate bounded adaptive profile selection.** Wire the existing managed selector
-  through the shared Core path, include direct as the safe baseline, expose diagnostics, and pass
-  the simple-versus-graph task corpus before changing any profile's default.
-- [ ] **A40-9 — Ship CLI parity and explicit strategy launch.** `/runs`, preview/confirm start,
-  live updates, retained replay, `--json`, goal continuation, and authorized child transcript
-  drill-down from the shared projection.
+  through every eligible top-level conversational turn in the shared Core path, with or without a
+  goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
+  conversation corpora before changing any profile's default.
+- [ ] **A40-9 — Ship CLI parity and explicit strategy launch.** `/runs` for normal and goal-linked
+  turns, preview/confirm start, live updates, retained replay, `--json`, goal continuation, and
+  authorized child transcript drill-down from the shared projection.
 - [ ] **A40-10 — Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
-  Design, preview/confirm, live/reconnect state, accessible graph/list fallback, details and
-  authorized transcript drill-down; validate source-started browser and Electron.
+  Design with normal no-goal turns visible by default, preview/confirm, live/reconnect state,
+  accessible graph/list fallback, details and authorized transcript drill-down; validate
+  source-started browser and Electron.
 - [ ] **A40-11 — Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
@@ -776,16 +841,42 @@ merging this proposal for review checks nothing; an owner-acceptance update chec
 - CLI and Desktop call the same topology service and reduce identical event fixtures to semantically
   equivalent views after canonicalizing volatile IDs/timestamps/usage, or to byte-equivalent views
   when the fixture injects the same clock, ID generator, and usage source.
-- An ordinary adaptive turn can select only direct or an eligible profile strategy.
+- Every eligible top-level user-authored conversational turn runs the same topology policy whether
+  or not a goal is active, and can adaptively select only direct or an eligible profile strategy.
 - A model-authored planner/tool call without trusted intent cannot start a durable execution; an
   explicit command/UI action can, and the resulting run is a child of the current turn when nested.
 - A nested agent cannot recursively select a topology unless its parent node explicitly permits it.
-- A goal supervisor parents sequential turn executions and both hosts use the same continuation
-  decision and reason codes.
+- A goal supervisor optionally parents sequential turn executions and both hosts use the same
+  continuation decision and reason codes; it is never a prerequisite for per-turn selection.
 - No selected node or cumulative execution exceeds manifest, parent, role, tool, delegation, node,
   child, call, retry, iteration, depth, wall-time, token, cost, or concurrency ceilings.
 
-### 8.2 All-profile selection matrix
+### 8.2 Normal-conversation and goal parity
+
+Start fresh CLI and Desktop sessions with no goal record and run equivalent fixtures:
+
+1. a small informational prompt selects direct;
+2. a complex signal-matched prompt selects its eligible profile plan;
+3. an elliptical follow-up to an unresolved user-authored or user-confirmed task selects from the
+   bounded conversation task envelope rather than losing the established work shape;
+4. a contextless acknowledgement with no unresolved task selects direct; and
+5. each turn emits the same decision, node, edge, child, budget, fallback, and terminal semantics
+   through the shared execution projection.
+
+Assert that Core evaluates topology exactly once for each eligible top-level turn, the managed model
+selector is skipped when no non-direct candidate survives, the turn itself is the execution-tree
+root, and no goal record is created or mutated.
+
+Repeat the same prompts with an active goal whose user-authored objective is semantically redundant
+with the unresolved task already present in the no-goal fixture, and keep effective ceilings equal.
+Per-turn topology, plan identity, candidates, and selection outcome must remain equivalent; only
+optional goal parent correlation and continuation decisions may differ. A distinct user-authored
+goal objective may affect signals only as bounded, confirmed task context would in a no-goal
+conversation; the active-goal flag itself cannot. A separate lower-ceiling fixture may only narrow
+candidates or budgets. This proves normal conversation uses the feature and goal mode merely groups
+it.
+
+### 8.3 All-profile selection matrix
 
 For every one of the 17 workspace profile IDs, first run its **unchanged default** through CLI and
 Desktop adapters:
@@ -808,7 +899,7 @@ Then run **configured-mode fixtures** without changing the shipped default:
 Expected topology, plan identity, selection source, fallback reason, nodes, edges, child IDs, and
 terminal status must match across hosts. This is the proof that the feature is not Engineering-only.
 
-### 8.3 Selection quality
+### 8.4 Selection quality
 
 Each profile owns a reviewed corpus containing simple work and work that genuinely benefits from
 specialization, fan-out/fan-in, independent verification, or an explicit control point.
@@ -826,7 +917,7 @@ A profile does not default to adaptive until:
 - graph execution respects budgets and terminates under adversarial failures;
 - the independent counter-metric does not regress beyond the reviewed bound.
 
-### 8.4 Safety and failure
+### 8.5 Safety and failure
 
 - An approval node with no approver is blocked in Core, CLI, Desktop, resume, and subworkflow
   paths.
@@ -854,7 +945,7 @@ A profile does not default to adaptive until:
 - Concurrent launches of one slug receive different execution IDs; concurrent writers cannot lose
   transitions, and recent-run listing/pagination/retention never mistakes `latest` for identity.
 
-### 8.5 Product evidence
+### 8.6 Product evidence
 
 - Desktop Runs renders direct, profile, phase, and saved-graph fixtures; provides a non-canvas list
   fallback; remains keyboard/screen-reader usable; and has no overlap/overflow at supported Desktop
@@ -862,6 +953,10 @@ A profile does not default to adaptive until:
 - The source-started browser bridge and Electron produce the same run content; mocks alone do not
   pass.
 - CLI renders the same fixtures as readable text and stable JSON.
+- In fresh no-goal CLI and Desktop sessions, send one direct and one profile-selecting prompt through
+  normal chat, inspect each execution live in `/runs` or Desktop Runs, restart/reload the session,
+  and verify both retained views, topologies, and terminal states remain available without any goal
+  record having been created.
 - A live cross-host scenario starts a multi-stage run, fans out, opens one child transcript, retries
   one node, waits for approval, cancels or resumes, and reaches the same retained terminal map in
   both hosts.

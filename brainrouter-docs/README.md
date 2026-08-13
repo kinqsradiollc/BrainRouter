@@ -139,8 +139,9 @@ deep dives.
   customer code at all;
   [ADR-040 one runtime, graphs of bounded loops](decisions/ADR-040-one-runtime-graphs-of-bounded-loops.md) —
   proposed runtime contract that preserves one bounded turn engine while Core chooses the smallest
-  eligible topology above it: direct or a validated per-profile stage graph for ordinary turns,
-  with durable phase plans and saved graphs remaining explicit. It repairs shared-plan identity
+  eligible topology on every eligible top-level conversation turn, with or without a goal: direct
+  or a validated per-profile stage graph, while durable phase plans and saved graphs remain
+  explicit. It repairs shared-plan identity
   across all 17 profiles, activates only bounded validated strategy selection, fails graph authority
   and approvals closed, treats optimization as a grounded verifier/counter-metric/rollback graph,
   and defines one safe execution map rendered as Desktop Runs and a CLI timeline/JSON view.
