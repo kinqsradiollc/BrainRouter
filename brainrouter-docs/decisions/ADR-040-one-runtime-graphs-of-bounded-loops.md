@@ -972,15 +972,22 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   mutation-proved. Phase children become the stage's child sessions, feeding A40-5's stage-child
   correlation from the phase-plan side. Six tests.
 
-  It lands BEFORE its wiring, exactly as `graphAdapter` did: wiring it means sending its snapshot to
-  the durable store on the live `/build` path (four `executePhasePlan` call sites, the repair loop,
-  finish timing), which is its own end-to-end-tested slice. It is documented in the E1 sweep's
-  `KNOWN_UNWIRED` with the dead-export ceiling rise (285 → 286) named there, and it leaves the sweep
-  the moment `executePhasePlan` composes these hooks.
+  **The wiring now shipped too.** `runWorkflow` composes the emitter into its live `ExecuteHooks`
+  (`workflowTool.ts`): `onPhaseStart`/`onPhaseComplete` mirror every phase, and every terminal path —
+  success, interrupt, and the detached background run — calls `finish` with the settled execution, so
+  a `/build`, `/plan`, or any multi-agent command leaves a durable execution-map record behind, the
+  same shape a saved-graph run leaves. It is STRICTLY best-effort: the emitter's construction and each
+  hook are guarded, so a durable-store failure drops the mirror, never the run it was describing. The
+  store exclusive-creates by run id, so a re-run without a launch run id records the first run only —
+  an accepted best-effort limit, stated in the code. `execution-phase-plan-wiring.test.ts` drives a
+  real `runWorkflow` and mutation-proves both guarantees: the persisted emission count (which falls to
+  a bare construct+finish if the per-phase composition is dropped) and the best-effort guard (a
+  pre-occupied durable slot must not fail the run). This repaid the row's own E1 debt: the adapter left
+  `KNOWN_UNWIRED` and the dead-export ceiling fell back 286 → 285.
 
-  **Still open for this row:** wiring the phase-plan adapter into the live `/build` path; edge
-  traversals and retry attempts as first-class emissions (these extend the graph engine and the
-  reducer snapshot); and the typed compatibility failure mappings.
+  **Still open for this row:** edge traversals and retry attempts as first-class emissions (these
+  extend the graph engine and the reducer snapshot); the resume path's durable emission (gated today by
+  the store's exclusive-create); and the typed compatibility failure mappings.
 - [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless

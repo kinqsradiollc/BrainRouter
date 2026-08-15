@@ -53,6 +53,10 @@ import {
   rejectExecutionDispatchReceipt,
 } from '../../orchestration/execution/authority.js';
 import { normalizePhasePlanExecutionTarget } from '../../orchestration/execution/normalization.js';
+import {
+  canonicalPhasePlanEmitter,
+  type CanonicalPhasePlanEmitter,
+} from '../../orchestration/execution/phasePlanAdapter.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */
@@ -391,14 +395,53 @@ async function runWorkflowUnchecked(
     );
     hooks.signal = ctx.interruptSignal; // WS6 — a user Stop halts further phase dispatch
 
+    // ADR-040 A40-7 — mirror this phase-plan run onto the canonical execution
+    // map so a `/build` answers the same `/runs` questions a saved-graph run
+    // does. STRICTLY best-effort: the emitter reduces an event stream and writes
+    // the durable run store, and none of that may break the build it merely
+    // describes — so its construction and every hook are guarded, and any failure
+    // silently drops canonical emission for this run, never the run itself. The
+    // durable store exclusive-creates by runId, so a re-run without a launch
+    // runId records the first run only; that is an accepted best-effort limit.
+    const canonical: CanonicalPhasePlanEmitter | undefined = (() => {
+      try {
+        return canonicalPhasePlanEmitter({
+          executionId: ctx.executionLaunch?.parentExecutionId ?? slug,
+          sessionKey: ctx.parentSessionKey ?? 'local',
+          startedAt: new Date().toISOString(),
+          runId: ctx.executionLaunch?.runId ?? slug,
+          workspaceRoot: ws,
+        });
+      } catch {
+        return undefined;
+      }
+    })();
+    if (canonical) {
+      const baseStart = hooks.onPhaseStart;
+      const baseComplete = hooks.onPhaseComplete;
+      hooks.onPhaseStart = (phase, index, total) => {
+        baseStart?.(phase, index, total);
+        try { canonical.hooks.onPhaseStart?.(phase, index, total); } catch { /* best-effort */ }
+      };
+      hooks.onPhaseComplete = (phaseExecution) => {
+        baseComplete?.(phaseExecution);
+        try { canonical.hooks.onPhaseComplete?.(phaseExecution); } catch { /* best-effort */ }
+      };
+    }
+    const finishCanonical = (result: PhasePlanExecution): void => {
+      try { canonical?.finish(result); } catch { /* best-effort — canonical emission never blocks a build */ }
+    };
+
     // WF-BG — background mode: kick the run off DETACHED so a long fan-out doesn't
     // block the REPL turn. The durable ledger (visible via /workflows + the bg
     // panel) tracks live phase progress; the run continues in-process. On an
     // unexpected throw, the ledger is marked failed.
     if (args?.background === true) {
-      void executePhasePlan(plan, runner, hooks).catch(() => {
-        finishRun(ws, slug, 'failed');
-      });
+      void executePhasePlan(plan, runner, hooks)
+        .then((backgroundExecution) => finishCanonical(backgroundExecution))
+        .catch(() => {
+          finishRun(ws, slug, 'failed');
+        });
       return JSON.stringify(
         {
           ok: true,
@@ -414,6 +457,7 @@ async function runWorkflowUnchecked(
     }
 
     const interruptedResult = (execution: PhasePlanExecution): string => {
+      finishCanonical(execution);
       terminalizePhaseRunInternal(ws, slug, 'interrupted');
       // The shared build worktree still needs to be removed and preserved as a
       // patch. Injecting an explicit failed verify keeps that cleanup path from
@@ -494,6 +538,7 @@ async function runWorkflowUnchecked(
     assertAuthorityCurrent?.();
     if (ctx.interruptSignal?.aborted) return interruptedResult(execution);
 
+    finishCanonical(execution);
     return JSON.stringify(
       {
         ok: true,
