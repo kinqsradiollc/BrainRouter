@@ -550,14 +550,26 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
       }
       // a rejected approval halts its branch (no outgoing activation)
       const approvalRejected = node.type === 'approval' && (rec.output as { approved?: boolean })?.approved === false;
-      if (!approvalRejected) {
-        for (const e of graph.edges) {
-          if (e.source !== id) continue;
+      // ADR-040 A40-7 — emit every outgoing edge's traversal state, not only the
+      // ones taken. A branch NOT taken (`skipped`) and a branch an approval closed
+      // (`blocked`) are as much a part of the run's shape as the edge followed
+      // (`traversed`) — a map that shows only what fired cannot say why the rest
+      // did not. Only a `traversed` edge activates its target; the others are
+      // recorded but do not propagate.
+      for (const e of graph.edges) {
+        if (e.source !== id) continue;
+        let edgeState: 'traversed' | 'skipped' | 'blocked';
+        if (approvalRejected) {
+          edgeState = 'blocked';
+        } else if (rec.branch !== undefined && e.sourceHandle && e.sourceHandle !== rec.branch) {
           // branch routing: a branching node's handled edges fire only on a match;
           // handle-less edges always pass through.
-          if (rec.branch !== undefined && e.sourceHandle && e.sourceHandle !== rec.branch) continue;
+          edgeState = 'skipped';
+        } else {
           activeEdges.add(e.id);
+          edgeState = 'traversed';
         }
+        opts.emit({ edgeId: e.id, edgeState });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
