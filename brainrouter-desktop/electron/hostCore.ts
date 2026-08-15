@@ -18,6 +18,10 @@
  * When no `spawnAgent` factory is supplied (unit tests), the core degrades to
  * the original single-agent behavior — including interrupt-and-defer for a
  * switch requested mid-turn — because one agent can't safely run two turns.
+ *
+ * ADR-040 A40-2 — reviewed durable launches have a host-only seam. The
+ * renderer cannot mint or transport authority: this module asks the active
+ * Agent for an opaque intent and returns only that same object to its runTurn.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -31,6 +35,7 @@ import {
   type AgentImage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
+import type { ExecutionIntentHandle } from '@kinqs/brainrouter-types/agent';
 import {
   InputQueue,
   drainExternalSteering,
@@ -44,6 +49,10 @@ import {
   type SteeringInput,
 } from '@kinqs/brainrouter-core/session';
 import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
+import {
+  captureReviewedExecutionRequest,
+  type ReviewedExecutionRequest,
+} from './host/reviewedExecution.js';
 
 /**
  * The slice of the CLI Agent the host needs — structural, so tests can fake
@@ -54,7 +63,21 @@ import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 export interface AgentLike {
   sessionKey: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[]; preplanned?: boolean }): Promise<string>;
+  runTurn(prompt: string, callbacks: any, opts?: {
+    hiddenPrompt?: boolean;
+    images?: AgentImage[];
+    preplanned?: boolean;
+    executionIntent?: ExecutionIntentHandle;
+  }): Promise<string>;
+  /** ADR-040 A40-2 — only trusted hosts may ask Core to mint this capability. */
+  issueExecutionIntent?(input: {
+    source: 'reviewed-ui';
+    toolName: 'run_workflow' | 'run_workflow_graph';
+    args: Record<string, unknown>;
+    requestId?: string;
+  }): Promise<ExecutionIntentHandle>;
+  /** Host-only revocation for pending or active reviewed execution authority. */
+  revokeReviewedExecutionAuthority?(): void;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
   requestSteer?(text: string, options?: {
@@ -138,6 +161,18 @@ export function createBrokerPort(
 export interface HostCore {
   /** Feed one decoded wire message in; invalid shapes are ignored (logged via status). */
   handle(message: unknown): Promise<void>;
+  /**
+   * ADR-040 A40-2 — trusted Electron-host entrypoint for a launch already
+   * reviewed by a host-owned UI. This is deliberately absent from AgentCommand
+   * and preload, so no renderer message can request or receive bearer proof.
+   */
+  startReviewedExecution(input: ReviewedExecutionRequest): Promise<void>;
+  /**
+   * Revoke reviewed authority before a host-side runtime policy mutation. The
+   * workspace scope covers background sessions whose execution reads the same
+   * workspace policy files.
+   */
+  revokeReviewedExecutionAuthority(scope: 'active-session' | 'workspace'): void;
   /**
    * ADR-032 D8 — replace every pooled Agent across an authenticated tenant
    * boundary. The callback runs only after old turns and session checkpoints
@@ -262,9 +297,18 @@ export function createHostCore(input: {
   let tenantRebinding = false;
   let sessionMutationTail: Promise<void> = Promise.resolve();
   let queuedSessionMutations = 0;
+  // ADR-040 A40-2 — identity equality is insufficient after A→B→A or after
+  // another same-session turn. Every authority-changing reservation/request
+  // advances this process-local fence; reviewed launches must observe one
+  // uninterrupted generation from issuance through their own turn reservation.
+  let runtimeAuthorityGeneration = 0n;
+  const advanceRuntimeAuthorityGeneration = (): bigint => (
+    runtimeAuthorityGeneration += 1n
+  );
 
   function runSessionMutation<T>(operation: () => Promise<T>): Promise<T> {
     queuedSessionMutations += 1;
+    advanceRuntimeAuthorityGeneration();
     const guarded = async (): Promise<T> => {
       try {
         return await operation();
@@ -339,9 +383,80 @@ export function createHostCore(input: {
   // ONLY agent is busy is queued here and applied once its turn unwinds.
   let pendingSwitch: (() => Promise<void>) | null = null;
 
+  interface ReviewedExecutionLaunch {
+    agent: AgentLike;
+    handle: ExecutionIntentHandle;
+    authorityGeneration: bigint;
+  }
+
+  const reviewedExecutionIsCurrent = (
+    key: string,
+    launch: ReviewedExecutionLaunch,
+    expectedGeneration = launch.authorityGeneration,
+  ): boolean => (
+    !shuttingDown
+    && !tenantRebinding
+    && pendingSwitch === null
+    && runtimeAuthorityGeneration === expectedGeneration
+    && activeKey === key
+    && pool.get(key)?.agent === launch.agent
+    && launch.agent.sessionKey === key
+  );
+
+  const cancelReviewedExecution = (key: string): void => {
+    stamp(key, {
+      kind: 'turn-error',
+      message: 'Reviewed execution canceled because its session or runtime authority changed before launch.',
+    });
+  };
+
+  const revokeReviewedExecutionAuthority = (
+    scope: 'active-session' | 'workspace',
+  ): void => {
+    // Rotate the host-side pre-launch fence even when a test/older Agent does
+    // not expose Core's revocation seam. Core then retires pending handles and
+    // interrupts only reviewed turns that already consumed their launch.
+    advanceRuntimeAuthorityGeneration();
+    const agents = scope === 'workspace'
+      ? [...new Set([...pool.values()].map((runtime) => runtime.agent))]
+      : [pool.get(activeKey)?.agent].filter((agent): agent is AgentLike => !!agent);
+    for (const pooled of agents) pooled.revokeReviewedExecutionAuthority?.();
+  };
+
   let deliverySequence = 0;
   const nextDeliveryId = (): string => `delivery-${Date.now().toString(36)}-${++deliverySequence}`;
   const peerWakeScheduled = new Set<string>();
+
+  async function abandonReservedReviewedExecution(key: string, runtime: Runtime): Promise<void> {
+    runtime.running = false;
+    cancelReviewedExecution(key);
+    const next = shuttingDown || tenantRebinding ? undefined : runtime.queue.dequeue();
+    const deferredSwitch = pendingSwitch;
+    pendingSwitch = null;
+    if (deferredSwitch && !shuttingDown) await deferredSwitch();
+    if (
+      !next
+      && key !== activeKey
+      && input.spawnAgent
+      && runtime.queue.list().length === 0
+      && (runtime.agent.pendingSteeringCount ?? 0) === 0
+      && !peerWakeScheduled.has(key)
+      && pool.get(key) === runtime
+    ) {
+      pool.delete(key);
+      void trackSessionDrain(runtime.agent);
+    }
+    if (next) {
+      setImmediate(() => {
+        void startTurnForKey(key, next.text, false, undefined, {
+          id: next.deliveryId ?? nextDeliveryId(),
+          mode: next.deliveryMode ?? 'queue',
+          source: next.deliverySource ?? 'user',
+          ...(next.deliverySender ? { sender: next.deliverySender } : {}),
+        });
+      });
+    }
+  }
 
   function schedulePeerWake(key: string): void {
     if (peerWakeScheduled.has(key) || shuttingDown || tenantRebinding) return;
@@ -370,14 +485,22 @@ export function createHostCore(input: {
     images?: AgentImage[],
     delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source']; sender?: PeerSessionSender },
     suppressTurnStart = false,
+    reviewedExecution?: ReviewedExecutionLaunch,
   ): Promise<void> {
     // Preserve the long-standing synchronous `running` reservation when there
     // is no session mutation. Queue/Steer commands may arrive in the same tick
     // as start-turn and must see the latch immediately.
     if (queuedSessionMutations > 0) await sessionMutationTail;
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      if (reviewedExecution) cancelReviewedExecution(key);
+      return;
+    }
     if (tenantRebinding) {
       stamp(key, { kind: 'turn-error', message: 'Wait for the organization switch to finish before sending.' });
+      return;
+    }
+    if (reviewedExecution && !reviewedExecutionIsCurrent(key, reviewedExecution)) {
+      cancelReviewedExecution(key);
       return;
     }
     const rt = pool.get(key);
@@ -389,14 +512,34 @@ export function createHostCore(input: {
     // Reserve the session before an async policy refresh so a second send cannot
     // race through validation and start another turn.
     rt.running = true;
+    const reservationGeneration = advanceRuntimeAuthorityGeneration();
+    if (
+      reviewedExecution
+      && (
+        reservationGeneration !== reviewedExecution.authorityGeneration + 1n
+        || !reviewedExecutionIsCurrent(key, reviewedExecution, reservationGeneration)
+      )
+    ) {
+      await abandonReservedReviewedExecution(key, rt);
+      return;
+    }
+    let policyError: string | null;
     try {
-      const policyError = input.validateTurn ? await input.validateTurn(key) : null;
-      if (policyError) { rt.running = false; stamp(key, { kind: 'turn-error', message: policyError }); return; }
+      policyError = input.validateTurn ? await input.validateTurn(key) : null;
     } catch (error) {
+      if (reviewedExecution && !reviewedExecutionIsCurrent(key, reviewedExecution, reservationGeneration)) {
+        await abandonReservedReviewedExecution(key, rt);
+        return;
+      }
       rt.running = false;
       stamp(key, { kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
       return;
     }
+    if (reviewedExecution && !reviewedExecutionIsCurrent(key, reviewedExecution, reservationGeneration)) {
+      await abandonReservedReviewedExecution(key, rt);
+      return;
+    }
+    if (policyError) { rt.running = false; stamp(key, { kind: 'turn-error', message: policyError }); return; }
     // DESK-6t — LAZY HISTORY lands here: if this session was resumed for viewing
     // and never loaded into the agent, load its transcript NOW (before the turn)
     // so the model has the full conversation. Hidden behind LLM latency.
@@ -444,7 +587,11 @@ export function createHostCore(input: {
     });
     if (!suppressTurnStart) turnEmit({ kind: 'turn-start', prompt });
     try {
-      const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden, images });
+      const answer = await rt.agent.runTurn(prompt, turnCallbacks, {
+        hiddenPrompt: hidden,
+        images,
+        ...(reviewedExecution ? { executionIntent: reviewedExecution.handle } : {}),
+      });
       turnEmit({ kind: 'turn-complete', answer });
       if (delivery) turnEmit({
         kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
@@ -560,6 +707,80 @@ export function createHostCore(input: {
 
   async function startTurn(prompt: string, hidden?: boolean, images?: AgentImage[]): Promise<void> {
     await startTurnForKey(activeKey, prompt, hidden, images);
+  }
+
+  async function startReviewedExecution(request: ReviewedExecutionRequest): Promise<void> {
+    // Capture the complete origin and immutable reviewed payload before the
+    // first await. A mutation already in the serialized tail must invalidate
+    // this request; it must never silently inherit that mutation's active Agent.
+    const key = activeKey;
+    const runtime = pool.get(key);
+    const originAgent = runtime?.agent;
+    const authorityGeneration = runtimeAuthorityGeneration;
+    const mutationQueuedAtEntry = queuedSessionMutations > 0;
+    let reviewedRequest: ReturnType<typeof captureReviewedExecutionRequest>;
+    try {
+      reviewedRequest = captureReviewedExecutionRequest(request);
+    } catch (error) {
+      stamp(key, {
+        kind: 'turn-error',
+        message: `Reviewed execution request is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+    if (mutationQueuedAtEntry) {
+      await sessionMutationTail;
+      cancelReviewedExecution(key);
+      return;
+    }
+    if (shuttingDown) return;
+    if (tenantRebinding) {
+      stamp(key, { kind: 'turn-error', message: 'Wait for the organization switch to finish before sending.' });
+      return;
+    }
+    if (!runtime || !originAgent) {
+      stamp(key, { kind: 'turn-error', message: 'No active session to run in.' });
+      return;
+    }
+    if (runtime.running) {
+      stamp(key, { kind: 'turn-error', message: 'A turn is already running in this session.' });
+      return;
+    }
+    const issue = originAgent.issueExecutionIntent;
+    if (!issue) {
+      stamp(key, { kind: 'turn-error', message: 'Reviewed execution is unavailable in this Agent runtime.' });
+      return;
+    }
+    let handle: ExecutionIntentHandle;
+    try {
+      handle = await issue.call(originAgent, {
+        source: 'reviewed-ui',
+        toolName: reviewedRequest.toolName,
+        args: reviewedRequest.args,
+        ...(reviewedRequest.requestId !== undefined ? { requestId: reviewedRequest.requestId } : {}),
+      });
+      if (!handle || typeof handle !== 'object') {
+        throw new Error('The Agent runtime returned an invalid execution intent.');
+      }
+    } catch (error) {
+      const staleLaunch = shuttingDown
+        || tenantRebinding
+        || pendingSwitch !== null
+        || runtimeAuthorityGeneration !== authorityGeneration
+        || activeKey !== key
+        || pool.get(key)?.agent !== originAgent
+        || originAgent.sessionKey !== key;
+      if (staleLaunch) cancelReviewedExecution(key);
+      else stamp(key, { kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    const launch = { agent: originAgent, handle, authorityGeneration };
+    if (runtime.running || !reviewedExecutionIsCurrent(key, launch)) {
+      cancelReviewedExecution(key);
+      return;
+    }
+    await startTurnForKey(key, reviewedRequest.prompt, false, undefined, undefined, false, launch);
   }
 
   async function deliverInput(
@@ -987,6 +1208,10 @@ export function createHostCore(input: {
         return;
       case 'interrupt': {
         cancelResume(); // user stopped — never auto-resume on top of a stop
+        // Stop is also an authority boundary for a reviewed launch whose Agent
+        // issuer has not resolved yet. Advancing the fence makes that pending
+        // handle permanently stale even though no runTurn exists to interrupt.
+        advanceRuntimeAuthorityGeneration();
         // DESK-2 — cooperative stop of the VIEWED session's turn: flag its agent
         // (it unwinds at the next LLM/tool boundary) AND dismiss pending
         // approvals so a turn blocked on a dialog fails closed instead of hanging.
@@ -1024,11 +1249,17 @@ export function createHostCore(input: {
         return;
       }
       case 'set-model': {
-        const a = pool.get(activeKey)?.agent;
+        // A reviewed action is scoped to the runtime actor selected when the
+        // click entered the host. Fence the request before provider resolution
+        // or persistence awaits so an A→B (or Auto) model change cannot let a
+        // pending handle launch under a different provider/endpoint/model.
+        const targetKey = activeKey;
+        const targetAgent = pool.get(targetKey)?.agent;
+        revokeReviewedExecutionAuthority(cmd.persist ? 'workspace' : 'active-session');
         if (cmd.model === 'auto') {
-          try { input.clearSessionModel?.(activeKey); } catch { /* best effort */ }
-          emit({ kind: 'status', text: 'Model set to Auto (primary chain).' });
-          emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+          try { input.clearSessionModel?.(targetKey); } catch { /* best effort */ }
+          stamp(targetKey, { kind: 'status', text: 'Model set to Auto (primary chain).' });
+          stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
           return;
         }
         // Item 10 — persist:true → GLOBAL default (config.json, shared with the
@@ -1038,29 +1269,43 @@ export function createHostCore(input: {
         // LLM (provider/model/endpoint/key) and write the full session override
         // (never the global default unless persist) — so it never syncs to others.
         const full = cmd.providerName ? await input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
-        if (cmd.providerName && !full) {
-          emit({ kind: 'turn-error', message: `The selected provider or model “${cmd.model}” is unavailable. Refresh Models and choose again.` });
+        if (
+          cmd.providerName
+          && (
+            activeKey !== targetKey
+            || pool.get(targetKey)?.agent !== targetAgent
+            || targetAgent?.sessionKey !== targetKey
+          )
+        ) {
+          stamp(targetKey, {
+            kind: 'turn-error',
+            message: 'Model selection canceled because the active session changed before provider resolution completed.',
+          });
           return;
         }
-        if (full) a?.setLLMConfig?.(full); else a?.setModel?.(cmd.model);
+        if (cmd.providerName && !full) {
+          stamp(targetKey, { kind: 'turn-error', message: `The selected provider or model “${cmd.model}” is unavailable. Refresh Models and choose again.` });
+          return;
+        }
+        if (full) targetAgent?.setLLMConfig?.(full); else targetAgent?.setModel?.(cmd.model);
         if (cmd.persist) {
           try {
             if (cmd.providerName) input.persistProviderModel?.(cmd.providerName, cmd.model);
             else input.persistModel?.(cmd.model);
           } catch (err) {
-            emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
-            emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+            stamp(targetKey, { kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
+            stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
             return;
           }
-          try { input.clearSessionModel?.(activeKey); } catch { /* global model still persisted */ }
+          try { input.clearSessionModel?.(targetKey); } catch { /* global model still persisted */ }
         } else if (cmd.providerName) {
           // Per-session cross-provider override (provider/model/endpoint, no secret).
-          try { input.setSessionLlm?.(activeKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
+          try { input.setSessionLlm?.(targetKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
         } else {
-          try { input.setSessionModel?.(activeKey, cmd.model); } catch { /* in-memory set already applied */ }
+          try { input.setSessionModel?.(targetKey, cmd.model); } catch { /* in-memory set already applied */ }
         }
-        emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` });
-        emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+        stamp(targetKey, { kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` });
+        stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
         return;
       }
       case 'shutdown':
@@ -1088,7 +1333,15 @@ export function createHostCore(input: {
     }
   }
 
-  return { handle, rebindTenant, bindLearning, deliverPeerMessage, broker };
+  return {
+    handle,
+    startReviewedExecution,
+    revokeReviewedExecutionAuthority,
+    rebindTenant,
+    bindLearning,
+    deliverPeerMessage,
+    broker,
+  };
 }
 
 function peerSenderDetails(

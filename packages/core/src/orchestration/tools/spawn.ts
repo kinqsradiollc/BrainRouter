@@ -26,6 +26,7 @@ import { callMcpTool, childSessionKey } from '../../mcp/mcpUtils.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveAutoChainMode, autoChainRoles } from '../delegation/autoChain.js';
 import { resolveDelegationPolicy, evaluateDelegationGate } from '../delegation/delegationPolicy.js';
+import { reviewedExecutionRole } from '../execution/policySnapshot.js';
 import { buildParentExecutionContextSnapshot } from '../delegation/parentContext.js';
 import {
   buildDelegatedTaskPacket,
@@ -121,6 +122,23 @@ async function emitRouteFeedback(
 }
 
 export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string> {
+  const executionAuthorityGuard =
+    ctx.executionLaunch?.assertAuthorityCurrent ?? ctx.executionAuthorityGuard;
+  executionAuthorityGuard?.();
+  const reviewedPolicySnapshot = executionAuthorityGuard
+    ? ctx.executionPolicySnapshot
+    : undefined;
+  if (executionAuthorityGuard && !reviewedPolicySnapshot) {
+    throw new Error(
+      'Reviewed child launch is missing its immutable execution policy snapshot.',
+    );
+  }
+  const reviewedInstructionSummary = executionAuthorityGuard
+    ? ctx.executionInstructionSummary ?? null
+    : undefined;
+  const executionPolicyWorkspaceRoot = executionAuthorityGuard
+    ? ctx.executionPolicyWorkspaceRoot ?? ctx.workspaceRoot
+    : ctx.workspaceRoot;
   const suppliedProfileStageLaunch = args?.profileStageLaunch;
   const profileStageLaunch: PreparedProfileStageDelegation | undefined =
     ctx.profileStageController?.ownsPreparedDelegation(suppliedProfileStageLaunch)
@@ -139,6 +157,16 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           strategyId: profileStageLaunch.strategyId,
         }
       : undefined;
+  const manifest = reviewedPolicySnapshot
+    ? reviewedPolicySnapshot.manifest
+    : loadWorkspaceManifest(executionPolicyWorkspaceRoot);
+  const findReviewedRole = (id: string) => reviewedPolicySnapshot
+    ? reviewedExecutionRole(reviewedPolicySnapshot, id)
+    : undefined;
+  const knownRoleIds = () => reviewedPolicySnapshot
+    ? reviewedPolicySnapshot.roles.map((role) => role.definition.id)
+    : listAll(executionPolicyWorkspaceRoot, activeProfilePromptContext)
+      .map((loaded) => loaded.def.id);
   // Resolve agent definition via agentId (registry) or role (legacy).
   let role: ReturnType<typeof resolveRole>;
   let childTier: Tier | undefined;
@@ -150,41 +178,68 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   let childDefOwnership: string | null | undefined;
 
   if (typeof args.agentId === 'string' && args.agentId.trim()) {
-    const loaded = findById(
-      args.agentId.trim(),
-      ctx.workspaceRoot,
-      activeProfilePromptContext,
-    );
+    const loaded = reviewedPolicySnapshot
+      ? findReviewedRole(args.agentId.trim())
+      : findById(
+        args.agentId.trim(),
+        executionPolicyWorkspaceRoot,
+        activeProfilePromptContext,
+      );
     if (!loaded) {
-      const known = listAll(ctx.workspaceRoot, activeProfilePromptContext)
-        .map((l) => l.def.id)
-        .join(', ');
+      const known = knownRoleIds().join(', ');
       throw new Error(`Unknown agentId "${args.agentId}". Known agents: ${known}.`);
     }
     role = {
-      name: loaded.def.id,
-      description: loaded.def.whenToUse,
-      defaultAccess: loaded.def.defaultAccess,
-      promptOverlay: loaded.def.prompt,
+      name: 'definition' in loaded ? loaded.definition.id : loaded.def.id,
+      description: 'definition' in loaded ? loaded.definition.whenToUse : loaded.def.whenToUse,
+      defaultAccess: 'definition' in loaded ? loaded.definition.defaultAccess : loaded.def.defaultAccess,
+      promptOverlay: 'definition' in loaded ? loaded.definition.prompt : loaded.def.prompt,
     };
-    childTier = loaded.def.tier;
-    childToolScope = loaded.def.toolScope;
-    childDisallowedTools = loaded.def.disallowedTools;
-    childDefOwnership = loaded.def.ownership ?? undefined;
+    const definition = 'definition' in loaded ? loaded.definition : loaded.def;
+    childTier = definition.tier;
+    childToolScope = definition.toolScope;
+    childDisallowedTools = definition.disallowedTools;
+    childDefOwnership = definition.ownership ?? undefined;
   } else {
     const roleName = String(args.role ?? '');
     if (!roleName.trim()) throw new Error('spawn_agent requires either "agentId" or "role".');
     role = resolveRole(roleName, activeProfilePromptContext);
-    childTier = findById(
-      role.name,
-      ctx.workspaceRoot,
-      activeProfilePromptContext,
-    )?.def.tier;
+    const loaded = reviewedPolicySnapshot
+      ? findReviewedRole(role.name)
+      : findById(
+        role.name,
+        executionPolicyWorkspaceRoot,
+        activeProfilePromptContext,
+      );
+    // A legacy role string is only a compatibility lookup, never authority to
+    // escape the reviewed workspace profile. Once a manifest exists, reject a
+    // role that the active registry filtered out before creating a child/session.
+    if (manifest && !loaded) {
+      const known = knownRoleIds().join(', ');
+      throw new Error(
+        `Role "${role.name}" is unavailable in the active workspace profile.`
+          + (known ? ` Available roles: ${known}.` : ''),
+      );
+    }
+    const definition = loaded
+      ? ('definition' in loaded ? loaded.definition : loaded.def)
+      : undefined;
+    if (reviewedPolicySnapshot && definition) {
+      role = {
+        name: definition.id,
+        description: definition.whenToUse,
+        defaultAccess: definition.defaultAccess,
+        promptOverlay: definition.prompt,
+      };
+    }
+    childTier = definition?.tier;
+    childToolScope = definition?.toolScope;
+    childDisallowedTools = definition?.disallowedTools;
+    childDefOwnership = definition?.ownership ?? undefined;
   }
 
   const prompt = String(args.prompt ?? '');
   if (!prompt.trim()) throw new Error('spawn_agent requires a non-empty prompt.');
-  const manifest = loadWorkspaceManifest(ctx.workspaceRoot);
 
   // P1.2 — spawn hierarchy checks.
   const rawMaxDepth = getCliKnobs().maxSpawnDepth;
@@ -220,6 +275,15 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   }
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
+  if (
+    executionAuthorityGuard
+    && clampAccess(role.defaultAccess, requested) !== requested
+  ) {
+    throw new Error(
+      `Reviewed execution cannot raise role "${role.name}" above its `
+      + `${role.defaultAccess} access ceiling (requested ${requested}).`,
+    );
+  }
   // Fail SAFE if a caller ever omits the parent access mode: clamp against the
   // least privilege ('read'), never the most ('shell'). Spawn is a privilege
   // primitive — an absent parent ceiling must not silently grant a child more.
@@ -242,7 +306,8 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   // MAS-P4-T2 — supervisor gate. Consult the delegation policy before
   // creating the session. `no-children` denies outright; `ask-*` policies
   // prompt the interactive parent (and fail closed in headless runs).
-  const delegationPolicy = resolveDelegationPolicy(readPreferences(ctx.workspaceRoot));
+  const delegationPolicy = reviewedPolicySnapshot?.delegationPolicy
+    ?? resolveDelegationPolicy(readPreferences(executionPolicyWorkspaceRoot));
   const rawGate = evaluateDelegationGate({ policy: delegationPolicy, childAccess: access, depth: ctx.depth ?? 0 });
   // Auto-chain follow-ups (the reviewer/verifier the user opted into via
   // `/auto-chain review|verify|both`) are PRE-AUTHORIZED — they must not re-prompt
@@ -267,6 +332,17 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
       throw new Error(`Spawn of "${role.name}" (${access}) declined under delegation policy "${delegationPolicy}".`);
     }
   }
+
+  // A reviewed workflow is bound to the exact workspace/profile/runtime
+  // authority that was present when its opaque intent was issued. Recheck
+  // after the only pre-session await so a manifest, role, access, permission,
+  // or delegation-policy change cannot widen a child launch mid-flight.
+  executionAuthorityGuard?.();
+  const childLlm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, role.name);
+  // Provider/role routing is live config. Fence its synchronous capture too:
+  // another process may edit config.json even while this process is preparing
+  // a spawn, and no child/session side effect should follow a drifted route.
+  executionAuthorityGuard?.();
 
   const requestedChildLaunchCwd = resolveChildLaunchCwd(ctx, args.workdir);
   const parentWaitTimeoutMs = parentWaitTimeoutMsFromArgs(args);
@@ -350,11 +426,12 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     visibleTools: ctx.parentVisibleTools?.(),
     reviewPolicy: parentReviewPolicy,
     executionMode: parentExecutionMode,
-    workspaceInstructions: loadWorkspaceInstructionSummary(ctx.workspaceRoot),
+    workspaceInstructions: reviewedInstructionSummary !== undefined
+      ? reviewedInstructionSummary ?? undefined
+      : loadWorkspaceInstructionSummary(ctx.workspaceRoot),
     ownership,
     outputContract: getOutputContract(role.name)?.id ?? null,
   });
-  const childLlm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, role.name);
   const selectedPersona = manifest?.persona.enabled.includes(role.name)
     ? role.name
     : manifest?.persona.default ?? role.name;
@@ -431,7 +508,9 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     workspaceRoot: childWorkspaceRoot,
     launchCwd: childLaunchCwd,
     sessionKey: childKey,
-    instructionSummary: loadWorkspaceInstructionSummary(childWorkspaceRoot),
+    instructionSummary: reviewedInstructionSummary !== undefined
+      ? reviewedInstructionSummary ?? undefined
+      : loadWorkspaceInstructionSummary(childWorkspaceRoot),
   });
   let systemPromptOverride = buildRolePrompt(role, basePrompt, '');
   systemPromptOverride += `\n\n${renderDelegatedTaskPacket(taskPacket)}`;
@@ -506,6 +585,19 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     // ctx types these as plain string; the Agent narrows them.
     parentReviewPolicy: ctx.parentReviewPolicy as 'request' | 'proceed' | undefined,
     parentExecutionMode: ctx.parentExecutionMode as 'planning' | 'fast' | undefined,
+    executionAuthorityGuard,
+    ...(reviewedInstructionSummary !== undefined
+      ? { executionInstructionSummary: reviewedInstructionSummary }
+      : {}),
+    ...(ctx.executionMcpInventoryFingerprint !== undefined
+      ? { executionMcpInventoryFingerprint: ctx.executionMcpInventoryFingerprint }
+      : {}),
+    ...(executionAuthorityGuard
+      ? { executionPolicyWorkspaceRoot }
+      : {}),
+    ...(reviewedPolicySnapshot
+      ? { executionPolicySnapshot: reviewedPolicySnapshot }
+      : {}),
   });
   if (stageSkills) {
     childAgent.activeSkill = stageSkills.ids[0];
@@ -564,6 +656,7 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           });
         },
       });
+      executionAuthorityGuard?.();
       if (childTurnWasInterrupted(childAgent)) {
         finalizeInterruptedChild({
           ctx,
@@ -614,47 +707,9 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
             preview;
         }
       }
-
-      const completedAt = new Date().toISOString();
-      // MAS-P4-T3: per-child accounting — chars kept out of the parent's
-      // context via offload, and wall-clock spawn→complete.
-      const offloadedChars = workingRef ? Math.max(0, output.length - storedOutput.length) : 0;
-      const startedMs = record.startedAt ? Date.parse(record.startedAt) : NaN;
-      const wallClockMs = Number.isFinite(startedMs) ? Math.max(0, Date.parse(completedAt) - startedMs) : undefined;
-      updateSession(ctx.workspaceRoot, record.id, {
-        status: 'completed',
-        completedAt,
-        finalOutput: storedOutput,
-        // MAS-READMANIFEST — capture the files this child read so the phase
-        // engine can forward an "already mapped" manifest to later phases.
-        filesRead: childAgent.filesRead,
-        usage: { ...childAgent.sessionUsage, offloadedChars, wallClockMs },
-      });
-      // MAS-P2-M6: fire-and-forget feedback record. Skipped silently
-      // when MCP is offline or memory_capture_turn isn't exposed.
-      void emitRouteFeedback(ctx, {
-        task: prompt,
-        chosenAgentId: role.name,
-        parentAgentId: ctx.parentAgentId,
-        ownership,
-        outcome: 'success',
-        record,
-        completedAt,
-        tokenCost:
-          (childAgent.sessionUsage?.promptTokens ?? 0) +
-          (childAgent.sessionUsage?.completionTokens ?? 0),
-      });
-      // Roll the offload savings into the parent's metrics so /tokens can
-      // report what didn't have to land back in the parent's context window.
-      if (workingRef && output.length > OFFLOAD_PREVIEW_CHARS) {
-        ctx.recordOffload?.(output.length - OFFLOAD_PREVIEW_CHARS);
-      }
-      // FOOTER-TELEMETRY-2 — roll this child's token spend into the parent's
-      // in-memory counter so the footer `offload` segment can show it live.
-      ctx.recordChildTokens?.(
-        (childAgent.sessionUsage?.promptTokens ?? 0) +
-        (childAgent.sessionUsage?.completionTokens ?? 0),
-      );
+      // The offload port is asynchronous. A user steer or policy change during
+      // it revokes this child before any success state or merge is published.
+      executionAuthorityGuard?.();
       // Tell the REPL the child finished — otherwise the user sees the child's
       // tool calls scroll by and then silence, with no signal that it's safe
       // to ask the parent agent to continue.
@@ -678,6 +733,9 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
       let worktreeSummary: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string; heldForReview?: boolean } | undefined;
       let mergeLine = '';
       if (childWorkspace.isolation && !worktreeSettled) {
+        // Keep authority failures outside the best-effort merge-error catch:
+        // revocation is a terminal execution decision, not a cleanup warning.
+        executionAuthorityGuard?.();
         try {
           // BUILD-LOOP P2.5 — HOLD the child's changes (don't auto-merge) when it's a
           // build fan-out slice (`holdWorktree` → the synthesis gate owns the merge) or
@@ -706,12 +764,57 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
         }
       }
 
+      executionAuthorityGuard?.();
+      const completedAt = new Date().toISOString();
+      // MAS-P4-T3: per-child accounting — chars kept out of the parent's
+      // context via offload, and wall-clock spawn→complete.
+      const offloadedChars = workingRef ? Math.max(0, output.length - storedOutput.length) : 0;
+      const startedMs = record.startedAt ? Date.parse(record.startedAt) : NaN;
+      const wallClockMs = Number.isFinite(startedMs) ? Math.max(0, Date.parse(completedAt) - startedMs) : undefined;
+      updateSession(ctx.workspaceRoot, record.id, {
+        status: 'completed',
+        completedAt,
+        finalOutput: storedOutput,
+        // MAS-READMANIFEST — capture the files this child read so the phase
+        // engine can forward an "already mapped" manifest to later phases.
+        filesRead: childAgent.filesRead,
+        usage: { ...childAgent.sessionUsage, offloadedChars, wallClockMs },
+      });
+      // Reviewed execution suppresses unrelated route-feedback capture. The
+      // child result remains in the workflow/session ledger owned by the run.
+      if (!executionAuthorityGuard) {
+        void emitRouteFeedback(ctx, {
+          task: prompt,
+          chosenAgentId: role.name,
+          parentAgentId: ctx.parentAgentId,
+          ownership,
+          outcome: 'success',
+          record,
+          completedAt,
+          tokenCost:
+            (childAgent.sessionUsage?.promptTokens ?? 0) +
+            (childAgent.sessionUsage?.completionTokens ?? 0),
+        });
+      }
+      // Roll the offload savings into the parent's metrics so /tokens can
+      // report what didn't have to land back in the parent's context window.
+      if (workingRef && output.length > OFFLOAD_PREVIEW_CHARS) {
+        ctx.recordOffload?.(output.length - OFFLOAD_PREVIEW_CHARS);
+      }
+      // FOOTER-TELEMETRY-2 — roll this child's token spend into the parent's
+      // in-memory counter so the footer `offload` segment can show it live.
+      ctx.recordChildTokens?.(
+        (childAgent.sessionUsage?.promptTokens ?? 0) +
+        (childAgent.sessionUsage?.completionTokens ?? 0),
+      );
+
       const AGENT_PREVIEW_MAX = Math.max(400, getCliKnobs().agentPreviewChars);
       const previewBody = (output
         ? (output.length <= AGENT_PREVIEW_MAX
             ? output
             : extractChildPreview(output, AGENT_PREVIEW_MAX))
         : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX)) + mergeLine;
+      executionAuthorityGuard?.();
       ctx.onChildComplete?.(createChildExecutionReceipt({
         childId: record.id,
         role: role.name,
@@ -733,7 +836,7 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
       // to ask. Only workers chain, and reviewers/verifiers aren't workers,
       // so a follow-up never triggers another follow-up. `autoChain` is the
       // canonical mode; legacy `/auto-review on` resolves to `review`.
-      if (role.name === 'worker') {
+      if (role.name === 'worker' && !executionAuthorityGuard) {
         const prefs = readPreferences(ctx.workspaceRoot);
         const mode = resolveAutoChainMode(prefs);
         const roles = autoChainRoles(mode, getCliKnobs().autoChainMaxFollowups);
@@ -811,15 +914,17 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           error: message,
           finalOutput: syntheticOutput,
         });
-        void emitRouteFeedback(ctx, {
-          task: prompt,
-          chosenAgentId: role.name,
-          parentAgentId: ctx.parentAgentId,
-          ownership,
-          outcome: 'failure',
-          record,
-          completedAt,
-        });
+        if (!executionAuthorityGuard) {
+          void emitRouteFeedback(ctx, {
+            task: prompt,
+            chosenAgentId: role.name,
+            parentAgentId: ctx.parentAgentId,
+            ownership,
+            outcome: 'failure',
+            record,
+            completedAt,
+          });
+        }
         ctx.onChildComplete?.(createChildExecutionReceipt({
           childId: record.id,
           role: role.name,

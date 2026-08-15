@@ -17,6 +17,7 @@
  */
 
 import type { AccessMode } from '../roles/roles.js';
+import { inferRoleFromTask } from '../tools/helpers.js';
 
 /** How a phase aggregates its children's outputs before the next phase. */
 export type PhaseSynthesis = 'role-rollup' | 'review-merge' | 'none';
@@ -67,6 +68,11 @@ export interface PhasePlanResult {
 
 const ACCESS_MODES: readonly AccessMode[] = ['read', 'write', 'shell'];
 const SYNTH_MODES: readonly PhaseSynthesis[] = ['role-rollup', 'review-merge', 'none'];
+const REVIEWED_PHASE_PLAN_LIMITS = Object.freeze({
+  phases: 16,
+  agentsPerPhase: 16,
+  agentsTotal: 64,
+});
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -77,11 +83,20 @@ const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v
  * fills defaults (`access:'read'`, `synthesize:'none'`, `title` ← `id`), collects
  * ALL errors, and returns `plan:null` if any hard error is present.
  */
-export function normalizePhasePlan(raw: unknown): PhasePlanResult {
+function normalizePhasePlanWithLimits(
+  raw: unknown,
+  limits?: typeof REVIEWED_PHASE_PLAN_LIMITS,
+): PhasePlanResult {
   const errors: string[] = [];
   if (!isObject(raw)) return { plan: null, errors: ['plan must be an object'] };
   if (!Array.isArray(raw.phases) || raw.phases.length === 0) {
     return { plan: null, errors: ['plan.phases must be a non-empty array'] };
+  }
+  if (limits && raw.phases.length > limits.phases) {
+    return {
+      plan: null,
+      errors: [`plan.phases exceeds the ${limits.phases}-phase limit`],
+    };
   }
 
   const seenIds = new Set<string>();
@@ -112,12 +127,18 @@ export function normalizePhasePlan(raw: unknown): PhasePlanResult {
     if (hasAgents) {
       const list = rawPhase.agents as unknown[];
       if (list.length === 0) errors.push(`${where}.agents must not be empty`);
+      if (limits && list.length > limits.agentsPerPhase) {
+        errors.push(`${where}.agents exceeds the ${limits.agentsPerPhase}-child limit`);
+      }
       agents = list.map((a, j) => normalizeAgent(a, `${where}.agents[${j}]`, errors));
     }
     if (hasFanOut) {
       const fo = rawPhase.fanOut as Record<string, unknown>;
       const over = Array.isArray(fo.over) ? fo.over.filter(isNonEmptyString) : [];
       if (over.length === 0) errors.push(`${where}.fanOut.over must be a non-empty string array`);
+      if (limits && over.length > limits.agentsPerPhase) {
+        errors.push(`${where}.fanOut.over exceeds the ${limits.agentsPerPhase}-child limit`);
+      }
       const agent = normalizeAgent(fo.agent, `${where}.fanOut.agent`, errors);
       fanOut = { over, agent };
     }
@@ -134,8 +155,21 @@ export function normalizePhasePlan(raw: unknown): PhasePlanResult {
     const inputFrom = toStringArray(rawPhase.inputFrom);
     const dependsOn = toStringArray(rawPhase.dependsOn);
 
-    phases.push({ id: id || `phase-${i}`, title, agents, fanOut, inputFrom, synthesize, dependsOn });
+    phases.push({
+      id: id || `phase-${i}`,
+      title,
+      ...(agents ? { agents } : {}),
+      ...(fanOut ? { fanOut } : {}),
+      ...(inputFrom !== undefined ? { inputFrom } : {}),
+      synthesize,
+      ...(dependsOn !== undefined ? { dependsOn } : {}),
+    });
   });
+
+  const totalAgents = phases.reduce((sum, phase) => sum + countPhaseAgents(phase), 0);
+  if (limits && totalAgents > limits.agentsTotal) {
+    errors.push(`plan exceeds the ${limits.agentsTotal}-child cumulative limit`);
+  }
 
   // Cross-references (inputFrom / dependsOn must name real phases) + cycle check.
   const ids = new Set(phases.map((p) => p.id));
@@ -155,6 +189,50 @@ export function normalizePhasePlan(raw: unknown): PhasePlanResult {
   const plan: PhasePlan = { phases };
   if (isNonEmptyString(raw.title)) plan.title = raw.title.trim();
   return { plan, errors };
+}
+
+/** Preserve the public/legacy normalizer while trusted launches opt into caps. */
+export function normalizePhasePlan(raw: unknown): PhasePlanResult {
+  return normalizePhasePlanWithLimits(raw);
+}
+
+/** Internal reviewed-launch shape: bounded before intent issuance or effects. */
+export function normalizeReviewedPhasePlan(raw: unknown): PhasePlanResult {
+  const normalized = normalizePhasePlanWithLimits(raw, REVIEWED_PHASE_PLAN_LIMITS);
+  if (!normalized.plan) return normalized;
+  // An omitted role must not be re-inferred after {{input}} or read-manifest
+  // interpolation. Pin it from the reviewed template prompt once so prior child
+  // output cannot switch the later role, overlay, tier, or tool scope.
+  const phases = normalized.plan.phases.map((phase) => ({
+    ...phase,
+    ...(phase.agents
+      ? {
+          agents: phase.agents.map((agent) => ({
+            ...agent,
+            role: agent.role ?? inferRoleFromTask(agent.prompt),
+          })),
+        }
+      : {}),
+    ...(phase.fanOut
+      ? {
+          fanOut: {
+            ...phase.fanOut,
+            agent: {
+              ...phase.fanOut.agent,
+              role: phase.fanOut.agent.role
+                ?? inferRoleFromTask(phase.fanOut.agent.prompt),
+            },
+          },
+        }
+      : {}),
+  }));
+  return {
+    plan: {
+      ...(normalized.plan.title ? { title: normalized.plan.title } : {}),
+      phases,
+    },
+    errors: [],
+  };
 }
 
 function normalizeAgent(raw: unknown, where: string, errors: string[]): PhaseAgentSpec {

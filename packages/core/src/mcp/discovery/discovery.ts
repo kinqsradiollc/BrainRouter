@@ -28,6 +28,19 @@ export interface McpToolBrief {
   summary: string;
 }
 
+/** Resolve an exact namespaced tool, or a unique legacy raw alias. */
+export function resolveMcpCatalogTool<T extends McpCatalogTool>(
+  tools: readonly T[],
+  target: string,
+): T | undefined {
+  const want = target.trim();
+  if (!want) return undefined;
+  const exact = tools.find((tool) => String(tool.name) === want);
+  if (exact) return exact;
+  const rawMatches = tools.filter((tool) => String(tool.__rawName ?? '') === want);
+  return rawMatches.length === 1 ? rawMatches[0] : undefined;
+}
+
 const MAX_SUMMARY = 200;
 
 /** Collapse whitespace and clip a tool description to a one-line summary. */

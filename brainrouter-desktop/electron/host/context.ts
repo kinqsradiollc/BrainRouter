@@ -97,6 +97,8 @@ export interface HostContext {
   refreshAccountModelCatalog: (force?: boolean) => Promise<DesktopAccountModelCatalog>;
   peekAccountModelCatalog: () => DesktopAccountModelCatalog;
   syncActiveSessionLlm: (base?: LLMConfig) => LLMConfig;
+  /** Revoke pending/active reviewed authority before runtime-policy writes. */
+  revokeReviewedExecutionAuthority: (scope: 'active-session' | 'workspace') => void;
   /** ADR-032 D8 — drains every pooled Agent, installs the org-bound MCP
    * transport, then respawns the active Agent under the same local tenant. */
   rebindActiveAccountOrg: (

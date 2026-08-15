@@ -18,7 +18,7 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 | **034** | Messages that arrive | **COMPLETE** | Three exports nothing reaches — see below. |
 | **035** | A meeting you cannot lose | **COMPLETE** | Nothing. |
 | **038** | A planner worth opening | **COMPLETE** | Nothing. |
-| **040** | One runtime, graphs of bounded loops | **ACCEPTED · IMPLEMENTATION ACTIVE** | A40-1 is implemented; A40-2–A40-11 remain open. |
+| **040** | One runtime, graphs of bounded loops | **ACCEPTED · IMPLEMENTATION ACTIVE** | A40-1 and A40-2's trusted-intent slice are implemented; the rest of A40-2 and A40-3–A40-11 remain open. |
 
 ---
 
@@ -182,7 +182,13 @@ orchestration around it, and CLI/Desktop will render one event-derived execution
 map. The implemented A40-1 slice repairs the truth underneath that work: all 17
 workspace profiles resolve exact or declared bundled plan identity without
 changing their reviewed modes, and runtime state carries workspace and plan IDs
-separately. A40-2–A40-11 remain open and this row makes no claim about them.
+separately. A40-2's trusted-intent slice is also implemented: ordinary/model
+turns cannot self-authorize durable workflow launch, explicit CLI and host
+actions carry one exact opaque live-Agent capability, new phase ledgers record
+content-free launch/parent lineage, and a purpose-limited revocable execution
+lease follows declared descendants. A40-2 remains open for the conversational
+task envelope, closed origin/topology contract, goal/no-goal parity, and shared
+Core goal supervisor; A40-3–A40-11 remain open as well.
 
 ---
 
@@ -198,6 +204,6 @@ neither can be run at zero cost without you.
 | 033 · D7 precision/recall | A provider key supplied to the harness's env var |
 
 Those are the only owner-run acceptance decisions listed here. ADR-040's remaining
-A40-2–A40-11 rows are engineering work, not acceptance that can be inferred from
-the decision being approved. 032's procedure action ledger — previously the one
+A40-2 work and A40-3–A40-11 rows are engineering work, not acceptance that can
+be inferred from the decision being approved. 032's procedure action ledger — previously the one
 genuinely unwritten piece of code — is built, tested and reached.

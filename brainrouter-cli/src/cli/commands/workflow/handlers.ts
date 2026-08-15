@@ -7,6 +7,7 @@
 import path from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
@@ -741,17 +742,32 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         return true;
       }
       if (sub === 'run') {
-        // WF-LAUNCH — kick off a workflow from a template. Builds + validates the
-        // plan, then runs a turn where the agent fires one run_workflow call.
-        const template = (args[1] ?? '').trim();
-        const templateArgs = parseTemplateArgs(args.slice(2).join(' '));
-        const kick = buildWorkflowRunKickoff(template, templateArgs);
+        // ADR-040 A40-2 — validate first, then have the trusted CLI bind the exact
+        // arguments before asking the model for one run_workflow call. The
+        // prompt requests execution but cannot authorize it by itself.
+        const kick = buildWorkflowRunKickoff(
+          (args[1] ?? '').trim(),
+          parseTemplateArgs(args.slice(2).join(' ')),
+          `run-${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+        );
         if (!kick.ok) {
           console.log(chalk.red(`\n${kick.error}\n`));
           return true;
         }
+        let executionIntent;
+        try {
+          executionIntent = await agent.issueExecutionIntent({
+            source: 'user-command',
+            toolName: 'run_workflow',
+            args: kick.toolArgs,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(chalk.red(`\nCould not authorize workflow launch: ${message}\n`));
+          return true;
+        }
         console.log(chalk.green(`\n▶  Running workflow "${kick.title}"…\n`));
-        ctx.repl.runAgentTurn(kick.prompt);
+        ctx.repl.runAgentTurn(kick.prompt, { executionIntent });
         return true;
       }
       if (sub === 'switch') {

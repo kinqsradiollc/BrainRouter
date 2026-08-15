@@ -49,19 +49,28 @@ for the golden tests you must update.
 
 - **Evidence:** `packages/core/src/command/parity.ts`, `brainrouter-cli/src/tests/catalog-parity.test.ts:14`
 
-### 4. Command handlers delegate — they don't orchestrate
+### 4. Command handlers delegate — they don't orchestrate or serialize authority
 
 Slash handlers never spawn processes or run multi-step logic themselves.
 Background work goes through `agent.spawnBackgroundWorker` (separate Agent +
-on-disk transcript); multi-phase flows (e.g. `/build`) are launched by handing
-`ctx.repl.runAgentTurn` a prompt instructing the agent to call the orchestration
-tool (`run_workflow` with template + templateArgs). Use `runAgentTurnAsync` when
-the handler needs post-turn cleanup (e.g. `/side` restoring the parent
-`sessionKey` via `.finally`).
+on-disk transcript). An explicit `/build` or `/workflow run` command first
+validates the exact low-level tool
+arguments, asks the live `Agent` for a `user-command` execution-intent handle,
+and passes that opaque handle beside—not inside—the kickoff prompt through
+`RunAgentTurnOptions.executionIntent`. Ordinary turns and the separate
+`/workflow resume <slug>` goal/artifact action carry no such handle; trusted
+phase-run resume waits for per-attempt durable lineage. Never put
+the handle or an intent record in prompt text, transcript data, IPC, or a
+delegated task packet. Use `runAgentTurnAsync` when a handler needs post-turn
+cleanup (e.g. `/side` restoring the parent `sessionKey` via `.finally`).
 
 - **Why:** foreground turn-state is a shared hazard; reusing the worker infra +
   the agent's own tools keeps transcripts, guardrails, and policy on every path.
-- **Evidence:** `brainrouter-cli/src/cli/commands/orchestration/spawn.ts:12,44`
+- **Evidence:** `brainrouter-cli/src/cli/commands/orchestration/spawn.ts`,
+  `brainrouter-cli/src/cli/commands/workflow/handlers.ts`,
+  `brainrouter-cli/src/cli/commands/workflowLaunch/index.ts`,
+  `brainrouter-cli/src/cli/ink/runChat/turnRunner.ts`,
+  `brainrouter-cli/src/tests/execution-intent-cli.test.ts`
 
 ### 5. MCP-backed commands print through shared helpers; classic output is chalk + newline-padded
 
@@ -236,6 +245,56 @@ reserve "preview" for read-only, pre-write user-review surfaces.
   `packages/core/src/orchestration/roles/rolePromptSelection.ts`,
   `packages/agent-protocol/src/events.ts`,
   `packages/core/src/tests/orchestration-plan-identity.test.ts`
+
+### 11e. Durable execution requires live, exact, one-shot host intent
+
+`run_workflow` and `run_workflow_graph` are stable low-level targets, not model
+authority. An ordinary turn hides both. The live `Agent` may expose exactly one
+only while it owns an unexpired execution-intent handle bound to the current
+workspace, session, user, turn, source, request, topology, and Core-normalized
+arguments. The process-local object identity is the bearer; its frozen,
+content-free record is audit data only. Serialization, cloning, a structural
+lookalike, planner output, goal state, hidden prompts, workspace/plugin data, or
+prior cost approval cannot mint or transfer authority. A same-owner mismatch
+burns the handle, successful consume is one-shot, and validation happens before
+the cost prompt and before any durable write.
+
+The reviewed turn is purpose-limited: it advertises and accepts only the exact
+launch plus indispensable steering control. Its private policy fingerprint
+binds the effective manifest, roles, hooks, tool ceilings, session review mode,
+workspace instructions, extension/MCP inventory, and provider/model routing.
+Any identity, policy, catalog, runtime-actor, or authenticated-user steering
+change permanently revokes the pending handle or consumed execution lease.
+That lease follows declared descendants, is rechecked after awaited approvals
+and model/tool boundaries and before merges or terminal publication, and never
+authorizes undeclared delegation, continuation, worker/process lifecycle, or
+background execution. Reviewed descendants use the reviewed parent policy root
+and exact instruction snapshot even when their files live in isolated
+worktrees. Open-ended advisory extension hooks and unrelated capture/title/
+learning automation do not run in a reviewed turn.
+
+The public host sources are `user-command` and `reviewed-ui`.
+`authorized-workflow` is reserved for a future Core-derived declared child edge;
+callers cannot select it. A trusted new phase launch records a fresh run ID, its
+parent turn execution ID, and the content-free intent record additively in the
+legacy-readable workflow ledger. Trusted phase-run resume and background launch
+stay closed until their execution attempts can own durable lineage and a
+revocable lifetime. The Desktop host may hold an in-process reviewed-action
+seam, but the renderer cannot issue or transport the bearer.
+Saved-graph production launch stays closed until its approval, cancellation,
+cumulative-budget, and failure semantics fail closed; Desktop Test run remains
+preview-only.
+
+- **Evidence:** `packages/types/src/agent/execution.ts`,
+  `packages/core/src/orchestration/execution/authority.ts`,
+  `packages/core/src/orchestration/execution/normalization.ts`,
+  `packages/core/src/agent/agent.ts`,
+  `packages/core/src/agent/runtime/runTurn.impl.ts`,
+  `packages/core/src/agent/runtime/toolAdapterInvocationPhase.ts`,
+  `packages/core/src/agent/runtime/turnFinalizationPhase.ts`,
+  `packages/core/src/workflow/run/workflowRun.ts`,
+  `packages/core/src/tests/execution-intent-authority.test.ts`,
+  `packages/core/src/tests/execution-intent-runtime.test.ts`
 
 ---
 

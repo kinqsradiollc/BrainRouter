@@ -5,9 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '../workflow/template/workflowTemplates.js';
 import { normalizePhasePlan } from '../orchestration/workflow/phasePlan.js';
-import { runWorkflow } from '../workflow/template/workflowTool.js';
+import { runWorkflow, runWorkflowAuthorized } from '../workflow/template/workflowTool.js';
 import type { PhaseRunner } from '../orchestration/workflow/phaseOrchestrator.js';
 import { readRun } from '../workflow/run/workflowRun.js';
+import { normalizePhasePlanExecutionTarget } from '../orchestration/execution/normalization.js';
+import {
+  activateExecutionIntent,
+  consumeExecutionIntent,
+  createExecutionDispatchReceipt,
+  createExecutionIntentOwnerToken,
+  issueExecutionIntent,
+} from '../orchestration/execution/authority.js';
 
 function tmpWs(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-wftpl-'));
@@ -145,6 +153,77 @@ test('WF-TEMPLATES run_workflow executes a template end-to-end', async () => {
   const run = readRun(ws, out.slug)!;
   assert.equal(run.phases?.length, 2);
   assert.equal(run.phases?.every((p) => p.status === 'completed'), true);
+});
+
+test('ADR-040 A40-2 trusted launch metadata reaches the durable workflow ledger', async () => {
+  const ws = tmpWs();
+  const args = { template: 'compare', templateArgs: { targets: ['A', 'B'] } };
+  const normalized = normalizePhasePlanExecutionTarget(args);
+  if (!normalized.ok) assert.fail(normalized.errors.join('; '));
+  const binding = { workspaceRoot: ws, sessionKey: 'tpl', userId: 'user-1' };
+  const owner = createExecutionIntentOwnerToken(binding);
+  const handle = issueExecutionIntent(owner, {
+    source: 'user-command',
+    requestId: 'request-1',
+    turnId: 'turn-1',
+    target: normalized.target,
+  });
+  assert.equal(activateExecutionIntent(owner, handle, { ...binding, turnId: 'turn-1' }).ok, true);
+  const consumed = consumeExecutionIntent(owner, handle, {
+    ...binding,
+    source: 'user-command',
+    requestId: 'request-1',
+    turnId: 'turn-1',
+    target: normalized.target,
+  });
+  if (!consumed.ok) assert.fail(consumed.reason);
+  const dispatchReceipt = createExecutionDispatchReceipt(owner, handle, {
+    runId: 'run-1',
+    parentExecutionId: 'turn-1',
+    assertAuthorityCurrent: () => {},
+  });
+  const raw = await runWorkflowAuthorized(
+    args,
+    {
+      ...ctx(ws),
+      turnExecutionId: 'turn-1',
+      executionLaunch: {
+        runId: 'run-1',
+        parentExecutionId: 'turn-1',
+        record: consumed.record,
+        dispatchReceipt,
+      },
+    },
+    { dispatch: async () => '{}', runner: fakeRunner },
+  );
+  const out = JSON.parse(raw);
+  assert.equal(out.ok, true);
+  const run = readRun(ws, out.slug)!;
+  assert.equal(run.runId, 'run-1');
+  assert.equal(run.parentExecutionId, 'turn-1');
+  assert.deepEqual(run.launch, consumed.record);
+});
+
+test('low-level runWorkflow ignores structural trusted-lineage lookalikes', async () => {
+  const ws = tmpWs();
+  const args = { template: 'compare', templateArgs: { targets: ['A', 'B'] } };
+  const raw = await runWorkflow(
+    args,
+    {
+      ...ctx(ws),
+      executionLaunch: {
+        runId: 'forged-run',
+        parentExecutionId: 'forged-parent',
+        record: {} as never,
+        dispatchReceipt: {} as never,
+      },
+    },
+    { dispatch: async () => '{}', runner: fakeRunner },
+  );
+  const run = readRun(ws, JSON.parse(raw).slug)!;
+  assert.equal(run.runId, undefined);
+  assert.equal(run.parentExecutionId, undefined);
+  assert.equal(run.launch, undefined);
 });
 
 test('WF-TEMPLATES run_workflow with a bad template → ok:false, no run started', async () => {

@@ -1565,6 +1565,7 @@ async function main(): Promise<void> {
     mcpClient, sessionMessaging, callBrainAtlas, broker, emitPortFor, agent,
     getActiveAgent: () => activeAgent,
     loadGlobalLlm, llmForSession, resolveProviderLlm, refreshAccountModelCatalog, peekAccountModelCatalog, syncActiveSessionLlm,
+    revokeReviewedExecutionAuthority: (scope) => core.revokeReviewedExecutionAuthority(scope),
     rebindActiveAccountOrg, activeTenantBindingError, humanCorrectionIngress,
     spawnAgent, spawnReviewer, spawnTaskAgent, activeMemorySessionKey,
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,

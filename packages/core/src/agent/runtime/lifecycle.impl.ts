@@ -127,8 +127,11 @@ export async function ensureInitialized(this: Agent): Promise<void> {
   }
 
 export function createSystemMessage(this: Agent) {
-    const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
-    const activePersonality = resolveActivePersonality(this.workspaceRoot, this.sessionKey);
+    const reviewedPolicy = this.reviewedExecutionPolicySnapshot();
+    const activeMode = reviewedPolicy?.activeMode
+      ?? resolveActiveMode(this.workspaceRoot, this.sessionKey);
+    const activePersonality = reviewedPolicy?.activePersonality
+      ?? resolveActivePersonality(this.workspaceRoot, this.sessionKey);
     // 10b: pass the connected MCP tool inventory so `buildSystemPrompt`
     // can omit the BrainRouter memory section when the brain is offline.
     // The cached `lastKnownMcpTools` is populated by every successful
@@ -142,7 +145,9 @@ export function createSystemMessage(this: Agent) {
       sessionKey: this.sessionKey,
       instructionSummary: this.reviewSourceSafety
         ? REVIEW_WORKSPACE_INSTRUCTION_NOTICE
-        : loadWorkspaceInstructionSummary(this.workspaceRoot),
+        : reviewedPolicy
+          ? reviewedPolicy.instructionSummary ?? undefined
+          : loadWorkspaceInstructionSummary(this.workspaceRoot),
       personality: activePersonality.style,
       activeSkill: this.activeSkill,
       // Planning/fast framing + review-policy framing reflect the ACTIVE
@@ -243,7 +248,12 @@ export async function runExtensionHooks(
     for (const h of handlers) {
       if (h.match && ctx.tool && !ctx.tool.includes(h.match)) continue;
       try {
-        const r = await h.handle({ event, tool: ctx.tool, args: ctx.args, workspaceRoot: this.workspaceRoot });
+        const r = await h.handle({
+          event,
+          tool: ctx.tool,
+          args: ctx.args,
+          workspaceRoot: this.reviewedExecutionPolicyWorkspaceRoot(),
+        });
         if (r === 'deny') return `Blocked by an extension ${event} hook`;
       } catch { /* a throwing handler is ignored, never blocks the call */ }
     }

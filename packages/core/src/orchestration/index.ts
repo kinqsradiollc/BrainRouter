@@ -19,6 +19,7 @@ export * from './profiles/orchestrationProfileResolver.js';
 export * from './profiles/taskSignals.js';
 export * from './profiles/adaptiveStrategySelection.js';
 export * from './profiles/adaptiveStrategySelectionModel.js';
+export * from './execution/index.js';
 export * from './roles/outputContracts.js';
 export type {
   ChildExecutionReceipt,

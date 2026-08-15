@@ -12,6 +12,7 @@ import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { toolPairKey } from '../../../runtime/observability/toolPairing.js';
 import { expandMentions } from '../../../memory/mentions.js';
 import { formatToolCall } from '../text/toolFormat.js';
+import type { RunAgentTurnOptions } from '../../commands/_context.js';
 import type { RunChatContext } from './context.js';
 import {
   forgetExpiredPeerMessageForAgent,
@@ -32,7 +33,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
 
   ctx.runChatTurn = async (
     rawInput: string,
-    options: { agent?: typeof agent; ephemeral?: boolean } = {},
+    options: RunAgentTurnOptions = {},
   ): Promise<void> => {
     if (!ctx.controller) return;
     const controller = ctx.controller;
@@ -398,7 +399,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
         onNotice: (notice) => {
           if (notice?.message) controller!.push.memory(notice.level ?? 'info', `✂️ ${notice.message}`);
         },
-      });
+      }, options.executionIntent ? { executionIntent: options.executionIntent } : undefined);
 
       parentDone = true;
       // Flush any pending batch-spawn notice + final fleet snapshot so

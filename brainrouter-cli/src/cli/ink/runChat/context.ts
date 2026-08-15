@@ -6,6 +6,7 @@
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { InputQueue } from '../../../runtime/input/inputQueue.js';
+import type { RunAgentTurnOptions } from '../../commands/_context.js';
 import type { ChatController } from '../ChatApp.js';
 import type { createReadlineShim } from './readlineShim.js';
 
@@ -75,7 +76,7 @@ export interface RunChatContext {
   drainInputQueue: () => void;
   runChatTurn: (
     rawInput: string,
-    options?: { agent?: Agent; ephemeral?: boolean },
+    options?: RunAgentTurnOptions,
   ) => Promise<void>;
   hasLiveActors: () => boolean;
   tickChildRefresh: () => void;

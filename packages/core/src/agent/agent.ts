@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 // 0.3.7 — Agent now talks to a Pool of MCP servers. The Pool's public
 // surface matches McpClientWrapper's (listTools / callTool / isConnected /
@@ -27,6 +27,11 @@ import type {
   ComputerUsePort,
   InteractionPort,
 } from '@kinqs/brainrouter-agent-protocol';
+import type {
+  ExecutionIntentHandle,
+  ExecutionIntentRecord,
+  ExecutionIntentSource,
+} from '@kinqs/brainrouter-types/agent';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import {
   appendTranscriptEntry,
@@ -124,7 +129,7 @@ export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/w
 export { applyPatchEnvelope } from './fs/applyPatch.js';
 import { normalizeToolName } from '../tool/specs/names.js';
 import { registryAllowedTools, registryEntry } from '../tool/registry/registry.js';
-import { searchMcpCatalog } from '../mcp/discovery/discovery.js';
+import { resolveMcpCatalogTool, searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
 import { localToolExecutor, type OrchestrationRuntimePort, type ToolLifecycleRuntimePort } from '../tool/registry/executors.js';
@@ -151,8 +156,17 @@ import { callMcpTool, extractToolText } from '../mcp/mcpUtils.js';
 import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js';
 import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/store/goalStore.js';
-import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
-import { extensionHookHandlers, requiredExtensionToolNames } from '../extension/registry.js';
+import {
+  runCapturedHooks,
+  runHooks,
+  type HookEvent,
+  type HookRunResult,
+} from '../hooks/hooksStore.js';
+import {
+  extensionContributionGeneration,
+  extensionHookHandlers,
+  requiredExtensionToolNames,
+} from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/runtime/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuard.js';
@@ -230,7 +244,7 @@ import {
   hashBriefingContent,
   wrapMidSessionRefresh,
 } from '../memory/anchorPin.js';
-import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
+import { buildHookifyContext, evaluateHookify, listHookifyRules, type HookifyRule } from '../hooks/hookifyStore.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compaction/compactor.js';
 import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
 import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js';
@@ -282,6 +296,10 @@ import {
 // Giant turn-loop body stays behind the Agent facade. Tool handlers are owned
 // by required capability extensions and enter through an internal-only port.
 import { runTurn as runTurnImpl } from './runtime/runTurn.impl.js';
+import {
+  registerExecutionLaunchRuntime,
+  type ExecutionLaunchAuthorization,
+} from './runtime/executionLaunchRuntime.js';
 import { invokeBuiltinToolRuntime } from '../extension/builtin/runtime.js';
 import {
   bootstrapSession as bootstrapSessionImpl,
@@ -514,6 +532,50 @@ import type { PromptLayeredMessage } from './transport/llmTransport.js';
 import type { WorkspaceCapabilityResolution } from '../workspace/capabilities.js';
 import type { ActiveTurnOrchestrationResolution } from '../workspace/activeTurnOrchestration.js';
 import { resolveWorkspaceMemoryCaptureContext } from '../workspace/memoryCapture.js';
+import {
+  normalizePhasePlanExecutionTarget,
+  normalizeWorkflowGraphExecutionTarget,
+  readExecutionIntentRecord,
+  type NormalizedExecutionIntentTarget,
+} from '../orchestration/execution/index.js';
+import {
+  normalizedPhasePlanSnapshot,
+  snapshotExecutionIntentInput,
+} from '../orchestration/execution/normalization.js';
+import { executionRoutingPolicyFingerprint } from '../orchestration/execution/routingPolicy.js';
+import {
+  captureReviewedExecutionPolicy,
+  type ReviewedExecutionPolicySnapshot,
+} from '../orchestration/execution/policySnapshot.js';
+import { clampAccess, inferRoleFromTask } from '../orchestration/tools/helpers.js';
+import {
+  activateExecutionIntent,
+  consumeExecutionIntent,
+  createExecutionDispatchReceipt,
+  createExecutionIntentOwnerToken,
+  expireExecutionIntent,
+  issueExecutionIntent as mintExecutionIntent,
+  rejectExecutionDispatchReceipt,
+  validateExecutionIntent,
+  type ExecutionIntentOwnerToken,
+} from '../orchestration/execution/authority.js';
+import { loadWorkflowGraph } from '../workflow/graph/graphStore.js';
+import { loadWorkspaceManifest } from '../workspace/manifest.js';
+import { resolveWorkspaceFileForRead } from '../workspace/fileWrite.js';
+import {
+  resolveWorkspaceToolSelection,
+  workspaceMcpToolAllowed,
+  workspaceToolAllowed,
+} from '../workspace/toolProfiles.js';
+import { learnedTenantForAgent } from './runtime/learningPhase.js';
+
+export interface RunTurnOptions {
+  hiddenPrompt?: boolean;
+  images?: Array<{ mediaType: string; dataBase64: string }>;
+  preplanned?: boolean;
+  /** Host-held capability. It is never serialized into prompt/history/IPC. */
+  executionIntent?: ExecutionIntentHandle;
+}
 
 export interface AgentOptions {
   workspaceRoot: string;
@@ -642,6 +704,28 @@ export interface AgentOptions {
    */
   parentReviewPolicy?: 'request' | 'proceed';
   parentExecutionMode?: 'planning' | 'fast';
+  /**
+   * Process-local live lease inherited by a child of a reviewed durable
+   * execution. It is checked before every child tool and terminal application
+   * boundary, so parent steering/policy revocation cannot leave an already
+   * running descendant free to mutate or merge.
+   */
+  executionAuthorityGuard?: () => void;
+  /**
+   * Exact workspace-instruction snapshot inherited from the reviewed parent.
+   * Reviewed descendants use this instead of reloading a detached worktree's
+   * potentially different checkout.
+   */
+  executionInstructionSummary?: string | null;
+  /**
+   * Content-free identity of the MCP catalog reviewed by the parent. A child
+   * must observe the same catalog before it can start its turn.
+   */
+  executionMcpInventoryFingerprint?: string;
+  /** Parent policy root used by reviewed descendants running in a worktree. */
+  executionPolicyWorkspaceRoot?: string;
+  /** Immutable policy inherited from the reviewed root; never serialized. */
+  executionPolicySnapshot?: ReviewedExecutionPolicySnapshot;
 }
 
 
@@ -715,6 +799,26 @@ export function explainUnknownToolName(name: string): string {
   );
 }
 
+function canonicalExecutionAuthorityJson(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return '"<undefined>"';
+  if (typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? JSON.stringify(value) : 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalExecutionAuthorityJson).join(',')}]`;
+  }
+  if (typeof value !== 'object') return JSON.stringify(String(value));
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return `{${entries.map(([key, child]) => (
+    `${JSON.stringify(key)}:${canonicalExecutionAuthorityJson(child)}`
+  )).join(',')}}`;
+}
+
 
 export class Agent {
   public mcpClient: McpClientWrapper;
@@ -726,8 +830,34 @@ export class Agent {
    *  RunTurnCallbacks.onCodeIndex at the top of runTurn (executeLocalTool has
    *  no callbacks param, so we bridge through the instance). */
   public codeIndexListener: ((e: { file: string; chunks: number }) => void) | null = null;
-  public sessionKey: string;
-  public learnedTenant?: LearnedTenant;
+  #sessionKey = '';
+  public get sessionKey(): string {
+    return this.#sessionKey;
+  }
+  public set sessionKey(value: string) {
+    if (value === this.#sessionKey) return;
+    if (this.#sessionKey) this.invalidateExecutionIntentAuthority();
+    this.#sessionKey = value;
+  }
+  #learnedTenant?: Readonly<LearnedTenant>;
+  public get learnedTenant(): LearnedTenant | undefined {
+    return this.#learnedTenant;
+  }
+  public set learnedTenant(value: LearnedTenant | undefined) {
+    const normalized = value
+      ? Object.freeze({
+        orgId: value.orgId?.trim() || null,
+        userId: value.userId.trim() || 'local',
+      })
+      : undefined;
+    const current = this.#learnedTenant;
+    if (
+      current?.orgId === normalized?.orgId
+      && current?.userId === normalized?.userId
+    ) return;
+    if (current !== undefined) this.invalidateExecutionIntentAuthority();
+    this.#learnedTenant = normalized;
+  }
   public readonly learnedTenantPinnedByHost: boolean;
   public learningEnabled: boolean;
   /**
@@ -742,8 +872,35 @@ export class Agent {
   public getFederationSessionKey(): string | null {
     return this.federationSessionKey;
   }
-  public workspaceRoot: string;
+  #workspaceRoot: string | undefined;
+  public get workspaceRoot(): string {
+    return this.#workspaceRoot ?? '';
+  }
+  public set workspaceRoot(value: string) {
+    if (value === this.#workspaceRoot) return;
+    if (this.#workspaceRoot !== undefined) {
+      this.invalidateExecutionIntentAuthority();
+    }
+    this.#workspaceRoot = value;
+  }
   public launchCwd: string;
+  /** Stable identity for the currently running turn; reset at turn finalization. */
+  public turnExecutionId: string | null = null;
+  #executionIntentOwner?: ExecutionIntentOwnerToken;
+  #executionIntentOwnerKey?: string;
+  #activeExecutionIntent?: {
+    owner: ExecutionIntentOwnerToken;
+    handle: ExecutionIntentHandle;
+    record: ExecutionIntentRecord;
+    policyFingerprint: string;
+    policySnapshot: ReviewedExecutionPolicySnapshot;
+  };
+  #issuedExecutionIntentPolicies = new WeakMap<object, string>();
+  #issuedExecutionIntentPolicySnapshots = new WeakMap<object, ReviewedExecutionPolicySnapshot>();
+  #reviewedExecutionTurnPolicySnapshot?: ReviewedExecutionPolicySnapshot;
+  #executionIntentTurnToolName: 'run_workflow' | 'run_workflow_graph' | null = null;
+  #executionIntentAuthorityGeneration = 0;
+  #turnInProgress = false;
   public chatHistory: any[] = [];
   /**
    * Runtime projection of peer observations already durably appended to the
@@ -911,7 +1068,15 @@ export class Agent {
   };
   /** Read-only saved-profile plan resolved for the current root turn. */
   public activeTurnOrchestration?: ActiveTurnOrchestrationResolution;
-  public accessMode: AccessMode;
+  #accessMode: AccessMode | undefined;
+  public get accessMode(): AccessMode {
+    return this.#accessMode ?? 'shell';
+  }
+  public set accessMode(value: AccessMode) {
+    if (value === this.#accessMode) return;
+    if (this.#accessMode !== undefined) this.invalidateExecutionIntentAuthority();
+    this.#accessMode = value;
+  }
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   public policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
   public silent: boolean;
@@ -1008,8 +1173,14 @@ export class Agent {
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
   public prompter: InteractivePrompter;
   // DESK-5n — parent's review stance, for the silent-child Auto-mode bypass.
-  private parentReviewPolicy?: AgentOptions['parentReviewPolicy'];
+  public parentReviewPolicy?: AgentOptions['parentReviewPolicy'];
   public parentExecutionMode?: AgentOptions['parentExecutionMode'];
+  private executionAuthorityGuard?: () => void;
+  private executionInstructionSummary?: string | null;
+  private executionMcpInventoryFingerprint?: string;
+  private executionPolicyWorkspaceRoot?: string;
+  private executionPolicySnapshot?: ReviewedExecutionPolicySnapshot;
+  #executionIntentMcpInventory: readonly unknown[] = Object.freeze([]);
 
   constructor(mcpClient: McpClientWrapper, llmConfig: LLMConfig, options: AgentOptions) {
     this.mcpClient = mcpClient;
@@ -1071,15 +1242,112 @@ export class Agent {
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
     this.parentReviewPolicy = options.parentReviewPolicy;
     this.parentExecutionMode = options.parentExecutionMode;
+    this.executionAuthorityGuard = options.executionAuthorityGuard;
+    this.executionInstructionSummary = options.executionInstructionSummary;
+    this.executionMcpInventoryFingerprint = options.executionMcpInventoryFingerprint;
+    this.executionPolicyWorkspaceRoot = options.executionPolicyWorkspaceRoot;
+    this.executionPolicySnapshot = options.executionAuthorityGuard
+      ? options.executionPolicySnapshot
+      : undefined;
+    registerExecutionLaunchRuntime(this, {
+      recordMcpInventory: (tools) => {
+        if (
+          this.#executionIntentTurnToolName
+          || this.executionAuthorityGuard
+          || this.executionMcpInventoryFingerprint
+        ) {
+          this.#recordExecutionIntentMcpInventory(tools);
+        }
+      },
+      assertPendingCurrent: () => this.#assertPendingExecutionLaunchCurrent(),
+      preflight: (toolName, args) => this.#preflightExecutionLaunch(toolName, args),
+      authorize: (toolName, args) => this.#authorizeExecutionLaunch(toolName, args),
+      rejectPending: () => this.#rejectPendingExecutionLaunch(),
+      reject: (launch) => this.#rejectExecutionLaunch(launch),
+      assertLeaseCurrent: (launch) => this.#assertExecutionLaunchAuthorityCurrent(launch),
+      assertCurrent: (launch) => this.#assertExecutionLaunchStillCurrent(launch),
+    });
+  }
+
+  /** Fail closed at every child tool/finalization seam after parent revocation. */
+  public assertInheritedExecutionAuthorityCurrent(): void {
+    this.executionAuthorityGuard?.();
+  }
+
+  /** Propagate only the live lease, never the root's one-shot launch receipt. */
+  public inheritedExecutionAuthorityGuard(): (() => void) | undefined {
+    return this.executionAuthorityGuard;
+  }
+
+  /** Exact reviewed instruction text propagated independently of worktree HEAD. */
+  public inheritedExecutionInstructionSummary(): string | null | undefined {
+    return this.executionInstructionSummary;
+  }
+
+  /** Root snapshots live instructions once; descendants retain that snapshot. */
+  public executionInstructionSummaryForDescendants(): string | null | undefined {
+    if (this.executionInstructionSummary !== undefined) {
+      return this.executionInstructionSummary;
+    }
+    const policy = this.reviewedExecutionPolicySnapshot();
+    if (policy) return policy.instructionSummary;
+    if (!this.#executionIntentTurnToolName) return undefined;
+    return loadWorkspaceInstructionSummary(this.workspaceRoot) ?? null;
+  }
+
+  /**
+   * MCP catalog identity propagated to reviewed descendants. The root derives
+   * it from the issue-time catalog; descendants retain the same immutable hash.
+   */
+  public executionMcpInventoryFingerprintForDescendants(): string | undefined {
+    if (this.executionMcpInventoryFingerprint) {
+      return this.executionMcpInventoryFingerprint;
+    }
+    if (!this.#executionIntentTurnToolName) return undefined;
+    return this.#currentExecutionMcpInventoryFingerprint();
+  }
+
+  /**
+   * Policy stays rooted in the reviewed parent checkout even when writes run in
+   * a detached child worktree. File mutation paths still use workspaceRoot.
+   */
+  public reviewedExecutionPolicyWorkspaceRoot(): string {
+    return this.executionPolicyWorkspaceRoot ?? this.workspaceRoot;
+  }
+
+  /** Immutable policy captured by the reviewed root and shared by descendants. */
+  public reviewedExecutionPolicySnapshot(): ReviewedExecutionPolicySnapshot | undefined {
+    return this.executionPolicySnapshot ?? this.#reviewedExecutionTurnPolicySnapshot;
+  }
+
+  /** Run live hooks for ordinary turns and captured hooks for reviewed turns. */
+  public runExecutionHooks(
+    event: HookEvent,
+    context: { tool?: string; payload?: Record<string, unknown> } = {},
+    timeoutMs = 5000,
+  ): HookRunResult[] {
+    const policy = this.reviewedExecutionPolicySnapshot();
+    return policy
+      ? runCapturedHooks(policy.hooks, event, context, timeoutMs)
+      : runHooks(this.workspaceRoot, event, context, timeoutMs);
+  }
+
+  /** Hookify rules share the same immutable reviewed policy root as shell hooks. */
+  public reviewedExecutionHookifyRules(): readonly HookifyRule[] | undefined {
+    return this.reviewedExecutionPolicySnapshot()?.hookifyRules;
   }
 
   /** Apply an authenticated host identity between turns without replacing the
    * Agent or losing its conversation. Hosts serialize this call against turns. */
   public setLearningBinding(tenant: LearnedTenant, enabled: boolean): void {
-    this.learnedTenant = {
+    // Any authenticated-principal transition invalidates already-issued launch
+    // capabilities, even if a host later switches back to the same identity.
+    // Otherwise an old reviewed action could become usable again within its TTL.
+    this.invalidateExecutionIntentAuthority();
+    this.#learnedTenant = Object.freeze({
       orgId: tenant.orgId?.trim() || null,
       userId: tenant.userId.trim() || 'local',
-    };
+    });
     this.learningEnabled = enabled;
   }
 
@@ -1173,6 +1441,811 @@ export class Agent {
       if (err instanceof NoTTYError) return true; // headless — no terminal to ask, proceed
       throw err;
     }
+  }
+
+  private executionIntentBinding(): {
+    workspaceRoot: string;
+    sessionKey: string;
+    userId: string;
+  } {
+    const learnedTenant = learnedTenantForAgent(this);
+    return {
+      workspaceRoot: this.workspaceRoot,
+      sessionKey: this.sessionKey,
+      userId: learnedTenant.userId.trim() || 'local',
+    };
+  }
+
+  /**
+   * Descriptor-safe MCP authority snapshot. Tool names alone are insufficient:
+   * reconnecting the same server id with a different schema can widen what a
+   * reviewed descendant may send. Keep only bounded plain protocol metadata;
+   * the content itself stays process-local inside the policy digest.
+   */
+  #recordExecutionIntentMcpInventory(tools: readonly unknown[]): void {
+    const rows = tools.map((tool, index) => {
+      if (!tool || typeof tool !== 'object') {
+        throw new Error(`MCP tool ${index} is not a plain descriptor`);
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(tool);
+      const descriptorValue = (key: string): unknown => {
+        const descriptor = descriptors[key];
+        if (!descriptor) return undefined;
+        if (!('value' in descriptor)) {
+          throw new Error(`MCP tool ${index}.${key} must not be an accessor`);
+        }
+        return descriptor.value;
+      };
+      const nameValue = descriptorValue('name');
+      if (typeof nameValue !== 'string' || !nameValue.trim()) {
+        throw new Error(`MCP tool ${index}.name must be a non-empty string`);
+      }
+      const name = nameValue.trim();
+      const rawValue = descriptorValue('__rawName');
+      const rawName = typeof rawValue === 'string' && rawValue.trim()
+        ? rawValue.trim()
+        : this.rawMcpToolName(name);
+      const serverValue = descriptorValue('__serverId');
+      const serverId = typeof serverValue === 'string' && serverValue.trim()
+        ? serverValue.trim()
+        : this.serverIdFromMcpToolName(name) ?? null;
+      const status = serverId && typeof (this.mcpClient as any).getStatus === 'function'
+        ? (this.mcpClient as any).getStatus(serverId)
+        : undefined;
+      const descriptionValue = descriptorValue('description');
+      const inputSchema = descriptorValue('inputSchema')
+        ?? descriptorValue('input_schema')
+        ?? null;
+      const outputSchema = descriptorValue('outputSchema')
+        ?? descriptorValue('output_schema')
+        ?? null;
+      const annotations = descriptorValue('annotations') ?? null;
+      return {
+        name,
+        rawName,
+        serverId,
+        identity: typeof status?.identity === 'string' ? status.identity : 'unknown',
+        description: typeof descriptionValue === 'string' ? descriptionValue : null,
+        inputSchema,
+        outputSchema,
+        annotations,
+      };
+    }).sort((left, right) => {
+      const leftKey = `${left.serverId ?? ''}\u0000${left.name}\u0000${left.rawName}`;
+      const rightKey = `${right.serverId ?? ''}\u0000${right.name}\u0000${right.rawName}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+    const snapshot = snapshotExecutionIntentInput(rows);
+    if (!Array.isArray(snapshot)) {
+      throw new Error('MCP authority snapshot must be an array');
+    }
+    this.#executionIntentMcpInventory = snapshot;
+    const observed = this.#currentExecutionMcpInventoryFingerprint();
+    if (
+      this.executionMcpInventoryFingerprint
+      && observed !== this.executionMcpInventoryFingerprint
+    ) {
+      throw new Error(
+        'Workflow execution canceled because its reviewed MCP tool catalog changed.',
+      );
+    }
+  }
+
+  #currentExecutionMcpInventoryFingerprint(): string {
+    return createHash('sha256')
+      .update(canonicalExecutionAuthorityJson(this.#executionIntentMcpInventory))
+      .digest('hex');
+  }
+
+  /**
+   * Content-free digest of every mutable local policy source that can widen a
+   * reviewed phase/graph launch. The digest is process-private: it binds the
+   * opaque handle and its child-spawn guard without persisting workspace or
+   * user policy content in the execution ledger.
+   */
+  private executionIntentPolicyFingerprint(options: {
+    includeMcpInventory?: boolean;
+    policySnapshot?: ReviewedExecutionPolicySnapshot;
+  } = {}): string {
+    const knobs = getCliKnobs();
+    const policy = options.policySnapshot
+      ?? captureReviewedExecutionPolicy(this.workspaceRoot, this.sessionKey);
+    const shape = {
+      manifest: policy.manifest,
+      roles: policy.roles,
+      hooks: policy.hooks,
+      hookify: policy.hookifyRules.map(({ sourcePath: _sourcePath, ...rule }) => rule),
+      agent: {
+        accessMode: this.accessMode,
+        silent: this.silent,
+        tier: this.tier ?? null,
+        depth: this.agentDepth,
+        toolScope: this.toolScope ?? null,
+        authorityToolCeiling: this.authorityToolCeiling ?? null,
+        disallowedTools: [...this.disallowedTools].sort(),
+        activeSkill: this.activeSkill ?? null,
+        activeSkillAllowedTools: this.activeSkillAllowedTools === undefined
+          ? null
+          : [...this.activeSkillAllowedTools].sort(),
+        activeSkillDisallowedTools: [...this.activeSkillDisallowedTools].sort(),
+      },
+      // Provider/model/endpoint are part of the reviewed runtime identity. The
+      // credential itself never enters the snapshot; host setters rotate the
+      // capability generation when any live LLM config value changes.
+      llmRuntime: {
+        provider: this.llmConfig.provider,
+        model: this.llmConfig.model,
+        endpoint: this.llmConfig.endpoint ?? null,
+        apiVersion: this.llmConfig.apiVersion ?? null,
+      },
+      // Child roles and the build critic resolve through top-level providers
+      // + agentModels at dispatch time. Bind that private, credential-free
+      // routing source (including its file revision) to the reviewed launch.
+      routingPolicyFingerprint: executionRoutingPolicyFingerprint(),
+      // Keep the entire resolved CLI policy private inside the digest. Durable
+      // execution consults knobs in several layers (approval, child bounds,
+      // isolation, repair/critic gates, merge review, and optional delivery),
+      // so a hand-maintained subset can silently miss a later side effect.
+      cli: knobs,
+      delegationPolicy: policy.delegationPolicy,
+      activeMode: policy.activeMode,
+      activePersonality: policy.activePersonality,
+      workspaceInstructions: policy.instructionSummary,
+      ...(options.includeMcpInventory === false
+        ? {}
+        : { mcpInventory: this.#executionIntentMcpInventory }),
+      extensionContributionGeneration: extensionContributionGeneration(),
+    };
+    return createHash('sha256')
+      .update(canonicalExecutionAuthorityJson(shape))
+      .digest('hex');
+  }
+
+  private assertExecutionIntentPolicyFingerprint(expected: string): void {
+    if (this.executionIntentPolicyFingerprint() !== expected) {
+      throw new Error(
+        'Workflow launch canceled because its reviewed workspace, profile, role, access, skill, permission, model-routing, or delegation policy changed.',
+      );
+    }
+  }
+
+  /** Permanently revoke every pending/active launch generation. */
+  private invalidateExecutionIntentAuthority(): void {
+    const active = this.#activeExecutionIntent;
+    if (active) {
+      expireExecutionIntent(
+        active.owner,
+        active.handle,
+        active.record.turnId,
+      );
+    }
+    this.#activeExecutionIntent = undefined;
+    this.#executionIntentOwner = undefined;
+    this.#executionIntentOwnerKey = undefined;
+    this.#executionIntentAuthorityGeneration += 1;
+  }
+
+  /**
+   * Trusted-host revocation seam for an explicit runtime-policy change.
+   * Pending handles are retired immediately; an already-running reviewed root
+   * turn is also interrupted so it cannot wait through a host-side provider or
+   * policy transition and resume with stale authority. Ordinary turns keep
+   * their existing lifecycle.
+   */
+  public revokeReviewedExecutionAuthority(): void {
+    const reviewedTurnActive = this.#executionIntentTurnToolName !== null;
+    this.invalidateExecutionIntentAuthority();
+    if (reviewedTurnActive) this.requestInterrupt();
+  }
+
+  private assertExecutionIntentToolEligible(
+    toolName: 'run_workflow' | 'run_workflow_graph',
+    policySnapshot = this.reviewedExecutionPolicySnapshot(),
+  ): void {
+    const canonical = registryEntry(toolName)?.name ?? toolName;
+    const workspaceSelection = resolveWorkspaceToolSelection({
+      manifest: policySnapshot
+        ? policySnapshot.manifest
+        : loadWorkspaceManifest(this.workspaceRoot),
+      activeToolProfiles: [],
+    });
+    const hardEligible = (
+      !this.silent
+      && this.agentDepth === 0
+      && this.tier !== 'worker'
+      && this.allowedToolsForAccess().has(canonical)
+      && (!this.toolScope?.local.length || toolNameMatchesAny(canonical, this.toolScope.local))
+      && (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes(canonical))
+      && !toolNameMatchesAny(canonical, [
+        ...this.disallowedTools,
+        ...this.activeSkillDisallowedTools,
+      ])
+      && (
+        this.activeSkillAllowedTools === undefined
+        || toolNameMatchesAny(canonical, this.activeSkillAllowedTools)
+      )
+      && workspaceToolAllowed(workspaceSelection, { toolId: canonical })
+      && resolveToolVisible(canonical, true, getCliKnobs().toolOverrides)
+    );
+    if (!hardEligible) {
+      throw new Error(
+        `Workflow launch tool "${canonical}" is not eligible under the current `
+        + 'workspace, access, delegated-authority, skill, or user tool policy.',
+      );
+    }
+  }
+
+  private assertFreshPhaseRunAvailable(
+    target: NormalizedExecutionIntentTarget,
+  ): void {
+    const record = target.record;
+    if (record.topology !== 'phase-plan' || record.resume !== null) return;
+    const relativePath = path.join(
+      '.brainrouter',
+      'workflows',
+      record.slug,
+      'run.json',
+    );
+    try {
+      resolveWorkspaceFileForRead(this.workspaceRoot, relativePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    throw new Error(
+      `Workflow run "${record.slug}" already exists. Fresh per-execution paths `
+      + 'are not enabled yet; choose a distinct slug or wait for the execution-store slice.',
+    );
+  }
+
+  private assertPhasePlanRolesEligible(
+    target: NormalizedExecutionIntentTarget,
+    policySnapshot = this.reviewedExecutionPolicySnapshot(),
+  ): void {
+    const plan = normalizedPhasePlanSnapshot(target);
+    const manifest = policySnapshot
+      ? policySnapshot.manifest
+      : loadWorkspaceManifest(this.workspaceRoot);
+    if (!plan) return;
+    const activeRoles = new Map(
+      (policySnapshot?.roles ?? listAgentDefinitions(this.workspaceRoot).map((loaded) => ({
+        source: loaded.source,
+        definition: loaded.def,
+      }))).map((loaded) => [loaded.definition.id, loaded.definition]),
+    );
+    const unavailable = new Set<string>();
+    const elevated = new Set<string>();
+    for (const phase of plan.phases) {
+      const specs = phase.fanOut
+        ? [phase.fanOut.agent]
+        : phase.agents ?? [];
+      for (const spec of specs) {
+        const effectiveRole = spec.role ?? inferRoleFromTask(spec.prompt);
+        const definition = activeRoles.get(effectiveRole);
+        if (!definition) {
+          unavailable.add(effectiveRole);
+          continue;
+        }
+        const requestedAccess = spec.access ?? 'read';
+        if (clampAccess(definition.defaultAccess, requestedAccess) !== requestedAccess) {
+          elevated.add(
+            `${effectiveRole} (${requestedAccess} requested; ${definition.defaultAccess} maximum)`,
+          );
+        }
+      }
+    }
+    if (unavailable.size > 0) {
+      throw new Error(
+        `Workflow plan requests role(s) unavailable in workspace profile "${manifest?.profile ?? 'current'}": `
+        + `${[...unavailable].sort().join(', ')}. Choose a compatible reviewed workflow.`,
+      );
+    }
+    if (elevated.size > 0) {
+      throw new Error(
+        'Workflow plan requests access above its reviewed role ceiling: '
+        + `${[...elevated].sort().join(', ')}. Choose access at or below each role default.`,
+      );
+    }
+  }
+
+  private snapshotExecutionIntentIssue(input: {
+    source: Exclude<ExecutionIntentSource, 'authorized-workflow'>;
+    toolName: 'run_workflow' | 'run_workflow_graph';
+    args: Record<string, unknown>;
+    requestId?: string;
+  }): {
+    source: Exclude<ExecutionIntentSource, 'authorized-workflow'>;
+    toolName: 'run_workflow' | 'run_workflow_graph';
+    args: Record<string, unknown>;
+    requestId?: string;
+  } {
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const readData = (key: string): unknown => {
+      const descriptor = descriptors[key];
+      if (!descriptor || !('value' in descriptor)) {
+        throw new Error(`Execution intent ${key} must be a plain data property.`);
+      }
+      return descriptor.value;
+    };
+    const source = readData('source');
+    const toolName = readData('toolName');
+    const requestIdDescriptor = descriptors.requestId;
+    if (requestIdDescriptor && !('value' in requestIdDescriptor)) {
+      throw new Error('Execution intent requestId must be a plain data property.');
+    }
+    if (source !== 'user-command' && source !== 'reviewed-ui') {
+      throw new Error('Execution intent source is not available to hosts.');
+    }
+    if (toolName !== 'run_workflow' && toolName !== 'run_workflow_graph') {
+      throw new Error('Execution intent toolName is not a durable launch tool.');
+    }
+    const args = snapshotExecutionIntentInput(readData('args'));
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      throw new Error('Execution intent args must be a plain object.');
+    }
+    const requestId = requestIdDescriptor && 'value' in requestIdDescriptor
+      ? requestIdDescriptor.value
+      : undefined;
+    if (requestId !== undefined && typeof requestId !== 'string') {
+      throw new Error('Execution intent requestId must be a string.');
+    }
+    return {
+      source,
+      toolName,
+      args: args as Record<string, unknown>,
+      ...(requestId !== undefined ? { requestId } : {}),
+    };
+  }
+
+  private currentExecutionIntentOwner(): ExecutionIntentOwnerToken {
+    const binding = this.executionIntentBinding();
+    const key = `${binding.workspaceRoot}\u0000${binding.sessionKey}\u0000${binding.userId}`;
+    if (!this.#executionIntentOwner || this.#executionIntentOwnerKey !== key) {
+      this.#executionIntentOwner = createExecutionIntentOwnerToken(binding);
+      this.#executionIntentOwnerKey = key;
+    }
+    return this.#executionIntentOwner;
+  }
+
+  /**
+   * Host-only launch issuer. The live Agent owns the private authority token;
+   * callers can request only a user command or reviewed UI action, never claim
+   * an inherited workflow edge. The returned object has no serializable fields.
+   */
+  public async issueExecutionIntent(input: {
+    source: Exclude<ExecutionIntentSource, 'authorized-workflow'>;
+    toolName: 'run_workflow' | 'run_workflow_graph';
+    args: Record<string, unknown>;
+    requestId?: string;
+  }): Promise<ExecutionIntentHandle> {
+    if (this.#turnInProgress) {
+      throw new Error('Execution intent cannot be issued while an Agent turn is already running.');
+    }
+    const reviewed = this.snapshotExecutionIntentIssue(input);
+    const issuanceBinding = this.executionIntentBinding();
+    const issuanceGeneration = this.#executionIntentAuthorityGeneration;
+    const issuancePolicySnapshot = captureReviewedExecutionPolicy(
+      this.workspaceRoot,
+      this.sessionKey,
+    );
+    const issuanceLocalPolicyFingerprint = this.executionIntentPolicyFingerprint({
+      includeMcpInventory: false,
+      policySnapshot: issuancePolicySnapshot,
+    });
+    const phaseTarget = reviewed.toolName === 'run_workflow'
+      ? normalizePhasePlanExecutionTarget(reviewed.args)
+      : null;
+    await this.ensureInitialized();
+    let issuedMcpTools: unknown[] = [];
+    try {
+      const tools = await this.mcpClient.listTools();
+      issuedMcpTools = Array.isArray(tools.tools) ? tools.tools : [];
+    } catch {
+      // Offline at review means no MCP authority. A later reconnect changes the
+      // catalog and therefore requires a fresh reviewed launch.
+    }
+    this.#recordExecutionIntentMcpInventory(issuedMcpTools);
+    const currentBinding = this.executionIntentBinding();
+    if (
+      issuanceBinding.workspaceRoot !== currentBinding.workspaceRoot
+      || issuanceBinding.sessionKey !== currentBinding.sessionKey
+      || issuanceBinding.userId !== currentBinding.userId
+      || issuanceGeneration !== this.#executionIntentAuthorityGeneration
+      || issuanceLocalPolicyFingerprint !== this.executionIntentPolicyFingerprint({
+        includeMcpInventory: false,
+      })
+      || this.#turnInProgress
+    ) {
+      throw new Error(
+        'Execution intent issuance was canceled because its workspace, session, user, or local execution policy changed.',
+      );
+    }
+    this.assertExecutionIntentToolEligible(reviewed.toolName, issuancePolicySnapshot);
+    let target: NormalizedExecutionIntentTarget;
+    if (reviewed.toolName === 'run_workflow') {
+      const normalized = phaseTarget!;
+      if (!normalized.ok) {
+        throw new Error(`Workflow launch is invalid: ${normalized.errors.join('; ')}`);
+      }
+      target = normalized.target;
+    } else {
+      const descriptors = Object.getOwnPropertyDescriptors(reviewed.args);
+      const idDescriptor = descriptors.id ?? descriptors.graphId;
+      const varsDescriptor = descriptors.vars;
+      if (!idDescriptor || !('value' in idDescriptor) || typeof idDescriptor.value !== 'string') {
+        throw new Error('Workflow graph launch requires a plain string id.');
+      }
+      if (varsDescriptor && !('value' in varsDescriptor)) {
+        throw new Error('Workflow graph vars must be plain data, not an accessor.');
+      }
+      const graphId = idDescriptor.value.trim();
+      const definition = loadWorkflowGraph(this.workspaceRoot, graphId);
+      if (!definition) throw new Error(`No saved workflow graph "${graphId}".`);
+      const graphRevision = typeof (definition as { updatedAt?: unknown }).updatedAt === 'string'
+        ? String((definition as { updatedAt?: string }).updatedAt)
+        : null;
+      const normalized = normalizeWorkflowGraphExecutionTarget({
+        graphId,
+        graphRevision,
+        definition,
+        vars: varsDescriptor && 'value' in varsDescriptor ? varsDescriptor.value : {},
+      });
+      if (!normalized.ok) {
+        throw new Error(`Workflow graph launch is invalid: ${normalized.errors.join('; ')}`);
+      }
+      target = normalized.target;
+    }
+    this.assertPhasePlanRolesEligible(target, issuancePolicySnapshot);
+    this.assertFreshPhaseRunAvailable(target);
+    const policyFingerprint = this.executionIntentPolicyFingerprint({
+      policySnapshot: issuancePolicySnapshot,
+    });
+    const handle = mintExecutionIntent(this.currentExecutionIntentOwner(), {
+      source: reviewed.source,
+      requestId: reviewed.requestId?.trim() || randomUUID(),
+      turnId: randomUUID(),
+      target,
+    });
+    this.#issuedExecutionIntentPolicies.set(handle as object, policyFingerprint);
+    this.#issuedExecutionIntentPolicySnapshots.set(
+      handle as object,
+      issuancePolicySnapshot,
+    );
+    return handle;
+  }
+
+  private beginExecutionIntentTurn(handle?: ExecutionIntentHandle): string {
+    this.#activeExecutionIntent = undefined;
+    this.#reviewedExecutionTurnPolicySnapshot = undefined;
+    if (!handle) {
+      // A capability is scoped to the next explicitly launched turn. If any
+      // ordinary turn wins the Agent's serialized turn slot first, rotate the
+      // private owner so the queued/stale handle can never be used afterward.
+      this.invalidateExecutionIntentAuthority();
+      this.#executionIntentTurnToolName = null;
+      const turnId = randomUUID();
+      this.turnExecutionId = turnId;
+      return turnId;
+    }
+    const record = readExecutionIntentRecord(handle);
+    if (!record) {
+      throw new Error(
+        'Execution launch refused: the intent handle is unknown or was serialized. Start it again from an explicit command or reviewed UI action.',
+      );
+    }
+    const policyFingerprint = this.#issuedExecutionIntentPolicies.get(handle as object);
+    const policySnapshot = this.#issuedExecutionIntentPolicySnapshots.get(handle as object);
+    if (!policyFingerprint || !policySnapshot) {
+      throw new Error(
+        'Execution launch refused: the handle was not issued by this live Agent. Start it again from an explicit command or reviewed UI action.',
+      );
+    }
+    const owner = this.currentExecutionIntentOwner();
+    try {
+      this.assertExecutionIntentPolicyFingerprint(policyFingerprint);
+    } catch (error) {
+      // Presenting a genuine bearer is a one-shot activation attempt even when
+      // its reviewed policy has drifted. Burn it and its sibling generation so
+      // restoring mutable workspace policy cannot revive the same capability.
+      expireExecutionIntent(owner, handle, record.turnId);
+      this.#issuedExecutionIntentPolicies.delete(handle as object);
+      this.#issuedExecutionIntentPolicySnapshots.delete(handle as object);
+      this.invalidateExecutionIntentAuthority();
+      throw error;
+    }
+    const activated = activateExecutionIntent(
+      owner,
+      handle,
+      { ...this.executionIntentBinding(), turnId: record.turnId },
+    );
+    if (!activated.ok) {
+      this.#issuedExecutionIntentPolicies.delete(handle as object);
+      this.#issuedExecutionIntentPolicySnapshots.delete(handle as object);
+      this.invalidateExecutionIntentAuthority();
+      throw new Error(
+        `Execution launch refused (${activated.reason}). Start it again from an explicit command or reviewed UI action.`,
+      );
+    }
+    this.#activeExecutionIntent = {
+      owner,
+      handle,
+      record: activated.record,
+      policyFingerprint,
+      policySnapshot,
+    };
+    this.#reviewedExecutionTurnPolicySnapshot = policySnapshot;
+    this.#executionIntentTurnToolName = activated.record.target.topology === 'workflow-graph'
+      ? 'run_workflow_graph'
+      : 'run_workflow';
+    // Claiming one explicit turn permanently retires every sibling handle
+    // issued by the prior owner. The selected handle keeps that owner only in
+    // this active record long enough to consume and mint its dispatch receipt.
+    this.#executionIntentOwner = undefined;
+    this.#executionIntentOwnerKey = undefined;
+    this.#executionIntentAuthorityGeneration += 1;
+    this.turnExecutionId = activated.record.turnId;
+    return activated.record.turnId;
+  }
+
+  private endExecutionIntentTurn(turnId: string): void {
+    const active = this.#activeExecutionIntent;
+    if (active?.record.turnId === turnId) {
+      expireExecutionIntent(
+        active.owner,
+        active.handle,
+        turnId,
+      );
+    }
+    this.#activeExecutionIntent = undefined;
+    this.#executionIntentTurnToolName = null;
+    this.#reviewedExecutionTurnPolicySnapshot = undefined;
+    if (this.turnExecutionId === turnId) this.turnExecutionId = null;
+  }
+
+  private normalizeExecutionLaunchTarget(
+    toolName: 'run_workflow' | 'run_workflow_graph',
+    args: Record<string, unknown>,
+  ): ReturnType<typeof normalizePhasePlanExecutionTarget> {
+    if (toolName === 'run_workflow') {
+      return normalizePhasePlanExecutionTarget(args);
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(args);
+    const idDescriptor = descriptors.id ?? descriptors.graphId;
+    const varsDescriptor = descriptors.vars;
+    if (!idDescriptor || !('value' in idDescriptor) || typeof idDescriptor.value !== 'string') {
+      return { ok: false, errors: ['run_workflow_graph requires a plain string id.'] };
+    }
+    if (varsDescriptor && !('value' in varsDescriptor)) {
+      return { ok: false, errors: ['run_workflow_graph vars must be plain data, not an accessor.'] };
+    }
+    const graphId = idDescriptor.value.trim();
+    const definition = loadWorkflowGraph(this.workspaceRoot, graphId);
+    const graphRevision = definition && typeof (definition as { updatedAt?: unknown }).updatedAt === 'string'
+      ? String((definition as { updatedAt?: string }).updatedAt)
+      : null;
+    return definition
+      ? normalizeWorkflowGraphExecutionTarget({
+        graphId,
+        graphRevision,
+        definition,
+        vars: varsDescriptor && 'value' in varsDescriptor ? varsDescriptor.value : {},
+      })
+      : { ok: false, errors: [`No saved workflow graph "${graphId}".`] };
+  }
+
+  /** Reject unauthorized durable calls before any extension or shell hook runs. */
+  #preflightExecutionLaunch(
+    toolName: 'run_workflow' | 'run_workflow_graph',
+    args: Record<string, unknown>,
+  ): void {
+    const active = this.#activeExecutionIntent;
+    const turnId = this.turnExecutionId;
+    if (!active || !turnId) {
+      throw new Error(
+        `${toolName} requires an explicit /workflow or /build command, or a reviewed UI launch. Model/planner requests cannot authorize durable execution.`,
+      );
+    }
+    const burn = (): void => {
+      expireExecutionIntent(active.owner, active.handle, turnId);
+      this.#activeExecutionIntent = undefined;
+    };
+    try {
+      this.assertExecutionIntentPolicyFingerprint(active.policyFingerprint);
+      this.assertExecutionIntentToolEligible(toolName);
+    } catch (error) {
+      burn();
+      throw error;
+    }
+    const normalized = this.normalizeExecutionLaunchTarget(toolName, args);
+    if (!normalized.ok) {
+      burn();
+      throw new Error(
+        `${toolName} arguments do not match an authorized launch: ${normalized.errors.join('; ')}`,
+      );
+    }
+    this.assertPhasePlanRolesEligible(normalized.target);
+    const validated = validateExecutionIntent(active.owner, active.handle, {
+      ...this.executionIntentBinding(),
+      source: active.record.source,
+      requestId: active.record.requestId,
+      turnId,
+      target: normalized.target,
+    });
+    if (!validated.ok) {
+      this.#activeExecutionIntent = undefined;
+      throw new Error(
+        `${toolName} launch refused (${validated.reason}). Start a fresh explicit launch.`,
+      );
+    }
+  }
+
+  /** Pre-consume fence used across async context and hook boundaries. */
+  #assertPendingExecutionLaunchCurrent(): void {
+    const active = this.#activeExecutionIntent;
+    if (!active || this.turnExecutionId !== active.record.turnId || !this.#turnInProgress) {
+      throw new Error(
+        'Workflow launch canceled because its reviewed turn is no longer active.',
+      );
+    }
+    const binding = this.executionIntentBinding();
+    if (
+      binding.workspaceRoot !== active.record.workspaceRoot
+      || binding.sessionKey !== active.record.sessionKey
+      || binding.userId !== active.record.userId
+    ) {
+      throw new Error(
+        'Workflow launch canceled because its workspace, session, or user changed.',
+      );
+    }
+    this.assertExecutionIntentPolicyFingerprint(active.policyFingerprint);
+  }
+
+  /** Internal turn-loop rejection path before a dispatch receipt exists. */
+  #rejectPendingExecutionLaunch(): void {
+    this.invalidateExecutionIntentAuthority();
+  }
+
+  /** Internal turn-loop rejection path after one-shot consume. */
+  #rejectExecutionLaunch(
+    launch: Pick<ExecutionLaunchAuthorization, 'dispatchReceipt'>,
+  ): void {
+    rejectExecutionDispatchReceipt(launch.dispatchReceipt);
+  }
+
+  /** Tool-adapter chokepoint: validate, burn once, and return frozen arguments. */
+  #authorizeExecutionLaunch(
+    toolName: 'run_workflow' | 'run_workflow_graph',
+    args: Record<string, unknown>,
+  ): ExecutionLaunchAuthorization {
+    const active = this.#activeExecutionIntent;
+    const turnId = this.turnExecutionId;
+    if (!active || !turnId) {
+      throw new Error(
+        `${toolName} requires an explicit /workflow or /build command, or a reviewed UI launch. Model/planner requests cannot authorize durable execution.`,
+      );
+    }
+
+    this.assertExecutionIntentPolicyFingerprint(active.policyFingerprint);
+
+    const normalized = this.normalizeExecutionLaunchTarget(toolName, args);
+    if (!normalized.ok) {
+      expireExecutionIntent(active.owner, active.handle, turnId);
+      this.#activeExecutionIntent = undefined;
+      throw new Error(`${toolName} arguments do not match an authorized launch: ${normalized.errors.join('; ')}`);
+    }
+    const consumed = consumeExecutionIntent(
+      active.owner,
+      active.handle,
+      {
+        ...this.executionIntentBinding(),
+        source: active.record.source,
+        requestId: active.record.requestId,
+        turnId,
+        target: normalized.target,
+      },
+    );
+    if (!consumed.ok) {
+      this.#activeExecutionIntent = undefined;
+      throw new Error(
+        `${toolName} launch refused (${consumed.reason}). The authorization was consumed; start a fresh explicit launch.`,
+      );
+    }
+    this.#activeExecutionIntent = undefined;
+    const runId = randomUUID();
+    const authoritySnapshot = Object.freeze({
+      parentExecutionId: turnId,
+      authorityGeneration: this.#executionIntentAuthorityGeneration,
+      authorityPolicyFingerprint: active.policyFingerprint,
+      record: consumed.record,
+      dispatchArgs: consumed.dispatchArgs,
+    });
+    const dispatchReceipt = createExecutionDispatchReceipt(
+        active.owner,
+        active.handle,
+        {
+          runId,
+          parentExecutionId: turnId,
+          assertAuthorityCurrent: () => {
+            this.#assertExecutionLaunchAuthorityCurrent(authoritySnapshot);
+          },
+        },
+      );
+    return Object.freeze({ runId, ...authoritySnapshot, dispatchReceipt });
+  }
+
+  /** Revalidate the complete live binding after any approval/policy await. */
+  #assertExecutionLaunchAuthorityCurrent(
+    launch: Pick<ExecutionLaunchAuthorization, 'parentExecutionId' | 'authorityGeneration' | 'authorityPolicyFingerprint' | 'record' | 'dispatchArgs'>,
+  ): void {
+    const binding = this.executionIntentBinding();
+    if (
+      !this.#turnInProgress
+      || this.turnExecutionId !== launch.parentExecutionId
+      || this.#executionIntentAuthorityGeneration !== launch.authorityGeneration
+      || binding.workspaceRoot !== launch.record.workspaceRoot
+      || binding.sessionKey !== launch.record.sessionKey
+      || binding.userId !== launch.record.userId
+    ) {
+      throw new Error(
+        'Workflow launch canceled because its workspace, session, user, turn, or reviewed instruction changed before dispatch.',
+      );
+    }
+    // The intent TTL governs issue -> activation/consume only. After consume,
+    // the workflow is fenced by the active turn/generation/policy lease and
+    // its own child/wall-clock budgets; reusing the five-minute intent TTL as
+    // an execution deadline would cancel legitimate long-running builds.
+    this.assertExecutionIntentPolicyFingerprint(launch.authorityPolicyFingerprint);
+    const toolName = launch.record.target.topology === 'workflow-graph'
+      ? 'run_workflow_graph'
+      : 'run_workflow';
+    this.assertExecutionIntentToolEligible(toolName);
+    if (launch.record.target.topology === 'phase-plan') {
+      const normalized = normalizePhasePlanExecutionTarget(launch.dispatchArgs);
+      if (!normalized.ok) {
+        throw new Error(
+          `Workflow launch canceled because its protected plan is no longer valid: ${normalized.errors.join('; ')}`,
+        );
+      }
+      this.assertPhasePlanRolesEligible(normalized.target);
+    }
+  }
+
+  /** Revalidate the complete live binding after any approval/policy await. */
+  #assertExecutionLaunchStillCurrent(
+    launch: Pick<ExecutionLaunchAuthorization, 'parentExecutionId' | 'authorityGeneration' | 'authorityPolicyFingerprint' | 'record' | 'dispatchArgs'>,
+  ): void {
+    this.#assertExecutionLaunchAuthorityCurrent(launch);
+    if (launch.record.target.topology === 'phase-plan' && launch.record.target.resume === null) {
+      // Revalidate a collision after the potentially slow cost prompt. This is
+      // read-only; the low-level store remains the final atomic backstop.
+      const relativePath = path.join(
+        '.brainrouter',
+        'workflows',
+        launch.record.target.slug,
+        'run.json',
+      );
+      try {
+        resolveWorkspaceFileForRead(this.workspaceRoot, relativePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw error;
+      }
+      throw new Error(
+        `Workflow run "${launch.record.target.slug}" appeared before dispatch. Start a fresh explicit launch with a distinct slug.`,
+      );
+    }
+  }
+
+  public activeExecutionLaunchToolName(): 'run_workflow' | 'run_workflow_graph' | null {
+    const topology = this.#activeExecutionIntent?.record.target.topology;
+    if (topology === 'phase-plan') return 'run_workflow';
+    if (topology === 'workflow-graph') return 'run_workflow_graph';
+    return null;
+  }
+
+  /** Purpose fence for an explicitly reviewed launch turn, even after consume. */
+  public executionIntentTurnToolName(): 'run_workflow' | 'run_workflow_graph' | null {
+    return this.#executionIntentTurnToolName;
   }
 
   /**
@@ -1302,15 +2375,45 @@ export class Agent {
     try {
       const res = await this.mcpClient.listTools();
       let tools = (res.tools || []).filter((t: any) => this.isModelVisibleMcpTool(t));
+      const workspaceSelection = resolveWorkspaceToolSelection({
+        manifest: loadWorkspaceManifest(this.workspaceRoot),
+        activeToolProfiles: this.activeWorkspaceCapabilities.toolProfiles,
+      });
+      tools = tools.filter((tool: any) => {
+        const name = String(tool?.name ?? '');
+        const rawName = String(tool?.__rawName ?? this.rawMcpToolName(name));
+        const serverId = typeof tool?.__serverId === 'string'
+          ? tool.__serverId
+          : this.serverIdFromMcpToolName(name);
+        const status = serverId && typeof (this.mcpClient as any).getStatus === 'function'
+          ? (this.mcpClient as any).getStatus(serverId)
+          : undefined;
+        return workspaceMcpToolAllowed(workspaceSelection, {
+          toolId: rawName,
+          brainrouterOwned: !serverId || status?.identity === 'brainrouter',
+        });
+      });
       tools = applyToolScope(tools, {
         allow: this.toolScope?.mcp,
-        disallow: this.disallowedTools,
+        disallow: [...this.disallowedTools, ...this.activeSkillDisallowedTools],
       });
       if (this.authorityToolCeiling) {
         tools = tools.filter((tool: any) =>
           toolNameMatchesAny(String(tool?.name ?? ''), this.authorityToolCeiling!.mcp),
         );
       }
+      if (this.activeSkillAllowedTools !== undefined) {
+        tools = tools.filter((tool: any) =>
+          toolNameMatchesAny(String(tool?.name ?? ''), this.activeSkillAllowedTools!),
+        );
+      }
+      const overrides = getCliKnobs().toolOverrides;
+      tools = tools.filter((tool: any) => {
+        const name = String(tool?.name ?? '');
+        const rawName = String(tool?.__rawName ?? this.rawMcpToolName(name));
+        return resolveToolVisible(name, true, overrides)
+          && resolveToolVisible(rawName, true, overrides);
+      });
       return tools;
     } catch {
       return [];
@@ -1322,9 +2425,7 @@ export class Agent {
     const want = target.trim();
     if (!want) return undefined;
     const tools = await this.visibleMcpToolList();
-    return tools.find((t: any) =>
-      String(t?.name ?? '') === want ||
-      String(t?.__rawName ?? this.rawMcpToolName(String(t?.name ?? ''))) === want);
+    return resolveMcpCatalogTool(tools, want);
   }
 
   /**
@@ -1351,11 +2452,23 @@ export class Agent {
     return registryAllowedTools(this.accessMode);
   }
 
-  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }>; preplanned?: boolean }): Promise<string> {
+  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: RunTurnOptions): Promise<string> {
     // Body moved to ./runTurn.impl.ts (god-file breakdown); delegate with `this`
     // bound so all instance state resolves exactly as before.
-    if (this.reviewSourceSafety) this.modelProviderRequestsThisTurn = 0;
-    return runTurnImpl.call(this, prompt, callbacks, opts);
+    if (this.#turnInProgress) {
+      throw new Error('An Agent turn is already running; concurrent runTurn calls are not allowed.');
+    }
+    this.#turnInProgress = true;
+    let turnId: string | undefined;
+    try {
+      if (this.reviewSourceSafety) this.modelProviderRequestsThisTurn = 0;
+      if (opts?.executionIntent) await this.ensureInitialized();
+      turnId = this.beginExecutionIntentTurn(opts?.executionIntent);
+      return await runTurnImpl.call(this, prompt, callbacks, opts);
+    } finally {
+      if (turnId) this.endExecutionIntentTurn(turnId);
+      this.#turnInProgress = false;
+    }
   }
 
   /**
@@ -1371,7 +2484,15 @@ export class Agent {
     return estimateTokensContentAware(text);
   }
 
-  public async executeLocalTool(name: string, args: Record<string, any>, runtime?: { orchestrationRuntime?: OrchestrationRuntimePort; lifecycleRuntime?: ToolLifecycleRuntimePort }): Promise<string> {
+  public async executeLocalTool(name: string, args: Record<string, any>, runtime?: {
+    orchestrationRuntime?: OrchestrationRuntimePort;
+    lifecycleRuntime?: ToolLifecycleRuntimePort;
+    authorizeMcpTarget?(
+      name: string,
+      args: Record<string, unknown>,
+      descriptor: unknown,
+    ): void;
+  }): Promise<string> {
     // HONK-L3 — re-nest args the local model emitted against a flattened schema
     // (dot-notation keys → nested objects) before any executor sees them.
     if (this.flattenedToolNames.has(name)) args = nestArguments(args);
@@ -1400,7 +2521,14 @@ export class Agent {
       args,
       invokedName: name,
       builtinRuntime: trusted
-        ? { invoke: (toolName, toolArgs) => invokeBuiltinToolRuntime.call(this, toolName, toolArgs) }
+        ? {
+          invoke: (toolName, toolArgs) => invokeBuiltinToolRuntime.call(
+            this,
+            toolName,
+            toolArgs,
+            runtime?.authorizeMcpTarget,
+          ),
+        }
         : undefined,
       orchestrationRuntime: trusted ? runtime?.orchestrationRuntime : undefined,
       lifecycleRuntime: trusted ? runtime?.lifecycleRuntime : undefined,
@@ -1546,6 +2674,18 @@ export class Agent {
           ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
         }
       : { ...base, source };
+    if (source === 'user') {
+      // Authenticated user steering changes the reviewed instruction while a
+      // launch may be waiting at a model or cost boundary. Require a fresh
+      // explicit launch; peer/extension input cannot revoke user authority.
+      this.invalidateExecutionIntentAuthority();
+      // A reviewed execution may already have descendants in an awaited tool.
+      // Revoke cooperatively and cascade immediately so they cannot continue
+      // mutating or merge after the authenticated user changed direction.
+      try {
+        for (const child of childAgentsFor(this.sessionKey)) child.requestInterrupt();
+      } catch { /* orchestration registry unavailable / no reviewed children */ }
+    }
     this.pendingSteering.push(input);
     return input.source === 'peer-session'
       ? { ...input, sender: { ...input.sender } }
@@ -1704,6 +2844,7 @@ export class Agent {
   }
 
   public setModel(model: string): void {
+    if (model !== this.llmConfig.model) this.invalidateExecutionIntentAuthority();
     return setModelImpl.call(this, model);
   }
 
@@ -1756,6 +2897,9 @@ export class Agent {
   }
 
   public setLLMConfig(next: Partial<LLMConfig>): void {
+    const current = this.llmConfig as unknown as Record<string, unknown>;
+    const changed = Object.entries(next).some(([key, value]) => current[key] !== value);
+    if (changed) this.invalidateExecutionIntentAuthority();
     return setLLMConfigImpl.call(this, next);
   }
 

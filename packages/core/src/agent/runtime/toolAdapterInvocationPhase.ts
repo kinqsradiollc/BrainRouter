@@ -5,7 +5,11 @@
  * active-turn orchestration lease, local lifecycle callbacks, MCP identity and
  * skill adaptation, and stable error/denial projection.
  */
-import type { Agent, RunTurnCallbacks } from '../agent.js';
+import type {
+  Agent,
+  RunTurnCallbacks,
+} from '../agent.js';
+import type { ExecutionLaunchAuthorization } from './executionLaunchRuntime.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import type { OrchestrationContext } from '../../orchestration/tools.js';
@@ -55,7 +59,17 @@ export async function invokeAuthorizedToolAdapter(input: {
   loadedRequiredSkills: Set<string>;
   spawnedChildIds: Set<string>;
   waitedChildIds: Set<string>;
-  buildOrchestrationContext(): OrchestrationContext;
+  executionLaunchAuthorization?: ExecutionLaunchAuthorization;
+  revalidateExecutionLaunch?(): void;
+  rejectExecutionLaunch?(): void;
+  authorizeNestedMcpTarget?(
+    name: string,
+    args: Record<string, unknown>,
+    descriptor: unknown,
+  ): void;
+  buildOrchestrationContext(
+    executionLaunch?: OrchestrationContext['executionLaunch'],
+  ): OrchestrationContext;
   refreshActiveSkillTools(): void;
   markChildOutputDelivered(): void;
 }): Promise<ToolAdapterInvocationResult> {
@@ -130,40 +144,72 @@ async function invokeLocalAdapter(
     currentSessionKey: () => agent.sessionKey,
     signal: agent.turnAbort!.signal,
     invoke: async (toolName, toolArgs, metadata) => {
-      if (metadata.workflowLaunch && agent.silent) {
-        throw new Error(
-          `${toolName}: nested workflows are blocked for spawned/child ` +
-          'agents because they run unattended.',
+      const launchAuthorization = input.executionLaunchAuthorization;
+      try {
+        if (metadata.workflowLaunch && agent.silent) {
+          throw new Error(
+            `${toolName}: nested workflows are blocked for spawned/child ` +
+            'agents because they run unattended.',
+          );
+        }
+        let dispatchArgs = toolArgs;
+        let executionLaunch: OrchestrationContext['executionLaunch'];
+        if (metadata.workflowLaunch) {
+          if (!launchAuthorization) {
+            throw new Error(
+              `${toolName} launch reached the adapter without pre-hook authorization.`,
+            );
+          }
+          dispatchArgs = launchAuthorization.dispatchArgs as Record<string, any>;
+          executionLaunch = {
+            runId: launchAuthorization.runId,
+            parentExecutionId: launchAuthorization.parentExecutionId,
+            record: launchAuthorization.record,
+            dispatchReceipt: launchAuthorization.dispatchReceipt,
+          };
+          if (toolName === 'run_workflow_graph') {
+            throw new Error(
+              'Saved workflow graph production launch is not enabled yet. Use Test run only as a preview until graph approvals and cumulative budgets fail closed.',
+            );
+          }
+        }
+        if (
+          metadata.workflowLaunch &&
+          !(await agent.confirmRunWorkflowLaunch(dispatchArgs))
+        ) {
+          throw new Error(
+            `${toolName} declined — the high-cost workflow launch was not approved.`,
+          );
+        }
+        if (launchAuthorization) {
+          input.revalidateExecutionLaunch?.();
+        }
+        assertOrchestrationActive(toolName);
+        const output = await executeOrchestrationTool(
+          toolName,
+          dispatchArgs,
+          input.buildOrchestrationContext(executionLaunch),
         );
-      }
-      if (
-        metadata.workflowLaunch &&
-        !(await agent.confirmRunWorkflowLaunch(toolArgs))
-      ) {
-        throw new Error(
-          `${toolName} declined — the high-cost workflow launch was not approved.`,
+        trackChildObservation(
+          toolName,
+          dispatchArgs,
+          output,
+          input.spawnedChildIds,
+          input.waitedChildIds,
         );
+        if (
+          isChildSynthesisTool(toolName) &&
+          resultHasChildOutput(output)
+        ) {
+          input.markChildOutputDelivered();
+        }
+        return output;
+      } catch (error) {
+        if (metadata.workflowLaunch && launchAuthorization) {
+          input.rejectExecutionLaunch?.();
+        }
+        throw error;
       }
-      assertOrchestrationActive(toolName);
-      const output = await executeOrchestrationTool(
-        toolName,
-        toolArgs,
-        input.buildOrchestrationContext(),
-      );
-      trackChildObservation(
-        toolName,
-        toolArgs,
-        output,
-        input.spawnedChildIds,
-        input.waitedChildIds,
-      );
-      if (
-        isChildSynthesisTool(toolName) &&
-        resultHasChildOutput(output)
-      ) {
-        input.markChildOutputDelivered();
-      }
-      return output;
     },
   });
   assertOrchestrationActive = runtime.assertActive;
@@ -171,6 +217,7 @@ async function invokeLocalAdapter(
   try {
     const resultText = await agent.executeLocalTool(name, args, {
       orchestrationRuntime: runtime.port,
+      authorizeMcpTarget: input.authorizeNestedMcpTarget,
       lifecycleRuntime: {
         afterInvoke: (kind, toolArgs) => {
           if (kind === 'track-automation') {
@@ -230,8 +277,14 @@ async function invokeMcpAdapter(
   input: Parameters<typeof invokeAuthorizedToolAdapter>[0],
 ): Promise<ToolAdapterInvocationResult> {
   const { agent, name, args, mcpTool } = input;
+  const descriptorName = String(mcpTool?.name ?? name);
+  if (descriptorName !== name) {
+    throw new Error(
+      `MCP tool dispatch mismatch: authorized "${name}" but resolved "${descriptorName}".`,
+    );
+  }
   const mcpArgs = applyFederationIdentity(
-    name,
+    descriptorName,
     args,
     agent.federationSessionKey,
   ) as Record<string, any>;
@@ -271,11 +324,13 @@ async function invokeMcpAdapter(
   // Only the actual remote fallback crosses the open-ended MCP authority
   // boundary and therefore needs the fail-closed approval gate.
   if (localSkillResult === undefined) {
-    await agent.approveMcpToolCall(name, mcpTool, mcpArgs);
+    await agent.approveMcpToolCall(descriptorName, mcpTool, mcpArgs);
+    agent.assertInheritedExecutionAuthorityCurrent();
   }
+  agent.assertInheritedExecutionAuthorityCurrent();
   const response =
     localSkillResult ??
-    await agent.mcpClient.callTool(name, mcpArgs, {
+    await agent.mcpClient.callTool(descriptorName, mcpArgs, {
       signal: agent.turnAbort?.signal,
     });
   const learnedMetadata = (localSkillResult as any)?.metadata?.scope === 'learned'

@@ -5,7 +5,6 @@
  * workspace/package skills, applies their subtractive tool policy to Agent
  * state, and formats the small model-facing stage guidance used by runTurn.
  */
-import { randomUUID } from 'node:crypto';
 import type { Agent } from '../agent.js';
 import {
   ProfileStageController,
@@ -21,6 +20,7 @@ export function createProfileStageControllerForTurn(input: {
   agent: Agent;
   resolution: ActiveTurnOrchestrationResolution;
   turnSessionKey: string;
+  turnExecutionId: string;
   onStateChange?: (event: ProfileStageStateEvent) => void;
 }): ProfileStageController | undefined {
   const { agent, resolution } = input;
@@ -35,7 +35,7 @@ export function createProfileStageControllerForTurn(input: {
     return undefined;
   }
   return new ProfileStageController(
-    { turnId: randomUUID(), sessionKey: input.turnSessionKey },
+    { turnId: input.turnExecutionId, sessionKey: input.turnSessionKey },
     resolution.plan,
     {
       loadSkill: async (skillId) => await resolveStageSkillActivation({

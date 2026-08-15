@@ -4,7 +4,7 @@
 // before. Imports mirror the symbols the loop referenced inside the class.
 import path from 'node:path';
 import chalk from 'chalk';
-import type { Agent, RunTurnCallbacks } from '../agent.js';
+import type { Agent, RunTurnCallbacks, RunTurnOptions } from '../agent.js';
 import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { linkArtifact } from '../../artifact/artifactStore.js';
 import {
@@ -13,9 +13,13 @@ import {
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
-import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
+import { parseHookDecision } from '../../hooks/hooksStore.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
-import { synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
+import {
+  isOrchestrationToolName,
+  synthesizeDelegateTools,
+  OrchestrationContext,
+} from '../../orchestration/tools.js';
 import {
   isOrchestrationRuntimeUnavailableError,
 } from '../../orchestration/runtime/activeTurnRuntime.js';
@@ -33,7 +37,7 @@ import {
 import { evaluateSteeringToolGate } from '../../task/steeringReconciliationGate.js';
 import { readPlan } from '../../task/taskStore.js';
 import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
-import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
+import { localToolExecutor, localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
 import { normalizeToolName } from '../../tool/specs/names.js';
 import {
   hideWorkerToolsFor,
@@ -83,6 +87,10 @@ import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import { authorizeToolCall } from './toolAuthorizationPhase.js';
 import { invokeAuthorizedToolAdapter } from './toolAdapterInvocationPhase.js';
+import {
+  executionLaunchRuntimeFor,
+  type ExecutionLaunchAuthorization,
+} from './executionLaunchRuntime.js';
 import { preflightRequiredSkills } from './requiredSkillPreflight.js';
 import {
   executeToolBatch,
@@ -103,6 +111,7 @@ import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
 import { beginToolProvenanceBatch, noteToolProvenance } from './contentProvenance.js';
 import { getLearnedItem } from '../../learning/index.js';
 import { learnedTenantForAgent } from './learningPhase.js';
+import { resolveMcpCatalogTool } from '../../mcp/discovery/discovery.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -113,7 +122,8 @@ function sameLlmRoute(
     && (route.llm.apiKey ?? '') === (llm.apiKey ?? '');
 }
 
-export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }>; preplanned?: boolean }): Promise<string> {
+export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: RunTurnOptions): Promise<string> {
+  const executionLaunchRuntime = executionLaunchRuntimeFor(this);
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
@@ -138,6 +148,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // pre-turn abort can never poison this turn's first LLM call.
     this.turnAbort = new AbortController();
     const turnSessionKey = this.sessionKey;
+    const turnExecutionId = this.turnExecutionId;
+    if (!turnExecutionId) {
+      throw new Error('Turn execution identity was not initialized.');
+    }
     // Persist the user's message to the transcript IMMEDIATELY — before recall,
     // the next-action planner, or the main LLM call. Previously this happened
     // only after those server round-trips, so a turn that errored mid-flight
@@ -149,10 +163,25 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // An isolated reviewer is analysing this checkout, so the checkout cannot
     // simultaneously provide persona, capability, design-artifact, or tool
     // authority for that review.
-    if (this.reviewSourceSafety) clearWorkspaceCapabilityState(this);
-    else refreshWorkspaceCapabilityState(this, prompt);
+    const inheritedReviewedExecution =
+      this.inheritedExecutionAuthorityGuard() !== undefined;
+    const reviewedPolicySnapshot = this.reviewedExecutionPolicySnapshot();
+    const executionPolicyWorkspaceRoot =
+      this.reviewedExecutionPolicyWorkspaceRoot();
+    if (
+      this.reviewSourceSafety
+      || this.executionIntentTurnToolName() !== null
+      || inheritedReviewedExecution
+    ) {
+      // An explicitly reviewed execution already carries its exact plan/graph.
+      // Do not let kickoff prose activate an additional task capability/tool
+      // profile beside that bounded launch.
+      clearWorkspaceCapabilityState(this);
+    } else refreshWorkspaceCapabilityState(this, prompt);
     const activeTurnOrchestration = resolveActiveTurnOrchestration({
-      workspaceRoot: this.workspaceRoot,
+      workspaceRoot: inheritedReviewedExecution
+        ? executionPolicyWorkspaceRoot
+        : this.workspaceRoot,
       task: prompt,
       activeCapabilitySkillIds: this.activeWorkspaceCapabilities.skills,
       parentDepth: this.agentDepth,
@@ -160,12 +189,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // resolving a plan here only produced a strategy nothing could run — and
       // named it in the turn's telemetry as if it had. Both ends now read the
       // same fact.
-      preplanned: opts?.preplanned === true || this.activeSkill !== undefined,
+      preplanned:
+        opts?.preplanned === true
+        || this.activeSkill !== undefined
+        || this.executionIntentTurnToolName() !== null
+        || inheritedReviewedExecution,
     });
     this.activeTurnOrchestration = activeTurnOrchestration;
     const workspaceManifestForTurn = this.reviewSourceSafety
       ? null
-      : loadWorkspaceManifest(this.workspaceRoot);
+      : reviewedPolicySnapshot
+        ? reviewedPolicySnapshot.manifest
+        : loadWorkspaceManifest(this.workspaceRoot);
     const goalForSkillActivation = this.reviewSourceSafety
       ? null
       : readGoal(this.workspaceRoot, this.sessionKey);
@@ -174,11 +209,28 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       : readPlan(this.workspaceRoot, this.sessionKey);
     const activePlanPhase = planForSkillActivation.phases?.find((phase) =>
       phase.status === 'in_progress');
-    const requiredSkillActivation = this.reviewSourceSafety
+    const reviewedExecutionTurn = this.executionIntentTurnToolName() !== null;
+    let reviewedTurnLease: ExecutionLaunchAuthorization | undefined;
+    let reviewedTurnTerminallyDenied = false;
+    const assertReviewedTurnCurrent = (): void => {
+      if (reviewedTurnLease) {
+        executionLaunchRuntime.assertLeaseCurrent(reviewedTurnLease);
+      } else if (reviewedExecutionTurn) {
+        executionLaunchRuntime.assertPendingCurrent();
+      } else {
+        this.assertInheritedExecutionAuthorityCurrent();
+      }
+    };
+    const requiredSkillActivation =
+      this.reviewSourceSafety || reviewedExecutionTurn || inheritedReviewedExecution
       ? {
         planningSchema: {
-          id: 'isolated-review',
-          label: 'Isolated review',
+          id: reviewedExecutionTurn || inheritedReviewedExecution
+            ? 'reviewed-execution'
+            : 'isolated-review',
+          label: reviewedExecutionTurn || inheritedReviewedExecution
+            ? 'Reviewed execution'
+            : 'Isolated review',
           source: 'safe-fallback' as const,
         },
         required: [],
@@ -201,6 +253,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       alreadyLoadedSkillIds: initiallyLoadedRequiredSkills,
       callbacks,
     });
+    assertReviewedTurnCurrent();
     const loadedRequiredSkills = requiredSkillPreflight.loadedSkillIds;
     // ADR-027 D3 — warn once per skill per turn, not per mutating call.
     const warnedRequiredSkills = new Set<string>();
@@ -230,6 +283,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       role_overlay: this.roleOverlay ? 'set' : 'none',
       agent_id: this.agentId,
       parent_agent_id: this.parentAgentId,
+      execution_id: turnExecutionId,
     }, {
       traceId: this.parentTraceId,
       parentSpanId: this.parentSpanId,
@@ -243,6 +297,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     } catch (err: any) {
       // Non-fatal: continue with local tools only
     }
+    executionLaunchRuntime.recordMcpInventory(mcpTools);
     // 10b: cache the inventory so `createSystemMessage` can render a
     // brain-online vs brain-offline prompt. Refresh chatHistory[0]
     // whenever the inventory shape changed (online → offline or vice
@@ -260,6 +315,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       agent: this,
       resolution: activeTurnOrchestration,
       turnSessionKey,
+      turnExecutionId,
       ...(callbacks.onProfileStageUpdate
         ? { onStateChange: callbacks.onProfileStageUpdate }
         : {}),
@@ -314,7 +370,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // profiles (cli.llmProfiles): with 0–1 there is nothing to switch between,
     // so the surface stays hidden and default behavior is unchanged.
     const llmProfileNames = Object.keys(cliKnobs.llmProfiles ?? {}).sort();
-    const hideSwitchModel = !switchModelToolAvailable(cliKnobs.llmProfiles);
+    const hideSwitchModel = inheritedReviewedExecution
+      || !switchModelToolAvailable(cliKnobs.llmProfiles);
     // §5.4 — when progressive discovery is OFF (default) the discovery entry
     // points stay hidden; when ON they're exposed and the full MCP catalog is
     // collapsed below so the model searches for tools instead of carrying them all.
@@ -334,7 +391,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const activeProfileStageController = (
       profileStageController
       && allowed.has('profile_stage')
-      && (!this.toolScope?.local.length || this.toolScope.local.includes('profile_stage'))
+      && (!this.toolScope?.local.length || toolNameMatchesAny('profile_stage', this.toolScope.local))
       && (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes('profile_stage'))
       && !toolNameMatchesAny('profile_stage', this.disallowedTools)
       && workspaceAllowsLocalTool('profile_stage')
@@ -391,8 +448,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         )
       );
     };
-    let filteredLocalTools = localToolSpecsFromExecutors({
-      resultExpansionAvailable: this.resultCache.size() > 0,
+    const localToolAvailability = {
       workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
       activeOrchestrationPlan: activeProfileStageController !== undefined,
       rootAgent: !hideWorkerTools,
@@ -416,12 +472,22 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         !isRemoteBrainUrl(cliKnobs.brainUrl),
       multiProfile: !hideSwitchModel,
       mcpDiscovery: mcpDiscoveryOn,
-    }).filter((t) => {
+    };
+    const localToolPassesHardGates = (t: { name: string }): boolean => {
       const mandatorySteeringControl = t.name === 'reconcile_steer';
+      if (inheritedReviewedExecution && isOrchestrationToolName(t.name)) {
+        return false;
+      }
+      if (
+        (t.name === 'run_workflow' || t.name === 'run_workflow_graph')
+        && t.name !== this.activeExecutionLaunchToolName()
+      ) {
+        return false;
+      }
       // HARD gates first — a user override can never escalate past these.
       const hardVisible =
         allowed.has(t.name) &&
-        (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
+        (!this.toolScope?.local.length || toolNameMatchesAny(t.name, this.toolScope.local)) &&
         (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes(t.name)) &&
         (
           mandatorySteeringControl ||
@@ -439,7 +505,15 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // and the non-hiding reliability aids stay (L1 loop/storm caps below; L3
       // schema flattening, which just helps a weak model CALL those same tools).
       return mandatorySteeringControl || resolveToolVisible(t.name, true, toolOverrides);
-    });
+    };
+    let filteredLocalTools = localToolSpecsFromExecutors({
+      ...localToolAvailability,
+      resultExpansionAvailable: this.resultCache.size() > 0,
+    }).filter(localToolPassesHardGates);
+    const resultExpansionTool = localToolSpecsFromExecutors({
+      ...localToolAvailability,
+      resultExpansionAvailable: true,
+    }).find((tool) => tool.name === 'extract_result' && localToolPassesHardGates(tool));
     // MC-D3 — when switch_model is offered, append the concrete profile names to
     // its description so the model can pick a valid target without guessing.
     // New spec object (like the flatten pass below) so the shared registry
@@ -545,10 +619,21 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // `delegate_<id>` tools live next to the legacy `spawn_agent` /
     // `task_agent` / `delegate_agent` so the LLM has a discoverable
     // typed path AND the escape hatch.
-    const delegateTools = synthesizeDelegateTools(listAgentDefinitions(this.workspaceRoot)).filter((tool) => {
+    const agentDefinitionsForTurn = reviewedPolicySnapshot
+      ? reviewedPolicySnapshot.roles.map((role) => ({
+        source: role.source,
+        def: role.definition,
+        filePath: '',
+      }))
+      : listAgentDefinitions(this.workspaceRoot);
+    const delegateTools = inheritedReviewedExecution ? [] : synthesizeDelegateTools(
+      agentDefinitionsForTurn,
+    ).filter((tool) => {
       const ownerName = registryEntry(tool.name)?.name ?? tool.name;
       return registryToolAllowed(tool.name, this.accessMode)
-        && (!this.toolScope?.local.length || this.toolScope.local.includes(tool.name) || this.toolScope.local.includes(ownerName))
+        && (!this.toolScope?.local.length
+          || toolNameMatchesAny(tool.name, this.toolScope.local)
+          || toolNameMatchesAny(ownerName, this.toolScope.local))
         && (!this.authorityToolCeiling
           || this.authorityToolCeiling.local.includes(tool.name)
           || this.authorityToolCeiling.local.includes(ownerName))
@@ -557,22 +642,109 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         && workspaceAllowsLocalTool(tool.name)
         && skillAllowsTool(tool.name);
     });
-    const baseAllTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
+    // Preserve the actual hard dispatch surface separately from prompt-size
+    // hiding. A model can emit any registered name from memory, so schema
+    // omission is never sufficient authorization. MCP relevance budgets and
+    // progressive discovery remain prompt-only and therefore use the earlier
+    // authorizedMcpTools snapshot.
+    const hardAuthorizedLocalNames = new Set(
+      [...filteredLocalTools, ...delegateTools].map((tool) => String(tool.name)),
+    );
+    // `spawn_agent` is the intentionally hidden, backwards-compatible single
+    // form of the advertised `spawn_agents` tool. It remains dispatchable for
+    // ordinary root turns when it passes every hard gate, but is still denied
+    // for inherited reviewed execution by `localToolPassesHardGates` above.
+    const legacySpawnExecutor = localToolExecutor('spawn_agent');
+    if (
+      legacySpawnExecutor
+      && allowed.has('spawn_agent')
+      && (
+        !this.toolScope?.local.length
+        || toolNameMatchesAny('spawn_agent', this.toolScope.local)
+        || toolNameMatchesAny('spawn_agents', this.toolScope.local)
+      )
+      && (
+        !this.authorityToolCeiling
+        || this.authorityToolCeiling.local.includes('spawn_agent')
+        || this.authorityToolCeiling.local.includes('spawn_agents')
+      )
+      && !toolDisallowed('spawn_agent')
+      && !toolDisallowed('spawn_agents')
+      && workspaceAllowsLocalTool('spawn_agents')
+      && skillAllowsTool('spawn_agent')
+      && skillAllowsTool('spawn_agents')
+      && resolveToolVisible('spawn_agent', true, toolOverrides)
+      && resolveToolVisible('spawn_agents', true, toolOverrides)
+    ) {
+      hardAuthorizedLocalNames.add('spawn_agent');
+    }
+    if (resultExpansionTool) hardAuthorizedLocalNames.add(resultExpansionTool.name);
+    const hardAuthorizedMcpNames = new Set(
+      authorizedMcpTools.map((tool: any) => String(tool?.name ?? '')),
+    );
+    const hardSurfaceAllowsTool = (
+      name: string,
+      isLocal: boolean,
+      descriptor?: unknown,
+    ): boolean => {
+      if (isLocal) {
+        const ownerName = registryEntry(name)?.name ?? name;
+        return (
+          hardAuthorizedLocalNames.has(name)
+          || hardAuthorizedLocalNames.has(ownerName)
+        ) && (name !== 'extract_result' || this.resultCache.size() > 0)
+          && !toolDisallowed(name)
+          && !toolDisallowed(ownerName)
+          && resolveToolVisible(name, true, getCliKnobs().toolOverrides)
+          && resolveToolVisible(ownerName, true, getCliKnobs().toolOverrides);
+      }
+      const descriptorName = descriptor && typeof descriptor === 'object'
+        ? String((descriptor as { name?: unknown }).name ?? name)
+        : name;
+      const rawName = descriptor && typeof descriptor === 'object'
+        ? String((descriptor as { __rawName?: unknown }).__rawName ?? descriptorName)
+        : descriptorName;
+      if (descriptor && descriptorName !== name) return false;
+      return hardAuthorizedMcpNames.has(descriptorName)
+        && !toolDisallowed(descriptorName)
+        && !toolDisallowed(rawName)
+        && resolveToolVisible(descriptorName, true, getCliKnobs().toolOverrides)
+        && resolveToolVisible(rawName, true, getCliKnobs().toolOverrides);
+    };
+    let baseAllTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
     let allTools = [...baseAllTools];
     const refreshActiveSkillTools = (): void => {
       allTools = baseAllTools.filter((tool: any) => {
         const name = String(tool?.name ?? '');
+        const reviewedTurnTool = this.executionIntentTurnToolName();
+        if (reviewedTurnTool) {
+          if (name === 'reconcile_steer') return true;
+          if (name !== this.activeExecutionLaunchToolName()) return false;
+        }
+        if (
+          (name === 'run_workflow' || name === 'run_workflow_graph')
+          && name !== this.activeExecutionLaunchToolName()
+        ) {
+          return false;
+        }
         return name === 'profile_stage'
           || (!toolDisallowed(name) && skillAllowsTool(name));
       });
+    };
+    const refreshResultExpansionTool = (): void => {
+      if (
+        !resultExpansionTool
+        || this.resultCache.size() === 0
+        || baseAllTools.some((tool) => tool.name === resultExpansionTool.name)
+      ) return;
+      baseAllTools = [...baseAllTools, resultExpansionTool];
+      refreshActiveSkillTools();
     };
     refreshActiveSkillTools();
     const mcpToolByName = new Map<string, any>();
     for (const tool of mcpTools) {
       const name = String(tool?.name ?? '');
       if (name) mcpToolByName.set(name, tool);
-      const rawName = typeof tool?.__rawName === 'string' ? tool.__rawName : '';
-      if (rawName) mcpToolByName.set(rawName, tool);
     }
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools, ${delegateTools.length} delegate tools, and ${mcpTools.length} MCP tools.`);
 
@@ -583,6 +755,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       requiredSkillActivation,
       requiredSkillPreflight,
       carriedPendingChildIds,
+      reviewedExecution: reviewedExecutionTurn || inheritedReviewedExecution,
+      assertReviewedExecutionCurrent: reviewedExecutionTurn || inheritedReviewedExecution
+        ? assertReviewedTurnCurrent
+        : undefined,
       ...(opts?.images ? { images: opts.images } : {}),
     });
     if (preparedContext.blockedAnswer) return preparedContext.blockedAnswer;
@@ -653,9 +829,32 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const sequenceGuardExempt = new Set(getCliKnobs().repeatSequenceExemptTools);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
-    const buildOrchestrationContext = (): OrchestrationContext => ({
+    const buildOrchestrationContext = (
+      executionLaunch?: OrchestrationContext['executionLaunch'],
+    ): OrchestrationContext => {
+      const executionInstructionSummary =
+        this.executionInstructionSummaryForDescendants();
+      const executionMcpInventoryFingerprint =
+        this.executionMcpInventoryFingerprintForDescendants();
+      const executionPolicySnapshot = this.reviewedExecutionPolicySnapshot();
+      return ({
       workspaceRoot: this.workspaceRoot,
       parentSessionKey: this.sessionKey,
+      turnExecutionId,
+      executionLaunch,
+      executionAuthorityGuard: this.inheritedExecutionAuthorityGuard(),
+      ...(executionInstructionSummary !== undefined
+        ? { executionInstructionSummary }
+        : {}),
+      ...(executionMcpInventoryFingerprint !== undefined
+        ? { executionMcpInventoryFingerprint }
+        : {}),
+      ...(this.executionIntentTurnToolName() || inheritedReviewedExecution
+        ? { executionPolicyWorkspaceRoot }
+        : {}),
+      ...(executionPolicySnapshot
+        ? { executionPolicySnapshot }
+        : {}),
       interruptSignal: this.turnAbort?.signal, // DESK-6 — Stop unblocks child waits
       parentAccessMode: this.accessMode,
       ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown to descendants
@@ -687,7 +886,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // depth 0 anyway). askYesNo throws NoTTYError in headless runs, which
       // we convert to a clear "no terminal" spawn error.
       confirmDelegation: this.silent
-        ? undefined
+        ? (inheritedReviewedExecution && this.confirmToolApproval
+          ? async (info) => this.confirmToolApproval!({
+            tool: 'spawn_agent',
+            summary: info.prompt.slice(0, 240),
+            reason: `Reviewed child requests nested ${info.role} delegation with ${info.access} access.`,
+          })
+          : undefined)
         : async (info) => {
             const q =
               `Delegation policy gate — allow spawning a ${info.role} agent (${info.access})?\n` +
@@ -708,7 +913,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             }
           },
       confirmToolApproval: this.silent
-        ? undefined
+        ? (inheritedReviewedExecution && this.confirmToolApproval
+          ? async (info) => this.confirmToolApproval!({
+            tool: info.tool,
+            command: info.command,
+            path: info.path,
+            summary: info.summary,
+            reason: info.reason,
+            dangerous: info.dangerous,
+          })
+          : undefined)
         : async (info) => {
             const command = info.command ? `\n  Command: ${info.command}` : '';
             const q =
@@ -752,15 +966,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         } catch { return null; }
       },
       parentContextEnvelope: () => buildRootContextEnvelope(this.chatHistory, {
-        executionId: this.sessionKey,
+        executionId: turnExecutionId,
       }),
       parentSourceFiles: () => [...this.filesRead],
-      parentVisibleTools: () => allTools.map((tool: any) => String(tool.name)).filter(Boolean),
-      parentVisibleLocalTools: () => allTools
+      // The parent model sees only the one reviewed launch tool in an explicit
+      // turn. Children still inherit the complete pre-purpose-filter ceiling
+      // that was reviewed and policy-bound, not an unusable one-tool surface.
+      parentVisibleTools: () => (this.executionIntentTurnToolName() ? baseAllTools : allTools)
+        .map((tool: any) => String(tool.name)).filter(Boolean),
+      parentVisibleLocalTools: () => (this.executionIntentTurnToolName() ? baseAllTools : allTools)
         .filter((tool: any) => isRegisteredLocalTool(String(tool.name)))
         .map((tool: any) => String(tool.name))
         .filter(Boolean),
-      parentVisibleMcpTools: () => allTools
+      parentVisibleMcpTools: () => (this.executionIntentTurnToolName() ? baseAllTools : allTools)
         .filter((tool: any) => !isRegisteredLocalTool(String(tool.name)))
         .map((tool: any) => String(tool.name))
         .filter(Boolean),
@@ -768,17 +986,26 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // override > workspace pref) so the child records the mode the parent
       // was actually running — not a workspace default a later, unrelated
       // session switch might change.
-      parentExecutionMode: resolveActiveMode(this.workspaceRoot, this.sessionKey).executionMode,
-      parentReviewPolicy: resolveActiveMode(this.workspaceRoot, this.sessionKey).reviewPolicy,
+      parentExecutionMode: executionPolicySnapshot?.activeMode.executionMode
+        ?? (inheritedReviewedExecution && this.parentExecutionMode
+          ? this.parentExecutionMode
+          : resolveActiveMode(executionPolicyWorkspaceRoot, this.sessionKey).executionMode),
+      parentReviewPolicy: executionPolicySnapshot?.activeMode.reviewPolicy
+        ?? (inheritedReviewedExecution && this.parentReviewPolicy
+          ? this.parentReviewPolicy
+          : resolveActiveMode(executionPolicyWorkspaceRoot, this.sessionKey).reviewPolicy),
       profileStageController: activeProfileStageController,
     });
+    };
 
     while (loopCount < maxLoops) {
       loopCount++;
+      assertReviewedTurnCurrent();
       const interruptedAnswer = lifecycleCoordinator.beginLoop(loopCount);
       if (interruptedAnswer) return interruptedAnswer;
 
       const invocation = await invokeModelPhase(this, callbacks, allTools);
+      assertReviewedTurnCurrent();
       if (invocation.kind === 'interrupted') return invocation.note;
       const response = invocation.response;
       // 0.3.9 item 13 — model-tier self-escalation. When the response
@@ -787,7 +1014,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // the ladder one up, retry the same turn, and surface a yellow
       // warning row. Pro-tier marker is a no-op. Bounded by a per-turn
       // counter so a marker-emitting model can't loop forever.
-      const needsHigh = detectNeedsHigh(response.content);
+      const needsHigh = reviewedExecutionTurn || inheritedReviewedExecution
+        ? null
+        : detectNeedsHigh(response.content);
       if (needsHigh && (this.tierEscalationsThisTurn ?? 0) < 2) {
         const routerKnobs = getCliKnobs().router;
         if (routerKnobs.enabled && routerKnobs.aliases['tier:pro']) {
@@ -809,7 +1038,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           if (route && !sameLlmRoute(route, this.llmConfig)) {
             this.tierEscalationsThisTurn = (this.tierEscalationsThisTurn ?? 0) + 1;
             const before = `${this.llmConfig.provider}/${this.llmConfig.model}`;
-            this.llmConfig = { ...route.llm };
+            this.setLLMConfig(route.llm);
             traceEvent('tier.escalate', {
               from: before,
               to: route.slug,
@@ -834,7 +1063,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         if (next && ladder.ladder[next] && ladder.ladder[next] !== this.llmConfig.model) {
           this.tierEscalationsThisTurn = (this.tierEscalationsThisTurn ?? 0) + 1;
           const before = this.llmConfig.model;
-          this.llmConfig = { ...this.llmConfig, model: ladder.ladder[next] };
+          this.setModel(ladder.ladder[next]);
           traceEvent('tier.escalate', {
             from: before,
             to: this.llmConfig.model,
@@ -963,9 +1192,26 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         ...mcpTools.map((t: any) => t.name).filter((n: any) => typeof n === 'string'),
       ];
       const toolCalls: any[] = response.toolCalls ?? [];
-      const normalizedNames = toolCalls.map((tc: any) =>
-        normalizeToolName(tc.function.name, candidates),
+      const normalizedNames = toolCalls.map((tc: any) => {
+        const normalized = normalizeToolName(tc.function.name, candidates);
+        if (isRegisteredLocalTool(normalized)) return normalized;
+        return resolveMcpCatalogTool(authorizedMcpTools, normalized)?.name
+          ?? normalized;
+      });
+      const reviewedTurnTool = this.executionIntentTurnToolName();
+      const activeReviewedTool = this.activeExecutionLaunchToolName();
+      const executionIntentBatchViolation = reviewedTurnTool !== null && !(
+        toolCalls.length === 1
+        && (
+          normalizedNames[0] === activeReviewedTool
+          || (activeReviewedTool === null && normalizedNames[0] === 'reconcile_steer')
+        )
       );
+      if (executionIntentBatchViolation) {
+        executionLaunchRuntime.rejectPending();
+        reviewedTurnTerminallyDenied = true;
+        refreshActiveSkillTools();
+      }
       // ARGUMENT-AWARE signature: a batch only counts as a "repeat" when the
       // model re-issued the SAME tools with the SAME args in the SAME order — a
       // genuine no-progress loop. A read_file → edit_file → run_command sweep
@@ -1032,10 +1278,30 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         this.sessionKey,
       );
       const provenanceBatch = beginToolProvenanceBatch(this.sessionProvenance);
-
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
         const delegationLaunch = registryDelegationLaunchTool(name);
+        if (executionIntentBatchViolation) {
+          const refused =
+            'Reviewed execution turns accept exactly one matching launch call. '
+            + 'Sibling, reordered, or post-launch tool calls are not authorized; start a fresh explicit action.';
+          callbacks.onToolStart(name, {});
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary: 'tool refused outside the reviewed execution purpose',
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, tc.id);
+          return {
+            toolMsg: {
+              role: 'tool',
+              tool_call_id: tc.id,
+              name,
+              content: refused,
+              isError: true,
+            },
+            fullResultText: refused,
+          };
+        }
         // INTERRUPT — skip queued tools once a stop is requested; the loop-top
         // check then ends the turn before the next LLM call.
         if (this.interruptRequested) {
@@ -1062,9 +1328,42 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         let summary = '';
         let runtimeUnavailable = false;
 
+        // A child of a reviewed workflow retains a live, process-local lease.
+        // Recheck it before any tool policy, hook, prompt, or adapter can cause
+        // effects; parent steering/policy changes permanently revoke the child.
+        try {
+          this.assertInheritedExecutionAuthorityCurrent();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.requestInterrupt();
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary: 'reviewed execution authority was revoked',
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, tc.id);
+          return {
+            toolMsg: {
+              role: 'tool',
+              tool_call_id: tc.id,
+              name,
+              content: `Skipped: ${message}`,
+              isError: true,
+            },
+            fullResultText: `Skipped: ${message}`,
+          };
+        }
+
         // If the LLM emitted malformed JSON for arguments, fail the tool call
         // up-front with a clear error so it can self-correct next turn.
         if (argParseError) {
+          if (
+            name === 'run_workflow'
+            || name === 'run_workflow_graph'
+          ) {
+            executionLaunchRuntime.rejectPending();
+            reviewedTurnTerminallyDenied = true;
+            refreshActiveSkillTools();
+          }
           isError = true;
           resultText = argParseError;
           summary = 'malformed JSON args';
@@ -1174,65 +1473,125 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // call — BLOCKING, so it runs for unattended agents too (enforcement).
         let blockedByHook: string | undefined;
         const hookifyWarnings: string[] = [];
-        if (this.hookEnforceActive()) {
-          // Typed extension pre-tool handlers (in-process) deny identically to a
-          // non-zero shell-hook exit; they may inspect the structured args.
-          const extDeny = await this.runExtensionHooks('pre-tool', { tool: name, args });
-          if (extDeny && !blockedByHook) blockedByHook = extDeny;
-          const preResults = runHooks(this.workspaceRoot, 'pre-tool', { tool: name, payload: args });
-          const denial = preResults.find((r) => r.exitCode !== 0);
-          if (denial) {
-            blockedByHook = (denial.stderr || denial.stdout || '').toString().trim() || `Hook ${denial.hook.id} denied tool call (exit ${denial.exitCode})`;
-          }
-          // CC-P4.2 — structured decision contract: a hook may print JSON
-          // ({decision, reason, updatedInput}) instead of using its exit code.
-          // deny blocks even on exit 0; updatedInput REPLACES the tool args.
-          for (const r of preResults) {
-            const d = parseHookDecision(r.stdout);
-            if (!d) continue;
-            if (d.decision === 'deny' && !blockedByHook) {
-              blockedByHook = d.reason?.trim() || `Hook ${r.hook.id} (pre-tool) denied this call`;
-            } else if (d.updatedInput && typeof d.updatedInput === 'object') {
-              args = d.updatedInput;
-              hookifyWarnings.push(`hook ${r.hook.id} rewrote the tool input${d.reason ? ` — ${d.reason}` : ''}`);
-            }
-          }
-          // Hookify markdown rules: warn/block matching by event + pattern.
-          const rules = listHookifyRules(this.workspaceRoot);
-          if (rules.length > 0) {
-            const ctx = buildHookifyContext(name, args);
-            const matches = evaluateHookify(rules, ctx);
-            for (const m of matches) {
-              if (m.action === 'block') {
-                blockedByHook = `Hookify rule "${m.rule.name}" blocked this ${ctx.event} operation: ${m.rule.message.slice(0, 240)}`;
-                break;
-              }
-              hookifyWarnings.push(`⚠️ ${m.rule.name}: ${m.rule.message.slice(0, 200)}`);
-            }
-          }
-        }
-
+        const durableLaunch = name === 'run_workflow' || name === 'run_workflow_graph';
+        let executionLaunchAuthorization: ExecutionLaunchAuthorization | undefined;
+        const authorizeNamedTool = (
+          targetName: string,
+          targetArgs: Record<string, unknown> | null,
+          targetIsLocal: boolean,
+          targetMcpTool: unknown,
+          options: {
+            trustedExecutionLaunch?: boolean;
+            revalidation?: boolean;
+          } = {},
+        ) => authorizeToolCall({
+          agent: this,
+          callbacks,
+          name: targetName,
+          args: targetArgs,
+          isLocal: targetIsLocal,
+          mcpTool: targetMcpTool,
+          skillAllowsTool,
+          workspaceAllowsLocalTool,
+          workspaceAllowsMcpTool,
+          hardSurfaceAllowsTool,
+          requiredSkillActivation,
+          loadedRequiredSkills,
+          attemptedRequiredSkills:
+            requiredSkillPreflight.attemptedSkillIds,
+          warnedRequiredSkills,
+          ...options,
+          trace: { traceId: turnSpan.traceId, spanId: turnSpan.spanId },
+        });
+        const authorizeCurrentTool = (options: {
+          trustedExecutionLaunch?: boolean;
+          revalidation?: boolean;
+        } = {}) => authorizeNamedTool(
+          name,
+          args,
+          isLocal,
+          mcpToolByName.get(name),
+          options,
+        );
         try {
+          // Durable launch authority is checked before any in-process extension
+          // or workspace shell hook can observe the call or cause side effects.
+          // Hooks may still deny an authorized call, but they receive only the
+          // canonical frozen arguments and cannot rewrite an authority-bearing
+          // launch after one-shot consume.
+          if (durableLaunch) {
+            executionLaunchRuntime.preflight(name, args);
+            // Run the complete normal policy intersection before hooks too:
+            // access mode, permissions, skills, workspace policy, and plan
+            // phase gates are part of authority, not post-hook cleanup.
+            authorizeCurrentTool({ trustedExecutionLaunch: true });
+            executionLaunchAuthorization = executionLaunchRuntime.authorize(name, args);
+            reviewedTurnLease = executionLaunchAuthorization;
+            args = executionLaunchAuthorization.dispatchArgs;
+            refreshActiveSkillTools();
+          }
+          if (this.hookEnforceActive()) {
+            // Typed extension pre-tool handlers (in-process) deny identically to a
+            // non-zero shell-hook exit; they may inspect the structured args.
+            const extDeny = await this.runExtensionHooks('pre-tool', { tool: name, args });
+            if (executionLaunchAuthorization) {
+              authorizeCurrentTool({ trustedExecutionLaunch: true, revalidation: true });
+              executionLaunchRuntime.assertCurrent(executionLaunchAuthorization);
+            } else {
+              this.assertInheritedExecutionAuthorityCurrent();
+            }
+            if (extDeny && !blockedByHook) blockedByHook = extDeny;
+            const preResults = this.runExecutionHooks(
+              'pre-tool',
+              { tool: name, payload: args },
+            );
+            const denial = preResults.find((r) => r.exitCode !== 0);
+            if (denial) {
+              blockedByHook = (denial.stderr || denial.stdout || '').toString().trim() || `Hook ${denial.hook.id} denied tool call (exit ${denial.exitCode})`;
+            }
+            // CC-P4.2 — structured decision contract: a hook may print JSON
+            // ({decision, reason, updatedInput}) instead of using its exit code.
+            // deny blocks even on exit 0; updatedInput REPLACES the tool args.
+            for (const r of preResults) {
+              const d = parseHookDecision(r.stdout);
+              if (!d) continue;
+              if (d.decision === 'deny' && !blockedByHook) {
+                blockedByHook = d.reason?.trim() || `Hook ${r.hook.id} (pre-tool) denied this call`;
+              } else if (d.updatedInput && typeof d.updatedInput === 'object') {
+                if (durableLaunch) {
+                  blockedByHook = 'Durable workflow launch arguments cannot be rewritten by a pre-tool hook; start a newly reviewed launch instead.';
+                } else {
+                  args = d.updatedInput;
+                  hookifyWarnings.push(`hook ${r.hook.id} rewrote the tool input${d.reason ? ` — ${d.reason}` : ''}`);
+                }
+              }
+            }
+            // Hookify markdown rules: warn/block matching by event + pattern.
+            const rules = this.reviewedExecutionHookifyRules()
+              ?? listHookifyRules(this.workspaceRoot);
+            if (rules.length > 0) {
+              const ctx = buildHookifyContext(name, args);
+              const matches = evaluateHookify(rules, ctx);
+              for (const m of matches) {
+                if (m.action === 'block') {
+                  blockedByHook = `Hookify rule "${m.rule.name}" blocked this ${ctx.event} operation: ${m.rule.message.slice(0, 240)}`;
+                  break;
+                }
+                hookifyWarnings.push(`⚠️ ${m.rule.name}: ${m.rule.message.slice(0, 200)}`);
+              }
+            }
+            if (executionLaunchAuthorization) {
+              authorizeCurrentTool({ trustedExecutionLaunch: true, revalidation: true });
+              executionLaunchRuntime.assertCurrent(executionLaunchAuthorization);
+            } else {
+              this.assertInheritedExecutionAuthorityCurrent();
+            }
+          }
           if (blockedByHook) {
             throw new Error(`Blocked by pre-tool hook: ${blockedByHook}`);
           }
-          authorizeToolCall({
-            agent: this,
-            callbacks,
-            name,
-            args,
-            isLocal,
-            mcpTool: mcpToolByName.get(name),
-            skillAllowsTool,
-            workspaceAllowsLocalTool,
-            workspaceAllowsMcpTool,
-            requiredSkillActivation,
-            loadedRequiredSkills,
-            attemptedRequiredSkills:
-              requiredSkillPreflight.attemptedSkillIds,
-            warnedRequiredSkills,
-            trace: { traceId: turnSpan.traceId, spanId: turnSpan.spanId },
-          });
+          if (!durableLaunch) authorizeCurrentTool();
+          this.assertInheritedExecutionAuthorityCurrent();
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
@@ -1269,6 +1628,23 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               loadedRequiredSkills,
               spawnedChildIds: spawnedChildIdsThisTurn,
               waitedChildIds: waitedChildIdsThisTurn,
+              executionLaunchAuthorization,
+              revalidateExecutionLaunch: executionLaunchAuthorization
+                ? () => {
+                  authorizeCurrentTool({
+                    trustedExecutionLaunch: true,
+                    revalidation: true,
+                  });
+                  executionLaunchRuntime.assertCurrent(executionLaunchAuthorization!);
+                }
+                : undefined,
+              rejectExecutionLaunch: executionLaunchAuthorization
+                ? () => executionLaunchRuntime.reject(executionLaunchAuthorization!)
+                : undefined,
+              authorizeNestedMcpTarget: (targetName, targetArgs, descriptor) => {
+                authorizeNamedTool(targetName, targetArgs, false, descriptor);
+                this.assertInheritedExecutionAuthorityCurrent();
+              },
               buildOrchestrationContext,
               refreshActiveSkillTools,
               markChildOutputDelivered: () => {
@@ -1281,6 +1657,15 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             runtimeUnavailable = invocation.runtimeUnavailable;
           }
         } catch (err: any) {
+          if (executionLaunchAuthorization) {
+            executionLaunchRuntime.reject(executionLaunchAuthorization);
+          } else if (durableLaunch) {
+            executionLaunchRuntime.rejectPending();
+          }
+          if (durableLaunch) {
+            reviewedTurnTerminallyDenied = true;
+            refreshActiveSkillTools();
+          }
           isError = true;
           const message = err?.message ?? String(err);
           runtimeUnavailable = isOrchestrationRuntimeUnavailableError(err);
@@ -1315,6 +1700,15 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             summary = message;
           }
         }
+        // Adapter errors are ordinary tool outcomes only while the reviewed
+        // execution lease is still live. Keep this outside the formatting
+        // catch so revocation cannot be converted into a retryable tool result
+        // and then flow through callbacks or post-tool hooks.
+        if (executionLaunchAuthorization) {
+          executionLaunchRuntime.assertLeaseCurrent(executionLaunchAuthorization);
+        } else {
+          this.assertInheritedExecutionAuthorityCurrent();
+        }
         if (isError) {
           this.recentToolFailure = `${name}: ${summary || resultText.slice(0, 160)}`;
         }
@@ -1345,6 +1739,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           preview,
           ...(delegationState ? { delegationState } : {}),
         }, tc.id);
+        if (executionLaunchAuthorization) {
+          executionLaunchRuntime.assertLeaseCurrent(executionLaunchAuthorization);
+        } else {
+          this.assertInheritedExecutionAuthorityCurrent();
+        }
         const toolTrace: Record<string, unknown> = {
           tool: name,
           ok: !isError,
@@ -1357,10 +1756,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         }
         traceEvent('brainrouter.tool', toolTrace, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
         if (this.hookAdvisoryActive()) {
-          const postResults = runHooks(this.workspaceRoot, 'post-tool', {
+          const postResults = this.runExecutionHooks(
+            'post-tool',
+            {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
-          });
+            },
+          );
           // A post-tool hook may REPLACE the model-visible result text and/or
           // mark it an error (redact secrets, fail on a lint/policy breach).
           // Applied before the result is clamped + handed to the LLM below.
@@ -1370,7 +1772,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             if (typeof d.updatedOutput === 'string') resultText = d.updatedOutput;
             if (d.isError === true) isError = true;
           }
-          void this.runExtensionHooks('post-tool', { tool: name, args });
+          // Advisory extension hooks are open-ended async code with no
+          // revocation signal. Do not let them outlive or side-effect a
+          // reviewed execution after its lease changes; reviewed paths retain
+          // the synchronous, fingerprinted workspace hook contract above.
+          if (!reviewedExecutionTurn && !inheritedReviewedExecution) {
+            await this.runExtensionHooks('post-tool', { tool: name, args });
+          }
+          if (executionLaunchAuthorization) {
+            executionLaunchRuntime.assertLeaseCurrent(executionLaunchAuthorization);
+          } else {
+            this.assertInheritedExecutionAuthorityCurrent();
+          }
         }
 
         // ADR-032 D7 — provenance records outcomes, not intentions. Failed,
@@ -1416,6 +1829,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
           clampedContent = formatHandoffForModel(handoff, { label: name });
         }
+        refreshResultExpansionTool();
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
@@ -1430,6 +1844,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         const systemMsg = resultSystemMessage
           ? { role: 'system', content: resultSystemMessage }
           : undefined;
+        if (executionLaunchAuthorization) {
+          executionLaunchRuntime.assertLeaseCurrent(executionLaunchAuthorization);
+        } else {
+          this.assertInheritedExecutionAuthorityCurrent();
+        }
         // Return; the caller pushes to chatHistory in original call order
         // (NOT settle order) and records the FULL untruncated result for
         // /transcript. Doing the push here would let parallel batches land
@@ -1460,6 +1879,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         },
       });
 
+      if (!reviewedTurnTerminallyDenied) assertReviewedTurnCurrent();
+
       publishToolBatch({
         results: processed,
         publishToolResult: (toolMsg, fullResultText) => {
@@ -1481,8 +1902,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           callbacks.onStatusUpdate(`Recovery: synthesized placeholder for orphan tool_call ${synthetic.tool_call_id}.`);
         },
       });
+      if (reviewedTurnTerminallyDenied) {
+        return 'Reviewed workflow launch did not proceed. Start a fresh explicit action to try again.';
+      }
     }
 
+    assertReviewedTurnCurrent();
     return await finalizeTurnPhase(this, {
       prompt,
       answer: finalAnswer,
@@ -1492,6 +1917,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       callbacks,
       activeTurnOrchestration,
       turnSpan,
+      reviewedExecution: reviewedExecutionTurn || inheritedReviewedExecution,
+      assertReviewedExecutionCurrent: reviewedExecutionTurn || inheritedReviewedExecution
+        ? assertReviewedTurnCurrent
+        : undefined,
     });
     } finally {
       profileStageController?.terminate(

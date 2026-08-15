@@ -801,7 +801,12 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   Evaluate every eligible top-level turn from bounded user/confirmed task context, make a normal
   turn the root when no goal exists, define/validate explicit topology and strategy provenance,
   reject planner/model self-authorization, parent durable children, and keep the Core goal
-  supervisor an optional continuation parent for both hosts.
+  supervisor an optional continuation parent for both hosts. Partial implementation evidence:
+  the trusted-intent slice binds one exact CLI or host-reviewed phase launch to an opaque,
+  single-use live-Agent capability, preserves parent/launch lineage in legacy-readable ledgers,
+  purpose-limits the reviewed turn, and carries a revocable policy-bound lease through declared
+  descendants. The conversational task envelope, closed origin/topology contract, goal/no-goal
+  parity, and shared Core goal supervisor remain open, so this row stays unchecked.
 - [ ] **A40-3 — Make saved graph execution fail closed and bounded.** Wire the shared approval port,
   block when absent, enforce agent-node role/access configuration, propagate cancellation, apply
   cumulative execution budgets and required/optional failure rules, and prove bounded loop/

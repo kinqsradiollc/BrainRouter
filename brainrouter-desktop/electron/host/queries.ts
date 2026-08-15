@@ -567,6 +567,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     refreshAccountModelCatalog,
     peekAccountModelCatalog,
     syncActiveSessionLlm,
+    revokeReviewedExecutionAuthority,
     rebindActiveAccountOrg,
     activeTenantBindingError,
     humanCorrectionIngress,
@@ -4436,6 +4437,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'action:ext-set-enabled': async (args) => {
         const name = typeof args.name === 'string' ? args.name : '';
         if (!name) return { ok: false, error: 'No extension name.' };
+        revokeReviewedExecutionAuthority('workspace');
         setExtensionEnabled(name, args.enabled === true);
         await loadExtensions(workspaceRoot).catch(() => undefined);
         return { ok: true, name };
@@ -4443,6 +4445,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // EXTENSIONS — trust / untrust this workspace, then (re)load so workspace
       // extensions activate or deactivate immediately.
       'action:trust-workspace': async (args) => {
+        revokeReviewedExecutionAuthority('workspace');
         if (args.trusted === true) trustWorkspace(workspaceRoot);
         else untrustWorkspace(workspaceRoot);
         await loadExtensions(workspaceRoot).catch(() => undefined);
@@ -5064,14 +5067,36 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const key = typeof args.key === 'string' ? args.key : '';
         const SETTABLE = new Set(['delegationPolicy', 'autoChain', 'personality', 'personalityMode', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
         if (!SETTABLE.has(key)) throw new Error(`Preference "${key}" is not settable from the desktop.`);
+        if (
+          key === 'delegationPolicy'
+          && (readPreferences(workspaceRoot).delegationPolicy ?? 'auto') !== (args.value ?? 'auto')
+        ) {
+          revokeReviewedExecutionAuthority('workspace');
+        }
         return writePreferences(workspaceRoot, { [key]: args.value } as never);
       },
       'action:set-session-mode': (args) => {
         const parsed = desktopSessionModePatchFromArgs(args);
         if (parsed.error) throw new Error(parsed.error);
-        const sessionMode = setSessionMode(workspaceRoot, getActiveAgent().sessionKey, parsed.patch);
-        const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
-        const activePersonality = resolveActivePersonality(workspaceRoot, getActiveAgent().sessionKey);
+        const sessionKey = getActiveAgent().sessionKey;
+        const currentMode = resolveActiveMode(workspaceRoot, sessionKey);
+        const inheritedMode = resolveActiveMode(workspaceRoot);
+        const currentPersonality = resolveActivePersonality(workspaceRoot, sessionKey);
+        const inheritedPersonality = resolveActivePersonality(workspaceRoot);
+        const policyChanged = (
+          ('executionMode' in parsed.patch
+            && (parsed.patch.executionMode ?? inheritedMode.executionMode) !== currentMode.executionMode)
+          || ('reviewPolicy' in parsed.patch
+            && (parsed.patch.reviewPolicy ?? inheritedMode.reviewPolicy) !== currentMode.reviewPolicy)
+          || ('effort' in parsed.patch
+            && (parsed.patch.effort ?? inheritedMode.effort) !== currentMode.effort)
+          || ('personality' in parsed.patch
+            && (parsed.patch.personality ?? inheritedPersonality.style) !== currentPersonality.style)
+        );
+        if (policyChanged) revokeReviewedExecutionAuthority('active-session');
+        const sessionMode = setSessionMode(workspaceRoot, sessionKey, parsed.patch);
+        const activeMode = resolveActiveMode(workspaceRoot, sessionKey);
+        const activePersonality = resolveActivePersonality(workspaceRoot, sessionKey);
         if ('personality' in parsed.patch) getActiveAgent().refreshSystemPrompt();
         return {
           ok: true,
@@ -5083,19 +5108,26 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       'action:set-hook': (args) => {
         const id = typeof args.id === 'string' ? args.id : '';
-        return { ok: setHookEnabled(workspaceRoot, id, args.enabled === true) };
+        const enabled = args.enabled === true;
+        const current = readHooks(workspaceRoot).find((hook) => hook.id === id);
+        if (current && current.enabled !== enabled) revokeReviewedExecutionAuthority('workspace');
+        return { ok: setHookEnabled(workspaceRoot, id, enabled) };
       },
       'action:set-access': (args) => {
         const mode = args.mode;
         if (mode !== 'read' && mode !== 'write' && mode !== 'shell') throw new Error(`Unknown access mode "${String(mode)}".`);
-        getActiveAgent().setAccessMode(mode);
+        const activeAgent = getActiveAgent();
+        if (activeAgent.getAccessMode() !== mode) revokeReviewedExecutionAuthority('active-session');
+        activeAgent.setAccessMode(mode);
         return { ok: true, mode };
       },
       'action:reconnect-mcp': async (args) => {
         const id = typeof args.id === 'string' ? args.id : '';
         const fresh = loadConfig();
         const server = fresh.servers?.[id];
+        if (!server) return { ok: false, error: `No configured server named "${id}".` };
         const isBrainRouter = !!server && isBrainRouterLearningProfile(id, server);
+        revokeReviewedExecutionAuthority('workspace');
         if (isBrainRouter) {
           fresh.activeServer = id;
           saveConfig(fresh);
@@ -5112,9 +5144,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const id = typeof args.id === 'string' ? args.id : '';
         if (!id) return { ok: false, error: 'No server id.' };
         const fresh = loadConfig();
+        const server = fresh.servers?.[id];
+        if (!server) return { ok: false, error: `No configured server named "${id}".` };
+        revokeReviewedExecutionAuthority('workspace');
         (fresh as { activeServer?: string }).activeServer = id;
         saveConfig(fresh);
-        const server = fresh.servers?.[id];
         if (server && isBrainRouterLearningProfile(id, server)) {
           await rebindActiveAccountOrg(fresh, { forceIdentity: true });
           return { ok: true, activeServer: id };
@@ -5147,8 +5181,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const required = cfg.type === 'http' ? cfg.url : cfg.command;
         if (!required) return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
         const fresh = loadConfig();
-        fresh.servers = fresh.servers ?? {};
-        if (fresh.servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
+        const servers = fresh.servers ?? {};
+        if (servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
+        revokeReviewedExecutionAuthority('workspace');
+        fresh.servers = servers;
         fresh.servers[id] = cfg;
         saveConfig(fresh as never);
         if (isBrainRouterLearningProfile(id, cfg)) {
@@ -5163,7 +5199,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!id) return { ok: false, error: 'No server id.' };
         const fresh = loadConfig();
         const removed = fresh.servers?.[id];
+        if (!removed) return { ok: false, error: `No configured server named "${id}".` };
         const isBrainRouter = !!removed && isBrainRouterLearningProfile(id, removed);
+        revokeReviewedExecutionAuthority('workspace');
         try { await mcpClient.disconnectOne(id); } catch { /* already gone */ }
         if (fresh.servers && fresh.servers[id]) { delete fresh.servers[id]; saveConfig(fresh as never); }
         if (isBrainRouter) {

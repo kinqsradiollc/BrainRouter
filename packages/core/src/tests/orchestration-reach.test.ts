@@ -15,6 +15,8 @@ import { routeTask } from '../orchestration/delegation/router.js';
 import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '../workflow/template/workflowTemplates.js';
 import { describeProfileStageTool } from '../agent/runtime/profileStageRuntime.js';
 import {
+  createRunWorkflowGraphTool,
+  createRunWorkflowTool,
   createSpawnAgentsTool,
   createTaskAgentTool,
   createRouteTaskTool,
@@ -117,14 +119,14 @@ test('every tool the runtime NAMES in an injected message is a tool the model ca
   }
 });
 
-test('enabling active-turn orchestration also grants run_workflow, which its own guidance tells the model to call', () => {
-  // Splitting the two across catalog groups made the `investigate` template
-  // unreachable on a workspace that had opted into orchestration: three
-  // surfaces named a tool the catalog denied.
+test('the low-level workflow target stays catalogued for exact host-authorized dispatch', () => {
+  // Authorization is enforced at the runtime chokepoint, not by deleting the
+  // stable tool id from profiles. Existing catalogs and low-level APIs remain
+  // readable while model-facing guidance points at explicit host commands.
   assert.equal(advertised().has('run_workflow'), true);
 });
 
-test('route_task never recommends a tool this turn cannot emit', async () => {
+test('route_task never recommends a model tool this turn cannot emit', async () => {
   // The workspace-policy list is what the turn hands the model. A tier whose
   // tool is missing from it must yield to the next one, not be recommended
   // anyway — the router's answer is acted on, not read.
@@ -133,8 +135,10 @@ test('route_task never recommends a tool this turn cannot emit', async () => {
     skipMemory: true,
     availableTools: new Set(['spawn_agents', 'read_file', 'run_command']),
   });
-  assert.notEqual(withoutWorkflow.tier, 'workflow');
-  assert.notEqual(withoutWorkflow.recommendedTool, 'run_workflow');
+  assert.equal(withoutWorkflow.tier, 'workflow');
+  assert.equal(withoutWorkflow.recommendedTool, null);
+  assert.match(withoutWorkflow.reason, /`\/build <task>`/);
+  assert.doesNotMatch(withoutWorkflow.reason, /hand .* to `run_workflow`/i);
 
   const withoutWorkers = await routeTask({
     task: 'Watch the deploy in the background until it finishes and tell me how it went.',
@@ -168,14 +172,31 @@ test('route_task recommends a workflow for a phase chain, and names the template
     skipMemory: true,
   });
   assert.equal(result.tier, 'workflow');
-  assert.equal(result.recommendedTool, 'run_workflow');
-  assert.match(result.reason, /template "build"/);
+  assert.equal(result.recommendedTool, null);
+  assert.match(result.reason, /`\/build <task>`/);
+  assert.match(result.reason, /cannot authorize or start/);
 });
 
 test('route_task routes a multi-target comparison to the compare workflow, not N hand-managed children', async () => {
   const result = await routeTask({ task: 'Compare pgvector vs sqlite-vec for our recall path.', skipMemory: true });
   assert.equal(result.tier, 'workflow');
-  assert.match(result.reason, /template "compare"/);
+  assert.equal(result.recommendedTool, null);
+  assert.match(result.reason, /`\/workflow run compare \[jsonArgs\]`/);
+});
+
+test('workflow tool specs state exact host authority and current Desktop availability', () => {
+  const phase = createRunWorkflowTool().description;
+  assert.match(phase, /unexpired, single-use execution intent/);
+  assert.match(phase, /exact workspace, session, user, turn, tool, and normalized arguments/);
+  assert.match(phase, /active goal, planner\/router recommendation.*does not create that authority/);
+  assert.match(phase, /`\/build <task>`/);
+  assert.match(phase, /`\/workflow run <template> \[jsonArgs\]`/);
+  assert.match(phase, /Desktop production launch is unavailable/);
+
+  const graph = createRunWorkflowGraphTool().description;
+  assert.match(graph, /unexpired, single-use execution intent/);
+  assert.match(graph, /Production graph launch remains unavailable/);
+  assert.match(graph, /Desktop Test run is preview-only/);
 });
 
 test('an explicit "do it yourself" still demotes below fan-out, because the veto outranks breadth', async () => {

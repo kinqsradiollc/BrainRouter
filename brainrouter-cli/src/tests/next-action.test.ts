@@ -44,9 +44,9 @@ test('NEXT-ACTION parseNextActionPlan tolerates prose-wrapped/fenced JSON and va
   assert.equal(parseNextActionPlan(undefined), null);
 });
 
-test('NEXT-ACTION planWantsFanOut only for fan-out/workflow with ≥2 subtasks', () => {
+test('NEXT-ACTION planWantsFanOut only arms automatic follow-through for fan-out', () => {
   assert.equal(planWantsFanOut({ strategy: 'fan-out', reasoning: '', subtasks: ['a', 'b', 'c'] }), true);
-  assert.equal(planWantsFanOut({ strategy: 'workflow', reasoning: '', subtasks: ['a', 'b'] }), true);
+  assert.equal(planWantsFanOut({ strategy: 'workflow', reasoning: '', subtasks: ['a', 'b'] }), false);
   assert.equal(planWantsFanOut({ strategy: 'fan-out', reasoning: '', subtasks: ['only one'] }), false);
   assert.equal(planWantsFanOut({ strategy: 'investigate', reasoning: '', subtasks: [] }), false);
   assert.equal(planWantsFanOut({ strategy: 'answer-direct', reasoning: '', subtasks: [] }), false);
@@ -92,22 +92,27 @@ test('BUILD-LOOP P3 parseNextActionPlan honors "build" only when enabled; downgr
   );
 });
 
-test('BUILD-LOOP P3 nextActionDirective: "build" fires one run_workflow build call; never arms fan-out', () => {
+test('BUILD-LOOP P3 nextActionDirective: "build" recommends an explicit launch without authoring one', () => {
   const withTask = nextActionDirective({
     strategy: 'build',
     reasoning: 'feature spans multiple files',
     subtasks: ['add a /metrics endpoint with tests'],
   });
-  assert.match(withTask, /Next-action plan \(decided\): build/);
-  assert.match(withTask, /SINGLE `run_workflow` call/);
-  assert.match(withTask, /"template":"build"/);
+  assert.match(withTask, /Next-action plan \(recommended\): build/);
+  assert.match(withTask, /explicit user launch/i);
+  assert.match(withTask, /`\/build <task>`/);
+  assert.match(withTask, /Desktop production launch is unavailable/);
+  assert.match(withTask, /Test run is preview-only/);
   assert.match(withTask, /add a \/metrics endpoint with tests/);
-  assert.match(withTask, /do NOT hand-edit files directly/);
-  // No subtasks → directive still emits a build call with a placeholder + fill instruction.
+  assert.doesNotMatch(withTask, /run_workflow/);
+  assert.doesNotMatch(withTask, /"(?:template|templateArgs|phases)"/);
+  assert.doesNotMatch(withTask, /FIRST action MUST/i);
+  assert.doesNotMatch(withTask, /```(?:json)?/);
+  // No subtasks → the recommendation still points to the explicit surfaces.
   const noTask = nextActionDirective({ strategy: 'build', reasoning: 'implement it', subtasks: [] });
-  assert.match(noTask, /"template":"build"/);
-  assert.match(noTask, /Replace the `task` placeholder/);
-  // "build" is a single workflow run, not a manual fan-out.
+  assert.match(noTask, /`\/build <task>`/);
+  assert.doesNotMatch(noTask, /run_workflow|"template"|FIRST action MUST/i);
+  // "build" is a recommendation, not an automatic fan-out.
   assert.equal(planWantsFanOut({ strategy: 'build', reasoning: '', subtasks: ['one task'] }), false);
 });
 

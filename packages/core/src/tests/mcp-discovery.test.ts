@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchMcpCatalog, toToolBrief, type McpCatalogTool } from '../mcp/discovery/discovery.js';
+import {
+  resolveMcpCatalogTool,
+  searchMcpCatalog,
+  toToolBrief,
+  type McpCatalogTool,
+} from '../mcp/discovery/discovery.js';
 
 const CATALOG: McpCatalogTool[] = [
   { name: 'mcp_github_create_issue', __rawName: 'create_issue', __serverId: 'github', description: 'Open a new GitHub issue in a repository.' },
@@ -8,6 +13,23 @@ const CATALOG: McpCatalogTool[] = [
   { name: 'mcp_slack_post_message', __rawName: 'post_message', __serverId: 'slack', description: 'Post a message to a Slack channel.' },
   { name: 'mcp_db_run_query', __rawName: 'run_query', __serverId: 'db', description: 'Run a read-only SQL query against the database.' },
 ];
+
+test('resolveMcpCatalogTool prefers exact names and only accepts unique raw aliases', () => {
+  assert.equal(
+    resolveMcpCatalogTool(CATALOG, 'mcp_github_create_issue')?.name,
+    'mcp_github_create_issue',
+  );
+  assert.equal(resolveMcpCatalogTool(CATALOG, 'create_issue')?.name, 'mcp_github_create_issue');
+  const collision = [
+    ...CATALOG,
+    { name: 'mcp_other_create_issue', __rawName: 'create_issue' },
+  ];
+  assert.equal(resolveMcpCatalogTool(collision, 'create_issue'), undefined);
+  assert.equal(
+    resolveMcpCatalogTool(collision, 'mcp_other_create_issue')?.name,
+    'mcp_other_create_issue',
+  );
+});
 
 test('searchMcpCatalog: name match ranks above description-only match', () => {
   const res = searchMcpCatalog(CATALOG, 'issue', 5);

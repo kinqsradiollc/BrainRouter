@@ -24,6 +24,7 @@ export interface BudgetableTool {
 /** Exact match, plus bare-name suffix matching for namespaced MCP tools. */
 export function toolNameMatchesAny(name: string, entries: Iterable<string>): boolean {
   for (const entry of entries) {
+    if (entry === '*') return true;
     if (entry && (name === entry || (name.startsWith('mcp_') && name.endsWith(`_${entry}`)))) return true;
   }
   return false;

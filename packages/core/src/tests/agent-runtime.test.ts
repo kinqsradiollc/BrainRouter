@@ -20,6 +20,7 @@ import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { readWorkContract } from '../task/workContractStore.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import { listSessions } from '../orchestration/session/orchestrator.js';
 import {
   buildWorkspaceSelectionCatalog,
   migrateWorkspaceManifestToolSelection,
@@ -2215,6 +2216,56 @@ test('P1.2: worker tier cannot delegate', async () => {
   });
 });
 
+test('workspace profile role ceiling rejects legacy role strings before child creation', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'health', profile: 'healthcare', by: 'wizard' }),
+    );
+    const ctx = makeStubOrchCtx(workspace);
+    await assert.rejects(
+      () => executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'worker', prompt: 'make a change that the reviewed profile did not permit' },
+        ctx,
+      ),
+      /Role "worker" is unavailable in the active workspace profile/,
+    );
+    assert.equal(
+      listSessions(workspace).some((session) => (
+        session.prompt === 'make a change that the reviewed profile did not permit'
+      )),
+      false,
+    );
+  });
+});
+
+test('reviewed spawn defense rejects access above the resolved role ceiling', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const ctx = makeStubOrchCtx(workspace, {
+      executionLaunch: {
+        runId: 'reviewed-run',
+        parentExecutionId: 'reviewed-turn',
+        record: {} as never,
+        dispatchReceipt: {},
+        assertAuthorityCurrent: () => {},
+      },
+    });
+    await assert.rejects(
+      () => executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'reviewer', access: 'shell', prompt: 'Review without writing.' },
+        ctx,
+      ),
+      /cannot raise role "reviewer" above its read access ceiling.*requested shell/i,
+    );
+    assert.equal(
+      listSessions(workspace).some((session) => session.prompt === 'Review without writing.'),
+      false,
+    );
+  });
+});
+
 test('ORCH-FIX: wait_agents on unknown/missing children resolves per-child, never throws (no main-loop hang)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const ctx = makeStubOrchCtx(workspace);
@@ -2612,6 +2663,10 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       assert.deepEqual(
         result.taskPacket.orchestration.skillIds,
         ['source-review', 'citation-check'],
+      );
+      assert.deepEqual(
+        result.taskPacket.toolPolicyCeiling,
+        { accessMode: 'read', localToolCount: 3, mcpToolCount: 0 },
       );
       assert.equal(controller.snapshot()[0].state, 'succeeded');
 
@@ -3059,7 +3114,7 @@ test('R4: unknown tool name in the batch is serial and fails closed before MCP d
       // The unknown one is reported as an error envelope.
       const unknown = toolMsgs.find((m) => m.tool_call_id === 'u1');
       assert.equal(unknown.isError, true);
-      assert.match(String(unknown.content), /requires approval/i);
+      assert.match(String(unknown.content), /outside the active .*ceiling/i);
       assert.equal(mcpCalls, 0, 'an unannotated unknown tool never reaches the remote server');
     } finally {
       restore();
