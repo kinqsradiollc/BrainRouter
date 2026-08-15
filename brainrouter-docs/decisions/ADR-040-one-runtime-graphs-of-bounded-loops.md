@@ -995,7 +995,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   launch config points at the main checkout, not this worktree, so running it would have rendered a
   tree without this panel. Calling that validation would be worse than leaving the row open.
   Preview/confirm and authorized transcript drill-down also remain.
-- [ ] **A40-11 — Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
+- [~] **A40-11 — PARTIAL. Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
   migration.
@@ -1165,3 +1165,22 @@ The desired result is not “BrainRouter uses graphs.” It is:
 
 > **BrainRouter knows when one bounded loop is enough, when a reviewed graph of bounded loops is
 > justified, and can show the same truthful answer everywhere it runs.**
+
+
+  **Shipped in `3c584b73e`.** This row's precondition — "only after the execution map can show their
+  real behavior" — is met: A40-4's vocabulary, A40-5's reducer, A40-7's emitter and A40-9/A40-10's
+  surfaces exist, and each optimization decision maps onto `ExecutionDecision`.
+
+  Domain-neutral measurement, counter-metric, verifier, arbitration, rollback and drift/audit. Three
+  orderings carry it, each a way a self-scoring loop lies: a counter-metric regression rejects even
+  when the target improved and is checked FIRST so the reported reason is the trade itself; a failed
+  verifier beats a measurement that says yes, and an unrun verifier is `unverified` rather than
+  assumed to have passed; arbitration gives the verifier the win, because a tie broken toward the
+  optimiser is not a tie broken. Drift/audit catches a metric that stopped discriminating. Twelve
+  tests, mutation-proved.
+
+  The Engineering build loop is retained as ONE instance of the shape, expressed in general terms.
+
+  **Still open for this row:** the migration itself — replacing the current build-loop callers with
+  these decisions, and emitting them into the map. Generalise first, migrate second, with the old
+  path retained meanwhile, is the sequence this row asks for.
