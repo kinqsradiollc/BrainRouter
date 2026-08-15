@@ -210,24 +210,15 @@ const ORPHAN_MODULE_CEILING = 26;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   [
-    'orchestration/execution/runStore.ts',
-    'ADR-040 A40-6. Durable per-launch run storage, landing before the adapters '
-    + 'that write to it (A40-7) and the surfaces that read it (A40-9 CLI /runs, '
-    + 'A40-10 Desktop Runs). Covered by execution-run-store.test.ts with mutation '
-    + 'runs for exclusive launch, compare-and-set, and the torn-pair resume '
-    + 'refusal. Same terms as the reducer entry below: named successor slices, '
-    + 'and the test below fails the moment it stops being an orphan.',
-  ],
-  [
-    'orchestration/execution/reducer.ts',
-    'ADR-040 A40-5. The execution-map reducer lands BEFORE its emitter by the '
-    + "ADR's own dependency-ordered board: A40-7 adapts phase plans and saved "
-    + 'graphs to emit the canonical run, and A40-9/A40-10 render it. It is '
-    + 'covered by execution-reducer.test.ts, including mutation runs for '
-    + 'idempotency, gap-awareness and terminal finality. This entry is the '
-    + 'honest way to hold that gap: it is visible, it is dated to a named '
-    + 'successor slice, and the test below fails the moment the module stops '
-    + 'being an orphan — so it cannot quietly become permanent.',
+    'orchestration/execution/graphAdapter.ts',
+    'ADR-040 A40-7. Adapts a saved graph run to the canonical execution map: it '
+    + 'is the module that WIRED the A40-5 reducer and the A40-6 durable store, '
+    + 'so both of their entries here are gone — the sweep caught them as stale '
+    + 'the moment they stopped being orphans, which is the whole point of the '
+    + 'honesty test above. This one is now the frontier: nothing renders the map '
+    + 'yet, and that is A40-9 (CLI /runs) and A40-10 (Desktop Runs). Covered by '
+    + 'execution-graph-adapter.test.ts, including a real SIGKILL process-kill '
+    + 'test proving a committed resume point survives a crash.',
   ],
 ]);
 
@@ -595,29 +586,15 @@ function deadExports(): string[] {
  * must be wired or deleted; when that happens this comment goes and the number
  * falls with it.
  *
- * **It rose again, on purpose: 274 → 279, ADR-040 A40-6.**
- * `orchestration/execution/runStore.ts` is durable per-launch run storage, and
- * it lands before its writer (A40-7) and its readers (A40-9 CLI `/runs`, A40-10
- * Desktop Runs) for the same dependency-ordered reason as the reducer below.
- * Five slots, not one: a store is a surface, and its read/write/list/reconcile
- * entry points are all dead until something calls them. That is the honest
- * count and it is written here rather than rounded down. Same terms: named,
- * attributed to specific successor slices, and it falls when those land. If
- * they do not, this is the evidence the module should go.
- *
- * **It rose a second time, on purpose: 273 → 274, ADR-040 A40-5.**
- * `orchestration/execution/reducer.ts` is the execution-map reducer, and it
- * lands BEFORE its emitter because the ADR's own dependency-ordered board puts
- * the reducer at A40-5 and the adapters that feed it at A40-7. Its exports are
- * dead by construction until then — the same single fact the module's
- * `KNOWN_UNWIRED` entry records, which is why this is one slot and not several.
- *
- * Following the precedent above rather than inventing an exemption: the rise is
- * named, it is attributed to a specific successor slice, and it falls when A40-7
- * wires the emitter. If A40-7 never lands, this line is the evidence that the
- * reducer should be deleted rather than kept as scenery.
+ * **The A40-5 and A40-6 rises are REPAID.** Those two slices took it 273 → 279
+ * while their reducer and durable store had no caller. A40-7's adapter wired
+ * both, and the sweep immediately flagged their exclusions as stale — a ratchet
+ * that only catches new debt and never notices repayment is just a bigger
+ * number. What remains is A40-7's own frontier: the adapter's exports are dead
+ * until A40-9 and A40-10 render the map. Named, attributed, and it falls when
+ * they land.
  */
-const DEAD_EXPORT_CEILING = 279;
+const DEAD_EXPORT_CEILING = 280;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

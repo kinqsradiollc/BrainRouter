@@ -74,6 +74,33 @@ export interface GraphRunDeps {
   executionBudget?: number;
   /** Cooperative cancellation; checked before each node starts. */
   signal?: AbortSignal;
+  /**
+   * ADR-040 A40-7 — emit the canonical execution map as the run happens.
+   *
+   * The engine does not know what consumes this: Core's reducer projects it,
+   * the durable store persists it, CLI and Desktop render it. Optional so the
+   * engine stays usable headless, and deliberately fire-and-forget — a
+   * subscriber must never be able to fail a run by throwing.
+   */
+  emitExecution?: (event: GraphExecutionEmission) => void;
+  /** Identity for the emitted execution; generated per run when absent. */
+  executionId?: string;
+}
+
+/**
+ * What the engine knows at emit time, in the shape A40-4's vocabulary expects.
+ * The engine stays free of the protocol package; the caller maps this across.
+ */
+export interface GraphExecutionEmission {
+  executionId: string;
+  executionSequence: number;
+  nodeId?: string;
+  attempt?: number;
+  iterationPath?: readonly number[];
+  status?: string;
+  edgeId?: string;
+  edgeState?: 'active' | 'traversed' | 'skipped' | 'blocked';
+  decision?: { kind: string; outcome: string; reasonCodes: readonly string[] };
 }
 
 export interface NodeRunRecord {
@@ -107,6 +134,8 @@ interface RunOpts {
    * how a "bounded" graph runs unboundedly.
    */
   budget: { remaining: number };
+  /** Shared so a subworkflow's occurrences land in the SAME execution. */
+  emit: (e: Omit<GraphExecutionEmission, 'executionId' | 'executionSequence'>) => void;
 }
 
 function compare(a: string, op: string, b: string): boolean {
@@ -374,7 +403,7 @@ async function runSubWorkflow(node: WorkflowNode, ctx: InterpContext, deps: Grap
   for (const [k, v] of Object.entries(inputs)) seeded[k] = typeof v === 'string' ? interpolate(v, ctx) : v;
 
   // The child shares the parent's budget object, so nesting cannot reset it.
-  const result = await runGraphInternal({ ...sub, vars: { ...(sub.vars ?? {}), ...seeded } }, deps, { depth: opts.depth + 1, stack: [...opts.stack, ref], budget: opts.budget });
+  const result = await runGraphInternal({ ...sub, vars: { ...(sub.vars ?? {}), ...seeded } }, deps, { depth: opts.depth + 1, stack: [...opts.stack, ref], budget: opts.budget, emit: opts.emit });
   if (!result.ok) return { id: node.id, type: 'subworkflow', status: 'error', error: `sub-workflow ${ref} failed: ${result.error ?? 'unknown'}`, output: { ok: false } };
   return { id: node.id, type: 'subworkflow', status: 'ok', output: { text: result.finalOutput ?? '', ok: true, nodes: result.nodes } };
 }
@@ -386,13 +415,37 @@ async function runSubWorkflow(node: WorkflowNode, ctx: InterpContext, deps: Grap
  * through). A rejected `approval` halts its branch. The first node error fails
  * the run (fail-closed) and is reported.
  */
+/**
+ * A subscriber must not be able to fail a run. Observability that can break the
+ * thing it observes is worse than no observability, because the failure then
+ * looks like the workflow's.
+ */
+function makeEmitter(deps: GraphRunDeps, executionId: string): (e: Omit<GraphExecutionEmission, 'executionId' | 'executionSequence'>) => void {
+  let sequence = 0;
+  return (partial) => {
+    if (!deps.emitExecution) return;
+    sequence += 1;
+    try {
+      deps.emitExecution({ ...partial, executionId, executionSequence: sequence });
+    } catch {
+      /* an observer's failure is not the run's */
+    }
+  };
+}
+
 export async function runGraph(graph: WorkflowGraph, deps: GraphRunDeps): Promise<GraphRunResult> {
   const limit = deps.executionBudget ?? DEFAULT_EXECUTION_BUDGET;
-  return runGraphInternal(graph, deps, {
+  const executionId = deps.executionId ?? `graph-${graphKey(graph) || 'anon'}`;
+  const emit = makeEmitter(deps, executionId);
+  emit({ status: 'running' });
+  const result = await runGraphInternal(graph, deps, {
     depth: 0,
     stack: [graphKey(graph)].filter(Boolean),
     budget: { remaining: Math.max(0, limit) },
+    emit,
   });
+  emit({ status: result.ok ? 'succeeded' : 'failed' });
+  return result;
 }
 
 async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: RunOpts): Promise<GraphRunResult> {
@@ -443,6 +496,23 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
         : await runSingleNode(node, ctx, deps, upstream);
       records[id] = rec;
       ctx.nodes[id] = rec.output;
+      opts.emit({
+        nodeId: id,
+        attempt: 1,
+        iterationPath: opts.depth > 0 ? [opts.depth] : [],
+        status: rec.status === 'ok' ? 'succeeded' : rec.status === 'skipped' ? 'skipped' : 'failed',
+      });
+      if (node.type === 'approval') {
+        const approvedOutput = rec.output as { approved?: boolean; unattended?: boolean } | undefined;
+        opts.emit({
+          nodeId: id,
+          decision: {
+            kind: 'approval',
+            outcome: approvedOutput?.approved ? 'approved' : 'rejected',
+            reasonCodes: approvedOutput?.unattended ? ['unattended'] : [],
+          },
+        });
+      }
       // a sub-workflow node that failed should fail the parent run (fail-closed)
       if (rec.status === 'error') return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${rec.error ?? 'error'}` };
       if (node.type === 'output' && typeof (rec.output as { text?: unknown })?.text === 'string') {
