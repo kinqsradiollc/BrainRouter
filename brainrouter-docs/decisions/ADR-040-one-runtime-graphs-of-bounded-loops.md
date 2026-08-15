@@ -963,9 +963,17 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests.
 
   **Shipped in `0f6541638`** (`orchestration/execution/graphAdapter.ts` + emission in the graph
-  engine). Saved graphs now emit occurrences and approval decisions into the canonical map; the
-  reducer projects them and the durable store persists resume state on EVERY event rather than once
-  at the end — a run that saves only at completion has no resume point at the moment it needs one.
+  engine). Saved graphs now emit occurrences and approval decisions into the canonical map, and the
+  durable store persists resume state on EVERY event rather than once at the end — a run that saves
+  only at completion has no resume point at the moment it needs one.
+
+  **Correction, caught by the remaining-work audit:** at `0f6541638` the reducer did NOT actually
+  project those decisions — they were emitted into the stream and then dropped, and the approval test
+  passed while asserting only the node occurrence, never the decision, which is exactly how the gap
+  hid. The reducer now projects them: `ExecutionSnapshot.decisions` records each decision (its `kind`
+  as emitted rather than policed, bounded reason codes, deduped on replay, projected independently so
+  a decision riding on the same event as an occurrence records both), the approval test now asserts
+  the decision itself, and `execution-reducer-decisions.test.ts` mutation-proves the projection.
 
   **The process-kill evidence this row requires is RUN, with a real SIGKILL.** The test spawns a
   child, waits for it to commit a resume point, kills it, asserts the child died BY SIGNAL, and reads
