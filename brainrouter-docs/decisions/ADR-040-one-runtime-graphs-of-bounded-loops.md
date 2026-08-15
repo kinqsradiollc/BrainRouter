@@ -813,14 +813,18 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   with single-use dispatch receipts — a planner or model cannot fabricate one because there is no
   string to guess.
 
-  **Two acceptance failures remain OPEN and this row is not closed by them.** Both became visible
-  only after the test file stopped voiding itself: the reviewed root never reaches a steering-only
-  turn when the file runs in order, and `access downgrade during cost approval revokes launch before
-  persistence` produces no rejection — a launch survives an access downgrade performed inside the
-  approval await, which is the one window where a human is looking at a prompt and can change their
-  mind. `revalidateExecutionLaunch` exists and is wired at
-  `toolAdapterInvocationPhase.ts:185`, so the gap is that the re-check is either not reached or not
-  sufficient, not that it is absent.
+  **Two acceptance failures remain OPEN, and they are TEST-ISOLATION failures rather than product
+  ones — this distinction was checked, not assumed.** Both pass when run alone and fail only when the
+  file runs in order. For `access downgrade during cost approval revokes launch before persistence`
+  the behaviour was probed directly: the approval callback runs, access moves `shell` -> `read`, and
+  the launch IS rejected. So the revocation works and the authority model is sound; what is broken is
+  that some state leaks between tests in this file and blinds the check on later runs. Resetting the
+  CLI-knob and config-loader caches between temp workspaces (already done in `_helpers.ts`) is not
+  sufficient, so the leaked state is something else and is still unidentified.
+
+  This is recorded precisely because the opposite reading — "a launch survives an access downgrade" —
+  is what the raw failure looks like, and it would be a serious security claim to make on evidence
+  that does not support it.
 
   Two defects found while verifying this slice are fixed in the same commit:
 

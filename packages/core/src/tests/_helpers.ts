@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../agent/agent.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { _resetConfigCache } from '../config/configLoader.js';
 
 function applyTestSafeCliKnobDefaults(): void {
   // The config file lives under ~/.config/brainrouter, not BRAINROUTER_HOME.
@@ -68,6 +69,12 @@ export function withTempWorkspace(fn: (workspace: string) => void) {
   } finally {
     process.chdir(previousCwd);
     _resetCliKnobsCache();
+    // The knob cache alone is not the whole of it: configLoader keeps its own
+    // models/providers/prefixes caches, and the execution-policy FINGERPRINT is
+    // derived from that config. Leaving them warm across temp workspaces makes
+    // the drift detector blind — issuance and revalidation both read the same
+    // stale config, agree, and a launch that should have been revoked proceeds.
+    _resetConfigCache();
     if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
     else process.env.BRAINROUTER_HOME = previousHome;
     fs.rmSync(workspace, { recursive: true, force: true });
@@ -93,6 +100,12 @@ export async function withTempWorkspaceAsync<T>(fn: (workspace: string) => Promi
   } finally {
     process.chdir(previousCwd);
     _resetCliKnobsCache();
+    // The knob cache alone is not the whole of it: configLoader keeps its own
+    // models/providers/prefixes caches, and the execution-policy FINGERPRINT is
+    // derived from that config. Leaving them warm across temp workspaces makes
+    // the drift detector blind — issuance and revalidation both read the same
+    // stale config, agree, and a launch that should have been revoked proceeds.
+    _resetConfigCache();
     if (previousHome === undefined) delete process.env.BRAINROUTER_HOME;
     else process.env.BRAINROUTER_HOME = previousHome;
     fs.rmSync(tmp, { recursive: true, force: true });
