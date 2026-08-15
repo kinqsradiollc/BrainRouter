@@ -69,6 +69,19 @@ export interface ProjectedTraversal {
   sequence: number;
 }
 
+/**
+ * A40-5 — a loop node's budget: iterations it was ALLOWED (`declared`) vs the
+ * number it USED (`observed`). A loop that ran to its ceiling and one that
+ * stopped early look identical unless both are recorded, so a bounded loop can
+ * be seen to have stayed bounded rather than merely asserted to have.
+ */
+export interface ProjectedLoopBudget {
+  nodeId: string;
+  declared: number;
+  observed: number;
+  sequence: number;
+}
+
 export interface ExecutionSnapshot {
   executionId: string;
   status: ExecutionStatus;
@@ -83,6 +96,8 @@ export interface ExecutionSnapshot {
   traversals: readonly ProjectedTraversal[];
   /** A40-7 — bounded, typed reason codes for WHY the run ended as it did. */
   terminalReasonCodes: readonly string[];
+  /** A40-5 — loop budgets (allowed vs used), one per loop node that ran. */
+  loopBudgets: readonly ProjectedLoopBudget[];
   usage: ExecutionUsage;
   /** Sequences observed but NOT applied because something before them is missing. */
   pendingSequences: readonly number[];
@@ -113,6 +128,7 @@ interface ExecutionState {
   decisions: ProjectedDecision[];
   traversals: ProjectedTraversal[];
   terminalReasonCodes: readonly string[];
+  loopBudgets: ProjectedLoopBudget[];
   usage: ExecutionUsage;
   eventCount: number;
   truncated: boolean;
@@ -200,6 +216,7 @@ export class ExecutionSessionStore {
         decisions: [],
         traversals: [],
         terminalReasonCodes: [],
+        loopBudgets: [],
         usage: emptyExecutionUsage(),
         eventCount: 0,
         truncated: false,
@@ -306,6 +323,26 @@ export class ExecutionSessionStore {
       }
     }
 
+    // A40-5 — project a loop node's budget (declared vs observed). Independent
+    // and bounded like the others; its nodeId lives inside the payload so it is
+    // not read as an occurrence.
+    const rawLoop = (event.payload as { loopBudget?: unknown } | undefined)?.loopBudget;
+    if (rawLoop && typeof rawLoop === 'object') {
+      const b = rawLoop as { nodeId?: unknown; declared?: unknown; observed?: unknown };
+      if (typeof b.nodeId === 'string') {
+        if (state.loopBudgets.length >= EXECUTION_STORE_BOUNDS.maxOccurrencesPerExecution) {
+          state.truncated = true;
+        } else {
+          state.loopBudgets.push({
+            nodeId: b.nodeId,
+            declared: Number.isFinite(Number(b.declared)) ? Number(b.declared) : 0,
+            observed: Number.isFinite(Number(b.observed)) ? Number(b.observed) : 0,
+            sequence: event.executionSequence,
+          });
+        }
+      }
+    }
+
     if (typeof payload.status === 'string' && !('nodeId' in payload)) {
       const next = payload.status;
       // Terminal is final; a late event must not resurrect a finished run.
@@ -374,6 +411,7 @@ export class ExecutionSessionStore {
       decisions: Object.freeze([...state.decisions]),
       traversals: Object.freeze([...state.traversals]),
       terminalReasonCodes: state.terminalReasonCodes,
+      loopBudgets: Object.freeze([...state.loopBudgets]),
       usage: state.usage,
       pendingSequences: Object.freeze([...state.pending.keys()].sort((a, b) => a - b)),
       truncated: state.truncated,

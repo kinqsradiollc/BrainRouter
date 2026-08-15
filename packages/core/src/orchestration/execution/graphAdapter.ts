@@ -61,6 +61,7 @@ export function toExecutionEvent(
   if (emission.edgeState !== undefined) payload.edgeState = emission.edgeState;
   if (emission.decision !== undefined) payload.decision = emission.decision;
   if (emission.reasonCodes !== undefined) payload.reasonCodes = [...emission.reasonCodes];
+  if (emission.loopBudget !== undefined) payload.loopBudget = { ...emission.loopBudget };
   return {
     schemaVersion: EXECUTION_MAP_SCHEMA_VERSION,
     // Identity is (execution, sequence): stable across a replay, which is what
