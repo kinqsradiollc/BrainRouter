@@ -874,10 +874,24 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   Seven tests, each mutation-proved — one of which had to be rewritten because it passed whether the
   budget was shared or reset.
 
-  **Still open for this row:** agent-node role/access configuration enforcement, and the
-  required/optional node failure rules. The `run_workflow_graph` production block in
-  `toolAdapterInvocationPhase.ts` stays until those land — the block is what keeps this fail-closed
-  in the meantime, so it is deliberately NOT removed by this commit.
+  **Agent-node role/access enforcement now shipped.** A saved graph is untrusted config, so an
+  `agent` node's declared role/access is resolved fail-closed (`resolveGraphAgentAccess`): a bogus
+  `access` is DROPPED rather than misread as a grant, and whatever survives is only a REQUEST — the
+  spawn path still ceilings it at the parent's access via `clampAccess`, so a node can never escalate
+  beyond the launch. Five tests, the fail-closed drop and the shell-node-clamped-to-a-read-parent
+  escalation guarantee both mutation-proved. (The row's other named remainder, the required/optional
+  node failure rules, was already shipped in the graph engine — the "still open" was stale prose,
+  corrected here.) In the same slice the graph run path now routes through the canonical adapter, so a
+  graph run emits to the execution map like every other run (`graphAdapter` left the E1 `KNOWN_UNWIRED`
+  list; dead-export ceiling fell 285 → 284).
+
+  **Still open for this row:** removing the `run_workflow_graph` production block in
+  `toolAdapterInvocationPhase.ts`. Its precondition — role/access enforcement — has now landed, so the
+  block removal is the deliberate NEXT slice: it enables production saved-graph launch, an outward-
+  facing capability change, and gets its own focused PR with end-to-end proof rather than being folded
+  in here. Until then the block stays, and it is now defence-in-depth over the fail-closed guarantees
+  (unwired-approval error, shared execution budget, required-node-fails-run, access clamp) rather than
+  the only thing holding the line.
 - [x] **A40-4 — Add dependency-free execution-map records and events.** Closed statuses, logical
   nodes plus occurrence/traversal identities, execution-scoped event sequence/version fields,
   redaction/size bounds, and compatibility records for current profile-stage consumers.

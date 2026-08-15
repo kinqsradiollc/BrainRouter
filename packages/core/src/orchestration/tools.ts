@@ -20,7 +20,7 @@ import { handleSpawn } from './tools/spawn.js';
 import { handleList, handleWait, handleWaitBatch, handleReadTranscript, handleClose } from './tools/wait.js';
 import { handleSendInput, handleResumeAgent } from './tools/continuation.js';
 import { DELEGATE_TOOL_PREFIX, resolveDelegateAgentId, isOrchestrationToolName, synthesizeDelegateTools } from './tools/toolNames.js';
-import { DEFAULT_TASK_AGENT_TIMEOUT_MS, inferRoleFromTask, clampAccess, extractChildPreview } from './tools/helpers.js';
+import { DEFAULT_TASK_AGENT_TIMEOUT_MS, inferRoleFromTask, clampAccess, extractChildPreview, resolveGraphAgentAccess } from './tools/helpers.js';
 import { trackedPromiseFor, childAgentsFor, registerInterruptibleAgent, unregisterInterruptibleAgent } from './tools/registry.js';
 import type { OrchestrationContext } from './tools/context.js';
 import { resolveRole, type AccessMode } from './roles/roles.js';
@@ -28,7 +28,9 @@ import { ownershipRequirementError } from './ownership/ownership.js';
 import { listAll } from './agents/agentRegistry.js';
 import { runWorkflowAuthorized } from '../workflow/template/workflowTool.js';
 import { loadWorkflowGraph } from '../workflow/graph/graphStore.js';
-import { runGraph } from '../workflow/graph/graphEngine.js';
+import type { WorkflowNode } from '../workflow/graph/graph.js';
+import { runGraph, type GraphRunResult } from '../workflow/graph/graphEngine.js';
+import { runGraphAsCanonicalExecution } from './execution/graphAdapter.js';
 import { routeTask } from './delegation/router.js';
 import { localModelProfileActive } from '../provider/modelFamily.js';
 import { getCliKnobs } from '../config/config.js';
@@ -101,9 +103,12 @@ async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Pro
     : {};
   const seeded = { ...graph, vars: { ...(graph.vars ?? {}), ...callerVars } };
 
-  const result = await runGraph(seeded, {
-    runAgent: async (prompt) => {
-      const out = await handleTaskAgent({ prompt }, ctx);
+  const graphDeps = {
+    runAgent: async (prompt: string, node: WorkflowNode) => {
+      // ADR-040 A40-3 — honor the agent node's DECLARED role/access (validated,
+      // fail-closed). It is only a request: the spawn path clamps it to the
+      // parent's access, so a saved graph node cannot escalate beyond the launch.
+      const out = await handleTaskAgent({ prompt, ...resolveGraphAgentAccess(node) }, ctx);
       // handleTaskAgent may return raw text or a JSON envelope — surface the text.
       try {
         const j = JSON.parse(out) as Record<string, unknown>;
@@ -111,8 +116,36 @@ async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Pro
       } catch { /* raw text */ }
       return out;
     },
-    loadSubWorkflow: async (ref) => loadWorkflowGraph(ctx.workspaceRoot, ref),
-  });
+    loadSubWorkflow: async (ref: string) => loadWorkflowGraph(ctx.workspaceRoot, ref),
+  };
+
+  // ADR-040 A40-7 — run saved graphs THROUGH the canonical adapter so a production
+  // graph run lands in the same durable execution map and `/runs` projection as
+  // every other run, instead of emitting nothing. Re-run-safe by construction: the
+  // runId is UNIQUE per invocation, so the adapter's only pre-run failure point
+  // (startDurableRun's exclusive create) cannot collide — the single realistic
+  // throw is therefore BEFORE the graph executes, so the catch runs the graph
+  // exactly once, never twice. Canonical projection does not change the graph's own
+  // semantics: no `requestApproval` dep is passed, so approval nodes still
+  // fail-closed exactly as before.
+  const runId = ctx.executionLaunch?.runId ?? `graph-${id}-${Date.now()}`;
+  const executionId = ctx.executionLaunch?.parentExecutionId ?? `graph:${id}`;
+  let result: GraphRunResult;
+  try {
+    result = (await runGraphAsCanonicalExecution({
+      graph: seeded,
+      deps: graphDeps,
+      executionId,
+      runId,
+      sessionKey: ctx.parentSessionKey ?? 'local',
+      workspaceRoot: ctx.workspaceRoot,
+      startedAt: new Date().toISOString(),
+      definitionId: id,
+    })).result;
+  } catch {
+    // Canonical emission is never allowed to stop a graph from running.
+    result = await runGraph(seeded, graphDeps);
+  }
 
   if (!result.ok) return `Workflow "${id}" failed: ${result.error ?? 'unknown error'}`;
   const ran = result.order.filter((n) => result.nodes[n]?.status === 'ok').length;
