@@ -21,6 +21,7 @@ import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { readWorkContract } from '../task/workContractStore.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 import { listSessions } from '../orchestration/session/orchestrator.js';
+import { captureReviewedExecutionPolicy } from '../orchestration/execution/policySnapshot.js';
 import {
   buildWorkspaceSelectionCatalog,
   migrateWorkspaceManifestToolSelection,
@@ -2242,7 +2243,15 @@ test('workspace profile role ceiling rejects legacy role strings before child cr
 
 test('reviewed spawn defense rejects access above the resolved role ceiling', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
+    // ADR-040 A40-2 made a reviewed child launch fail closed without an
+    // immutable policy snapshot, so this context now has to carry one — not to
+    // appease the new check, but because without it the launch is refused for
+    // THAT reason and the role-ceiling defense below is never reached. Asserting
+    // the newer error instead would have left the ceiling untested while the
+    // suite still looked green.
     const ctx = makeStubOrchCtx(workspace, {
+      executionPolicyWorkspaceRoot: workspace,
+      executionPolicySnapshot: captureReviewedExecutionPolicy(workspace, 'session:test'),
       executionLaunch: {
         runId: 'reviewed-run',
         parentExecutionId: 'reviewed-turn',
