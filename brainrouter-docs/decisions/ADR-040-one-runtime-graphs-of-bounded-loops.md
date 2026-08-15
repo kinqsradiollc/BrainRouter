@@ -962,10 +962,24 @@ accepted decision record checks only A40-0; it makes no implementation claim.
 
   **Still open for this row:** preview/confirm start, live updates, retained replay, goal
   continuation, and authorized child-transcript drill-down.
-- [ ] **A40-10 — Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
+- [~] **A40-10 — PARTIAL. Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
   Design with normal no-goal turns visible by default, preview/confirm, live/reconnect state,
   accessible graph/list fallback, details and authorized transcript drill-down; validate
   source-started browser and Electron.
+
+  **Shipped in `7f2aaa60c`**: a Runs panel over Core's `runsView` — the same projection `/runs`
+  renders, so the two hosts cannot disagree about whether a run failed. Registered in the catalog,
+  the barrel and the render switch, so it can actually be opened. The list is the primary
+  presentation rather than a fallback: a graph is a nicety, a run you cannot read with a screen
+  reader is a run you cannot inspect. `stale` is distinguished from `error`, `summary-only` from
+  `projected`, and `interrupted` from `failed` — each collapse would be a lie the surface tells
+  confidently. 650/650 desktop tests, including the inventory check that caught the missing panel
+  group the moment the id was added.
+
+  **Explicitly NOT claimed:** the source-started browser and Electron validation. The repo's renderer
+  launch config points at the main checkout, not this worktree, so running it would have rendered a
+  tree without this panel. Calling that validation would be worse than leaving the row open.
+  Preview/confirm and authorized transcript drill-down also remain.
 - [ ] **A40-11 — Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
