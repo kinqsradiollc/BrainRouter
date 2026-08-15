@@ -25,6 +25,11 @@ import {
 
 /** A sub-workflow nest deeper than this fails closed (runaway guard). */
 export const MAX_SUBWORKFLOW_DEPTH = 8;
+/**
+ * Total node executions allowed per run. Depth bounds nesting; this bounds WORK.
+ * A single graph with a loop needs no nesting at all to run forever.
+ */
+export const DEFAULT_EXECUTION_BUDGET = 500;
 
 export interface GraphRunDeps {
   /**
@@ -41,11 +46,34 @@ export interface GraphRunDeps {
    */
   loadSubWorkflow?: (idOrName: string) => Promise<WorkflowGraph | null>;
   /**
-   * Ask a human to approve an `approval` node, returning true to continue. When
-   * absent, approval auto-passes (so headless/test runs don't block) and the
-   * record is flagged `auto: true`. Wired by the desktop to the approval port.
+   * Ask a human to approve an `approval` node, returning true to continue.
+   *
+   * ADR-040 A40-3: when this is absent the node now FAILS, it does not pass.
+   * It used to auto-pass "so headless runs don't block", which meant the one
+   * node type whose entire purpose is to stop and ask a human was a no-op in
+   * exactly the configuration where nobody is watching. A gate that opens when
+   * its keyholder is missing is not a gate.
+   *
+   * A run that genuinely wants no human in the loop says so explicitly with
+   * `allowUnattendedApproval`, which is recorded on the node so the decision is
+   * visible in the execution map rather than inferred from an absent callback.
    */
   requestApproval?: (node: WorkflowNode, summary: string) => Promise<boolean>;
+  /**
+   * Explicit opt-in to running `approval` nodes with no human present. Off by
+   * default: the caller must state it, and every such node is flagged
+   * `unattended: true` in its record.
+   */
+  allowUnattendedApproval?: boolean;
+  /**
+   * Cumulative ceiling on node executions for the WHOLE run, including every
+   * loop iteration and every node inside a subworkflow. `MAX_SUBWORKFLOW_DEPTH`
+   * bounds nesting but not total work: a shallow graph with a wide loop can run
+   * unboundedly without ever nesting. Defaults to `DEFAULT_EXECUTION_BUDGET`.
+   */
+  executionBudget?: number;
+  /** Cooperative cancellation; checked before each node starts. */
+  signal?: AbortSignal;
 }
 
 export interface NodeRunRecord {
@@ -72,6 +100,13 @@ interface RunOpts {
   depth: number;
   /** Stack of graph keys above this run, for direct-recursion detection. */
   stack: string[];
+  /**
+   * Node executions remaining for the WHOLE run, shared by reference with every
+   * nested subworkflow. Held in an object so a child's spend is visible to the
+   * parent — a per-run copy would let each nesting level start over, which is
+   * how a "bounded" graph runs unboundedly.
+   */
+  budget: { remaining: number };
 }
 
 function compare(a: string, op: string, b: string): boolean {
@@ -267,8 +302,25 @@ export async function runSingleNode(
     }
     case 'approval': {
       const summary = interpolate(String(data.summary ?? data.message ?? 'Approve this step?'), ctx);
-      const approved = deps.requestApproval ? await deps.requestApproval(node, summary) : true;
-      return { id: node.id, type: 'approval', status: 'ok', output: { approved, summary, auto: !deps.requestApproval }, branch: approved ? 'approved' : 'rejected' };
+      if (!deps.requestApproval) {
+        if (!deps.allowUnattendedApproval) {
+          return {
+            id: node.id,
+            type: 'approval',
+            status: 'error',
+            error: 'approval node reached with no approval port wired — refusing to self-approve. Wire requestApproval, or set allowUnattendedApproval to run this graph with no human present.',
+          };
+        }
+        return {
+          id: node.id,
+          type: 'approval',
+          status: 'ok',
+          output: { approved: true, summary, unattended: true },
+          branch: 'approved',
+        };
+      }
+      const approved = await deps.requestApproval(node, summary);
+      return { id: node.id, type: 'approval', status: 'ok', output: { approved, summary, unattended: false }, branch: approved ? 'approved' : 'rejected' };
     }
     case 'extract': {
       const instr = interpolate(String(data.prompt ?? data.instruction ?? ''), ctx);
@@ -321,7 +373,8 @@ async function runSubWorkflow(node: WorkflowNode, ctx: InterpContext, deps: Grap
   const seeded: Record<string, unknown> = { ...ctx.vars };
   for (const [k, v] of Object.entries(inputs)) seeded[k] = typeof v === 'string' ? interpolate(v, ctx) : v;
 
-  const result = await runGraphInternal({ ...sub, vars: { ...(sub.vars ?? {}), ...seeded } }, deps, { depth: opts.depth + 1, stack: [...opts.stack, ref] });
+  // The child shares the parent's budget object, so nesting cannot reset it.
+  const result = await runGraphInternal({ ...sub, vars: { ...(sub.vars ?? {}), ...seeded } }, deps, { depth: opts.depth + 1, stack: [...opts.stack, ref], budget: opts.budget });
   if (!result.ok) return { id: node.id, type: 'subworkflow', status: 'error', error: `sub-workflow ${ref} failed: ${result.error ?? 'unknown'}`, output: { ok: false } };
   return { id: node.id, type: 'subworkflow', status: 'ok', output: { text: result.finalOutput ?? '', ok: true, nodes: result.nodes } };
 }
@@ -334,7 +387,12 @@ async function runSubWorkflow(node: WorkflowNode, ctx: InterpContext, deps: Grap
  * the run (fail-closed) and is reported.
  */
 export async function runGraph(graph: WorkflowGraph, deps: GraphRunDeps): Promise<GraphRunResult> {
-  return runGraphInternal(graph, deps, { depth: 0, stack: [graphKey(graph)].filter(Boolean) });
+  const limit = deps.executionBudget ?? DEFAULT_EXECUTION_BUDGET;
+  return runGraphInternal(graph, deps, {
+    depth: 0,
+    stack: [graphKey(graph)].filter(Boolean),
+    budget: { remaining: Math.max(0, limit) },
+  });
 }
 
 async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: RunOpts): Promise<GraphRunResult> {
@@ -363,6 +421,19 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
       records[id] = { id, type: node.type, status: 'skipped' };
       continue;
     }
+    if (deps.signal?.aborted) {
+      return { ok: false, order, nodes: records, finalOutput, error: 'run canceled' };
+    }
+    if (opts.budget.remaining <= 0) {
+      return {
+        ok: false,
+        order,
+        nodes: records,
+        finalOutput,
+        error: `execution budget exhausted (${deps.executionBudget ?? DEFAULT_EXECUTION_BUDGET} node executions) — the run was stopped rather than allowed to continue`,
+      };
+    }
+    opts.budget.remaining -= 1;
     const upstream = (incoming.get(id) ?? [])
       .filter((e) => activeEdges.has(e.id))
       .map((e) => ({ id: e.source, output: ctx.nodes[e.source] }));
