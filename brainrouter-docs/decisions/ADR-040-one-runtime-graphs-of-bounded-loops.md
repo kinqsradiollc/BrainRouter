@@ -964,8 +964,23 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   stale the moment their modules gained a caller, and they are deleted rather than left as standing
   confessions.
 
-  **Still open for this row:** phase-plan (as opposed to saved-graph) adaptation, edge traversals and
-  retry attempts as first-class emissions, and the typed compatibility failure mappings.
+  **Phase-plan adaptation now shipped** (`phasePlanAdapter.ts`): the phase-plan counterpart to the
+  saved-graph adapter. A pure `ExecuteHooks` factory — `onPhaseStart`/`onPhaseComplete`/`finish` emit
+  canonical occurrences and the run's terminal status into the same reducer and `/runs` projection, so
+  a `/build` phase run and a saved-graph run answer the same questions in the same shape. The mapping
+  that matters is `partial → degraded` (a phase that lost some children is not a clean success);
+  mutation-proved. Phase children become the stage's child sessions, feeding A40-5's stage-child
+  correlation from the phase-plan side. Six tests.
+
+  It lands BEFORE its wiring, exactly as `graphAdapter` did: wiring it means sending its snapshot to
+  the durable store on the live `/build` path (four `executePhasePlan` call sites, the repair loop,
+  finish timing), which is its own end-to-end-tested slice. It is documented in the E1 sweep's
+  `KNOWN_UNWIRED` with the dead-export ceiling rise (285 → 286) named there, and it leaves the sweep
+  the moment `executePhasePlan` composes these hooks.
+
+  **Still open for this row:** wiring the phase-plan adapter into the live `/build` path; edge
+  traversals and retry attempts as first-class emissions (these extend the graph engine and the
+  reducer snapshot); and the typed compatibility failure mappings.
 - [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
