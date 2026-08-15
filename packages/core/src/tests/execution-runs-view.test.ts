@@ -41,6 +41,7 @@ function snapshot(over: Partial<ExecutionSnapshot> = {}): ExecutionSnapshot {
       { nodeExecutionId: 'n1#1', nodeId: 'n1', attempt: 1, iterationPath: [], status: 'succeeded', childSessionIds: [], usage: { promptTokens: 1, completionTokens: 1, toolCalls: 0, wallClockMs: 5 }, terminalReasonCodes: [] },
     ],
     decisions: [],
+    traversals: [],
     usage: { promptTokens: 1, completionTokens: 1, toolCalls: 0, wallClockMs: 5 },
     pendingSequences: [],
     truncated: false,

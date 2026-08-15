@@ -36,6 +36,9 @@ export const EXECUTION_STORE_BOUNDS = {
   maxEventsPerExecution: 2_000,
   maxOccurrencesPerExecution: 1_000,
   maxDecisionsPerExecution: 1_000,
+  // Below maxEventsPerExecution on purpose: a sub-bound at or above the event
+  // cap can never be the thing that trips, so it would not bound anything.
+  maxTraversalsPerExecution: 1_000,
 } as const;
 
 /**
@@ -53,6 +56,19 @@ export interface ProjectedDecision {
   decidedAt: string;
 }
 
+/**
+ * A40-7 — one edge traversal, projected from the event stream. A branch NOT taken
+ * (`skipped`) and one an approval closed (`blocked`) are recorded alongside the
+ * edge followed (`traversed`), so the map can say why a path did not fire, not
+ * only which fired. `state` is recorded as emitted rather than policed.
+ */
+export interface ProjectedTraversal {
+  traversalId: string;
+  edgeId: string;
+  state: string;
+  sequence: number;
+}
+
 export interface ExecutionSnapshot {
   executionId: string;
   status: ExecutionStatus;
@@ -63,6 +79,8 @@ export interface ExecutionSnapshot {
   occurrences: readonly ExecutionNodeOccurrence[];
   /** A40-7 — decisions the run made, in the order they were observed. */
   decisions: readonly ProjectedDecision[];
+  /** A40-7 — edge traversals (taken, skipped, and approval-blocked), in order. */
+  traversals: readonly ProjectedTraversal[];
   usage: ExecutionUsage;
   /** Sequences observed but NOT applied because something before them is missing. */
   pendingSequences: readonly number[];
@@ -91,6 +109,7 @@ interface ExecutionState {
   pending: Map<number, ExecutionEvent>;
   occurrences: Map<string, ExecutionNodeOccurrence>;
   decisions: ProjectedDecision[];
+  traversals: ProjectedTraversal[];
   usage: ExecutionUsage;
   eventCount: number;
   truncated: boolean;
@@ -176,6 +195,7 @@ export class ExecutionSessionStore {
         pending: new Map(),
         occurrences: new Map(),
         decisions: [],
+        traversals: [],
         usage: emptyExecutionUsage(),
         eventCount: 0,
         truncated: false,
@@ -265,6 +285,23 @@ export class ExecutionSessionStore {
       }
     }
 
+    // A40-7 — project any edge traversal this event carries. Also independent of
+    // the status/occurrence branches: an edge event carries only edgeId+edgeState.
+    const rawEdgeId = (event.payload as { edgeId?: unknown } | undefined)?.edgeId;
+    if (typeof rawEdgeId === 'string') {
+      if (state.traversals.length >= EXECUTION_STORE_BOUNDS.maxTraversalsPerExecution) {
+        state.truncated = true;
+      } else {
+        const rawEdgeState = (event.payload as { edgeState?: unknown } | undefined)?.edgeState;
+        state.traversals.push({
+          traversalId: event.eventId,
+          edgeId: rawEdgeId,
+          state: typeof rawEdgeState === 'string' ? rawEdgeState : 'traversed',
+          sequence: event.executionSequence,
+        });
+      }
+    }
+
     if (typeof payload.status === 'string' && !('nodeId' in payload)) {
       const next = payload.status;
       // Terminal is final; a late event must not resurrect a finished run.
@@ -322,6 +359,7 @@ export class ExecutionSessionStore {
       watermark: state.watermark,
       occurrences: Object.freeze([...state.occurrences.values()]),
       decisions: Object.freeze([...state.decisions]),
+      traversals: Object.freeze([...state.traversals]),
       usage: state.usage,
       pendingSequences: Object.freeze([...state.pending.keys()].sort((a, b) => a - b)),
       truncated: state.truncated,

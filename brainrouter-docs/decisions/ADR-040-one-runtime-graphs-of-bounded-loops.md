@@ -1019,9 +1019,17 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   pre-occupied durable slot must not fail the run). This repaid the row's own E1 debt: the adapter left
   `KNOWN_UNWIRED` and the dead-export ceiling fell back 286 → 285.
 
-  **Still open for this row:** edge traversals and retry attempts as first-class emissions (these
-  extend the graph engine and the reducer snapshot); the resume path's durable emission (gated today by
-  the store's exclusive-create); and the typed compatibility failure mappings.
+  **Edge traversals now shipped too.** The graph engine emits every outgoing edge's state, not just
+  the ones taken: the branch followed is `traversed`, a branch not taken is `skipped`, and a branch an
+  approval closed is `blocked` — a map that shows only what fired cannot say why the rest did not. The
+  reducer projects them into `ExecutionSnapshot.traversals` (bounded below the event cap so the
+  sub-bound can actually trip, deduped on replay, `state` recorded as emitted). Six tests, including a
+  real branching graph asserting `traversed` for the matched branch and `skipped` for the other, and
+  the engine emission mutation-proved.
+
+  **Still open for this row:** retry attempts as first-class emissions (this needs real per-node retry
+  semantics in the engine, not a bare counter); the resume path's durable emission (gated today by the
+  store's exclusive-create); and the typed compatibility failure mappings.
 - [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
