@@ -910,11 +910,19 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   itself as the whole story. Thirteen tests, mutation-proved — one of which had to be rewritten
   because it passed with idempotency removed.
 
-  **Still open for this row:** no-goal direct/profile instrumentation, optional goal grouping,
-  stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behaviour, and the
-  existing-event compatibility projection. The reducer has no emitter yet — that is A40-7 — and it is
-  recorded as an orphan in the E1 sweep rather than hidden, with the dead-export ceiling rise named
-  in the same place.
+  **Session lifecycle now shipped** (`reducer.ts`): the store indexes executions by session and by
+  child session, and exposes `executionsForSession`, `forgetSession` (the transcript delete and the
+  workspace-switch drop), `archiveSession` (retained-but-hidden — a direct `snapshot(id)` still
+  resolves, distinct from forget which drops the record), `forkSession` (the fork inherits history by
+  reference and cannot mutate the source), and `executionForChildSession` (stage-child drill-down).
+  Child session ids now union across events instead of being overwritten, and `forget` cleans both
+  indexes so a forgotten execution cannot reappear in a listing or a child-drill. Eight tests;
+  archive-vs-delete and fork isolation mutation-proved.
+
+  **Still open for this row:** loop budgets and optional goal grouping (both need declaredLimits /
+  goal ids EMITTED, which is A40-7's remaining emission work), and the existing-event compatibility
+  projection (that is A40-4's `profileStageCompat`). These are cross-row, not gaps in the store
+  itself.
 - [x] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.

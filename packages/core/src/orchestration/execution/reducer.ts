@@ -58,10 +58,13 @@ type OccurrencePayload = {
   iterationPath?: unknown;
   status?: unknown;
   usage?: unknown;
+  childSessionIds?: unknown;
 };
 
 interface ExecutionState {
   executionId: string;
+  /** The session this execution belongs to; the key for session-scoped ops. */
+  sessionKey: string;
   status: ExecutionStatus;
   watermark: number;
   seenEventIds: Set<string>;
@@ -73,6 +76,12 @@ interface ExecutionState {
   truncated: boolean;
   /** A gap was observed and has not been filled. */
   gapped: boolean;
+  /**
+   * A40-5 — retained but hidden. Distinct from `forget`, which drops the record:
+   * an archived execution still answers `snapshot()` (so a direct link keeps
+   * working) but is excluded from session listings.
+   */
+  archived: boolean;
 }
 
 function addUsage(into: ExecutionUsage, add: Partial<ExecutionUsage> | undefined): ExecutionUsage {
@@ -90,6 +99,15 @@ function numericPath(value: unknown): number[] {
   return value.map((n) => Math.trunc(Number(n))).filter((n) => Number.isFinite(n));
 }
 
+/** Union of previously-recorded child sessions with any new ones on this event. */
+function mergeChildSessions(previous: readonly string[] | undefined, incoming: unknown): readonly string[] {
+  const out = new Set(previous ?? []);
+  if (Array.isArray(incoming)) {
+    for (const id of incoming) if (typeof id === 'string' && id) out.add(id);
+  }
+  return Object.freeze([...out]);
+}
+
 /**
  * A bounded, per-session store of execution snapshots.
  *
@@ -98,21 +116,40 @@ function numericPath(value: unknown): number[] {
  */
 export class ExecutionSessionStore {
   readonly #executions = new Map<string, ExecutionState>();
+  /** A40-5 — sessionKey -> its execution ids, for session-scoped fork/archive/forget. */
+  readonly #bySession = new Map<string, Set<string>>();
+  /** A40-5 — child sessionKey -> the execution that spawned it, for stage-child correlation. */
+  readonly #byChildSession = new Map<string, string>();
 
   /** Insertion-ordered eviction; the oldest execution goes first. */
   #evictIfNeeded(): void {
     while (this.#executions.size > EXECUTION_STORE_BOUNDS.maxExecutions) {
       const oldest = this.#executions.keys().next();
       if (oldest.done) return;
+      this.#dropIndexes(oldest.value);
       this.#executions.delete(oldest.value);
     }
   }
 
-  #stateFor(executionId: string): ExecutionState {
+  /** Remove an execution from both indexes. The record itself is left to the caller. */
+  #dropIndexes(executionId: string): void {
+    const state = this.#executions.get(executionId);
+    if (!state) return;
+    this.#bySession.get(state.sessionKey)?.delete(executionId);
+    if (this.#bySession.get(state.sessionKey)?.size === 0) this.#bySession.delete(state.sessionKey);
+    for (const occurrence of state.occurrences.values()) {
+      for (const childId of occurrence.childSessionIds) {
+        if (this.#byChildSession.get(childId) === executionId) this.#byChildSession.delete(childId);
+      }
+    }
+  }
+
+  #stateFor(executionId: string, sessionKey: string): ExecutionState {
     let state = this.#executions.get(executionId);
     if (!state) {
       state = {
         executionId,
+        sessionKey,
         status: 'planned',
         watermark: 0,
         seenEventIds: new Set(),
@@ -122,8 +159,12 @@ export class ExecutionSessionStore {
         eventCount: 0,
         truncated: false,
         gapped: false,
+        archived: false,
       };
       this.#executions.set(executionId, state);
+      let ids = this.#bySession.get(sessionKey);
+      if (!ids) { ids = new Set(); this.#bySession.set(sessionKey, ids); }
+      ids.add(executionId);
       this.#evictIfNeeded();
     }
     return state;
@@ -134,7 +175,7 @@ export class ExecutionSessionStore {
    * sequence at or below the watermark, or a transition a terminal run refuses.
    */
   apply(event: ExecutionEvent): boolean {
-    const state = this.#stateFor(event.executionId);
+    const state = this.#stateFor(event.executionId, event.sessionKey);
 
     // Idempotency first: a replayed event is not new information.
     if (state.seenEventIds.has(event.eventId)) return false;
@@ -202,13 +243,18 @@ export class ExecutionSessionStore {
         previous?.usage ?? emptyExecutionUsage(),
         payload.usage as Partial<ExecutionUsage> | undefined,
       );
+      // A40-5 — stage-child correlation. New child session ids on this occurrence
+      // are unioned with any already recorded, and each is indexed back to this
+      // execution so a child transcript can be traced to the stage that spawned it.
+      const childSessionIds = mergeChildSessions(previous?.childSessionIds, payload.childSessionIds);
+      for (const childId of childSessionIds) this.#byChildSession.set(childId, state.executionId);
       state.occurrences.set(key, {
         nodeExecutionId: event.nodeExecutionId ?? key,
         nodeId: payload.nodeId,
         attempt,
         iterationPath,
         status,
-        childSessionIds: previous?.childSessionIds ?? [],
+        childSessionIds,
         usage,
         terminalReasonCodes: previous?.terminalReasonCodes ?? [],
       });
@@ -243,7 +289,79 @@ export class ExecutionSessionStore {
   }
 
   forget(executionId: string): void {
+    this.#dropIndexes(executionId);
     this.#executions.delete(executionId);
+  }
+
+  // ── A40-5 — session lifecycle ────────────────────────────────────────────
+
+  /**
+   * The execution ids for a session, newest-insertion last. Archived executions
+   * are excluded unless asked for — that is the whole point of archive vs forget.
+   */
+  executionsForSession(sessionKey: string, opts: { includeArchived?: boolean } = {}): readonly string[] {
+    const ids = this.#bySession.get(sessionKey);
+    if (!ids) return Object.freeze([]);
+    const out: string[] = [];
+    for (const id of ids) {
+      const state = this.#executions.get(id);
+      if (!state) continue;
+      if (state.archived && !opts.includeArchived) continue;
+      out.push(id);
+    }
+    return Object.freeze(out);
+  }
+
+  /**
+   * Drop every execution for a session — the transcript delete, and the hook a
+   * host calls on workspace switch to stop projecting the session it left.
+   * Returns the ids removed.
+   */
+  forgetSession(sessionKey: string): readonly string[] {
+    const ids = [...(this.#bySession.get(sessionKey) ?? [])];
+    for (const id of ids) {
+      this.#dropIndexes(id);
+      this.#executions.delete(id);
+    }
+    return Object.freeze(ids);
+  }
+
+  /**
+   * Hide a session's executions from listings while keeping them readable by id.
+   * Retained, not dropped: a direct `snapshot(id)` still answers.
+   */
+  archiveSession(sessionKey: string): readonly string[] {
+    const ids = [...(this.#bySession.get(sessionKey) ?? [])];
+    for (const id of ids) {
+      const state = this.#executions.get(id);
+      if (state) state.archived = true;
+    }
+    return Object.freeze(ids);
+  }
+
+  isArchived(executionId: string): boolean {
+    return this.#executions.get(executionId)?.archived ?? false;
+  }
+
+  /**
+   * Fork: the forked session inherits the source session's execution HISTORY by
+   * reference. The executions are immutable projections of past events, so the
+   * fork shares them rather than copying — and new events under the forked
+   * session key create their own executions, leaving the shared history intact.
+   * A fork of a session that does not exist inherits nothing.
+   */
+  forkSession(sourceSessionKey: string, forkedSessionKey: string): readonly string[] {
+    const source = this.#bySession.get(sourceSessionKey);
+    if (!source || source.size === 0) return Object.freeze([]);
+    let forked = this.#bySession.get(forkedSessionKey);
+    if (!forked) { forked = new Set(); this.#bySession.set(forkedSessionKey, forked); }
+    for (const id of source) forked.add(id);
+    return Object.freeze([...source]);
+  }
+
+  /** The execution that spawned a child session, for stage-child drill-down. */
+  executionForChildSession(childSessionId: string): string | undefined {
+    return this.#byChildSession.get(childSessionId);
   }
 }
 
