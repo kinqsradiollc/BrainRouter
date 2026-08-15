@@ -8,7 +8,18 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { connectionNotice, rowDetailLabel, statusTone } from './RunsPanel.js';
+import { connectionNotice, rowDetailLabel, statusTone, type RunsRow, type RunsDetail } from './RunsPanel.js';
+import type { RunsListRow, RunDetailView } from '@kinqs/brainrouter-core/orchestration/runs';
+
+// ADR-040 A40-10 — compile-time drift guard: the panel's row/detail types ARE
+// Core's projection types, not a parallel copy. These assignments only compile
+// while that holds, so re-localizing the shapes (or Core changing them) fails
+// the typecheck instead of letting the two hosts quietly disagree.
+const _rowIsCore: RunsListRow = {} as RunsRow;
+const _coreIsRow: RunsRow = {} as RunsListRow;
+const _detailIsCore: RunDetailView = {} as RunsDetail;
+const _coreIsDetail: RunsDetail = {} as RunDetailView;
+void _rowIsCore; void _coreIsRow; void _detailIsCore; void _coreIsDetail;
 
 test('a live panel shows no notice at all', () => {
   assert.equal(connectionNotice('live'), null);
