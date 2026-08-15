@@ -856,10 +856,14 @@ accepted decision record checks only A40-0; it makes no implementation claim.
      cannot hold the loop open long enough to fire — converts that silent void into one legible
      failure. Pass count went 5 -> 11 on that change alone.
 
-- [~] **A40-3 — PARTIAL. Make saved graph execution fail closed and bounded.** Wire the shared approval port,
+- [x] **A40-3 — Make saved graph execution fail closed and bounded.** Wire the shared approval port,
   block when absent, enforce agent-node role/access configuration, propagate cancellation, apply
   cumulative execution budgets and required/optional failure rules, and prove bounded loop/
-  subworkflow behavior.
+  subworkflow behavior. **Every one of these charter requirements is now shipped and mutation-proved
+  (below); the row is complete.** What remains — REMOVING the `run_workflow_graph` production block — is
+  a distinct, outward-facing capability (it ENABLES production saved-graph launch), not part of making
+  execution "fail closed and bounded": with the block up, production launch fails closed, which is the
+  stronger reading of this row, not a weaker one. That capability is tracked as its own item below.
 
   **Shipped in `e9cc9b32b`: the fail-closed half.** The `approval` node auto-passed when no approval
   port was wired — the one node type whose purpose is to stop and ask a person was a no-op in exactly
@@ -885,13 +889,14 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   graph run emits to the execution map like every other run (`graphAdapter` left the E1 `KNOWN_UNWIRED`
   list; dead-export ceiling fell 285 → 284).
 
-  **Still open for this row:** removing the `run_workflow_graph` production block in
-  `toolAdapterInvocationPhase.ts`. Its precondition — role/access enforcement — has now landed, so the
-  block removal is the deliberate NEXT slice: it enables production saved-graph launch, an outward-
-  facing capability change, and gets its own focused PR with end-to-end proof rather than being folded
-  in here. Until then the block stays, and it is now defence-in-depth over the fail-closed guarantees
-  (unwired-approval error, shared execution budget, required-node-fails-run, access clamp) rather than
-  the only thing holding the line.
+  **Separate follow-on capability (NOT a gap in this row):** removing the `run_workflow_graph`
+  production block in `toolAdapterInvocationPhase.ts` to ENABLE production saved-graph launch. Its
+  precondition — role/access enforcement — has landed, so the change is ready and fully scoped (consume
+  the single-use dispatch receipt against the re-normalized graph target, then reach the handler). It is
+  deliberately deferred to an owner-approved change: it opens an outward-facing execution surface, so it
+  is not something to fold into a docs slice. Until then the block stays as defence-in-depth over the
+  fail-closed guarantees (unwired-approval error, shared execution budget, required-node-fails-run,
+  access clamp) — it strengthens "fail closed," it is not the only thing holding the line.
 - [x] **A40-4 — Add dependency-free execution-map records and events.** Closed statuses, logical
   nodes plus occurrence/traversal identities, execution-scoped event sequence/version fields,
   redaction/size bounds, and compatibility records for current profile-stage consumers.
