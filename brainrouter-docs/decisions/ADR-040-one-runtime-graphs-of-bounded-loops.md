@@ -1027,9 +1027,19 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   real branching graph asserting `traversed` for the matched branch and `skipped` for the other, and
   the engine emission mutation-proved.
 
+  **Typed compatibility failure mappings now shipped too.** A failed run says WHY in a BOUNDED, typed
+  code, never its raw error string — an unbounded, possibly sensitive message has no place in a
+  durable, replayable map. `canonicalTerminalReasonCodes` maps each failure the graph engine can
+  produce (budget exhausted, cancel, a node failure, an invalid definition) to one safe code, and
+  anything unrecognized to the generic `error` — a known-unknown, not the leaked text. The engine emits
+  it on the terminal event, the reducer bounds it again (it does not trust its input) and projects it
+  as `ExecutionSnapshot.terminalReasonCodes`. Four tests, including a real failed graph run surfacing
+  `node-failed` and a proof that a raw error carrying a secret never becomes a reason code; the mapping
+  is mutation-proved.
+
   **Still open for this row:** retry attempts as first-class emissions (this needs real per-node retry
-  semantics in the engine, not a bare counter); the resume path's durable emission (gated today by the
-  store's exclusive-create); and the typed compatibility failure mappings.
+  semantics in the engine, not a bare counter); and the resume path's durable emission (gated today by
+  the store's exclusive-create).
 - [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless

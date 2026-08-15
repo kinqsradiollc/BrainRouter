@@ -101,6 +101,8 @@ export interface GraphExecutionEmission {
   edgeId?: string;
   edgeState?: 'active' | 'traversed' | 'skipped' | 'blocked';
   decision?: { kind: string; outcome: string; reasonCodes: readonly string[] };
+  /** A40-7 — bounded, typed terminal reason codes on a failed run's final event. */
+  reasonCodes?: readonly string[];
 }
 
 export interface NodeRunRecord {
@@ -438,6 +440,23 @@ function makeEmitter(deps: GraphRunDeps, executionId: string): (e: Omit<GraphExe
   };
 }
 
+/**
+ * ADR-040 A40-7 — map a graph run's raw failure string onto BOUNDED, typed
+ * canonical reason codes. The raw error can carry node ids and free text; it is
+ * NEVER surfaced verbatim as a reason code, because a durable, replayable map is
+ * the wrong place for unbounded, possibly sensitive detail. Each failure the
+ * engine can produce maps to one safe code; anything unrecognized is the generic
+ * `error` — a known-unknown, not the raw string.
+ */
+export function canonicalTerminalReasonCodes(error: string | undefined): readonly string[] {
+  if (!error) return [];
+  if (/execution budget exhausted/i.test(error)) return ['budget-exhausted'];
+  if (/run canceled/i.test(error)) return ['canceled'];
+  if (/^node .+ failed/i.test(error)) return ['node-failed'];
+  if (/invalid|validation|no saved workflow graph/i.test(error)) return ['invalid-definition'];
+  return ['error'];
+}
+
 export async function runGraph(graph: WorkflowGraph, deps: GraphRunDeps): Promise<GraphRunResult> {
   const limit = deps.executionBudget ?? DEFAULT_EXECUTION_BUDGET;
   const executionId = deps.executionId ?? `graph-${graphKey(graph) || 'anon'}`;
@@ -449,7 +468,10 @@ export async function runGraph(graph: WorkflowGraph, deps: GraphRunDeps): Promis
     budget: { remaining: Math.max(0, limit) },
     emit,
   });
-  emit({ status: result.ok ? 'succeeded' : 'failed' });
+  emit({
+    status: result.ok ? 'succeeded' : 'failed',
+    ...(result.ok ? {} : { reasonCodes: canonicalTerminalReasonCodes(result.error) }),
+  });
   return result;
 }
 

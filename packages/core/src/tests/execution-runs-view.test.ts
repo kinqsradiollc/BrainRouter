@@ -42,6 +42,7 @@ function snapshot(over: Partial<ExecutionSnapshot> = {}): ExecutionSnapshot {
     ],
     decisions: [],
     traversals: [],
+    terminalReasonCodes: [],
     usage: { promptTokens: 1, completionTokens: 1, toolCalls: 0, wallClockMs: 5 },
     pendingSequences: [],
     truncated: false,
