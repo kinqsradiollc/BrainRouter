@@ -938,10 +938,25 @@ accepted decision record checks only A40-0; it makes no implementation claim.
 
   **Still open for this row:** phase-plan (as opposed to saved-graph) adaptation, edge traversals and
   retry attempts as first-class emissions, and the typed compatibility failure mappings.
-- [ ] **A40-8 — Activate bounded adaptive profile selection.** Wire the existing managed selector
+- [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
   conversation corpora before changing any profile's default.
+
+  **Shipped in `f521274cb`: three of this row's four parts.** Eligibility (top-level only; an explicit
+  user choice is never overridden and is checked first so the reported reason is the true one),
+  `direct` as the safe baseline, and diagnostics carrying `selectionSource` for the execution map.
+  Goal presence changes nothing about eligibility and a test says so, because §0 requires it and "a
+  goal is active" is exactly the signal that later grows quietly into "route differently".
+
+  **The fourth part is a gate, and it stays SHUT.** Changing any profile default requires
+  fresh/elliptical/contextless conversation corpora that do not exist. `DEFAULTS_ARE_CORPUS_GATED`
+  is the switch, a test pins it closed, and every diagnostic surfaces it. Authoring a synthetic
+  corpus to open it would defeat the only thing it is for — a corpus is collected, not written by the
+  system it judges.
+
+  The module is deliberately UNWIRED and recorded as such in the E1 sweep: wiring it into the turn
+  path before the gate opens is precisely how a default moves without anyone deciding to move it.
 - [~] **A40-9 — PARTIAL. Ship CLI parity and explicit strategy launch.** `/runs` for normal and goal-linked
   turns, preview/confirm start, live updates, retained replay, `--json`, goal continuation, and
   authorized child transcript drill-down from the shared projection.
