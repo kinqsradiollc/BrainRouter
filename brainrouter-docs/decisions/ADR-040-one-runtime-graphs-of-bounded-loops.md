@@ -991,10 +991,17 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   confidently. 650/650 desktop tests, including the inventory check that caught the missing panel
   group the moment the id was added.
 
-  **Explicitly NOT claimed:** the source-started browser and Electron validation. The repo's renderer
-  launch config points at the main checkout, not this worktree, so running it would have rendered a
-  tree without this panel. Calling that validation would be worse than leaving the row open.
-  Preview/confirm and authorized transcript drill-down also remain.
+  **Browser validation: RUN, partially.** The renderer launch config only targeted the main checkout,
+  so the first attempt would have rendered a tree without this panel — validating against the wrong
+  tree is worse than not validating, and that run was stopped rather than reported. A worktree-target
+  entry was added and the app was loaded in a real browser from THIS tree: it renders with no console
+  errors, the dev server serves `{ id: "runs", title: "Runs", icon: "activity" }` and `runs: "work"`
+  from the worktree's catalog, and `RunsPanel.tsx` compiles and serves (HTTP 200) with its exported
+  helpers intact.
+
+  **Still open for this row:** Electron validation (the browser half is done, the packaged-host half
+  is not), driving the panel open and asserting its rendered contents against live data, plus
+  preview/confirm and authorized transcript drill-down.
 - [~] **A40-11 — PARTIAL. Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
