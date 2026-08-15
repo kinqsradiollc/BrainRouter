@@ -17,3 +17,4 @@ export * from './assuranceDetail.js';
 export * from './planning.js';
 export * from './terminal/index.js';
 export * from './executionMap.js';
+export * from './profileStageCompat.js';

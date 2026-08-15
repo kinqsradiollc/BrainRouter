@@ -878,7 +878,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   required/optional node failure rules. The `run_workflow_graph` production block in
   `toolAdapterInvocationPhase.ts` stays until those land — the block is what keeps this fail-closed
   in the meantime, so it is deliberately NOT removed by this commit.
-- [~] **A40-4 — PARTIAL. Add dependency-free execution-map records and events.** Closed statuses, logical
+- [x] **A40-4 — Add dependency-free execution-map records and events.** Closed statuses, logical
   nodes plus occurrence/traversal identities, execution-scoped event sequence/version fields,
   redaction/size bounds, and compatibility records for current profile-stage consumers.
 
@@ -894,8 +894,20 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   Labels are flattened (including U+2028/U+2029, which a naive newline filter misses) and clamped;
   reason codes are bounded in count and width. Eleven tests, mutation-proved.
 
-  **Still open for this row:** the compatibility records for current profile-stage consumers. The
-  vocabulary exists; nothing is emitting it yet, which is A40-5's reducer and A40-7's adapters.
+  **The compatibility record now shipped too** (`packages/agent-protocol/src/profileStageCompat.ts`,
+  still no dependencies). `projectProfileStageView` maps a canonical execution — its record, logical
+  nodes and occurrences — back onto the legacy `ProfileStageEventView` that existing hosts already
+  render, so those consumers keep working while the canonical map becomes what drives them. It is a
+  pure, TOTAL, deliberately LOSSY projection: every canonical status and selection source maps to a
+  legacy one with no `default: throw`, and each lossy edge is named — most of all `degraded`, which
+  the legacy palette cannot express and which is shown on the visible (`failed`) side rather than
+  greened into `succeeded`, keeping A40-7's "mostly worked is not worked" intact across the compat
+  boundary. A retried node shows its latest attempt; node order is stage order. Seven tests,
+  `degraded -> failed` mutation-proved. The core E1 sweep only sees `packages/core`, so this
+  leaf-package export does not touch its ceilings.
+
+  The vocabulary and its compatibility record are what this row asked for; EMITTING the canonical map
+  is A40-5's reducer and A40-7's adapters, which are their own rows.
 - [~] **A40-5 — PARTIAL. Add the Core reducer and bounded session store.** Idempotent/gap-aware reduction,
   snapshot watermarks, no-goal direct/profile instrumentation plus optional goal grouping,
   stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behavior, and
