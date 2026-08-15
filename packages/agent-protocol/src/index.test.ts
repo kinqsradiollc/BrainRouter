@@ -65,6 +65,8 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   );
   cb.onProfileStageUpdate({
     phase: 'updated',
+    workspaceProfileId: 'legal',
+    planProfileId: 'research',
     profileId: 'research',
     strategyId: 'investigate',
     selectionSource: 'deterministic',
@@ -127,6 +129,8 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   assert.equal(plan.revision, 3);
   assert.equal(plan.phases?.[0]?.id, 'phase_build');
   const profileStage = events[13] as Extract<AgentEvent, { kind: 'profile-stage' }>;
+  assert.equal(profileStage.workspaceProfileId, 'legal');
+  assert.equal(profileStage.planProfileId, 'research');
   assert.equal(profileStage.profileId, 'research');
   assert.equal(profileStage.stages[0].state, 'running');
   const requirement = events[16] as Extract<AgentEvent, { kind: 'requirement-event' }>;
@@ -141,6 +145,26 @@ test('createCallbackBridge: memory event falls back kind→text and defaults lev
   const cb = createCallbackBridge((e) => events.push(e));
   cb.onMemoryEvent({ kind: 'skipped', reason: 'policy' });
   assert.deepEqual(events[0], { kind: 'memory', level: 'info', text: 'policy' });
+});
+
+test('createCallbackBridge: legacy profile-stage identity remains readable', () => {
+  const events: AgentEvent[] = [];
+  const cb = createCallbackBridge((event) => events.push(event));
+  cb.onProfileStageUpdate({
+    phase: 'resolved',
+    profileId: 'research',
+    strategyId: 'investigate',
+    selectionSource: 'deterministic',
+    stages: [],
+  });
+  assert.deepEqual(events[0], {
+    kind: 'profile-stage',
+    phase: 'resolved',
+    profileId: 'research',
+    strategyId: 'investigate',
+    selectionSource: 'deterministic',
+    stages: [],
+  });
 });
 
 test('createCallbackBridge: steering receipt lifecycle preserves revisions', () => {

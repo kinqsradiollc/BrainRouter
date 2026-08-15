@@ -336,13 +336,24 @@ Orchestration-profile JSON resolves first-match-wins from workspace-local
 assets. Definitions never deep-merge. A higher-precedence file claims its ID
 even when invalid, so a malformed override produces an unavailable diagnostic
 and direct-primary fallback rather than silently activating a lower source.
+Workspace-to-plan identity then resolves in this exact order: a valid exact
+definition; an unavailable exact claim, which fails closed to direct; a declared
+work-shape alias; otherwise direct. Alias targets are loaded only from the
+bundled package definition. A workspace or plugin override at the target ID must
+never hijack another workspace profile's alias. CLI and Desktop onboarding bind
+the selection-catalog fingerprint and the selected profile's effective plan,
+source, and workspace/plan identities into one opaque review token. Both hosts
+rebuild these sources immediately before writing and reject any changed token,
+including a valid replacement that would otherwise keep every selected ID valid.
 Every source uses the same bounded, no-follow parser and exact role, skill,
 signal, and output-contract reference catalog. Diagnostics disclose safe source
 provenance and collisions without absolute paths or file contents.
 
 - **Evidence:** `packages/core/src/orchestration/profiles/orchestrationProfileSources.ts`,
   `packages/core/src/orchestration/profiles/orchestrationProfileDefinitionFile.ts`,
-  `packages/core/src/tests/orchestration-profile-sources.test.ts`
+  `packages/core/src/workspace/orchestrationPlanIdentity.ts`,
+  `packages/core/src/tests/orchestration-profile-sources.test.ts`,
+  `packages/core/src/tests/orchestration-plan-identity.test.ts`
 
 ---
 
@@ -438,6 +449,11 @@ or extension state. A missing manifest is an exact no-op. Capability plugins
 such as frontend and backend require task-time capability activation; merely
 adding their ID to the manifest pack list cannot activate them. Explicit skill
 disables win over profile, capability, and individual enable contributions.
+Library-backed domain profile packs derive their stable ownership ID from the
+workspace preset; their starter skills remain explicit reviewed manifest
+selections, while package-plugin packs remain owned by their inspected package
+asset. Never alias a domain pack to its reusable orchestration-plan profile:
+work-shape reuse must not change skill authority.
 
 CLI catalog adapters insert selected package roots after workspace-authored
 roots and before ordinary plugin/bundled roots. They apply the same ambient
@@ -461,7 +477,7 @@ workspace-local same-name skill keeps normal local precedence. Full explicit
 reads retain frontmatter so the existing skill tool-policy parser remains
 authoritative.
 
-- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/workspace/skillToolAdapter.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `packages/core/src/tests/workspace-skill-tool-adapter.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
+- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/workspace/skillToolAdapter.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `packages/core/src/tests/workspace-skill-tool-adapter.test.ts`, `packages/core/src/tests/workspace-profile-onboarding-matrix.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
 
 ### 15c. Reviewed workspace pickers consume the Core selection catalog
 

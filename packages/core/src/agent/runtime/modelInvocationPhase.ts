@@ -65,10 +65,12 @@ export async function invokeModelPhase(
   callbacks: RunTurnCallbacks,
   allTools: any[],
 ): Promise<ModelInvocationResult> {
+  const reviewedExecution = agent.executionIntentTurnToolName() !== null
+    || agent.inheritedExecutionAuthorityGuard() !== undefined;
   const invokeLlm = async (): Promise<ModelPhaseResponse> => {
     const contextWindowTokens = contextWindowForBudget(agent.llmConfig.model);
     const contextEnvelope = buildRootContextEnvelope(agent.chatHistory, {
-      executionId: agent.sessionKey,
+      executionId: agent.turnExecutionId ?? agent.sessionKey,
       budget: {
         maxChars: contextWindowTokens * 4,
         maxTokens: contextWindowTokens,
@@ -77,7 +79,8 @@ export async function invokeModelPhase(
     const requestMessages = sanitizeToolCallPairing(
       materializeContextEnvelope(contextEnvelope) as any[],
     );
-    const activeMode = resolveActiveMode(agent.workspaceRoot, agent.sessionKey);
+    const activeMode = agent.reviewedExecutionPolicySnapshot()?.activeMode
+      ?? resolveActiveMode(agent.workspaceRoot, agent.sessionKey);
     const selectedEffort = effortForTurnSelection(
       activeMode,
       agent.llmConfig.model,
@@ -207,7 +210,7 @@ export async function invokeModelPhase(
 
     const message = String(error?.message ?? error);
     const routerKnobs = getCliKnobs().router;
-    if (routerKnobs.enabled) {
+    if (routerKnobs.enabled && !reviewedExecution) {
       const failure = classifyRouterFailure(error);
       if (failure.retryable) {
         const config = loadOrInitConfig();
@@ -279,7 +282,7 @@ export async function invokeModelPhase(
               });
             },
             execute: async (route) => {
-              agent.llmConfig = { ...route.llm };
+              agent.setLLMConfig(route.llm);
               return invokeLlmResilient();
             },
           });
@@ -316,7 +319,8 @@ export async function invokeModelPhase(
           );
         }
       } else if (
-        isModelNotFoundError(message)
+        !reviewedExecution
+        && isModelNotFoundError(message)
         && (() => {
           agent.triedModels.add((agent.llmConfig.model ?? '').trim());
           return nextFallbackModel(

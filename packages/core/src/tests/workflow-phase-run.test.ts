@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { ExecutionIntentRecord } from '@kinqs/brainrouter-types/agent';
+import { getWorkflowDir } from '../workflow/run/workflowArtifacts.js';
 import {
   computePhaseRunStatus,
   applyPhaseTransition,
@@ -24,6 +26,28 @@ function phases(...specs: Array<[string, WorkflowRunPhase['status']]>): Workflow
   return specs.map(([id, status]) => ({ id, title: id, status, childIds: [] }));
 }
 const NOW = '2026-06-02T00:00:00.000Z';
+
+function launchRecord(requestId: string): ExecutionIntentRecord {
+  return {
+    version: 1,
+    workspaceRoot: '/repo',
+    sessionKey: 'session-1',
+    userId: 'user-1',
+    requestId,
+    source: 'user-command',
+    turnId: 'turn-1',
+    issuedAt: NOW,
+    expiresAt: '2026-06-02T00:05:00.000Z',
+    target: {
+      topology: 'phase-plan',
+      slug: 'build',
+      background: false,
+      resume: null,
+      template: 'build',
+      definitionDigest: 'a'.repeat(64),
+    },
+  };
+}
 
 // ── Pure model ────────────────────────────────────────────────────────────
 
@@ -97,6 +121,129 @@ test('WF-PERSIST ensurePhaseRun seeds pending phases and is idempotent', () => {
   // idempotent: a second call returns the same (doesn't reset)
   const again = ensurePhaseRun(ws, 'wf1', [{ id: 'review', title: 'Review' }], { kind: 'workflow' });
   assert.equal(again.phases?.length, 2);
+});
+
+test('A40-2 reads a legacy phase-run fixture without launch identity', () => {
+  const ws = tmpWs();
+  const legacy: WorkflowRun = {
+    slug: 'legacy',
+    kind: 'workflow',
+    status: 'running',
+    sessionKey: 'session-legacy',
+    pid: null,
+    startedAt: NOW,
+    updatedAt: NOW,
+    steps: [],
+    currentStepId: null,
+    phases: [{ id: 'review', title: 'Review', status: 'pending', childIds: [] }],
+  };
+  fs.writeFileSync(path.join(getWorkflowDir(ws, legacy.slug), 'run.json'), `${JSON.stringify(legacy, null, 2)}\n`);
+
+  const restored = readRun(ws, legacy.slug);
+  assert.deepEqual(restored, legacy);
+  assert.equal(restored?.runId, undefined);
+  assert.equal(restored?.parentExecutionId, undefined);
+  assert.equal(restored?.launch, undefined);
+});
+
+test('A40-2 phase-run launch identity round-trips and the same identity is idempotent', () => {
+  const ws = tmpWs();
+  const launch = launchRecord('request-1');
+  const run = ensurePhaseRun(ws, 'identified', [{ id: 'review', title: 'Review' }], {
+    kind: 'workflow',
+    runId: 'run-1',
+    parentExecutionId: 'turn-1',
+    launch,
+  });
+
+  assert.equal(run.runId, 'run-1');
+  assert.equal(run.parentExecutionId, 'turn-1');
+  assert.deepEqual(run.launch, launch);
+  const restored = readRun(ws, 'identified')!;
+  assert.equal(restored.runId, 'run-1');
+  assert.equal(restored.parentExecutionId, 'turn-1');
+  assert.deepEqual(restored.launch, launch);
+
+  const again = ensurePhaseRun(ws, 'identified', [{ id: 'replacement', title: 'Replacement' }], {
+    runId: 'run-1',
+    parentExecutionId: 'turn-1',
+    launch: { ...launch },
+  });
+  assert.deepEqual(again, restored);
+
+  const legacyCaller = ensurePhaseRun(ws, 'identified', [{ id: 'ignored', title: 'Ignored' }]);
+  assert.deepEqual(legacyCaller, restored);
+});
+
+test('A40-2 phase-run refuses a slug collision with a different run id', () => {
+  const ws = tmpWs();
+  ensurePhaseRun(ws, 'collision', [], {
+    runId: 'run-1',
+    launch: launchRecord('request-1'),
+  });
+
+  assert.throws(
+    () => ensurePhaseRun(ws, 'collision', [], {
+      runId: 'run-2',
+      launch: launchRecord('request-1'),
+    }),
+    /different run identity/i,
+  );
+});
+
+test('A40-2 phase-run refuses a slug collision with a different launch request', () => {
+  const ws = tmpWs();
+  ensurePhaseRun(ws, 'collision', [], {
+    runId: 'run-1',
+    launch: launchRecord('request-1'),
+  });
+
+  assert.throws(
+    () => ensurePhaseRun(ws, 'collision', [], {
+      runId: 'run-1',
+      launch: launchRecord('request-2'),
+    }),
+    /different launch request/i,
+  );
+});
+
+test('A40-2 phase-run compares the full launch record, not only requestId', () => {
+  const ws = tmpWs();
+  const original = launchRecord('same-request');
+  ensurePhaseRun(ws, 'collision', [], {
+    runId: 'run-1',
+    launch: original,
+  });
+
+  assert.throws(
+    () => ensurePhaseRun(ws, 'collision', [], {
+      runId: 'run-1',
+      launch: {
+        ...original,
+        userId: 'different-user',
+        target: { ...original.target, definitionDigest: 'b'.repeat(64) },
+      },
+    }),
+    /different launch request/i,
+  );
+});
+
+test('A40-2 phase-run refuses a slug collision with a different parent execution', () => {
+  const ws = tmpWs();
+  ensurePhaseRun(ws, 'collision', [], {
+    runId: 'run-1',
+    parentExecutionId: 'turn-1',
+    launch: launchRecord('request-1'),
+  });
+
+  assert.throws(
+    () => ensurePhaseRun(ws, 'collision', [], {
+      runId: 'run-1',
+      parentExecutionId: 'turn-2',
+      launch: launchRecord('request-1'),
+    }),
+    /different parent execution/i,
+  );
 });
 
 test('WF-PERSIST advanceRunPhase updates a phase + persists to disk', () => {

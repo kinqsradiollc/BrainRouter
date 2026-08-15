@@ -75,7 +75,12 @@ deep dives.
   [ADR-026 Desktop native visual system and platform-adaptive shell](decisions/ADR-026-desktop-native-visual-system.md) —
   proposed semantic styling layers, native window boundaries, system appearance, state-preserving surface contracts, and a small-PR migration gated by live macOS and Windows review;
   [ADR-027 compounding debt, graph execution, and workbench modernization](decisions/ADR-027-compounding-debt-graph-execution-and-workbench-modernization.md) —
-  proposed knowledge/technical/cognitive debt program grounded in the human-oversight evidence, graph execution replacing the turn loop, offline skill resolution, attachment storage with agent access and profile-aware document understanding, one visual system, an agent-callable control layer, session execution roots, two review gates, citable research artifacts, a database growth ladder, and distributed-systems correctness fixes;
+  proposed knowledge/technical/cognitive debt program grounded in the human-oversight evidence,
+  offline skill resolution, attachment storage with agent access and profile-aware document
+  understanding, one visual system, an agent-callable control layer, session execution roots, two
+  review gates, citable research artifacts, a database growth ladder, and distributed-systems
+  correctness fixes; its second turn-engine decision was withdrawn and deleted after failing
+  runtime parity;
   [ADR-028 surfaces that tell the truth](decisions/ADR-028-surfaces-that-tell-the-truth.md) —
   accepted rule that a surface never claims a state it has not established, offline-first planner sync (hybrid clocks, an ordered idempotent outbox, field-level merge that keeps both versions), the comprehension review whose wrong answer may be the agent's, and the reachability sweep that catches a module nothing calls;
   [ADR-029 one workspace, many surfaces](decisions/ADR-029-one-workspace-many-surfaces.md) —
@@ -131,7 +136,15 @@ deep dives.
   selected by suite rather than by a filter of ours, taint models extended as DATA so our own
   chokepoints can be declared as barriers — without which it re-reports code we already fixed — and
   a separate engine licence that decides, before any engineering, whether this can run against
-  customer code at all.
+  customer code at all;
+  [ADR-040 one runtime, graphs of bounded loops](decisions/ADR-040-one-runtime-graphs-of-bounded-loops.md) —
+  accepted runtime contract that preserves one bounded turn engine while Core chooses the smallest
+  eligible topology on every eligible top-level conversation turn, with or without a goal: direct
+  or a validated per-profile stage graph, while durable phase plans and saved graphs remain
+  explicit. It repairs shared-plan identity
+  across all 17 profiles, activates only bounded validated strategy selection, fails graph authority
+  and approvals closed, treats optimization as a grounded verifier/counter-metric/rollback graph,
+  and defines one safe execution map rendered as Desktop Runs and a CLI timeline/JSON view.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 

@@ -181,22 +181,34 @@ export function saveWorkspaceManifestFromPayload(
     if (!source) throw new Error('Unknown workspace setup source.');
     const current = loadWorkspaceManifest(workspaceRoot);
     const draft = parseManifestDraft(workspaceRoot, record, current, source);
-    const catalog = buildWorkspaceOnboardingSources(workspaceRoot, config).catalog;
+    const sources = buildWorkspaceOnboardingSources(workspaceRoot, config);
+    const catalog = sources.catalog;
+    const currentPreview = buildWorkspaceOnboardingPreview(
+      draft,
+      sources.catalog,
+      sources.orchestrationProfiles,
+    );
+    const fieldCatalog = {
+      ...catalog,
+      entries: currentPreview.catalog,
+    };
     const catalogFingerprint = parseDigest(record.catalogFingerprint);
+    if (catalogFingerprint !== currentPreview.catalogFingerprint) {
+      throw Object.assign(
+        new Error('Workspace onboarding sources changed during review.'),
+        { name: 'WorkspaceOnboardingSourceReviewError' },
+      );
+    }
     const personas = validateReviewedWorkspacePersonaSelection(draft.persona, catalog);
     if (!personas.ok) throw new Error('Reviewed workspace persona selection is unavailable.');
     const roles = validateReviewedWorkspaceRoleSelection({
       availableRoles: draft.orchestration.availableRoles,
       disabledRoles: draft.orchestration.disabledRoles,
-    }, catalog);
+    }, fieldCatalog);
     if (!roles.ok) throw new Error('Reviewed workspace role selection is unavailable.');
-    const capabilityCatalog = {
-      ...catalog,
-      entries: buildWorkspaceOnboardingPreview(draft, catalog).catalog,
-    };
     const capabilities = validateReviewedWorkspaceCapabilitySelection(
       draft.capabilities,
-      capabilityCatalog,
+      fieldCatalog,
     );
     if (!capabilities.ok) throw new Error('Reviewed workspace capability selection is unavailable.');
     const skills = validateReviewedWorkspaceSkillSelection(draft.skills, catalog);
@@ -220,7 +232,7 @@ export function saveWorkspaceManifestFromPayload(
         deny: draft.tools.deny,
       },
       catalog,
-      reviewedCatalogFingerprint: catalogFingerprint,
+      reviewedCatalogFingerprint: catalog.fingerprint,
     });
     const instructions = manifest.instructions;
     const instruction = parseInstruction(record.instruction, instructions);
@@ -441,7 +453,9 @@ function exactOptionalKeys(
 }
 
 function isStaleCatalogReviewError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== 'WorkspaceSelectionReviewError') return false;
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'WorkspaceOnboardingSourceReviewError') return true;
+  if (error.name !== 'WorkspaceSelectionReviewError') return false;
   const issues = (error as Error & { issues?: unknown }).issues;
   return Array.isArray(issues) && issues.some((issue) =>
     plainIssueCode(issue) === 'stale-catalog');

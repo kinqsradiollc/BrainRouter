@@ -4,13 +4,13 @@
  * This view contains catalog metadata and resolved IDs only. It never exposes
  * skill bodies, role prompts, secrets, paths, credentials, or live MCP payloads.
  */
-import { findBundledOrchestrationProfile } from '../orchestration/profiles/orchestrationProfileCatalog.js';
+import crypto from 'node:crypto';
 import {
-  findResolvedOrchestrationProfile,
   type ResolvedOrchestrationProfileCatalog,
   type ResolvedOrchestrationProfileSource,
 } from '../orchestration/profiles/orchestrationProfileSources.js';
 import type { WorkspaceManifest } from './manifest.js';
+import { resolveOrchestrationPlanIdentity } from './orchestrationPlanIdentity.js';
 import { getWorkspaceProfile } from './profiles.js';
 import {
   buildWorkspaceSelectionCatalog,
@@ -28,6 +28,9 @@ export interface WorkspaceOnboardingCatalogRow extends WorkspaceSelectionCatalog
 }
 
 export interface WorkspaceOnboardingPreview {
+  workspaceProfileId: string;
+  planProfileId: string | null;
+  /** @deprecated Compatibility alias for workspaceProfileId. */
   profileId: string;
   plan: {
     id: string;
@@ -72,6 +75,7 @@ export interface WorkspaceOnboardingPreview {
     manifestMaxParallel: number;
     effectiveMaxParallel: number;
   };
+  /** Opaque review token for both selection-catalog and effective-plan authority. */
   catalogFingerprint: string;
   catalog: WorkspaceOnboardingCatalogRow[];
 }
@@ -81,13 +85,11 @@ export function buildWorkspaceOnboardingPreview(
   catalog: WorkspaceSelectionCatalog = buildWorkspaceSelectionCatalog(),
   orchestrationProfiles?: ResolvedOrchestrationProfileCatalog,
 ): WorkspaceOnboardingPreview {
-  const resolvedPlan = orchestrationProfiles
-    ? findResolvedOrchestrationProfile(orchestrationProfiles, manifest.profile)
-    : undefined;
-  const plan = orchestrationProfiles
-    ? resolvedPlan?.definition
-    : findBundledOrchestrationProfile(manifest.profile);
-  const planSource: ResolvedOrchestrationProfileSource = resolvedPlan?.source
+  const identity = resolveOrchestrationPlanIdentity(manifest.profile, {
+    ...(orchestrationProfiles ? { catalog: orchestrationProfiles } : {}),
+  });
+  const plan = identity.definition;
+  const planSource: ResolvedOrchestrationProfileSource = identity.source
     ?? { kind: 'bundled', provenance: 'bundled' };
   const preset = getWorkspaceProfile(manifest.profile);
   const disabledRoles = new Set(manifest.orchestration.disabledRoles);
@@ -117,6 +119,8 @@ export function buildWorkspaceOnboardingPreview(
   const recommendedSkills = new Set(preset?.skills.enabled ?? []);
 
   return {
+    workspaceProfileId: manifest.profile,
+    planProfileId: identity.planProfileId,
     profileId: manifest.profile,
     plan: plan
       ? {
@@ -173,7 +177,7 @@ export function buildWorkspaceOnboardingPreview(
         ? Math.min(plan.limits.maxParallel, manifest.orchestration.maxParallel)
         : 0,
     },
-    catalogFingerprint: catalog.fingerprint,
+    catalogFingerprint: onboardingReviewFingerprint(catalog.fingerprint, identity),
     catalog: catalog.entries.map((entry) => {
       const roleBlockedByPlan = entry.kind === 'role'
         && (manifest.orchestration.mode === 'off' || !planRoles.has(entry.id));
@@ -234,4 +238,19 @@ export function buildWorkspaceOnboardingPreview(
       };
     }),
   };
+}
+
+function onboardingReviewFingerprint(
+  selectionCatalogFingerprint: string,
+  identity: ReturnType<typeof resolveOrchestrationPlanIdentity>,
+): string {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    version: 1,
+    selectionCatalogFingerprint,
+    workspaceProfileId: identity.workspaceProfileId,
+    planProfileId: identity.planProfileId,
+    resolution: identity.resolution,
+    source: identity.source ?? null,
+    definition: identity.definition ?? null,
+  })).digest('hex');
 }

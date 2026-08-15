@@ -40,10 +40,7 @@ function payload(root: string, profileId: string): ManifestSavePayload {
   const info = getWorkspaceManifestInfo(root);
   const profile = info.profiles.find((candidate) => candidate.id === profileId);
   assert.ok(profile);
-  return {
-    expected: info.review.revision,
-    source: 'wizard',
-    catalogFingerprint: info.preview.catalogFingerprint,
+  const draft = {
     profile: profile.id,
     persona: { default: profile.persona.default, enabled: [...profile.persona.enabled] },
     orchestration: {
@@ -57,6 +54,14 @@ function payload(root: string, profileId: string): ManifestSavePayload {
     tools: { profiles: [...profile.tools.profiles], enabled: [], deny: [] },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
     instructions: 'AGENT.md',
+  };
+  const preview = previewWorkspaceOnboardingFromPayload(root, draft);
+  assert.equal(preview.ok, true);
+  return {
+    expected: info.review.revision,
+    source: 'wizard',
+    catalogFingerprint: preview.ok ? preview.preview.catalogFingerprint : '',
+    ...draft,
   };
 }
 
@@ -88,6 +93,47 @@ function writeCustomPlan(root: string): void {
         executor: { kind: 'primary' },
         after: [],
         objective: 'Complete the task directly.',
+        skillIds: [],
+        optional: false,
+      }],
+    }],
+  }));
+}
+
+function writeInvalidPlanClaim(root: string, profileId: string): void {
+  const directory = path.join(root, 'orchestration-profiles');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${profileId}.json`), '{}');
+}
+
+function writeValidMarketingPlanClaim(root: string): void {
+  const directory = path.join(root, 'orchestration-profiles');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'marketing.json'), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'orchestration-profile',
+    id: 'marketing',
+    displayName: 'Workspace marketing orchestration',
+    defaultMode: 'adaptive',
+    fallbackStrategyId: 'direct-marketing',
+    rolePolicy: { availableRoles: ['reviewer'], disabledRoles: ['fleet'] },
+    limits: {
+      maxParallel: 3,
+      maxStages: 1,
+      maxChildrenPerStage: 1,
+      maxTotalChildren: 1,
+      maxDepth: 1,
+      maxRetries: 0,
+    },
+    strategies: [{
+      id: 'direct-marketing',
+      description: 'Complete one bounded marketing task directly.',
+      activation: { signals: ['small-scope'], explicitOnly: false },
+      stages: [{
+        id: 'complete',
+        executor: { kind: 'primary' },
+        after: [],
+        objective: 'Complete the reviewed marketing task directly.',
         skillIds: [],
         optional: false,
       }],
@@ -136,6 +182,77 @@ test('manifest-get and draft preview consume the same resolved workspace plan so
     const result = previewWorkspaceOnboardingFromPayload(env.root, draft);
     assert.equal(result.ok && result.preview.plan?.source.kind, 'workspace');
   } finally { env.cleanup(); }
+});
+
+test('manifest preview and save resolve one declared bundled plan alias', () => {
+  const env = tmpWorkspace();
+  try {
+    const input = payload(env.root, 'marketing');
+    const {
+      expected: _expected,
+      source: _source,
+      catalogFingerprint: _catalogFingerprint,
+      ...draft
+    } = input;
+    const preview = previewWorkspaceOnboardingFromPayload(env.root, draft);
+    assert.equal(preview.ok && preview.preview.plan?.id, 'writing');
+
+    const saved = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.equal(saved.saved, true);
+    assert.equal(saved.saved && saved.manifest.profile, 'marketing');
+  } finally { env.cleanup(); }
+});
+
+test('manifest preview and save fail closed on an invalid exact claim before alias fallback', () => {
+  const env = tmpWorkspace();
+  try {
+    writeInvalidPlanClaim(env.root, 'marketing');
+    const input = payload(env.root, 'marketing');
+    const {
+      expected: _expected,
+      source: _source,
+      catalogFingerprint: _catalogFingerprint,
+      ...draft
+    } = input;
+    const preview = previewWorkspaceOnboardingFromPayload(env.root, draft);
+    assert.equal(preview.ok && preview.preview.plan, null);
+
+    const saved = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.equal(saved.saved, false);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
+test('manifest save rejects a compatible exact plan replacement that was not previewed', () => {
+  const env = tmpWorkspace();
+  try {
+    const input = payload(env.root, 'marketing');
+    writeValidMarketingPlanClaim(env.root);
+
+    const saved = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.equal(saved.saved, false);
+    assert.equal(!saved.saved && saved.stale, true);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
+test('manifest preview and save accept every untouched workspace profile', () => {
+  const catalogEnv = tmpWorkspace();
+  const profileIds = getWorkspaceManifestInfo(catalogEnv.root).profiles.map((profile) => profile.id);
+  catalogEnv.cleanup();
+  assert.equal(profileIds.length, 17);
+
+  for (const profileId of profileIds) {
+    const env = tmpWorkspace();
+    try {
+      const input = payload(env.root, profileId);
+      const saved = saveWorkspaceManifestFromPayload(env.root, input);
+      assert.equal(saved.saved, true, `${profileId}: ${JSON.stringify(saved)}`);
+      assert.equal(saved.saved && saved.manifest.profile, profileId);
+    } finally {
+      env.cleanup();
+    }
+  }
 });
 
 test('plan preview parses a reviewed draft without writing workspace files', () => {

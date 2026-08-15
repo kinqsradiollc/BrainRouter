@@ -302,6 +302,10 @@
     "./planner/presentation": {
       "types": "./dist/planner/presentation.d.ts",
       "default": "./dist/planner/presentation.js"
+    },
+    "./orchestration/runs": {
+      "types": "./dist/orchestration/execution/publicRuns.d.ts",
+      "default": "./dist/orchestration/execution/publicRuns.js"
     }
   },
   "files": [

@@ -76,11 +76,29 @@ test('WF-TOOL defaultPhaseRunner records failed children when spawn returns no i
   assert.equal(results.every((r) => r.status === 'failed'), true);
 });
 
-test('WF-TOOL defaultPhaseRunner declares allowOverlap so write/shell phases clear the ownership gate', async () => {
+test('WF-TOOL defaultPhaseRunner serializes generic write/shell children without waiving ownership', async () => {
   // Regression: the MAS-P3 ownership gate rejects write/shell spawns that declare
   // no ownership and no allowOverlap. Build phases (worker=write, verifier=shell)
   // carry no ownership, so the runner must opt them out — otherwise every
   // implement/verify phase spawn-fails at the gate.
+  const spawnedWaves: any[][] = [];
+  const dispatch: OrchestrationDispatch = async (name, args: any) => {
+    if (name === 'spawn_agents') {
+      spawnedWaves.push(args.agents);
+      return JSON.stringify({ agents: args.agents.map((_: unknown, i: number) => ({ id: `c${i}` })) });
+    }
+    if (name === 'wait_agents') {
+      return JSON.stringify({ agents: args.ids.map((id: string) => ({ id, status: 'completed' })) });
+    }
+    return '{}';
+  };
+  const runner = defaultPhaseRunner(ctx('/tmp/none'), dispatch, 4);
+  await runner([{ prompt: 'edit', access: 'write' }, { prompt: 'test', access: 'shell' }], { id: 'implement', title: 'Implement' } as any);
+  assert.deepEqual(spawnedWaves.map((wave) => wave.length), [1, 1]);
+  assert.equal(spawnedWaves.flat().every((agent) => agent.allowOverlap === undefined), true);
+});
+
+test('WF-TOOL build-owned worktrees retain the intentional overlap declaration', async () => {
   let spawnedAgents: any[] = [];
   const dispatch: OrchestrationDispatch = async (name, args: any) => {
     if (name === 'spawn_agents') {
@@ -92,10 +110,12 @@ test('WF-TOOL defaultPhaseRunner declares allowOverlap so write/shell phases cle
     }
     return '{}';
   };
-  const runner = defaultPhaseRunner(ctx('/tmp/none'), dispatch, 4);
+  const runner = defaultPhaseRunner(ctx('/tmp/none'), dispatch, 4, {
+    workspaceRootOverride: '/tmp/build-worktree',
+  });
   await runner([{ prompt: 'edit', access: 'write' }, { prompt: 'test', access: 'shell' }], { id: 'implement', title: 'Implement' } as any);
   assert.equal(spawnedAgents.length, 2);
-  assert.equal(spawnedAgents.every((a) => a.allowOverlap === true), true);
+  assert.equal(spawnedAgents.every((agent) => agent.allowOverlap === true), true);
 });
 
 test('WF-TOOL defaultPhaseRunner surfaces the real spawn error instead of a generic message', async () => {

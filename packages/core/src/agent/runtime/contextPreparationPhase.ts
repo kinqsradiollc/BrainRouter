@@ -10,7 +10,7 @@ import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
-import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
+import { parseHookDecision } from '../../hooks/hooksStore.js';
 import {
   buildFanOutHint,
   shouldSuggestFanOut,
@@ -54,6 +54,10 @@ export interface PrepareTurnContextInput {
   requiredSkillPreflight: RequiredSkillPreflightResult;
   carriedPendingChildIds: string[];
   images?: Array<{ mediaType: string; dataBase64: string }>;
+  /** Exact reviewed turns suppress unrelated lifecycle automation. */
+  reviewedExecution?: boolean;
+  /** Recheck the pending root bearer or inherited descendant lease after awaits. */
+  assertReviewedExecutionCurrent?(): void;
 }
 
 export interface PreparedTurnContext {
@@ -91,6 +95,7 @@ export async function prepareTurnContextPhase(
       try {
         const beforeLen = agent.chatHistory.length;
         const compacted = await agent.compactHistory();
+        input.assertReviewedExecutionCurrent?.();
         if (compacted && input.callbacks.onCompactionEvent) {
           input.callbacks.onCompactionEvent({
             droppedMessages: Math.max(
@@ -109,16 +114,23 @@ export async function prepareTurnContextPhase(
   }
 
   await agent.injectRecallContext(prompt, input.mcpTools as any[], input.callbacks);
+  input.assertReviewedExecutionCurrent?.();
 
   if (agent.hookAdvisoryActive()) {
-    runHooks(agent.workspaceRoot, 'pre-turn', { payload: { prompt } });
-    void agent.runExtensionHooks('pre-turn');
+    agent.runExecutionHooks('pre-turn', { payload: { prompt } });
+    input.assertReviewedExecutionCurrent?.();
+    // Advisory extension hooks are open-ended async code without a revocation
+    // signal. A reviewed launch keeps the synchronous, fingerprinted workspace
+    // hook contract, but does not start extension work that could outlive the
+    // reviewed authority or the turn itself.
+    if (!input.reviewedExecution) void agent.runExtensionHooks('pre-turn');
   }
   if (agent.hookEnforceActive()) {
     const extensionDenial = await agent.runExtensionHooks(
       'user-prompt-submit',
       { args: { prompt } },
     );
+    input.assertReviewedExecutionCurrent?.();
     if (extensionDenial) {
       return {
         prompt,
@@ -128,7 +140,7 @@ export async function prepareTurnContextPhase(
       };
     }
 
-    const results = runHooks(agent.workspaceRoot, 'user-prompt-submit', {
+    const results = agent.runExecutionHooks('user-prompt-submit', {
       payload: { prompt },
     });
     const injectedContext: string[] = [];
@@ -153,6 +165,14 @@ export async function prepareTurnContextPhase(
         typeof decision?.additionalContext === 'string' &&
         decision.additionalContext.trim()
       ) {
+        if (input.reviewedExecution) {
+          return {
+            prompt,
+            fanOutHinted: false,
+            blockedAnswer:
+              'Reviewed execution canceled because a user-prompt hook attempted to change its bounded launch context.',
+          };
+        }
         injectedContext.push(decision.additionalContext.trim());
       }
     }
@@ -163,7 +183,7 @@ export async function prepareTurnContextPhase(
 
   agent.lastUserPrompt = prompt;
   agent.lastTurnHitLoopLimit = false;
-  if (!agent.reviewSourceSafety) {
+  if (!agent.reviewSourceSafety && !input.reviewedExecution) {
     try {
       agent.autoCaptureRequirement(prompt, input.callbacks);
     } catch {
@@ -171,11 +191,10 @@ export async function prepareTurnContextPhase(
     }
   }
 
-  const fanOutHinted = await preparePlanningHint(
-    agent,
-    prompt,
-    input.callbacks,
-  );
+  const fanOutHinted = input.reviewedExecution
+    ? false
+    : await preparePlanningHint(agent, prompt, input.callbacks);
+  input.assertReviewedExecutionCurrent?.();
   applyGoalAnchor(agent);
   // ADR-032 D1 — the learned block, attached like every other anchor and
   // never merged into the base prompt.

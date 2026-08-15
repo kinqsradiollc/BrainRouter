@@ -14,6 +14,8 @@ import {
   type WorkspaceProfileId,
 } from '@kinqs/brainrouter-core/workspace';
 
+type WorkspaceOrchestrationProfiles = Parameters<typeof buildWorkspaceOnboardingPreview>[2];
+
 export interface ProjectOnboardingFieldEdits {
   personaDefault: string;
   personasEnabled: string[];
@@ -118,8 +120,17 @@ export function finalizeCatalogReviewedProjectOnboarding(
   draft: WorkspaceManifest,
   edits: ProjectOnboardingFieldEdits,
   catalog: WorkspaceSelectionCatalog,
+  orchestrationProfiles?: WorkspaceOrchestrationProfiles,
 ): WorkspaceManifest {
   const edited = applyProjectOnboardingEdits(draft, edits);
+  const fieldCatalog = {
+    ...catalog,
+    entries: buildWorkspaceOnboardingPreview(
+      edited,
+      catalog,
+      orchestrationProfiles,
+    ).catalog,
+  };
   const personas = validateReviewedWorkspacePersonaSelection(edited.persona, catalog);
   if (!personas.ok) {
     throw new Error(formatCatalogReviewIssues('persona', personas.issues));
@@ -127,17 +138,13 @@ export function finalizeCatalogReviewedProjectOnboarding(
   const roles = validateReviewedWorkspaceRoleSelection({
     availableRoles: edited.orchestration.availableRoles,
     disabledRoles: edited.orchestration.disabledRoles,
-  }, catalog);
+  }, fieldCatalog);
   if (!roles.ok) {
     throw new Error(formatCatalogReviewIssues('role', roles.issues));
   }
-  const capabilityCatalog = {
-    ...catalog,
-    entries: buildWorkspaceOnboardingPreview(edited, catalog).catalog,
-  };
   const capabilities = validateReviewedWorkspaceCapabilitySelection(
     edited.capabilities,
-    capabilityCatalog,
+    fieldCatalog,
   );
   if (!capabilities.ok) {
     throw new Error(formatCatalogReviewIssues('capability', capabilities.issues));

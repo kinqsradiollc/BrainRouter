@@ -8,7 +8,7 @@
 // keeping them out of this union is what stops a new call site opening a tab
 // that nothing renders.
 // `peers` arrives with ADR-034 (messages that arrive) and IS a member.
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -45,6 +45,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'prototype', title: 'Prototype', icon: 'bolt' },
   { id: 'servers', title: 'Servers', icon: 'globe' },
   { id: 'peers', title: 'Peers', icon: 'bubble' },
+  { id: 'runs', title: 'Runs', icon: 'activity' },
   { id: 'browser', title: 'Browser', icon: 'globe' },
 ];
 
@@ -88,7 +89,7 @@ export const PANEL_GROUPS: ReadonlyArray<readonly [PanelGroup, string]> = [
 const GROUP_OF: Partial<Record<PanelId, PanelGroup>> = {
   files: 'code', file: 'code', editor: 'code', diff: 'code', search: 'code', terminal: 'code',
   plan: 'work', tasks: 'work', 'task-detail': 'work', stack: 'work', worktrees: 'work',
-  schedule: 'work', workflows: 'work',
+  schedule: 'work', workflows: 'work', runs: 'work',
   memory: 'knowledge', knowledge: 'knowledge', artifacts: 'knowledge',
   annotations: 'knowledge', requirements: 'knowledge', attachments: 'knowledge',
   comprehension: 'understand',

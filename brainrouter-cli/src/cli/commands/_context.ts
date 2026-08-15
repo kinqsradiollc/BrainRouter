@@ -16,7 +16,19 @@ import type readline from 'node:readline';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
+import type { ExecutionIntentHandle } from '@kinqs/brainrouter-types/agent';
 import type { FederationHandle } from '../../runtime/federation/federationRegistration.js';
+
+/**
+ * ADR-040 A40-2 — host-owned metadata for one agent turn. Execution intent is opaque
+ * and never embedded in the model-visible prompt; only an explicit host action
+ * supplies it, while ordinary and compatibility turns omit it.
+ */
+export interface RunAgentTurnOptions {
+  agent?: Agent;
+  ephemeral?: boolean;
+  executionIntent?: ExecutionIntentHandle;
+}
 
 /**
  * Lifecycle / REPL-scoped state that command handlers can read or mutate.
@@ -34,14 +46,14 @@ export interface ReplContext {
   /** True while the REPL is mid-turn; loop ticks should defer when set. */
   isProcessing: () => boolean;
   /** Programmatically run an agent turn (used by /continue and friends). */
-  runAgentTurn: (prompt: string) => void;
+  runAgentTurn: (prompt: string, options?: RunAgentTurnOptions) => void;
   /**
    * Awaitable variant. `/side` and `/btw` supply an isolated Agent and mark the
    * turn ephemeral so the shared renderer can skip durable REPL side effects.
    */
   runAgentTurnAsync: (
     prompt: string,
-    options?: { agent?: Agent; ephemeral?: boolean },
+    options?: RunAgentTurnOptions,
   ) => Promise<void>;
 }
 

@@ -19,7 +19,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { getWorkflowDir, getWorkflowsRoot } from './workflowArtifacts.js';
+import type { ExecutionIntentRecord } from '@kinqs/brainrouter-types/agent';
+import { getWorkflowDir, getWorkflowsRoot, slugify } from './workflowArtifacts.js';
+import { writeWorkspaceFileAtomic } from '../../workspace/fileWrite.js';
 
 export type RunStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted';
@@ -35,6 +37,12 @@ export interface WorkflowRunStep {
 
 export interface WorkflowRun {
   slug: string;
+  /** A40-2 — stable identity for this execution, independent of its display slug. */
+  runId?: string;
+  /** Owning turn/graph execution when this durable run is launched as a child. */
+  parentExecutionId?: string;
+  /** Trusted launch provenance captured before the durable execution starts. */
+  launch?: ExecutionIntentRecord;
   kind: string;
   status: RunStatus;
   sessionKey: string | null;
@@ -82,6 +90,38 @@ export interface WorkflowRunPhase {
   endedAt?: string;
   /** Pointer to the phase's aggregated synthesis output (offloaded, not inlined). */
   aggregatedOutputRef?: string;
+}
+
+function canonicalLaunchRecord(value: ExecutionIntentRecord | undefined): string | null {
+  if (!value) return null;
+  const canonical = (input: unknown): string => {
+    if (input === null || typeof input !== 'object') return JSON.stringify(input);
+    if (Array.isArray(input)) return `[${input.map(canonical).join(',')}]`;
+    return `{${Object.entries(input as Record<string, unknown>)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`)
+      .join(',')}}`;
+  };
+  return canonical(value);
+}
+
+function assertPhaseRunIdentityCompatible(
+  slug: string,
+  existing: WorkflowRun,
+  opts: { runId?: string; parentExecutionId?: string; launch?: ExecutionIntentRecord },
+): void {
+  if (opts.runId !== undefined && opts.runId !== existing.runId) {
+    throw new Error(`Workflow run "${slug}" already exists with a different run identity.`);
+  }
+  if (opts.parentExecutionId !== undefined && opts.parentExecutionId !== existing.parentExecutionId) {
+    throw new Error(`Workflow run "${slug}" already exists with a different parent execution.`);
+  }
+  if (
+    opts.launch !== undefined
+    && canonicalLaunchRecord(opts.launch) !== canonicalLaunchRecord(existing.launch)
+  ) {
+    throw new Error(`Workflow run "${slug}" already exists with a different launch request.`);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -356,6 +396,10 @@ function runPath(workspaceRoot: string, slug: string): string {
   return path.join(getWorkflowDir(workspaceRoot, slug), 'run.json');
 }
 
+function runRelativePath(slug: string): string {
+  return path.join('.brainrouter', 'workflows', slugify(slug), 'run.json');
+}
+
 function readMetaKind(workspaceRoot: string, slug: string): string {
   try {
     const meta = JSON.parse(fs.readFileSync(path.join(getWorkflowDir(workspaceRoot, slug), 'meta.json'), 'utf-8'));
@@ -374,7 +418,21 @@ export function readRun(workspaceRoot: string, slug: string): WorkflowRun | null
 }
 
 function writeRun(workspaceRoot: string, run: WorkflowRun): WorkflowRun {
-  fs.writeFileSync(runPath(workspaceRoot, run.slug), JSON.stringify(run, null, 2) + '\n', 'utf-8');
+  writeWorkspaceFileAtomic(
+    workspaceRoot,
+    runRelativePath(run.slug),
+    `${JSON.stringify(run, null, 2)}\n`,
+  );
+  return run;
+}
+
+function createRunExclusive(workspaceRoot: string, run: WorkflowRun): WorkflowRun {
+  writeWorkspaceFileAtomic(
+    workspaceRoot,
+    runRelativePath(run.slug),
+    `${JSON.stringify(run, null, 2)}\n`,
+    { exclusive: true },
+  );
   return run;
 }
 
@@ -403,7 +461,14 @@ export function ensureRun(
     steps: stepTemplateForKind(kind).map((s) => ({ id: s.id, title: s.title, status: 'pending' as RunStepStatus })),
     currentStepId: null,
   };
-  return writeRun(workspaceRoot, run);
+  try {
+    return createRunExclusive(workspaceRoot, run);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const raced = readRun(workspaceRoot, slug);
+    if (!raced) throw error;
+    return raced;
+  }
 }
 
 /**
@@ -438,6 +503,37 @@ export function finishRun(workspaceRoot: string, slug: string, status: RunStatus
 }
 
 /**
+ * ADR-040 — force a phase-aware run into a coherent terminal state after its
+ * foreground executor has already created the ledger. Any phase that never
+ * reached a terminal hook inherits the executor's terminal outcome, while
+ * completed/partial phases retain their evidence. One atomic write avoids a
+ * transient `running` record between per-phase cleanup writes.
+ */
+function terminalizePhaseRun(
+  workspaceRoot: string,
+  slug: string,
+  status: 'failed' | 'interrupted',
+  now = new Date().toISOString(),
+): WorkflowRun | null {
+  const run = readRun(workspaceRoot, slug);
+  if (!run) return null;
+  const phases = run.phases?.map((phase) =>
+    phase.status === 'pending' || phase.status === 'running'
+      ? { ...phase, status, endedAt: phase.endedAt ?? now }
+      : phase,
+  );
+  return writeRun(workspaceRoot, {
+    ...run,
+    status,
+    ...(phases ? { phases } : {}),
+    updatedAt: now,
+  });
+}
+
+/** Internal executor seam; intentionally omitted from the workflow barrel. */
+export const terminalizePhaseRunInternal = terminalizePhaseRun;
+
+/**
  * WF-PERSIST — lazily create a **phase-aware** run for a runtime-driven workflow,
  * seeding the given phases (all `pending`). Idempotent: returns the existing run
  * untouched if one is already on disk. The PhasePlan executor (WF-TOOL) calls
@@ -448,14 +544,29 @@ export function ensurePhaseRun(
   workspaceRoot: string,
   slug: string,
   phases: Array<{ id: string; title: string }>,
-  opts: { sessionKey?: string | null; pid?: number | null; now?: string; kind?: string; planJson?: string } = {},
+  opts: {
+    sessionKey?: string | null;
+    pid?: number | null;
+    now?: string;
+    kind?: string;
+    planJson?: string;
+    runId?: string;
+    parentExecutionId?: string;
+    launch?: ExecutionIntentRecord;
+  } = {},
 ): WorkflowRun {
   const existing = readRun(workspaceRoot, slug);
-  if (existing) return existing;
+  if (existing) {
+    assertPhaseRunIdentityCompatible(slug, existing, opts);
+    return existing;
+  }
   const now = opts.now ?? new Date().toISOString();
   const kind = opts.kind ?? readMetaKind(workspaceRoot, slug);
   const run: WorkflowRun = {
     slug,
+    runId: opts.runId,
+    parentExecutionId: opts.parentExecutionId,
+    launch: opts.launch,
     kind,
     status: 'running',
     sessionKey: opts.sessionKey ?? null,
@@ -467,7 +578,15 @@ export function ensurePhaseRun(
     phases: phases.map((p) => ({ id: p.id, title: p.title, status: 'pending' as RunPhaseStatus, childIds: [] })),
     planJson: opts.planJson,
   };
-  return writeRun(workspaceRoot, run);
+  try {
+    return createRunExclusive(workspaceRoot, run);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const raced = readRun(workspaceRoot, slug);
+    if (!raced) throw error;
+    assertPhaseRunIdentityCompatible(slug, raced, opts);
+    return raced;
+  }
 }
 
 /**

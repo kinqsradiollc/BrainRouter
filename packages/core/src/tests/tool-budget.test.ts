@@ -56,6 +56,8 @@ test('applyToolScope whitelists allow and removes disallow (suffix-aware)', () =
 });
 
 test('toolNameMatchesAny permits exact and namespaced MCP matches without widening local names', () => {
+  assert.equal(toolNameMatchesAny('read_file', ['*']), true);
+  assert.equal(toolNameMatchesAny('mcp_docs_search', ['*']), true);
   assert.equal(toolNameMatchesAny('read_file', ['read_file']), true);
   assert.equal(toolNameMatchesAny('mcp_docs_search', ['search']), true);
   assert.equal(toolNameMatchesAny('grep_search', ['search']), false);

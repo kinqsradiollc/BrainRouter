@@ -14,8 +14,8 @@
  *                          synthesize the result.
  *   - `fan-out`         — separable breadth; several children on DISTINCT
  *                          lenses in one message → `spawn_agents`.
- *   - `workflow`        — a dependency chain (phases feeding forward) the
- *                          runtime should execute → `run_workflow`.
+ *   - `workflow`        — a dependency chain (phases feeding forward) worth
+ *                          recommending for an explicit host launch.
  *   - `spawn-worker`    — long-running / tracked / multi-turn work.
  *                          Worker threads themselves land in 0.4.2;
  *                          the tier is reserved so the policy is
@@ -80,12 +80,11 @@ interface RouteTaskOptions {
    * The local tools this turn can actually emit, after the workspace tool
    * policy, user overrides and skill allowlists have run.
    *
-   * Omit it and every tier is considered reachable — correct for tests and for
-   * callers with no turn context. When it IS supplied, a tier whose tool is not
-   * in it is skipped and the next-cheapest tier answers instead. Recommending
-   * `run_workflow` to a workspace whose catalog does not include it, or
-   * `spawn_worker_thread` where background workers are off, hands the model an
-   * instruction it cannot follow — the failure this router was rebuilt to stop.
+   * Omit it and every tool-backed tier is considered reachable — correct for
+   * tests and for callers with no turn context. When it IS supplied, a tier
+   * whose model-callable tool is not in it is skipped and the next-cheapest tier
+   * answers instead. The workflow tier is a host-launch recommendation rather
+   * than a model-callable tool, so it is intentionally independent of this set.
    */
   availableTools?: ReadonlySet<string>;
 }
@@ -245,12 +244,12 @@ function baselineRoute(task: string, available?: ReadonlySet<string>): BaselineR
   // because detached work is a lifecycle decision, not a breadth one.
   const veto = detectFanOutVeto(task);
   if (!veto.vetoed) {
-    const shape = reachable(available, 'run_workflow') ? detectWorkflowShape(task) : null;
+    const shape = detectWorkflowShape(task);
     if (shape) {
       return {
         tier: 'workflow',
-        reason: `${shape.reason} — hand the whole chain to \`run_workflow\` with template "${shape.template}"; the runtime fans out, waits, synthesizes, and feeds each phase forward.`,
-        recommendedTool: 'run_workflow',
+        reason: workflowLaunchRecommendation(shape),
+        recommendedTool: null,
         agentId: null,
         confidence: 0.75,
       };
@@ -353,6 +352,13 @@ const IMPLEMENT_VERB = /\b(implement|build|write|edit|fix|refactor|add|update|cr
 interface WorkflowShape {
   template: 'build' | 'compare' | 'review-wide' | 'research';
   reason: string;
+}
+
+function workflowLaunchRecommendation(shape: WorkflowShape): string {
+  if (shape.template === 'build') {
+    return `${shape.reason} — recommend the explicit CLI \`/build <task>\` launch. This routing result cannot authorize or start a workflow.`;
+  }
+  return `${shape.reason} — recommend the explicit CLI \`/workflow run ${shape.template} [jsonArgs]\` launch. This routing result cannot authorize or start a workflow.`;
 }
 
 /**

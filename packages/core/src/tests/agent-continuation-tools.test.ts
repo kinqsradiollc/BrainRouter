@@ -23,6 +23,59 @@ function ctx(workspace: string): OrchestrationContext {
   };
 }
 
+test('ADR-040 reviewed PhasePlans keep every child and lifecycle edge executor-owned', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-reviewed-edges-'));
+  const unrelated = createSession(workspace, {
+    role: 'explorer',
+    prompt: 'Unrelated work',
+    parentSessionKey: 'other-parent',
+    access: 'read',
+  });
+  const launchContext = ctx(workspace);
+  launchContext.executionLaunch = {
+    assertAuthorityCurrent: () => {},
+  } as OrchestrationContext['executionLaunch'];
+  const descendantContext = {
+    ...ctx(workspace),
+    executionAuthorityGuard: () => {},
+  };
+
+  for (const name of [
+    'profile_stage',
+    'task_agent',
+    'delegate_agent',
+    'delegate_reviewer',
+    'spawn_agent',
+    'spawn_agents',
+    'list_agents',
+    'wait_agent',
+    'wait_agents',
+    'read_agent_transcript',
+    'close_agent',
+    'send_input',
+    'resume_agent',
+    'route_task',
+    'run_workflow',
+    'run_workflow_graph',
+  ]) {
+    await assert.rejects(
+      () => executeOrchestrationTool(name, { id: unrelated.id }, descendantContext),
+      /deterministic executor owns every declared child and lifecycle edge/,
+      `${name} must not cross the reviewed PhasePlan tree`,
+    );
+  }
+  assert.equal(getSession(workspace, unrelated.id)?.status, 'pending');
+
+  await assert.rejects(
+    () => executeOrchestrationTool('send_input', { id: unrelated.id, message: 'Continue.' }, launchContext),
+    /exact PhasePlan does not declare child-continuation edges/,
+  );
+  await assert.rejects(
+    () => executeOrchestrationTool('resume_agent', { id: unrelated.id }, launchContext),
+    /exact PhasePlan does not declare child-continuation edges/,
+  );
+});
+
 test('send_input resumes an existing child transcript for one more turn', async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-send-input-'));
   const child = createSession(workspace, {

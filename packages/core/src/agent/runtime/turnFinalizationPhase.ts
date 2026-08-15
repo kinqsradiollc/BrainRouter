@@ -8,7 +8,7 @@
 
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import type { ActiveTurnOrchestrationResolution } from '../../workspace/activeTurnOrchestration.js';
-import { collectStopAdditionalContext, runHooks } from '../../hooks/hooksStore.js';
+import { collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
@@ -29,6 +29,10 @@ export interface FinalizeTurnInput {
   callbacks: RunTurnCallbacks;
   activeTurnOrchestration: ActiveTurnOrchestrationResolution;
   turnSpan: TurnSpan;
+  /** Exact reviewed turns keep their consumed lease through finalization. */
+  reviewedExecution?: boolean;
+  /** Throws when the root launch lease or inherited execution lease was revoked. */
+  assertReviewedExecutionCurrent?(): void;
 }
 
 export type TurnTerminationReason =
@@ -40,6 +44,15 @@ export async function finalizeTurnPhase(
   agent: Agent,
   input: FinalizeTurnInput,
 ): Promise<string> {
+  const assertAuthorityCurrent = (): void => {
+    if (input.assertReviewedExecutionCurrent) {
+      input.assertReviewedExecutionCurrent();
+      return;
+    }
+    agent.assertInheritedExecutionAuthorityCurrent();
+  };
+
+  assertAuthorityCurrent();
   const normalizedCompletion = normalizeTurnCompletionAnswer({
     answer: input.answer,
     exitedCleanly: input.exitedCleanly,
@@ -53,34 +66,41 @@ export async function finalizeTurnPhase(
   agent.lastTurnHitLoopLimit = normalizedCompletion.hitLoopLimit;
   agent.lastAnswer = finalAnswer;
 
-  await agent.captureTurn(input.prompt, finalAnswer, input.callbacks);
-  // Naming is opportunistic and bounded. It must not delay the completed turn;
-  // compare-and-set prevents a concurrent human/hook rename from being lost.
-  scheduleFirstTurnSessionTitleProposal(
-    agent,
-    input.prompt,
-    finalAnswer.slice(0, 2_000),
-    input.callbacks,
-  );
-  // ADR-032 D5 — the turn-end checkpoint. Dispatched, never awaited: §1's worst
-  // gap is that an agent learns only when it remembers to ask, and the fix for
-  // that must not become a thing a person waits on. It sits after captureTurn
-  // so the trajectory it reads is the finished one.
-  scheduleLearningCheckpoint(agent, 'turn-end');
+  assertAuthorityCurrent();
+  if (!input.reviewedExecution) {
+    await agent.captureTurn(input.prompt, finalAnswer, input.callbacks);
+    assertAuthorityCurrent();
+    // Naming is opportunistic and bounded. It must not delay the completed turn;
+    // compare-and-set prevents a concurrent human/hook rename from being lost.
+    scheduleFirstTurnSessionTitleProposal(
+      agent,
+      input.prompt,
+      finalAnswer.slice(0, 2_000),
+      input.callbacks,
+    );
+    // ADR-032 D5 — the turn-end checkpoint. Dispatched, never awaited: §1's worst
+    // gap is that an agent learns only when it remembers to ask, and the fix for
+    // that must not become a thing a person waits on. It sits after captureTurn
+    // so the trajectory it reads is the finished one.
+    scheduleLearningCheckpoint(agent, 'turn-end');
+  }
   if (agent.hookAdvisoryActive()) {
-    runHooks(agent.workspaceRoot, 'post-turn', {
+    assertAuthorityCurrent();
+    agent.runExecutionHooks('post-turn', {
       payload: {
         prompt: input.prompt,
         answerPreview: finalAnswer.slice(0, 1000),
         tokens: agent.lastTurnUsage,
       },
     });
+    assertAuthorityCurrent();
   }
 
   if (agent.hookNotifyActive()) {
+    assertAuthorityCurrent();
     try {
       const stopEvent = agent.silent ? 'subagent-stop' : 'stop';
-      const stopResults = runHooks(agent.workspaceRoot, stopEvent, {
+      const stopResults = agent.runExecutionHooks(stopEvent, {
         payload: {
           prompt: input.prompt,
           answerPreview: finalAnswer.slice(0, 1000),
@@ -96,9 +116,11 @@ export async function finalizeTurnPhase(
     } catch {
       // Stop hooks are advisory and cannot invalidate a completed turn.
     }
+    assertAuthorityCurrent();
 
+    assertAuthorityCurrent();
     try {
-      runHooks(agent.workspaceRoot, 'notification-agent-completed', {
+      agent.runExecutionHooks('notification-agent-completed', {
         payload: {
           sessionKey: agent.sessionKey,
           silent: agent.silent,
@@ -108,24 +130,16 @@ export async function finalizeTurnPhase(
     } catch {
       // Completion notifications are advisory.
     }
+    assertAuthorityCurrent();
   }
 
+  assertAuthorityCurrent();
   input.turnSpan.end({
     outcome: input.exitedCleanly ? 'ok' : 'loop_limit',
     loops_used: input.loopCount,
     tokens_in: agent.lastTurnUsage.promptTokens,
     tokens_out: agent.lastTurnUsage.completionTokens,
-    orchestration_profile_id:
-      input.activeTurnOrchestration.plan.orchestrationProfileId,
-    orchestration_strategy_id:
-      input.activeTurnOrchestration.plan.strategyId,
-    orchestration_selection_source:
-      input.activeTurnOrchestration.plan.selectionSource,
-    orchestration_stage_count:
-      input.activeTurnOrchestration.plan.stages.length,
-    orchestration_signal_ids:
-      input.activeTurnOrchestration.taskSignalIds.join(','),
-    orchestration_source: input.activeTurnOrchestration.source,
+    ...orchestrationTurnSpanAttributes(input.activeTurnOrchestration),
   });
 
   agent.sessionUsage.promptTokens += agent.lastTurnUsage.promptTokens;
@@ -186,6 +200,23 @@ export async function finalizeTurnPhase(
   }
 
   return finalAnswer;
+}
+
+/** A40-1: project terminal span identity without collapsing workspace and plan profiles. */
+export function orchestrationTurnSpanAttributes(
+  resolution: ActiveTurnOrchestrationResolution,
+): Record<string, unknown> {
+  return {
+    orchestration_workspace_profile_id: resolution.plan.workspaceProfileId,
+    orchestration_plan_profile_id: resolution.plan.planProfileId,
+    // A40-1 compatibility telemetry for one release; this remains plan identity.
+    orchestration_profile_id: resolution.plan.planProfileId,
+    orchestration_strategy_id: resolution.plan.strategyId,
+    orchestration_selection_source: resolution.plan.selectionSource,
+    orchestration_stage_count: resolution.plan.stages.length,
+    orchestration_signal_ids: resolution.taskSignalIds.join(','),
+    orchestration_source: resolution.source,
+  };
 }
 
 type FirstTurnTitleProposalPort = Pick<

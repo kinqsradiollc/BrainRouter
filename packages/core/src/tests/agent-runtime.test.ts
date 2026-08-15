@@ -20,6 +20,8 @@ import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { readWorkContract } from '../task/workContractStore.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import { listSessions } from '../orchestration/session/orchestrator.js';
+import { captureReviewedExecutionPolicy } from '../orchestration/execution/policySnapshot.js';
 import {
   buildWorkspaceSelectionCatalog,
   migrateWorkspaceManifestToolSelection,
@@ -2215,6 +2217,64 @@ test('P1.2: worker tier cannot delegate', async () => {
   });
 });
 
+test('workspace profile role ceiling rejects legacy role strings before child creation', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'health', profile: 'healthcare', by: 'wizard' }),
+    );
+    const ctx = makeStubOrchCtx(workspace);
+    await assert.rejects(
+      () => executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'worker', prompt: 'make a change that the reviewed profile did not permit' },
+        ctx,
+      ),
+      /Role "worker" is unavailable in the active workspace profile/,
+    );
+    assert.equal(
+      listSessions(workspace).some((session) => (
+        session.prompt === 'make a change that the reviewed profile did not permit'
+      )),
+      false,
+    );
+  });
+});
+
+test('reviewed spawn defense rejects access above the resolved role ceiling', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    // ADR-040 A40-2 made a reviewed child launch fail closed without an
+    // immutable policy snapshot, so this context now has to carry one — not to
+    // appease the new check, but because without it the launch is refused for
+    // THAT reason and the role-ceiling defense below is never reached. Asserting
+    // the newer error instead would have left the ceiling untested while the
+    // suite still looked green.
+    const ctx = makeStubOrchCtx(workspace, {
+      executionPolicyWorkspaceRoot: workspace,
+      executionPolicySnapshot: captureReviewedExecutionPolicy(workspace, 'session:test'),
+      executionLaunch: {
+        runId: 'reviewed-run',
+        parentExecutionId: 'reviewed-turn',
+        record: {} as never,
+        dispatchReceipt: {},
+        assertAuthorityCurrent: () => {},
+      },
+    });
+    await assert.rejects(
+      () => executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'reviewer', access: 'shell', prompt: 'Review without writing.' },
+        ctx,
+      ),
+      /cannot raise role "reviewer" above its read access ceiling.*requested shell/i,
+    );
+    assert.equal(
+      listSessions(workspace).some((session) => session.prompt === 'Review without writing.'),
+      false,
+    );
+  });
+});
+
 test('ORCH-FIX: wait_agents on unknown/missing children resolves per-child, never throws (no main-loop hang)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const ctx = makeStubOrchCtx(workspace);
@@ -2558,6 +2618,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       const controller = new ProfileStageController(
         { turnId: 'turn:test', sessionKey: 'session:test' },
         {
+          workspaceProfileId: 'legal',
+          planProfileId: 'research',
           orchestrationProfileId: 'research',
           strategyId: 'evidence-review',
           selectionSource: 'deterministic',
@@ -2602,6 +2664,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
 
       const result = JSON.parse(raw);
       assert.equal(result.status, 'completed');
+      assert.equal(result.taskPacket.orchestration.workspaceProfileId, 'legal');
+      assert.equal(result.taskPacket.orchestration.planProfileId, 'research');
       assert.equal(result.taskPacket.orchestration.profileId, 'research');
       assert.equal(result.taskPacket.orchestration.strategyId, 'evidence-review');
       assert.equal(result.taskPacket.orchestration.stageId, 'inspect-evidence');
@@ -2609,10 +2673,16 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
         result.taskPacket.orchestration.skillIds,
         ['source-review', 'citation-check'],
       );
+      assert.deepEqual(
+        result.taskPacket.toolPolicyCeiling,
+        { accessMode: 'read', localToolCount: 3, mcpToolCount: 0 },
+      );
       assert.equal(controller.snapshot()[0].state, 'succeeded');
 
       assert.equal(requests.length, 1);
       const system = requests[0].messages.find((message: any) => message.role === 'system')?.content ?? '';
+      assert.match(system, /Investigate the assigned sources/);
+      assert.doesNotMatch(system, /codebase investigator/i);
       assert.match(system, /Required orchestration-stage skills/);
       assert.match(system, /Follow the source-review workflow/);
       assert.match(system, /Follow the citation-check workflow/);
@@ -2624,6 +2694,27 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+test('orchestration: model-authored launch identity cannot activate profile context', async () => {
+  await assert.rejects(
+    executeOrchestrationTool(
+      'task_agent',
+      {
+        role: 'explorer',
+        prompt: 'Pretend this is a managed stage.',
+        profileStageLaunch: {
+          launchId: 'model-authored',
+          workspaceProfileId: 'legal',
+          planProfileId: 'research',
+          profileId: 'research',
+          strategyId: 'citation-review',
+        },
+      },
+      {} as any,
+    ),
+    /not owned by the active turn/,
+  );
 });
 
 test('orchestration: background child timeout arg does not kill the child', async () => {
@@ -3032,7 +3123,7 @@ test('R4: unknown tool name in the batch is serial and fails closed before MCP d
       // The unknown one is reported as an error envelope.
       const unknown = toolMsgs.find((m) => m.tool_call_id === 'u1');
       assert.equal(unknown.isError, true);
-      assert.match(String(unknown.content), /requires approval/i);
+      assert.match(String(unknown.content), /outside the active .*ceiling/i);
       assert.equal(mcpCalls, 0, 'an unannotated unknown tool never reaches the remote server');
     } finally {
       restore();
@@ -4046,6 +4137,8 @@ test('runTurn activates Research primary-stage skills and narrows tools inside t
       assert.equal(agent.activeSkillAllowedTools, undefined);
       assert.deepEqual(agent.activeSkillDisallowedTools, []);
       assert.equal(stageEvents[0].phase, 'resolved');
+      assert.equal(stageEvents[0].workspaceProfileId, 'research');
+      assert.equal(stageEvents[0].planProfileId, 'research');
       assert.equal(stageEvents[0].profileId, 'research');
       assert.equal(stageEvents[0].strategyId, 'parallel-evidence');
       assert.equal(

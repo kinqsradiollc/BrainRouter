@@ -21,7 +21,14 @@ import {
   createRouteTaskTool,
   createRunWorkflowTool,
   createRunWorkflowGraphTool,
-} from '../../orchestration/tools.js';
+} from '../../orchestration/agents/agentTools.js';
+// ADR-040 A40-2: imported from the DEFINING module, not the `orchestration/tools.js`
+// re-export barrel. A40-2 gave tools.ts new imports that make it part of a cycle
+// reaching back here, so by the time this module initialises every binding it
+// pulled through that barrel is still undefined — the factories below run at
+// module load, so the failure is `X is not a function` at import time and it
+// takes 14 brain test FILES down before a single test runs. Naming the source
+// module removes the hop through a module that is mid-initialisation.
 
 export const BUILTIN_TOOL_SPECS = [
   // ADR-028 D6 — the planner. A planner the agent cannot see is a second place

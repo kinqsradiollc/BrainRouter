@@ -168,7 +168,7 @@ export function buildFanOutHint(prompt: string, intent: BreadthIntent): string {
     `- **Add one adversarial child**, briefed to ${adversarialLens()}. You answer it; you do not merge it.`,
     '- **Write/shell children need an `ownership` glob**; read-only lenses do not.',
     '- Drain with `wait_agents({ ids: [...] })`, then synthesize into ONE response that says what the adversary failed to break.',
-    '- If the phases feed forward instead (plan → implement → verify → review), use `run_workflow` — the runtime sequences and synthesizes it for you.',
+    '- If the phases feed forward instead (plan → implement → verify → review), recommend an explicit host launch. In the CLI the user can run `/build <task>` or `/workflow run <template> [jsonArgs]`; this hint cannot authorize workflow execution.',
     '',
     '## Anti-patterns to avoid',
     '- Do NOT call a single tool, write a paragraph, then ask "which should we test next?". The user already said to do everything — execute, do not consult.',

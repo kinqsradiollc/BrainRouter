@@ -42,7 +42,7 @@ export function installDispatch(ctx: RunChatContext): void {
           refreshPromptForMode: ctx.refreshFooter,
           replaceBanner: (text: string) => ctx.controller?.replaceBanner(text),
           isProcessing: () => ctx.isProcessing,
-          runAgentTurn: (prompt: string) => { void ctx.runChatTurn(prompt); },
+          runAgentTurn: (prompt, options) => { void ctx.runChatTurn(prompt, options); },
           runAgentTurnAsync: (prompt, options) => ctx.runChatTurn(prompt, options),
         }),
       );

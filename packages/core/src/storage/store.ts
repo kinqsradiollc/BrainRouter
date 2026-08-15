@@ -77,7 +77,15 @@ export function getStateDir(workspaceRoot: string): string {
 }
 
 let migrationAttempted = new Set<string>();
-const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json']);
+// `agents/` holds workspace-local orchestration ROLE definitions
+// (`agentRegistry.ts` writes them, `domainPersonas.ts` reads them). They are
+// project-local and committable in exactly the way `workflows/` and
+// `workspace.json` are — a team checks them in so everyone gets the same roles.
+// They were absent from this set, so the legacy-state migration deleted them
+// outright the first time a workspace ran with BRAINROUTER_HOME pointing
+// somewhere else. That is someone's reviewed role definitions gone, not stale
+// runtime state, and the rescue-copy above never covered them either.
+const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json', 'agents']);
 const WORKSPACE_MANIFEST_CLAIM_PATTERN = /^\.workspace\.json\.[0-9]+\.[0-9a-f]{24}\.claim$/;
 
 function isWorkspaceLocalArtifact(entryName: string): boolean {

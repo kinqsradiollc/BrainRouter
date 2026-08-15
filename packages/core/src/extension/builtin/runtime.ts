@@ -31,6 +31,7 @@ import {
 import { startBackgroundShell, readBackgroundOutput, killBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
+import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
@@ -273,7 +274,16 @@ function assertSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: s
   }
 }
 
-export async function invokeBuiltinToolRuntime(this: any, name: string, args: Record<string, any>): Promise<string> {
+export async function invokeBuiltinToolRuntime(
+  this: any,
+  name: string,
+  args: Record<string, any>,
+  authorizeMcpTarget?: (
+    name: string,
+    args: Record<string, unknown>,
+    descriptor: unknown,
+  ) => void,
+): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
     // The Agent might have been constructed with a workspace different from
     // the launching shell's cwd (e.g. /resume from another dir), and cwd can
@@ -486,6 +496,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           reason: 'silent child agent requested a file write',
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         // A successful overwrite means the on-disk content is now what the agent
         // wrote — keep the read ledger accurate so a follow-up edit is allowed.
         this.filesReadThisSession.add(resolved);
@@ -514,6 +525,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           reason: 'silent child agent requested a notebook edit',
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         this.captureFileSnapshot(resolved); // undo log for /rewind --files
         const result = applyNotebookEdit(fs.readFileSync(resolved, 'utf8'), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
         fs.writeFileSync(resolved, result.content, 'utf8');
@@ -557,6 +569,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           reason: 'silent child agent requested a file edit',
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
         const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
@@ -710,6 +723,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
                 ? 'dangerous command requested by a silent child agent'
                 : 'silent child agent shell command requires parent approval',
             });
+            this.assertInheritedExecutionAuthorityCurrent();
             if (!approved) return 'Command execution rejected by parent approval.';
             parentApproved = true;
           } else if (dangerous) {
@@ -765,6 +779,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           const approved = this.interactionPort
             ? await this.interactionPort.confirm({ title: 'Run shell command?', detail: cmd, dangerous, tool: 'run_command' })
             : await this.prompter.askYesNo(question, false);
+          this.assertInheritedExecutionAuthorityCurrent();
           if (!approved) {
             return 'Command execution rejected by user.';
           }
@@ -774,6 +789,10 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         // past it here), but detach instead of blocking the turn. v1 runs
         // unsandboxed, so it is refused while cli.sandbox=on.
         if (args.background === true) {
+          this.assertInheritedExecutionAuthorityCurrent();
+          if (this.inheritedExecutionAuthorityGuard()) {
+            return 'Background run_command is unavailable inside reviewed execution until detached processes have an execution-owned revocation lease.';
+          }
           if (this.pentestMode) return 'Background run_command is disabled for pentests; commands must remain in the Docker/proxy perimeter.';
           // CODEX-SANDBOX-UNATTENDED — background runs are unsandboxed (v1), so
           // they are refused whenever the sandbox is active: either the user
@@ -798,6 +817,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           });
         }
         if (this.pentestMode) {
+          this.assertInheritedExecutionAuthorityCurrent();
           const result = runPentestCommand(cmd, this.pentestSandbox
             ? { ...this.pentestSandbox, workspaceRoot: this.workspaceRoot }
             : resolvePentestSandbox(this.workspaceRoot));
@@ -808,6 +828,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
+        this.assertInheritedExecutionAuthorityCurrent();
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         // WS5 — remember commits WE authored this session, so a later
         // `git commit --amend` of one of them is allowed (vs. amending a
@@ -1098,13 +1119,28 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const target = String(args.name ?? '').trim();
         if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
         const tool = await this.findVisibleMcpTool(target);
+        this.assertInheritedExecutionAuthorityCurrent();
         if (!tool) throw new Error(`mcp_call: "${target}" is not an available MCP tool. Use mcp_search to find the exact name.`);
         const callArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
           ? (args.args as Record<string, any>)
           : {};
         const toolName = String(tool.name);
         const mcpArgs = applyFederationIdentity(toolName, callArgs, this.federationSessionKey) as Record<string, any>;
+        authorizeMcpTarget?.(toolName, mcpArgs, tool);
+        const permissionNames = [
+          toolName,
+          String(tool.__rawName ?? '').trim(),
+        ].filter((name, index, names) => name && names.indexOf(name) === index);
+        if (permissionNames.some((permissionName) => evaluatePermissionRules(
+          getCliKnobs().permissions,
+          permissionName,
+          primaryArgText(permissionName, mcpArgs),
+          { workspace: this.workspaceRoot },
+        ) === 'deny')) {
+          throw new Error(`mcp_call target "${toolName}" denied by cli.permissions.`);
+        }
         await this.approveMcpToolCall(toolName, tool, mcpArgs);
+        this.assertInheritedExecutionAuthorityCurrent();
         const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
         return extractToolText(mcpRes);
       }
@@ -1207,6 +1243,11 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         return JSON.stringify({ marked: true, title, note: 'Chapter recorded — the user can browse with /chapters.' });
       }
       case 'switch_model': {
+        if (this.inheritedExecutionAuthorityGuard()) {
+          throw new Error(
+            'switch_model is unavailable inside reviewed execution because the reviewed provider and model identity are fixed for the execution.',
+          );
+        }
         // MC-D3 — agent-initiated switch to a named LLM profile: the explicit
         // sibling of the first-line tier self-escalation marker. Validated
         // against the configured profiles + the availableModels enforcement
@@ -1255,7 +1296,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           nextLlm = { ...route.llm };
           resolvedRoute = route.slug;
         }
-        this.llmConfig = nextLlm;
+        this.setLLMConfig(nextLlm);
         try {
           setSessionRuntime(this.workspaceRoot, this.sessionKey, {
             model: routeProfileModel ? result.profile.model : nextLlm.model,
@@ -1284,6 +1325,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
       }
       case 'task_output': {
         // CC-P11.1 — incremental output of a background run_command.
+        if (this.inheritedExecutionAuthorityGuard()) {
+          throw new Error('task_output is unavailable inside reviewed execution because background process ids are not execution-owned.');
+        }
         const id = String(args.id ?? '').trim();
         if (!id) throw new Error('task_output requires an id (from run_command background:true).');
         const fromByte = typeof args.fromByte === 'number' && args.fromByte >= 0 ? Math.floor(args.fromByte) : 0;
@@ -1292,6 +1336,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         return JSON.stringify(out);
       }
       case 'kill_command': {
+        if (this.inheritedExecutionAuthorityGuard()) {
+          throw new Error('kill_command is unavailable inside reviewed execution because background process ids are not execution-owned.');
+        }
         const id = String(args.id ?? '').trim();
         if (!id) throw new Error('kill_command requires an id (from run_command background:true).');
         const signal = args.signal === 'SIGKILL' || args.signal === 'SIGINT' ? args.signal : 'SIGTERM';
@@ -1333,6 +1380,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           dangerous: safety.touchesVcs || safety.deletes > 0,
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         // 0.4.x-3b — capture each target file's prior content before the patch
         // applies (undo log for /rewind --files). Parse the envelope's file
         // headers (`*** Add/Update/Delete File: <path>`).

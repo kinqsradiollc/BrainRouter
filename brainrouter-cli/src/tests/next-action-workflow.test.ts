@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseNextActionPlan, nextActionDirective } from '@kinqs/brainrouter-core/prompt';
+import { buildNextActionMessages, parseNextActionPlan, nextActionDirective } from '@kinqs/brainrouter-core/prompt';
 
 const VALID_PHASE_PLAN = {
   title: 'compare',
@@ -31,17 +31,29 @@ test('WF-PLANNER: phasePlan only attaches for workflow (not fan-out)', () => {
   assert.equal(plan.phasePlan, undefined);
 });
 
-test('WF-PLANNER: directive tells the model to fire ONE run_workflow with the prepared plan', () => {
-  const plan = parseNextActionPlan(JSON.stringify({ strategy: 'workflow', reasoning: 'r', subtasks: ['a', 'b'], phasePlan: VALID_PHASE_PLAN }))!;
-  const d = nextActionDirective(plan);
-  assert.match(d, /run_workflow/);
-  assert.match(d, /"phases"/); // the plan JSON is embedded
-  assert.doesNotMatch(d, /spawn_agents/); // not the manual fan-out path
+test('WF-PLANNER: new planner requests recommend phases without asking for an executable payload', () => {
+  const [system] = buildNextActionMessages('compare these systems, then recommend one');
+  assert.match(system.content, /recommendation only/i);
+  assert.doesNotMatch(system.content, /run_workflow|phasePlan|"phases"/);
 });
 
-test('WF-PLANNER: workflow WITHOUT a prepared plan falls back to the manual fan-out directive', () => {
+test('WF-PLANNER: directive recommends an explicit user launch and never renders the legacy prepared plan', () => {
+  const plan = parseNextActionPlan(JSON.stringify({ strategy: 'workflow', reasoning: 'r', subtasks: ['a', 'b'], phasePlan: VALID_PHASE_PLAN }))!;
+  const d = nextActionDirective(plan);
+  assert.match(d, /Next-action plan \(recommended\): workflow/);
+  assert.match(d, /explicit user launch/i);
+  assert.match(d, /`\/workflow run <template> \[jsonArgs\]`/);
+  assert.match(d, /Desktop production launch is unavailable/);
+  assert.match(d, /Test run is preview-only/);
+  assert.doesNotMatch(d, /run_workflow|"phases"|phasePlan/);
+  assert.doesNotMatch(d, /FIRST action MUST|```(?:json)?/i);
+  assert.doesNotMatch(d, /spawn_agents/);
+});
+
+test('WF-PLANNER: workflow WITHOUT a prepared plan is also only an explicit-launch recommendation', () => {
   const plan = parseNextActionPlan(JSON.stringify({ strategy: 'workflow', reasoning: 'r', subtasks: ['a', 'b', 'c'] }))!;
   assert.equal(plan.phasePlan, undefined);
   const d = nextActionDirective(plan);
-  assert.match(d, /spawn_agents|task_agent/);
+  assert.match(d, /`\/workflow run <template> \[jsonArgs\]`/);
+  assert.doesNotMatch(d, /run_workflow|spawn_agents|task_agent|"phases"|FIRST action MUST/i);
 });

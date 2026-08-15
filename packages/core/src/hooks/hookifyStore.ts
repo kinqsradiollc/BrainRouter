@@ -209,7 +209,7 @@ function fieldMatches(value: string, op: HookifyCondition['operator'], pattern: 
   }
 }
 
-export function evaluateHookify(rules: HookifyRule[], ctx: HookifyContext): HookifyMatch[] {
+export function evaluateHookify(rules: readonly HookifyRule[], ctx: HookifyContext): HookifyMatch[] {
   const out: HookifyMatch[] = [];
   for (const rule of rules) {
     if (!rule.enabled) continue;

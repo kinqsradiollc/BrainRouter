@@ -19,6 +19,47 @@ function makeWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'br-reviewed-onboard-'));
 }
 
+function writeInvalidMarketingPlanClaim(root: string): void {
+  const directory = path.join(root, 'orchestration-profiles');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'marketing.json'), '{}');
+}
+
+function writeValidMarketingPlanClaim(root: string): void {
+  const directory = path.join(root, 'orchestration-profiles');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'marketing.json'), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'orchestration-profile',
+    id: 'marketing',
+    displayName: 'Workspace marketing orchestration',
+    defaultMode: 'adaptive',
+    fallbackStrategyId: 'direct-marketing',
+    rolePolicy: { availableRoles: ['reviewer'], disabledRoles: ['fleet'] },
+    limits: {
+      maxParallel: 3,
+      maxStages: 1,
+      maxChildrenPerStage: 1,
+      maxTotalChildren: 1,
+      maxDepth: 1,
+      maxRetries: 0,
+    },
+    strategies: [{
+      id: 'direct-marketing',
+      description: 'Complete one bounded marketing task directly.',
+      activation: { signals: ['small-scope'], explicitOnly: false },
+      stages: [{
+        id: 'complete',
+        executor: { kind: 'primary' },
+        after: [],
+        objective: 'Complete the reviewed marketing task directly.',
+        skillIds: [],
+        optional: false,
+      }],
+    }],
+  }));
+}
+
 function acceptingPrompt(options: {
   profile?: string;
   text?: Partial<Record<ProjectOnboardingPromptId, string>>;
@@ -186,6 +227,76 @@ test('catalog review rejects a capability ID that was never offered', async () =
       }),
       /capability selection is no longer available/i,
     );
+    assert.equal(fs.existsSync(workspaceManifestPath(root)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('catalog review rejects a role hidden by an invalid exact plan claim', async () => {
+  const root = makeWorkspace();
+  try {
+    writeInvalidMarketingPlanClaim(root);
+    await assert.rejects(
+      runProjectOnboarding(root, {
+        prompt: acceptingPrompt({
+          profile: 'marketing',
+          choices: { 'orchestration-available': ['reviewer'] },
+        }),
+        print: () => undefined,
+      }),
+      /role selection is no longer available/i,
+    );
+    assert.equal(fs.existsSync(workspaceManifestPath(root)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('catalog review revalidates plan sources after the final confirmation', async () => {
+  const root = makeWorkspace();
+  let confirmed = false;
+  try {
+    await assert.rejects(
+      runProjectOnboarding(root, {
+        prompt: acceptingPrompt({
+          profile: 'marketing',
+          choices: { 'orchestration-available': ['reviewer'] },
+          beforeConfirm: () => {
+            confirmed = true;
+            writeInvalidMarketingPlanClaim(root);
+          },
+        }),
+        print: () => undefined,
+      }),
+      /choices changed while setup was open/i,
+    );
+    assert.equal(confirmed, true);
+    assert.equal(fs.existsSync(workspaceManifestPath(root)), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('catalog review rejects a compatible exact plan replacement that was not shown', async () => {
+  const root = makeWorkspace();
+  let confirmed = false;
+  try {
+    await assert.rejects(
+      runProjectOnboarding(root, {
+        prompt: acceptingPrompt({
+          profile: 'marketing',
+          choices: { 'orchestration-available': ['reviewer'] },
+          beforeConfirm: () => {
+            confirmed = true;
+            writeValidMarketingPlanClaim(root);
+          },
+        }),
+        print: () => undefined,
+      }),
+      /choices changed while setup was open/i,
+    );
+    assert.equal(confirmed, true);
     assert.equal(fs.existsSync(workspaceManifestPath(root)), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

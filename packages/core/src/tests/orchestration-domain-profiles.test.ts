@@ -222,7 +222,8 @@ test('P23-5 resolved child stage compiles into a bounded, provenance-bearing pac
   const collect = plan.stages.find((stage) => stage.id === 'collect');
   assert.ok(collect);
   const packetInput: BuildOrchestrationStageTaskPacketInputs = {
-    orchestrationProfileId: plan.orchestrationProfileId!,
+    workspaceProfileId: plan.workspaceProfileId!,
+    planProfileId: plan.planProfileId!,
     strategyId: plan.strategyId!,
     stage: collect,
     assignment: 'Assess the independent evidence for the first sub-question.',
@@ -245,6 +246,8 @@ test('P23-5 resolved child stage compiles into a bounded, provenance-bearing pac
 
   assert.deepEqual(packet.orchestration, {
     roleId: 'explorer',
+    workspaceProfileId: 'research',
+    planProfileId: 'research',
     profileId: 'research',
     strategyId: 'parallel-evidence',
     stageId: 'collect',
@@ -256,6 +259,26 @@ test('P23-5 resolved child stage compiles into a bounded, provenance-bearing pac
   assert.match(renderDelegatedTaskPacket(packet), /untrusted scope data/);
   assert.deepEqual(packet.toolPolicyCeiling.localTools, ['web_search', 'fetch_url']);
   assert.equal(packet.toolPolicyCeiling.accessMode, 'read');
+
+  const {
+    workspaceProfileId: _workspaceProfileId,
+    planProfileId: _planProfileId,
+    ...legacyPacketInput
+  } = packetInput;
+  const legacyPacket = buildOrchestrationStageTaskPacket({
+    ...legacyPacketInput,
+    orchestrationProfileId: 'research',
+  });
+  assert.equal(legacyPacket.orchestration.workspaceProfileId, 'research');
+  assert.equal(legacyPacket.orchestration.planProfileId, 'research');
+  assert.equal(legacyPacket.orchestration.profileId, 'research');
+  assert.throws(
+    () => buildOrchestrationStageTaskPacket({
+      ...packetInput,
+      orchestrationProfileId: 'research',
+    }),
+    /require both workspace and plan profile ids/i,
+  );
 
   const primary = plan.stages.find((stage) => stage.id === 'frame');
   assert.ok(primary);
@@ -282,7 +305,7 @@ test('P23-5 resolved child stage compiles into a bounded, provenance-bearing pac
   assert.throws(
     () => buildOrchestrationStageTaskPacket({
       ...packetInput,
-      orchestrationProfileId: '../research',
+      workspaceProfileId: '../research',
     }),
     /stable kebab-case identifier/,
   );

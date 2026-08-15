@@ -39,6 +39,11 @@ export interface ProvenanceRef {
 
 export interface ProfileStageEventView {
   phase: 'resolved' | 'updated' | 'terminated';
+  /** Absent on legacy host events emitted before dual profile identity. */
+  workspaceProfileId?: string;
+  /** Absent on legacy host events; profileId remains its compatibility alias. */
+  planProfileId?: string;
+  /** @deprecated Compatibility alias for planProfileId. */
   profileId: string;
   strategyId: string;
   selectionSource: 'explicit' | 'adaptive-model' | 'deterministic' | 'fallback';

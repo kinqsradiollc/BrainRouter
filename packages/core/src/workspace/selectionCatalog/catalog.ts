@@ -16,7 +16,7 @@ import {
   inspectWorkspaceProfilePlugins,
   workspaceProfilePluginSkillIds,
 } from '../profilePlugins.js';
-import { BUNDLED_WORKSPACE_SKILL_PACK_IDS } from '../skillSelection.js';
+import { BUNDLED_WORKSPACE_SKILL_PACKS } from '../skillSelection.js';
 import { WORKSPACE_TOOL_PROFILES } from '../toolProfiles.js';
 import { labelForId, pushCatalogEntry, safeCatalogText, safeProvenance } from './safety.js';
 import {
@@ -234,19 +234,24 @@ export function buildWorkspaceSelectionCatalog(
   for (const root of contributedRoots.filter((candidate) => !candidate.selectable)) {
     addContributedRoot(root);
   }
-  for (const packId of BUNDLED_WORKSPACE_SKILL_PACK_IDS) {
+  for (const pack of BUNDLED_WORKSPACE_SKILL_PACKS) {
     pushCatalogEntry(entries, {
-      id: packId,
+      id: pack.id,
       kind: 'skill-pack',
-      label: labelForId(packId),
-      description: 'Bundled skills recommended for this workspace profile.',
+      label: pack.label,
+      description: pack.description,
       category: 'skill-packs',
       source: 'bundled',
       provenance: 'bundled-skills',
       persistable: true,
       selectable: true,
       runtimeAvailabilityPrerequisites: [],
-      expandsTo: bundledSkills.map((skill) => skill.id),
+      // Preserve the pre-A40-1 Engineering catalog projection. Domain-owned
+      // marker packs have no implicit expansion; their starter skills remain
+      // explicit reviewed manifest selections.
+      expandsTo: pack.id === 'engineering'
+        ? bundledSkills.map((skill) => skill.id)
+        : [],
     });
   }
 

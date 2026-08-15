@@ -97,8 +97,22 @@ export function runHooks(
   context: { tool?: string; payload?: Record<string, unknown> } = {},
   timeoutMs = 5000,
 ): HookRunResult[] {
+  return runCapturedHooks(readHooks(workspaceRoot), event, context, timeoutMs);
+}
+
+/**
+ * Execute an already captured hook list without consulting the workspace.
+ * Reviewed execution uses this form so an A-to-B-to-A file swap cannot run a
+ * command that was not present when the user approved the launch.
+ */
+export function runCapturedHooks(
+  hooks: readonly Hook[],
+  event: HookEvent,
+  context: { tool?: string; payload?: Record<string, unknown> } = {},
+  timeoutMs = 5000,
+): HookRunResult[] {
   const results: HookRunResult[] = [];
-  for (const hook of readHooks(workspaceRoot)) {
+  for (const hook of hooks) {
     if (!hook.enabled || hook.event !== event) continue;
     if (hook.match && context.tool && !hookMatchesTool(hook.match, context.tool)) continue;
     const env = {
@@ -277,4 +291,3 @@ export function collectStopAdditionalContext(results: HookRunResult[]): string |
   }
   return ctx.length > 0 ? ctx.join('\n') : undefined;
 }
-

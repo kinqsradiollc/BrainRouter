@@ -208,7 +208,49 @@ const ORPHAN_MODULE_CEILING = 26;
  * silently widens the ceiling above by one — which is why the test below
  * requires every entry to still BE an orphan.
  */
-const KNOWN_UNWIRED = new Map<string, string>([]);
+const KNOWN_UNWIRED = new Map<string, string>([
+  [
+    'orchestration/execution/optimizationSubgraph.ts',
+    'ADR-040 A40-11. Domain-neutral measurement, counter-metric, verifier, '
+    + 'arbitration, rollback and drift/audit decisions, with the Engineering '
+    + 'build loop retained as ONE instance of the shape rather than the '
+    + 'definition. It is the vocabulary and the judgement; the callers that '
+    + 'replace the current build loop are the migration this row calls for, and '
+    + 'they come after it, not with it. Covered by '
+    + 'execution-optimization-subgraph.test.ts with mutation runs for the '
+    + 'counter-metric gate, verifier precedence and arbitration.',
+  ],
+  [
+    'orchestration/execution/adaptiveActivation.ts',
+    'ADR-040 A40-8. Eligibility, the direct safe baseline, and diagnostics for '
+    + 'adaptive profile selection. It lands unwired ON PURPOSE: A40-8 forbids '
+    + 'changing any profile default until fresh/elliptical/contextless '
+    + 'conversation corpora pass, and those corpora do not exist. Wiring it into '
+    + 'the turn path before that gate would be how a default quietly moves. '
+    + 'execution-adaptive-activation.test.ts pins the gate SHUT, so flipping '
+    + 'DEFAULTS_ARE_CORPUS_GATED without corpus results fails loudly.',
+  ],
+  [
+    'orchestration/execution/publicRuns.ts',
+    'ADR-040 A40-9. The curated public surface for run views, and it IS reached: '
+    + "brainrouter-cli/src/cli/commands/runs/index.ts imports it as "
+    + "'@kinqs/brainrouter-core/orchestration/runs' through the package exports "
+    + 'map. This sweep resolves relative imports inside core, so a cross-package '
+    + 'subpath consumer is invisible to it — the module is wired, the scan just '
+    + 'cannot see the wire. Verified by reading that file, not assumed.',
+  ],
+  [
+    'orchestration/execution/graphAdapter.ts',
+    'ADR-040 A40-7. Adapts a saved graph run to the canonical execution map: it '
+    + 'is the module that WIRED the A40-5 reducer and the A40-6 durable store, '
+    + 'so both of their entries here are gone — the sweep caught them as stale '
+    + 'the moment they stopped being orphans, which is the whole point of the '
+    + 'honesty test above. This one is now the frontier: nothing renders the map '
+    + 'yet, and that is A40-9 (CLI /runs) and A40-10 (Desktop Runs). Covered by '
+    + 'execution-graph-adapter.test.ts, including a real SIGKILL process-kill '
+    + 'test proving a committed resume point survives a crash.',
+  ],
+]);
 
 test('E1 — the documented-orphan list is honest in both directions', () => {
   // The sweep must not launder its own author's orphans, and it must not carry
@@ -573,8 +615,25 @@ function deadExports(): string[] {
  * tested behaviour inside a merge commit is not the merge's call to make. Each
  * must be wired or deleted; when that happens this comment goes and the number
  * falls with it.
+ *
+ * **The A40-5 and A40-6 rises are REPAID.** Those two slices took it 273 → 279
+ * while their reducer and durable store had no caller. A40-7's adapter wired
+ * both, and the sweep immediately flagged their exclusions as stale — a ratchet
+ * that only catches new debt and never notices repayment is just a bigger
+ * number. What remains is A40-7's own frontier: the adapter's exports are dead
+ * until A40-9 and A40-10 render the map. Named, attributed, and it falls when
+ * they land. A40-9 then took it 280 → 279 by giving the run views a real
+ * consumer: the ratchet falling, which is the direction it is for. A40-8 raised
+ * it 279 → 281 for `adaptiveActivation.ts`, which is unwired DELIBERATELY —
+ * wiring it before its corpus gate is how a profile default moves without
+ * anyone deciding to move it. Two slots, named, and they fall when the corpora
+ * exist and the gate is opened on purpose. A40-11 raised it 281 → 285 for
+ * `optimizationSubgraph.ts`: the governance vocabulary lands before the callers
+ * that migrate the Engineering build loop onto it, which is the sequence that
+ * row asks for — generalise first, migrate second, with the old path retained
+ * meanwhile. Four slots, named, falling when the migration lands.
  */
-const DEAD_EXPORT_CEILING = 273;
+const DEAD_EXPORT_CEILING = 285;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

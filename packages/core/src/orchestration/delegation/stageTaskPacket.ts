@@ -19,7 +19,15 @@ export interface BuildOrchestrationStageTaskPacketInputs extends Omit<
   BuildDelegatedTaskPacketInputs,
   'task' | 'roleId' | 'expectedOutput'
 > {
-  orchestrationProfileId: string;
+  /** Required with planProfileId for aliased workspace profiles. */
+  workspaceProfileId?: string;
+  /** Required with workspaceProfileId for aliased workspace profiles. */
+  planProfileId?: string;
+  /**
+   * @deprecated Exact-profile compatibility input. When neither dual-ID field
+   * is present, this value supplies both workspace and plan identity.
+   */
+  orchestrationProfileId?: string;
   strategyId: string;
   stage: ResolvedOrchestrationStage;
   /** Bounded fan-out slice, dataset partition, or evidence sub-question. */
@@ -31,7 +39,9 @@ export function buildOrchestrationStageTaskPacket(
 ): DelegatedTaskPacket {
   const {
     stage,
-    orchestrationProfileId,
+    workspaceProfileId: rawWorkspaceProfileId,
+    planProfileId: rawPlanProfileId,
+    orchestrationProfileId: rawLegacyProfileId,
     strategyId: rawStrategyId,
     assignment: rawAssignment,
     ...packetInput
@@ -45,9 +55,24 @@ export function buildOrchestrationStageTaskPacket(
 
   const roleId = requiredIdentifier(stage.executor.roleId, 'orchestration role id');
   const stageId = requiredIdentifier(stage.id, 'orchestration stage id');
-  const profileId = requiredIdentifier(
-    orchestrationProfileId,
-    'orchestration profile id',
+  const hasDualIdentity = rawWorkspaceProfileId !== undefined
+    || rawPlanProfileId !== undefined;
+  if (hasDualIdentity && (
+    rawWorkspaceProfileId === undefined
+    || rawPlanProfileId === undefined
+    || rawLegacyProfileId !== undefined
+  )) {
+    throw new Error(
+      'Orchestration stage packets require both workspace and plan profile ids.',
+    );
+  }
+  const workspaceProfileId = requiredIdentifier(
+    hasDualIdentity ? rawWorkspaceProfileId : rawLegacyProfileId,
+    'workspace profile id',
+  );
+  const planProfileId = requiredIdentifier(
+    hasDualIdentity ? rawPlanProfileId : rawLegacyProfileId,
+    'plan profile id',
   );
   const strategyId = requiredIdentifier(rawStrategyId, 'orchestration strategy id');
   const assignment = boundedAssignment(rawAssignment);
@@ -82,7 +107,9 @@ export function buildOrchestrationStageTaskPacket(
     ...packet,
     orchestration: {
       ...packet.orchestration,
-      profileId,
+      workspaceProfileId,
+      planProfileId,
+      profileId: planProfileId,
       strategyId,
       stageId,
       skillIds: stageSkillIds,
@@ -105,7 +132,10 @@ function boundedAssignment(value?: string): string | undefined {
   return normalized;
 }
 
-function requiredIdentifier(value: string, label: string): string {
+function requiredIdentifier(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a stable kebab-case identifier.`);
+  }
   const normalized = value.trim();
   if (
     normalized.length > 128

@@ -111,6 +111,21 @@ test('tier classification: long-running cue → spawn-worker recommends spawn_wo
   assert.equal(res.recommendedTool, 'spawn_worker_thread');
 });
 
+test('tier classification: workflow is advice for an explicit host launch, not a model tool', async () => {
+  const build = await routeTask({
+    task: 'Implement the retry backoff, then test it and finally review the diff.',
+    skipMemory: true,
+  });
+  assert.equal(build.tier, 'workflow');
+  assert.equal(build.recommendedTool, null);
+  assert.match(build.reason, /`\/build <task>`/);
+
+  const compare = await routeTask({ task: 'Compare pgvector vs sqlite-vec.', skipMemory: true });
+  assert.equal(compare.tier, 'workflow');
+  assert.equal(compare.recommendedTool, null);
+  assert.match(compare.reason, /`\/workflow run compare \[jsonArgs\]`/);
+});
+
 test('offline path: confidence capped at 0.6 + memoryEvidence empty + reason notes the gap', async () => {
   const res = await routeTask({ task: 'review the diff in src/foo.ts', skipMemory: true });
   assert.ok(res.confidence <= 0.6 + 1e-9);

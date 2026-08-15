@@ -132,13 +132,11 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description:
       'Route tasks and coordinate bounded child agents while the owning turn is active, including the built-in phase templates.',
     category: 'orchestration-workflows',
-    // `run_workflow` belongs here, not only in `workflow-launch`: `route_task`'s
-    // `workflow` tier and `spawn_agents`' description both tell the model to hand
-    // a phase chain to it, and a workspace that enabled this group and not the
-    // other was handed instructions naming a tool it could not emit. It runs the
-    // same in-turn child spawns as the rest of this group; `workflow-launch`
-    // keeps the surfaces that are NOT in-turn — saved graphs and progress
-    // reporting from inside a running workflow.
+    // `run_workflow` remains permission-eligible here for compatibility with
+    // existing manifests and explicit host launch commands. The live Agent hides
+    // it from ordinary turns and exposes it only while an exact, single-use
+    // execution intent is active. `workflow-launch` keeps the saved-graph and
+    // progress surfaces that are not ordinary in-turn delegation.
     toolIds: [
       'profile_stage', 'task_agent', 'delegate_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task', 'run_workflow',
@@ -252,4 +250,3 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     extensionIds: ['browser'],
   },
 ] as const;
-
