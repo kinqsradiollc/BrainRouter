@@ -797,7 +797,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   Local evidence: the 17-profile Core matrix and Core/CLI/Desktop identity, fail-closed,
   propagation, onboarding, and telemetry suites pass; hosted CI and the automated security review
   remain this slice's merge gates.
-- [ ] **A40-2 — Add conversational task envelopes, trusted intent, and execution-tree policy.**
+- [~] **A40-2 — PARTIAL. Add conversational task envelopes, trusted intent, and execution-tree policy.**
   Evaluate every eligible top-level turn from bounded user/confirmed task context, make a normal
   turn the root when no goal exists, define/validate explicit topology and strategy provenance,
   reject planner/model self-authorization, parent durable children, and keep the Core goal
@@ -807,6 +807,37 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   purpose-limits the reviewed turn, and carries a revocable policy-bound lease through declared
   descendants. The conversational task envelope, closed origin/topology contract, goal/no-goal
   parity, and shared Core goal supervisor remain open, so this row stays unchecked.
+
+  **Shipped in `30904ff5f`.** Authority is a capability and not a claim: handles are object
+  identities in a `WeakMap`, bound to workspace/session/user, TTL-bounded (5 min, 15 min ceiling),
+  with single-use dispatch receipts — a planner or model cannot fabricate one because there is no
+  string to guess.
+
+  **Two acceptance failures remain OPEN and this row is not closed by them.** Both became visible
+  only after the test file stopped voiding itself: the reviewed root never reaches a steering-only
+  turn when the file runs in order, and `access downgrade during cost approval revokes launch before
+  persistence` produces no rejection — a launch survives an access downgrade performed inside the
+  approval await, which is the one window where a human is looking at a prompt and can change their
+  mind. `revalidateExecutionLaunch` exists and is wired at
+  `toolAdapterInvocationPhase.ts:185`, so the gap is that the re-check is either not reached or not
+  sufficient, not that it is absent.
+
+  Two defects found while verifying this slice are fixed in the same commit:
+
+  1. **`migrateLegacyWorkspaceState` deleted workspace role definitions.** Its preserved set was
+     `{workflows, workspace.json}`. `.brainrouter/agents/` — written by `agentRegistry.ts`, read by
+     `domainPersonas.ts`, and committed by teams exactly as `workflows/` is — was swept as stale
+     runtime state the first time a workspace ran with `BRAINROUTER_HOME` pointing elsewhere, and the
+     rescue-copy never covered it either. That is shipped-code data loss with no connection to
+     ADR-040; A40-2's tests were merely the first to write that directory and then read state.
+     Fixed, with a three-case regression test that also pins that the sweep still sweeps.
+  2. **Eighteen of A40-2's twenty-three tests were discarded while the file reported `fail 0`.**
+     `completionStarted` settles only when the stub sees a steering-only turn; otherwise the await is
+     on a bare promise with no timer or socket behind it, so the event loop drains and node's runner
+     cancels the rest of the file. A deadline — deliberately not unref'd, since an unref'd timer
+     cannot hold the loop open long enough to fire — converts that silent void into one legible
+     failure. Pass count went 5 -> 11 on that change alone.
+
 - [ ] **A40-3 — Make saved graph execution fail closed and bounded.** Wire the shared approval port,
   block when absent, enforce agent-node role/access configuration, propagate cancellation, apply
   cumulative execution budgets and required/optional failure rules, and prove bounded loop/
