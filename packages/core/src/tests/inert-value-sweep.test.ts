@@ -210,6 +210,15 @@ const ORPHAN_MODULE_CEILING = 26;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   [
+    'orchestration/execution/runStore.ts',
+    'ADR-040 A40-6. Durable per-launch run storage, landing before the adapters '
+    + 'that write to it (A40-7) and the surfaces that read it (A40-9 CLI /runs, '
+    + 'A40-10 Desktop Runs). Covered by execution-run-store.test.ts with mutation '
+    + 'runs for exclusive launch, compare-and-set, and the torn-pair resume '
+    + 'refusal. Same terms as the reducer entry below: named successor slices, '
+    + 'and the test below fails the moment it stops being an orphan.',
+  ],
+  [
     'orchestration/execution/reducer.ts',
     'ADR-040 A40-5. The execution-map reducer lands BEFORE its emitter by the '
     + "ADR's own dependency-ordered board: A40-7 adapts phase plans and saved "
@@ -586,6 +595,16 @@ function deadExports(): string[] {
  * must be wired or deleted; when that happens this comment goes and the number
  * falls with it.
  *
+ * **It rose again, on purpose: 274 → 279, ADR-040 A40-6.**
+ * `orchestration/execution/runStore.ts` is durable per-launch run storage, and
+ * it lands before its writer (A40-7) and its readers (A40-9 CLI `/runs`, A40-10
+ * Desktop Runs) for the same dependency-ordered reason as the reducer below.
+ * Five slots, not one: a store is a surface, and its read/write/list/reconcile
+ * entry points are all dead until something calls them. That is the honest
+ * count and it is written here rather than rounded down. Same terms: named,
+ * attributed to specific successor slices, and it falls when those land. If
+ * they do not, this is the evidence the module should go.
+ *
  * **It rose a second time, on purpose: 273 → 274, ADR-040 A40-5.**
  * `orchestration/execution/reducer.ts` is the execution-map reducer, and it
  * lands BEFORE its emitter because the ADR's own dependency-ordered board puts
@@ -598,7 +617,7 @@ function deadExports(): string[] {
  * wires the emitter. If A40-7 never lands, this line is the evidence that the
  * reducer should be deleted rather than kept as scenery.
  */
-const DEAD_EXPORT_CEILING = 274;
+const DEAD_EXPORT_CEILING = 279;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
