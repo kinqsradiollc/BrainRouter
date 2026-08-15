@@ -901,9 +901,23 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   existing-event compatibility projection. The reducer has no emitter yet — that is A40-7 — and it is
   recorded as an orphan in the E1 sweep rather than hidden, with the dead-export ceiling rise named
   in the same place.
-- [ ] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
+- [~] **A40-6 — PARTIAL. Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.
+
+  **Shipped in `6a5fb0a29`** (`packages/core/src/orchestration/execution/runStore.ts`): per-launch run
+  paths, pagination, retention, immutable definition/subworkflow hashes, separated safe and protected
+  payloads (resume material 0600 and never in a listing), atomic revisioned writes with
+  compare-and-set, torn-pair resume refusal, and crash reconciliation of `running` to `interrupted`.
+  Eleven tests, mutation-proved.
+
+  Its own retention test found a real bug before it shipped: prune and reconciliation read through
+  the PAGED listing, whose cap (50) is below the retention bound (100), so pruning could never fire
+  and a crash reconciled only the newest page. Both now scan every run.
+
+  **Still open for this row:** the legacy `WorkflowRun` migration. Nothing writes to this store yet
+  either — that is A40-7 — so it is recorded in the E1 sweep as a documented orphan with the
+  dead-export ceiling rise (274 → 279, five slots) named in the same place rather than absorbed.
 - [ ] **A40-7 — Adapt phase plans and saved graphs to the canonical run.** Emit occurrences,
   traversals, attempts and decisions; preserve typed compatibility failure mappings; and prove
   resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests.
