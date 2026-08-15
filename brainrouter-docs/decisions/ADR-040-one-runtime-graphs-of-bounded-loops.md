@@ -1044,8 +1044,11 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   accessible graph/list fallback, details and authorized transcript drill-down; validate
   source-started browser and Electron.
 
-  **Shipped in `7f2aaa60c`**: a Runs panel over Core's `runsView` — the same projection `/runs`
-  renders, so the two hosts cannot disagree about whether a run failed. Registered in the catalog,
+  **Shipped in `7f2aaa60c`**: a reachable, tested Runs panel SHELL, built to render Core's `runsView`
+  shape. What that commit did NOT ship was the host DATA PATH — `runs.list`/`runs.detail` were never
+  registered — so the panel could only ever draw a permanent empty state, and the "two hosts cannot
+  disagree about whether a run failed" guarantee was not yet true. (The A40-040 remaining-work audit
+  caught this overclaim; it is corrected below.) Registered in the catalog,
   the barrel and the render switch, so it can actually be opened. The list is the primary
   presentation rather than a fallback: a graph is a nicety, a run you cannot read with a screen
   reader is a run you cannot inspect. `stale` is distinguished from `error`, `summary-only` from
@@ -1067,8 +1070,21 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   elsewhere. The production renderer bundle also builds and contains `id:"runs"` and `runs:"work"`,
   so the panel survives a real production build rather than only the dev server.
 
-  **Still open for this row:** driving the panel open in the running app and asserting its rendered
-  contents against live data, plus preview/confirm and authorized transcript drill-down.
+  **The data path is now wired.** `runs.list` and `runs.detail` are registered in the desktop host
+  (`electron/host/queries.ts`), each mirroring the CLI `/runs` handler EXACTLY — same `openDurableRuns`
+  best-effort, same `toRunsListRows`/`toRunDetailView`, same absent snapshot — so the panel and the CLI
+  now render ONE projection from one source, and the "two hosts cannot disagree" guarantee is finally
+  true rather than asserted. It is read-only: the curated `./orchestration/runs` subpath excludes
+  `readDurableRunResumeState`, so no resume material reaches a rendering surface. `queries.runs.test.ts`
+  drives the real `buildQueries` handlers over a seeded durable run and mutation-proves both the
+  registration (rename the handler and the test fails) and the honest projection (`summary-only` rows,
+  an `unavailable` detail with a caveat and an empty node list, `null` for a missing run).
+
+  **Still open for this row:** the explicit-strategy-launch UI (preview/confirm start) and authorized
+  transcript drill-down — both need visual review and the latter crosses the resume-material boundary;
+  a live/stale host push channel to replace the one-shot mount fetch; de-duplicating the panel's local
+  projection types against Core's `RunsListRow`/`RunDetailView`; and driving the panel open in the
+  running app to assert rendered contents against live data.
 - [~] **A40-11 — PARTIAL. Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
