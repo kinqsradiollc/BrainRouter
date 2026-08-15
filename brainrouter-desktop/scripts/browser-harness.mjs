@@ -18,6 +18,23 @@ export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Remove a temp tree, tolerating the Windows post-Chromium race. When Electron
+ * exits, Windows may not have released its handles on the profile (Network/Trust
+ * Tokens, etc.) by the time teardown runs, so rimraf hits `EBUSY` — which
+ * `force: true` does NOT swallow (it only ignores ENOENT). Node's own
+ * maxRetries/retryDelay backoff is the intended remedy, and it kept flaking the
+ * required Electron (windows) gate on release PRs before this. A final swallow
+ * keeps a cleanup failure from failing an otherwise-green run.
+ */
+function removeTree(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 12, retryDelay: 150 });
+  } catch {
+    /* best-effort: a leftover temp dir is not a test failure */
+  }
+}
+
 export async function startFixtureServer() {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -251,7 +268,7 @@ export async function launchElectron({ desktopRoot, electronApp = '', prepareLay
     try {
       await prepareLayout(layout);
     } catch (error) {
-      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+      removeTree(temporaryRoot);
       throw error;
     }
   }
@@ -284,12 +301,12 @@ export async function launchElectron({ desktopRoot, electronApp = '', prepareLay
       async stop() {
         renderer.close();
         await processHandle.stop();
-        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        removeTree(temporaryRoot);
       },
     };
   } catch (error) {
     await processHandle.stop();
-    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    removeTree(temporaryRoot);
     throw error;
   }
 }
@@ -365,12 +382,12 @@ export async function launchComparisonBrowser({ browserPath = '', initialUrl }) 
         pageSession.close();
         browserSession.close();
         await processHandle.stop();
-        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        removeTree(temporaryRoot);
       },
     };
   } catch (error) {
     await processHandle.stop();
-    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    removeTree(temporaryRoot);
     throw error;
   }
 }

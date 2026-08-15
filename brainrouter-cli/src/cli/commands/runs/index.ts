@@ -14,6 +14,7 @@ import {
   toRunDetailView,
   runsJson,
   runDetailJson,
+  openDurableRuns,
 } from '@kinqs/brainrouter-core/orchestration/runs';
 import type { CommandContext } from '../_context.js';
 
@@ -42,6 +43,12 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
   const workspaceRoot = ctx.agent.workspaceRoot;
 
   if (positional[0] === 'help') { printUsage(); return true; }
+
+  // A40-6: bring the store up to date before showing it — migrate legacy
+  // ledgers from before durable runs existed, and reconcile runs a crash left
+  // "running". Best-effort and once-per-process; a maintenance failure must not
+  // stop the user seeing their runs.
+  try { openDurableRuns(workspaceRoot); } catch { /* listing still works */ }
 
   if (!positional.length) {
     const rows = toRunsListRows(listDurableRuns(workspaceRoot, { limit: 20 }).runs);

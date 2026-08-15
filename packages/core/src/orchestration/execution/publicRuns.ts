@@ -22,3 +22,11 @@ export {
   type RunsListRow,
   type RunDetailView,
 } from './runsView.js';
+
+// A40-6: bringing the store up to date (migrate legacy ledgers, reconcile
+// crashed runs) is maintenance, not resume material, so it belongs on the
+// curated surface a host may call before it lists.
+export {
+  openDurableRuns,
+  type DurableRunsOpenResult,
+} from './runStoreMigration.js';
