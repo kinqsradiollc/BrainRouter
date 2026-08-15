@@ -942,9 +942,26 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
   conversation corpora before changing any profile's default.
-- [ ] **A40-9 — Ship CLI parity and explicit strategy launch.** `/runs` for normal and goal-linked
+- [~] **A40-9 — PARTIAL. Ship CLI parity and explicit strategy launch.** `/runs` for normal and goal-linked
   turns, preview/confirm start, live updates, retained replay, `--json`, goal continuation, and
   authorized child transcript drill-down from the shared projection.
+
+  **Shipped in `80aacffce`**: `/runs` lists a workspace's runs and shows one in detail, with
+  `--json`, registered in the REPL so it is reachable rather than merely present. The projection
+  lives in Core (`orchestration/execution/runsView.ts`, exposed as the curated
+  `./orchestration/runs` subpath) so Desktop Runs renders the SAME answer — two hosts formatting the
+  same events independently is how they come to disagree about whether something failed.
+
+  A view that lacks the events says so: `unavailable` with a caveat, or `gapped` with one. It never
+  draws an empty node list, because an empty map without a caveat reads as "this run did nothing".
+  Completeness comes from the snapshot and is never inferred from status.
+
+  `readDurableRunResumeState` is deliberately absent from the public subpath — a rendering surface
+  has no business holding resume material, and the package-boundary check enforces that rather than
+  a comment asking nicely.
+
+  **Still open for this row:** preview/confirm start, live updates, retained replay, goal
+  continuation, and authorized child-transcript drill-down.
 - [ ] **A40-10 — Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
   Design with normal no-goal turns visible by default, preview/confirm, live/reconnect state,
   accessible graph/list fallback, details and authorized transcript drill-down; validate
