@@ -882,10 +882,25 @@ accepted decision record checks only A40-0; it makes no implementation claim.
 
   **Still open for this row:** the compatibility records for current profile-stage consumers. The
   vocabulary exists; nothing is emitting it yet, which is A40-5's reducer and A40-7's adapters.
-- [ ] **A40-5 — Add the Core reducer and bounded session store.** Idempotent/gap-aware reduction,
+- [~] **A40-5 — PARTIAL. Add the Core reducer and bounded session store.** Idempotent/gap-aware reduction,
   snapshot watermarks, no-goal direct/profile instrumentation plus optional goal grouping,
   stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behavior, and
   existing-event compatibility projection.
+
+  **Shipped in `e6d691d9b`: idempotent, gap-aware reduction with watermarks and a bounded store**
+  (`packages/core/src/orchestration/execution/reducer.ts`). Replays are ignored by per-event
+  identity; out-of-order events are buffered rather than applied and drain in order once the hole
+  fills; completeness (`complete | gapped | unavailable`) is reported separately from run status; a
+  late event can neither resurrect a terminal run nor rewrite one terminal state into another. The
+  store evicts oldest-first and reports truncation as `gapped`, so a bounded store never presents
+  itself as the whole story. Thirteen tests, mutation-proved — one of which had to be rewritten
+  because it passed with idempotency removed.
+
+  **Still open for this row:** no-goal direct/profile instrumentation, optional goal grouping,
+  stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behaviour, and the
+  existing-event compatibility projection. The reducer has no emitter yet — that is A40-7 — and it is
+  recorded as an orphan in the E1 sweep rather than hidden, with the dead-export ceiling rise named
+  in the same place.
 - [ ] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.
