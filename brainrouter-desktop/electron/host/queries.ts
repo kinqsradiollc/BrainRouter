@@ -168,6 +168,16 @@ import {
 // BROWSER — story prompt/validation helpers + the driver step types the
 // browser:* handlers below use. The host instance itself arrives via ctx.browser.
 import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-core/browser';
+// ADR-040 A40-10 — the SAME curated run projection the CLI /runs renders, so the
+// two hosts cannot disagree about what a run looks like. Read-only: the resume
+// material (readDurableRunResumeState) is deliberately NOT on this surface.
+import {
+  openDurableRuns,
+  listDurableRuns,
+  readDurableRunSafe,
+  toRunsListRows,
+  toRunDetailView,
+} from '@kinqs/brainrouter-core/orchestration/runs';
 // IPC boundary: the browser:* channel is agent-reachable, so validate every input.
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
 import type { BrowserStep, BrowserStepResult } from '../browserHost.js';
@@ -823,6 +833,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           typeof args.name === 'string' ? args.name : '',
         ),
       }),
+      // ADR-040 A40-10 — Desktop Runs. These mirror the CLI /runs handlers EXACTLY
+      // (same openDurableRuns best-effort, same toRunsListRows/toRunDetailView, same
+      // absent snapshot) so the panel and the CLI render one projection, not two.
+      'runs.list': () => {
+        // Migration/reconciliation is maintenance, not resume material; listing
+        // still works if it throws.
+        try { openDurableRuns(workspaceRoot); } catch { /* listing still works */ }
+        return { runs: toRunsListRows(listDurableRuns(workspaceRoot, { limit: 20 }).runs) };
+      },
+      'runs.detail': (args) => {
+        const runId = typeof args.runId === 'string' ? args.runId : '';
+        const record = readDurableRunSafe(workspaceRoot, runId);
+        if (!record) return { run: null };
+        // No per-run event journal is retained yet (A40-9), so the snapshot is
+        // absent and toRunDetailView says so honestly rather than drawing an
+        // empty map as though it were the whole run.
+        return { run: toRunDetailView(record, undefined) };
+      },
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
       // pretend to be the general connector abstraction.
