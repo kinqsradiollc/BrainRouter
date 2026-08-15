@@ -210,6 +210,16 @@ const ORPHAN_MODULE_CEILING = 26;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   [
+    'orchestration/execution/adaptiveActivation.ts',
+    'ADR-040 A40-8. Eligibility, the direct safe baseline, and diagnostics for '
+    + 'adaptive profile selection. It lands unwired ON PURPOSE: A40-8 forbids '
+    + 'changing any profile default until fresh/elliptical/contextless '
+    + 'conversation corpora pass, and those corpora do not exist. Wiring it into '
+    + 'the turn path before that gate would be how a default quietly moves. '
+    + 'execution-adaptive-activation.test.ts pins the gate SHUT, so flipping '
+    + 'DEFAULTS_ARE_CORPUS_GATED without corpus results fails loudly.',
+  ],
+  [
     'orchestration/execution/publicRuns.ts',
     'ADR-040 A40-9. The curated public surface for run views, and it IS reached: '
     + "brainrouter-cli/src/cli/commands/runs/index.ts imports it as "
@@ -602,9 +612,13 @@ function deadExports(): string[] {
  * number. What remains is A40-7's own frontier: the adapter's exports are dead
  * until A40-9 and A40-10 render the map. Named, attributed, and it falls when
  * they land. A40-9 then took it 280 → 279 by giving the run views a real
- * consumer: the ratchet falling, which is the direction it is for.
+ * consumer: the ratchet falling, which is the direction it is for. A40-8 raised
+ * it 279 → 281 for `adaptiveActivation.ts`, which is unwired DELIBERATELY —
+ * wiring it before its corpus gate is how a profile default moves without
+ * anyone deciding to move it. Two slots, named, and they fall when the corpora
+ * exist and the gate is opened on purpose.
  */
-const DEAD_EXPORT_CEILING = 279;
+const DEAD_EXPORT_CEILING = 281;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
