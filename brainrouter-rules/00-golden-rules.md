@@ -178,3 +178,19 @@ else, remember these. Each links to the topical file with the full context.
     writer map, and `navigator.locks`, which the browser releases when the tab
     dies. Reach for the authoritative source first; a timer is what you use when
     there genuinely is not one. → [`02`](02-code-style-and-conventions.md)
+
+31. **A re-export barrel is not a safe import source for anything you call at
+    module load.** `toolSpecs.ts` built its tool specs at import time from
+    factories it pulled through `orchestration/tools.js`, which only re-exports
+    them. ADR-040 A40-2 gave that barrel new imports and closed a cycle back to
+    `toolSpecs`; from then on every binding it took through the barrel was
+    undefined when the factories ran. The symptom is not a failing assertion —
+    it is `X is not a function` during import, and fourteen brain test FILES
+    reported zero tests instead of one failure. Plain Node tolerated the cycle;
+    vitest did not, so it read as an environment artifact for three rounds
+    (byte-identical dist, live symlink, cleared caches, clean rebuild — all
+    dead ends). What identified it was hoisting ONE symbol out of the barrel
+    and watching the error move to the NEXT symbol in the same import block.
+    Import from the module that DEFINES a value when you invoke it at load
+    time, and treat "the whole file collected zero tests" as an import-time
+    failure rather than a flaky suite. → [`03`](03-core-runtime.md)
