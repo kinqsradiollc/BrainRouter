@@ -208,7 +208,19 @@ const ORPHAN_MODULE_CEILING = 26;
  * silently widens the ceiling above by one — which is why the test below
  * requires every entry to still BE an orphan.
  */
-const KNOWN_UNWIRED = new Map<string, string>([]);
+const KNOWN_UNWIRED = new Map<string, string>([
+  [
+    'orchestration/execution/reducer.ts',
+    'ADR-040 A40-5. The execution-map reducer lands BEFORE its emitter by the '
+    + "ADR's own dependency-ordered board: A40-7 adapts phase plans and saved "
+    + 'graphs to emit the canonical run, and A40-9/A40-10 render it. It is '
+    + 'covered by execution-reducer.test.ts, including mutation runs for '
+    + 'idempotency, gap-awareness and terminal finality. This entry is the '
+    + 'honest way to hold that gap: it is visible, it is dated to a named '
+    + 'successor slice, and the test below fails the moment the module stops '
+    + 'being an orphan — so it cannot quietly become permanent.',
+  ],
+]);
 
 test('E1 — the documented-orphan list is honest in both directions', () => {
   // The sweep must not launder its own author's orphans, and it must not carry
@@ -573,8 +585,20 @@ function deadExports(): string[] {
  * tested behaviour inside a merge commit is not the merge's call to make. Each
  * must be wired or deleted; when that happens this comment goes and the number
  * falls with it.
+ *
+ * **It rose a second time, on purpose: 273 → 274, ADR-040 A40-5.**
+ * `orchestration/execution/reducer.ts` is the execution-map reducer, and it
+ * lands BEFORE its emitter because the ADR's own dependency-ordered board puts
+ * the reducer at A40-5 and the adapters that feed it at A40-7. Its exports are
+ * dead by construction until then — the same single fact the module's
+ * `KNOWN_UNWIRED` entry records, which is why this is one slot and not several.
+ *
+ * Following the precedent above rather than inventing an exemption: the rise is
+ * named, it is attributed to a specific successor slice, and it falls when A40-7
+ * wires the emitter. If A40-7 never lands, this line is the evidence that the
+ * reducer should be deleted rather than kept as scenery.
  */
-const DEAD_EXPORT_CEILING = 273;
+const DEAD_EXPORT_CEILING = 274;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
