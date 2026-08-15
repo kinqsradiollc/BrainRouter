@@ -842,10 +842,28 @@ accepted decision record checks only A40-0; it makes no implementation claim.
      cannot hold the loop open long enough to fire — converts that silent void into one legible
      failure. Pass count went 5 -> 11 on that change alone.
 
-- [ ] **A40-3 — Make saved graph execution fail closed and bounded.** Wire the shared approval port,
+- [~] **A40-3 — PARTIAL. Make saved graph execution fail closed and bounded.** Wire the shared approval port,
   block when absent, enforce agent-node role/access configuration, propagate cancellation, apply
   cumulative execution budgets and required/optional failure rules, and prove bounded loop/
   subworkflow behavior.
+
+  **Shipped in `e9cc9b32b`: the fail-closed half.** The `approval` node auto-passed when no approval
+  port was wired — the one node type whose purpose is to stop and ask a person was a no-op in exactly
+  the configuration where nobody is watching, and an existing test asserted that by name, so the bug
+  was written down as the specification. Unwired approval is now an error; a deliberately unattended
+  run opts in with `allowUnattendedApproval` and each such node is flagged `unattended: true` so the
+  decision shows up in the map instead of being inferred from an absent callback.
+
+  Bounded, too: `MAX_SUBWORKFLOW_DEPTH` bounds NESTING, not WORK, so a shallow graph with a wide loop
+  ran unboundedly without ever nesting. `executionBudget` caps total node executions per run and the
+  counter is shared by reference with every subworkflow; an `AbortSignal` is checked before each node.
+  Seven tests, each mutation-proved — one of which had to be rewritten because it passed whether the
+  budget was shared or reset.
+
+  **Still open for this row:** agent-node role/access configuration enforcement, and the
+  required/optional node failure rules. The `run_workflow_graph` production block in
+  `toolAdapterInvocationPhase.ts` stays until those land — the block is what keeps this fail-closed
+  in the meantime, so it is deliberately NOT removed by this commit.
 - [ ] **A40-4 — Add dependency-free execution-map records and events.** Closed statuses, logical
   nodes plus occurrence/traversal identities, execution-scoped event sequence/version fields,
   redaction/size bounds, and compatibility records for current profile-stage consumers.
