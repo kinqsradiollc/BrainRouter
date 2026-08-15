@@ -39,7 +39,13 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let index = 0; index < 200; index += 1) {
+  // 10s budget (1000 x 10ms), not 2s. These predicates wait on an async service
+  // to start its transport, poll its inbox, and reach a state — comfortably under
+  // a second locally, but a loaded CI runner sharing the box with the full
+  // workspace suite can miss a 2s window without anything being wrong. The
+  // assertions are unchanged; only the patience is. A genuinely stuck state still
+  // fails, just later.
+  for (let index = 0; index < 1000; index += 1) {
     if (predicate()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
