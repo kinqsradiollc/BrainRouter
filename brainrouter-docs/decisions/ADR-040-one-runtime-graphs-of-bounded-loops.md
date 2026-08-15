@@ -820,7 +820,21 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   the launch IS rejected. So the revocation works and the authority model is sound; what is broken is
   that some state leaks between tests in this file and blinds the check on later runs. Resetting the
   CLI-knob and config-loader caches between temp workspaces (already done in `_helpers.ts`) is not
-  sufficient, so the leaked state is something else and is still unidentified.
+  sufficient.
+
+  **The poisoner is now identified by bisection**, which is a materially better position than
+  "something leaks". Pairing the downgrade test with each earlier test in turn isolates it to
+  `ADR-040 A40-2 reviewed pre-tool hooks execute the approval-time A snapshot across an A-to-B-to-A
+  swap`. With any other predecessor the downgrade test passes; with that one it fails.
+
+  Two candidates are ELIMINATED rather than assumed: `_resetCliKnobsCache()` does clear
+  `cachedOverrides`, so that test's hooks knob override does not survive it; and adding
+  `_resetConfigCache()` to `_helpers.ts` changed nothing. The remaining suspects are that test's
+  other global mutations — `resetExtensionContributions()` and the hook files it writes and swaps —
+  which it sets up but does not tear down.
+
+  Recorded this way deliberately: "one named test poisons two named tests, and here is what it is
+  NOT" is actionable in minutes. "Something leaks" is not.
 
   This is recorded precisely because the opposite reading — "a launch survives an access downgrade" —
   is what the raw failure looks like, and it would be a serious security claim to make on evidence
