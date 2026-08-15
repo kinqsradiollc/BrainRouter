@@ -950,10 +950,19 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   indexes so a forgotten execution cannot reappear in a listing or a child-drill. Eight tests;
   archive-vs-delete and fork isolation mutation-proved.
 
-  **Still open for this row:** loop budgets and optional goal grouping (both need declaredLimits /
-  goal ids EMITTED, which is A40-7's remaining emission work), and the existing-event compatibility
-  projection (that is A40-4's `profileStageCompat`). These are cross-row, not gaps in the store
-  itself.
+  **Loop budgets now shipped.** A loop node emits its budget — iterations ALLOWED (`declared`, the same
+  1..100 clamp it ran under) vs USED (`observed`, the count it reported) — and the reducer projects it
+  as `ExecutionSnapshot.loopBudgets`. A loop that ran to its ceiling and one that stopped early look
+  identical unless both numbers are kept, so a bounded loop can be SEEN to have stayed bounded rather
+  than merely asserted to have. The budget carries its own `nodeId` so it is not mistaken for an
+  occurrence; three tests, the real-loop emission mutation-proved. The existing-event compatibility
+  projection is also done — it is A40-4's `profileStageCompat`, shipped.
+
+  **Still open for this row:** the OPTIONAL goal grouping. It is genuinely gated, not deferred by
+  choice: there is no `goalId` anywhere in the emission or launch path today (only an unused
+  `scopeKind: 'goal'` enum), so a `#byGoal` index would be inert — it needs a goal-launch linkage to
+  emit against first, which is A40-9's goal-continuation work. The reducer side is a few lines mirroring
+  the existing session index and lands the moment there is a goal id to group by.
 - [x] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.

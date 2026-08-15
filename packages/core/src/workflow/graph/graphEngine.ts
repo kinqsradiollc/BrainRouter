@@ -103,6 +103,9 @@ export interface GraphExecutionEmission {
   decision?: { kind: string; outcome: string; reasonCodes: readonly string[] };
   /** A40-7 — bounded, typed terminal reason codes on a failed run's final event. */
   reasonCodes?: readonly string[];
+  /** A40-5 — a loop node's budget: iterations allowed vs used. Carries its own
+   *  nodeId so it is not mistaken for a node occurrence by the reducer. */
+  loopBudget?: { nodeId: string; declared: number; observed: number };
 }
 
 export interface NodeRunRecord {
@@ -540,6 +543,17 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
             reasonCodes: approvedOutput?.unattended ? ['unattended'] : [],
           },
         });
+      }
+      if (node.type === 'loop') {
+        // ADR-040 A40-5 — a loop's BUDGET: what it was allowed vs what it used.
+        // Declared is the same clamp the node ran under (1..100); observed is the
+        // iteration count it reported. A loop that ran to its ceiling looks
+        // identical to one that stopped early UNLESS both numbers are recorded.
+        const declared = Math.max(1, Math.min(100, Math.floor(Number((node.data as { maxIterations?: unknown } | undefined)?.maxIterations ?? 10)) || 10));
+        const observed = Math.max(0, Math.floor(Number((rec.output as { iterations?: unknown } | undefined)?.iterations)) || 0);
+        // nodeId lives INSIDE loopBudget, not at the top level: a top-level nodeId
+        // would make the reducer read this as another node occurrence.
+        opts.emit({ loopBudget: { nodeId: id, declared, observed } });
       }
       // a sub-workflow node that failed should fail the parent run (fail-closed)
       if (rec.status === 'error') {
