@@ -21,6 +21,7 @@ import {
   isExecutionStatus,
   isNodeOccurrenceStatus,
   occurrenceKey,
+  boundReasonCodes,
   type ExecutionEvent,
   type ExecutionNodeOccurrence,
   type ExecutionStatus,
@@ -34,7 +35,23 @@ export const EXECUTION_STORE_BOUNDS = {
   maxExecutions: 200,
   maxEventsPerExecution: 2_000,
   maxOccurrencesPerExecution: 1_000,
+  maxDecisionsPerExecution: 1_000,
 } as const;
+
+/**
+ * A40-7 — a typed decision the run made (an approval granted, a node degraded),
+ * projected from the event stream. `kind` is recorded AS EMITTED rather than
+ * policed here, so an unfamiliar decision kind is surfaced, not silently dropped.
+ * `reasonCodes` are bounded; these are safe codes, never chain-of-thought.
+ */
+export interface ProjectedDecision {
+  decisionId: string;
+  kind: string;
+  nodeExecutionId?: string;
+  outcome: string;
+  reasonCodes: readonly string[];
+  decidedAt: string;
+}
 
 export interface ExecutionSnapshot {
   executionId: string;
@@ -44,6 +61,8 @@ export interface ExecutionSnapshot {
   /** Highest contiguous sequence applied. Everything at or below this is known. */
   watermark: number;
   occurrences: readonly ExecutionNodeOccurrence[];
+  /** A40-7 — decisions the run made, in the order they were observed. */
+  decisions: readonly ProjectedDecision[];
   usage: ExecutionUsage;
   /** Sequences observed but NOT applied because something before them is missing. */
   pendingSequences: readonly number[];
@@ -71,6 +90,7 @@ interface ExecutionState {
   /** Buffered out-of-order events, keyed by sequence. */
   pending: Map<number, ExecutionEvent>;
   occurrences: Map<string, ExecutionNodeOccurrence>;
+  decisions: ProjectedDecision[];
   usage: ExecutionUsage;
   eventCount: number;
   truncated: boolean;
@@ -155,6 +175,7 @@ export class ExecutionSessionStore {
         seenEventIds: new Set(),
         pending: new Map(),
         occurrences: new Map(),
+        decisions: [],
         usage: emptyExecutionUsage(),
         eventCount: 0,
         truncated: false,
@@ -217,6 +238,33 @@ export class ExecutionSessionStore {
   #fold(state: ExecutionState, event: ExecutionEvent): void {
     const payload = (event.payload ?? {}) as StatusPayload & OccurrencePayload;
 
+    // A40-7 — project any decision this event carries (an approval granted, a
+    // node degraded). Independent of the status/occurrence branches below: one
+    // event can advance a node AND record the decision made at it, so this runs
+    // first and unconditionally. Deduplication already happened in `apply`, so a
+    // replayed event does not double-record its decision.
+    const rawDecision = (event.payload as { decision?: unknown } | undefined)?.decision;
+    if (rawDecision && typeof rawDecision === 'object') {
+      if (state.decisions.length >= EXECUTION_STORE_BOUNDS.maxDecisionsPerExecution) {
+        state.truncated = true;
+      } else {
+        const d = rawDecision as { kind?: unknown; outcome?: unknown; reasonCodes?: unknown };
+        state.decisions.push({
+          decisionId: event.eventId,
+          kind: typeof d.kind === 'string' ? d.kind : 'unknown',
+          nodeExecutionId: event.nodeExecutionId
+            ?? (typeof payload.nodeId === 'string' ? payload.nodeId : undefined),
+          outcome: typeof d.outcome === 'string' ? d.outcome : '',
+          reasonCodes: boundReasonCodes(
+            Array.isArray(d.reasonCodes)
+              ? d.reasonCodes.filter((c): c is string => typeof c === 'string')
+              : [],
+          ),
+          decidedAt: event.emittedAt,
+        });
+      }
+    }
+
     if (typeof payload.status === 'string' && !('nodeId' in payload)) {
       const next = payload.status;
       // Terminal is final; a late event must not resurrect a finished run.
@@ -273,6 +321,7 @@ export class ExecutionSessionStore {
       completeness: state.gapped || state.truncated ? 'gapped' : 'complete',
       watermark: state.watermark,
       occurrences: Object.freeze([...state.occurrences.values()]),
+      decisions: Object.freeze([...state.decisions]),
       usage: state.usage,
       pendingSequences: Object.freeze([...state.pending.keys()].sort((a, b) => a - b)),
       truncated: state.truncated,

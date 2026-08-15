@@ -138,6 +138,13 @@ test('an approval decision reaches the canonical map', async () => {
   });
   assert.equal(snapshot.completeness, 'complete');
   assert.ok(snapshot.occurrences.some((o) => o.nodeId === 'ap'));
+  // The DECISION, not just the node. This assertion is the point of the test's
+  // name — and it is exactly what was missing while the reducer dropped every
+  // decision, letting this test pass without the approval ever reaching the map.
+  const approval = snapshot.decisions.find((d) => d.kind === 'approval');
+  assert.ok(approval, 'the approval decision is projected into the snapshot');
+  assert.equal(approval!.outcome, 'approved');
+  assert.equal(approval!.nodeExecutionId, 'ap');
 });
 
 test('resume state is persisted DURING the run, not only at the end', async () => {
