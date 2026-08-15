@@ -133,3 +133,54 @@ test('an aborted signal stops the run at the next node', async () => {
   assert.equal(result.ok, false);
   assert.match(result.error ?? '', /canceled/i);
 });
+
+test('a REQUIRED node failing fails the run — fail-closed is the default', async () => {
+  // A node is required unless its definition says otherwise, so forgetting to
+  // mark one cannot silently turn a failure into a shrug.
+  const graph: WorkflowGraph = {
+    nodes: [
+      { id: 't', type: 'trigger' },
+      { id: 'boom', type: 'agent', data: { prompt: 'x' } },
+      { id: 'o', type: 'output', data: { template: 'done' } },
+    ],
+    edges: [
+      { id: 'e1', source: 't', target: 'boom' },
+      { id: 'e2', source: 'boom', target: 'o' },
+    ],
+  };
+  const result = await runGraph(graph, {
+    runAgent: async () => { throw new Error('exploded'); },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /boom/);
+});
+
+test('an OPTIONAL node failing degrades the run instead of failing it', async () => {
+  const graph: WorkflowGraph = {
+    nodes: [
+      { id: 't', type: 'trigger' },
+      { id: 'extra', type: 'agent', data: { prompt: 'x', optional: true } },
+      { id: 'o', type: 'output', data: { template: 'done' } },
+    ],
+    edges: [
+      { id: 'e1', source: 't', target: 'extra' },
+      { id: 'e2', source: 't', target: 'o' },
+    ],
+  };
+  const result = await runGraph(graph, {
+    runAgent: async () => { throw new Error('exploded'); },
+  });
+  assert.equal(result.ok, true, 'the rest of the run continues');
+  assert.equal(result.finalOutput, 'done');
+  assert.deepEqual([...(result.degradedNodes ?? [])], ['extra'],
+    'the run reports WHAT did not happen rather than claiming it all worked');
+});
+
+test('a clean run reports no degradation, so degraded means something', async () => {
+  const graph: WorkflowGraph = {
+    nodes: [{ id: 't', type: 'trigger' }, { id: 'o', type: 'output', data: { template: 'done' } }],
+    edges: [{ id: 'e1', source: 't', target: 'o' }],
+  };
+  const result = await runGraph(graph, echo);
+  assert.deepEqual([...(result.degradedNodes ?? [])], []);
+});

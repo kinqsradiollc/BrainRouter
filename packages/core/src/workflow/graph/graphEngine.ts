@@ -115,6 +115,11 @@ export interface NodeRunRecord {
 
 export interface GraphRunResult {
   ok: boolean;
+  /**
+   * Optional nodes that failed. Non-empty means the run finished DEGRADED: it
+   * produced a result, and part of what was asked for did not happen.
+   */
+  degradedNodes?: readonly string[];
   order: string[];
   nodes: Record<string, NodeRunRecord>;
   /** Text of the last `output` node that ran, if any. */
@@ -461,6 +466,7 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
   const records: Record<string, NodeRunRecord> = {};
   const ctx: InterpContext = { nodes: {}, vars: { ...(graph.vars ?? {}) } };
   const activeEdges = new Set<string>();
+  const degraded: string[] = [];
   let finalOutput: string | undefined;
 
   const isActive = (nodeId: string): boolean => {
@@ -514,7 +520,31 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
         });
       }
       // a sub-workflow node that failed should fail the parent run (fail-closed)
-      if (rec.status === 'error') return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${rec.error ?? 'error'}` };
+      if (rec.status === 'error') {
+        // ADR-040 A40-3 — required vs optional failure.
+        //
+        // Fail-closed is the DEFAULT: a node is required unless its definition
+        // says otherwise, so forgetting to mark one cannot silently turn a
+        // failure into a shrug. An optional node that fails stops its own
+        // branch and lets the rest of the run continue, and the run is reported
+        // as DEGRADED rather than succeeded — "it worked" and "it worked apart
+        // from the bits that did not" are different answers, and collapsing
+        // them is how a partial result gets treated as a whole one.
+        const optional = (node.data as { optional?: unknown } | undefined)?.optional === true;
+        if (!optional) {
+          return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${rec.error ?? 'error'}` };
+        }
+        degraded.push(id);
+        opts.emit({
+          nodeId: id,
+          decision: {
+            kind: 'degradation',
+            outcome: 'optional_node_failed',
+            reasonCodes: ['optional', id],
+          },
+        });
+        continue;
+      }
       if (node.type === 'output' && typeof (rec.output as { text?: unknown })?.text === 'string') {
         finalOutput = (rec.output as { text: string }).text;
       }
@@ -532,9 +562,22 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       records[id] = { id, type: node.type, status: 'error', error: message };
-      return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${message}` };
+      // A node that THROWS and a node that returns `status: 'error'` are the
+      // same event to everyone downstream, so the optional rule has to hold on
+      // both paths. Applying it to only one is how "optional" comes to mean
+      // "optional unless it fails in the other way".
+      const optionalOnThrow = (node.data as { optional?: unknown } | undefined)?.optional === true;
+      if (!optionalOnThrow) {
+        return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${message}` };
+      }
+      degraded.push(id);
+      opts.emit({
+        nodeId: id,
+        decision: { kind: 'degradation', outcome: 'optional_node_failed', reasonCodes: ['optional', id] },
+      });
+      continue;
     }
   }
 
-  return { ok: true, order, nodes: records, finalOutput };
+  return { ok: true, order, nodes: records, finalOutput, degradedNodes: Object.freeze([...degraded]) };
 }
