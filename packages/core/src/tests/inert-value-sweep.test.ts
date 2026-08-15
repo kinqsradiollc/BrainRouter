@@ -210,6 +210,17 @@ const ORPHAN_MODULE_CEILING = 26;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   [
+    'orchestration/execution/optimizationSubgraph.ts',
+    'ADR-040 A40-11. Domain-neutral measurement, counter-metric, verifier, '
+    + 'arbitration, rollback and drift/audit decisions, with the Engineering '
+    + 'build loop retained as ONE instance of the shape rather than the '
+    + 'definition. It is the vocabulary and the judgement; the callers that '
+    + 'replace the current build loop are the migration this row calls for, and '
+    + 'they come after it, not with it. Covered by '
+    + 'execution-optimization-subgraph.test.ts with mutation runs for the '
+    + 'counter-metric gate, verifier precedence and arbitration.',
+  ],
+  [
     'orchestration/execution/adaptiveActivation.ts',
     'ADR-040 A40-8. Eligibility, the direct safe baseline, and diagnostics for '
     + 'adaptive profile selection. It lands unwired ON PURPOSE: A40-8 forbids '
@@ -616,9 +627,13 @@ function deadExports(): string[] {
  * it 279 → 281 for `adaptiveActivation.ts`, which is unwired DELIBERATELY —
  * wiring it before its corpus gate is how a profile default moves without
  * anyone deciding to move it. Two slots, named, and they fall when the corpora
- * exist and the gate is opened on purpose.
+ * exist and the gate is opened on purpose. A40-11 raised it 281 → 285 for
+ * `optimizationSubgraph.ts`: the governance vocabulary lands before the callers
+ * that migrate the Engineering build loop onto it, which is the sequence that
+ * row asks for — generalise first, migrate second, with the old path retained
+ * meanwhile. Four slots, named, falling when the migration lands.
  */
-const DEAD_EXPORT_CEILING = 281;
+const DEAD_EXPORT_CEILING = 285;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
