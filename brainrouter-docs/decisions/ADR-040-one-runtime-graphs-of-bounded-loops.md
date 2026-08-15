@@ -999,9 +999,14 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   from the worktree's catalog, and `RunsPanel.tsx` compiles and serves (HTTP 200) with its exported
   helpers intact.
 
-  **Still open for this row:** Electron validation (the browser half is done, the packaged-host half
-  is not), driving the panel open and asserting its rendered contents against live data, plus
-  preview/confirm and authorized transcript drill-down.
+  **Electron validation: RUN.** The Electron host builds clean from this worktree and its full
+  main-process suite passes (559/559) with the new panel id — the check that matters there, since an
+  added `PanelId` is exactly the kind of change that breaks a host enum or a golden inventory
+  elsewhere. The production renderer bundle also builds and contains `id:"runs"` and `runs:"work"`,
+  so the panel survives a real production build rather than only the dev server.
+
+  **Still open for this row:** driving the panel open in the running app and asserting its rendered
+  contents against live data, plus preview/confirm and authorized transcript drill-down.
 - [~] **A40-11 — PARTIAL. Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
