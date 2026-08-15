@@ -240,6 +240,18 @@ const KNOWN_UNWIRED = new Map<string, string>([
     + 'cannot see the wire. Verified by reading that file, not assumed.',
   ],
   [
+    'orchestration/execution/phasePlanAdapter.ts',
+    'ADR-040 A40-7. Adapts a phase-plan run to the canonical execution map — the '
+    + 'phase-plan counterpart to graphAdapter.ts. It is a pure hook factory, '
+    + 'landed and tested (execution-phase-plan-adapter.test.ts, partial->degraded '
+    + 'mutation-proved) BEFORE its wiring, because wiring it meaningfully means '
+    + 'sending its snapshot to the durable store on the live /build path (4 '
+    + 'executePhasePlan call sites + the repair loop + finish timing), which is '
+    + 'its own end-to-end-tested slice. Same terms as graphAdapter had before A40-7 '
+    + 'wired it: named, dated to a specific next slice, and it leaves the sweep '
+    + 'the moment executePhasePlan composes these hooks.',
+  ],
+  [
     'orchestration/execution/graphAdapter.ts',
     'ADR-040 A40-7. Adapts a saved graph run to the canonical execution map: it '
     + 'is the module that WIRED the A40-5 reducer and the A40-6 durable store, '
@@ -632,8 +644,14 @@ function deadExports(): string[] {
  * that migrate the Engineering build loop onto it, which is the sequence that
  * row asks for — generalise first, migrate second, with the old path retained
  * meanwhile. Four slots, named, falling when the migration lands.
+
+ * **It rose again, on purpose: 285 → 286, ADR-040 A40-7.**
+ * `orchestration/execution/phasePlanAdapter.ts` — the phase-plan counterpart to
+ * graphAdapter, landed and tested before its wiring for the same reason graphAdapter
+ * was, and documented in KNOWN_UNWIRED above. It falls when executePhasePlan composes
+ * its hooks.
  */
-const DEAD_EXPORT_CEILING = 285;
+const DEAD_EXPORT_CEILING = 286;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
