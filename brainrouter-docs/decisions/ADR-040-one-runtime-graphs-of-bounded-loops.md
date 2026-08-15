@@ -915,7 +915,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   existing-event compatibility projection. The reducer has no emitter yet — that is A40-7 — and it is
   recorded as an orphan in the E1 sweep rather than hidden, with the dead-export ceiling rise named
   in the same place.
-- [~] **A40-6 — PARTIAL. Add durable execution identity and protected resume storage.** Per-launch run paths,
+- [x] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.
 
@@ -929,9 +929,15 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   the PAGED listing, whose cap (50) is below the retention bound (100), so pruning could never fire
   and a crash reconciled only the newest page. Both now scan every run.
 
-  **Still open for this row:** the legacy `WorkflowRun` migration. Nothing writes to this store yet
-  either — that is A40-7 — so it is recorded in the E1 sweep as a documented orphan with the
-  dead-export ceiling rise (274 → 279, five slots) named in the same place rather than absorbed.
+  **Closed (`runStoreMigration.ts`).** The legacy `WorkflowRun` ledger
+  (`.brainrouter/workflows/<slug>/run.json`) now migrates into the durable store: non-destructive
+  (the legacy ledger stays for the `/workflows` viewer), idempotent (guaranteed by the store's
+  exclusive create, not by an easily-removed guard), and honest — a legacy `running` run becomes
+  `interrupted` because its owning process is gone, `definitionHash` stays null, and no resume state
+  is fabricated. `openDurableRuns()` runs the migration plus crash-reconciliation once per process,
+  and `/runs` (CLI, and the same curated subpath Desktop uses) calls it before listing — which also
+  WIRES the previously-orphaned migration and reconcile, so both leave the E1 sweep. Eight tests,
+  the `running → interrupted` mapping mutation-proved.
 - [~] **A40-7 — PARTIAL. Adapt phase plans and saved graphs to the canonical run.** Emit occurrences,
   traversals, attempts and decisions; preserve typed compatibility failure mappings; and prove
   resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests.
