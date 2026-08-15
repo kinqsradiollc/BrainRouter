@@ -239,17 +239,6 @@ const KNOWN_UNWIRED = new Map<string, string>([
     + 'subpath consumer is invisible to it — the module is wired, the scan just '
     + 'cannot see the wire. Verified by reading that file, not assumed.',
   ],
-  [
-    'orchestration/execution/graphAdapter.ts',
-    'ADR-040 A40-7. Adapts a saved graph run to the canonical execution map: it '
-    + 'is the module that WIRED the A40-5 reducer and the A40-6 durable store, '
-    + 'so both of their entries here are gone — the sweep caught them as stale '
-    + 'the moment they stopped being orphans, which is the whole point of the '
-    + 'honesty test above. This one is now the frontier: nothing renders the map '
-    + 'yet, and that is A40-9 (CLI /runs) and A40-10 (Desktop Runs). Covered by '
-    + 'execution-graph-adapter.test.ts, including a real SIGKILL process-kill '
-    + 'test proving a committed resume point survives a crash.',
-  ],
 ]);
 
 test('E1 — the documented-orphan list is honest in both directions', () => {
@@ -639,7 +628,7 @@ function deadExports(): string[] {
  * lastSequence + best-effort-guard mutation-proved), so its emitter export has a
  * non-test caller and left the dead set. The module also left KNOWN_UNWIRED above.
  */
-const DEAD_EXPORT_CEILING = 285;
+const DEAD_EXPORT_CEILING = 284;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
