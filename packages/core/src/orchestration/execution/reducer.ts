@@ -81,6 +81,8 @@ export interface ExecutionSnapshot {
   decisions: readonly ProjectedDecision[];
   /** A40-7 — edge traversals (taken, skipped, and approval-blocked), in order. */
   traversals: readonly ProjectedTraversal[];
+  /** A40-7 — bounded, typed reason codes for WHY the run ended as it did. */
+  terminalReasonCodes: readonly string[];
   usage: ExecutionUsage;
   /** Sequences observed but NOT applied because something before them is missing. */
   pendingSequences: readonly number[];
@@ -110,6 +112,7 @@ interface ExecutionState {
   occurrences: Map<string, ExecutionNodeOccurrence>;
   decisions: ProjectedDecision[];
   traversals: ProjectedTraversal[];
+  terminalReasonCodes: readonly string[];
   usage: ExecutionUsage;
   eventCount: number;
   truncated: boolean;
@@ -196,6 +199,7 @@ export class ExecutionSessionStore {
         occurrences: new Map(),
         decisions: [],
         traversals: [],
+        terminalReasonCodes: [],
         usage: emptyExecutionUsage(),
         eventCount: 0,
         truncated: false,
@@ -308,6 +312,15 @@ export class ExecutionSessionStore {
       if (isExecutionStatus(next) && canTransitionExecutionStatus(state.status, next)) {
         state.status = next;
       }
+      // A40-7 — carry the run's typed terminal reason codes when it reports them.
+      // Bounded here too: the emitter already maps to safe codes, but the reducer
+      // does not trust its input to have stayed within the width/count bound.
+      const rawReasons = (event.payload as { reasonCodes?: unknown } | undefined)?.reasonCodes;
+      if (Array.isArray(rawReasons)) {
+        state.terminalReasonCodes = boundReasonCodes(
+          rawReasons.filter((c): c is string => typeof c === 'string'),
+        );
+      }
       return;
     }
 
@@ -360,6 +373,7 @@ export class ExecutionSessionStore {
       occurrences: Object.freeze([...state.occurrences.values()]),
       decisions: Object.freeze([...state.decisions]),
       traversals: Object.freeze([...state.traversals]),
+      terminalReasonCodes: state.terminalReasonCodes,
       usage: state.usage,
       pendingSequences: Object.freeze([...state.pending.keys()].sort((a, b) => a - b)),
       truncated: state.truncated,
