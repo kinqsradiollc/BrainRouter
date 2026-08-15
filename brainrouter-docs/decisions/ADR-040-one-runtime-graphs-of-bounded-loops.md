@@ -918,9 +918,26 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   **Still open for this row:** the legacy `WorkflowRun` migration. Nothing writes to this store yet
   either — that is A40-7 — so it is recorded in the E1 sweep as a documented orphan with the
   dead-export ceiling rise (274 → 279, five slots) named in the same place rather than absorbed.
-- [ ] **A40-7 — Adapt phase plans and saved graphs to the canonical run.** Emit occurrences,
+- [~] **A40-7 — PARTIAL. Adapt phase plans and saved graphs to the canonical run.** Emit occurrences,
   traversals, attempts and decisions; preserve typed compatibility failure mappings; and prove
   resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests.
+
+  **Shipped in `0f6541638`** (`orchestration/execution/graphAdapter.ts` + emission in the graph
+  engine). Saved graphs now emit occurrences and approval decisions into the canonical map; the
+  reducer projects them and the durable store persists resume state on EVERY event rather than once
+  at the end — a run that saves only at completion has no resume point at the moment it needs one.
+
+  **The process-kill evidence this row requires is RUN, with a real SIGKILL.** The test spawns a
+  child, waits for it to commit a resume point, kills it, asserts the child died BY SIGNAL, and reads
+  the committed point back from disk. An in-process "crash" unwinds and flushes, which is precisely
+  what a crash does not do.
+
+  This slice repaid the A40-5 and A40-6 E1 debts: the sweep flagged both `KNOWN_UNWIRED` entries as
+  stale the moment their modules gained a caller, and they are deleted rather than left as standing
+  confessions.
+
+  **Still open for this row:** phase-plan (as opposed to saved-graph) adaptation, edge traversals and
+  retry attempts as first-class emissions, and the typed compatibility failure mappings.
 - [ ] **A40-8 — Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
