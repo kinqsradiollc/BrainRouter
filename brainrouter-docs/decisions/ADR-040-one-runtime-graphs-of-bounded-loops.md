@@ -864,9 +864,24 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   required/optional node failure rules. The `run_workflow_graph` production block in
   `toolAdapterInvocationPhase.ts` stays until those land — the block is what keeps this fail-closed
   in the meantime, so it is deliberately NOT removed by this commit.
-- [ ] **A40-4 — Add dependency-free execution-map records and events.** Closed statuses, logical
+- [~] **A40-4 — PARTIAL. Add dependency-free execution-map records and events.** Closed statuses, logical
   nodes plus occurrence/traversal identities, execution-scoped event sequence/version fields,
   redaction/size bounds, and compatibility records for current profile-stage consumers.
+
+  **Shipped in `24b08eaa4`: the vocabulary** (`packages/agent-protocol/src/executionMap.ts`, no
+  dependencies). Closed run statuses split into non-overlapping open/terminal sets; `skipped` exists
+  for occurrences only, since a run cannot be skipped. Logical nodes, occurrences, declared edges,
+  traversals, decisions and execution-scoped events all present, with snapshot completeness
+  (`complete | gapped | unavailable`) reported separately from run status so a host missing events
+  says so instead of forging a runtime state to cover it.
+
+  `canTransitionExecutionStatus` refuses terminal -> open AND terminal -> a different terminal, so a
+  late or replayed event cannot resurrect a finished run or turn a cancelled one into a success.
+  Labels are flattened (including U+2028/U+2029, which a naive newline filter misses) and clamped;
+  reason codes are bounded in count and width. Eleven tests, mutation-proved.
+
+  **Still open for this row:** the compatibility records for current profile-stage consumers. The
+  vocabulary exists; nothing is emitting it yet, which is A40-5's reducer and A40-7's adapters.
 - [ ] **A40-5 — Add the Core reducer and bounded session store.** Idempotent/gap-aware reduction,
   snapshot watermarks, no-goal direct/profile instrumentation plus optional goal grouping,
   stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behavior, and
