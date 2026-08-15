@@ -31,6 +31,7 @@ import { tryHandleAnnotationCommand } from '../commands/annotation/index.js';
 import { tryHandleArtifactCommand } from '../commands/artifact/index.js';
 // ADR-038 D5 — the personal planner is USER-scoped, so /planner takes no workspace.
 import { tryHandlePlannerCommand } from '../commands/planner/index.js';
+import { tryHandleRunsCommand } from '../commands/runs/index.js';
 import { tryHandleAtlasCommand } from '../commands/atlas/index.js';
 import { tryHandleAttachmentCommand } from '../commands/attachment/index.js';
 import { tryHandleReviewsCommand } from '../commands/reviews/index.js';
@@ -146,6 +147,7 @@ export async function handleSlashCommand(
   if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleArtifactCommand(cmdCtx)) return;
   if (await tryHandlePlannerCommand(cmdCtx)) return;
+  if (await tryHandleRunsCommand(cmdCtx)) return;
   if (await tryHandleAtlasCommand(cmdCtx)) return;
   if (await tryHandleAttachmentCommand(cmdCtx)) return;
   if (await tryHandleReviewsCommand(cmdCtx)) return;

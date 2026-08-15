@@ -210,6 +210,15 @@ const ORPHAN_MODULE_CEILING = 26;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   [
+    'orchestration/execution/publicRuns.ts',
+    'ADR-040 A40-9. The curated public surface for run views, and it IS reached: '
+    + "brainrouter-cli/src/cli/commands/runs/index.ts imports it as "
+    + "'@kinqs/brainrouter-core/orchestration/runs' through the package exports "
+    + 'map. This sweep resolves relative imports inside core, so a cross-package '
+    + 'subpath consumer is invisible to it — the module is wired, the scan just '
+    + 'cannot see the wire. Verified by reading that file, not assumed.',
+  ],
+  [
     'orchestration/execution/graphAdapter.ts',
     'ADR-040 A40-7. Adapts a saved graph run to the canonical execution map: it '
     + 'is the module that WIRED the A40-5 reducer and the A40-6 durable store, '
@@ -592,9 +601,10 @@ function deadExports(): string[] {
  * that only catches new debt and never notices repayment is just a bigger
  * number. What remains is A40-7's own frontier: the adapter's exports are dead
  * until A40-9 and A40-10 render the map. Named, attributed, and it falls when
- * they land.
+ * they land. A40-9 then took it 280 → 279 by giving the run views a real
+ * consumer: the ratchet falling, which is the direction it is for.
  */
-const DEAD_EXPORT_CEILING = 280;
+const DEAD_EXPORT_CEILING = 279;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
