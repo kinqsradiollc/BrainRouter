@@ -59,7 +59,6 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
   const [selectedSource, setSelectedSource] = useState(firstGithub?.source ?? 'github');
   const selectedEntry = connectors.catalog.find((entry) => entry.source === selectedSource) ?? github ?? connectors.catalog[0];
   const [name, setName] = useState(firstGithub?.name ?? 'GitHub connector');
-  const [owner, setOwner] = useState(firstGithub ? connectorConfigString(firstGithub, 'owner') : '');
   const [includeIssues, setIncludeIssues] = useState(firstGithub ? firstGithub.config.includeIssues !== false : true);
   const [includePrs, setIncludePrs] = useState(firstGithub ? firstGithub.config.includePullRequests !== false : true);
   const [includeFiles, setIncludeFiles] = useState(Boolean(firstGithub?.config.includeFiles));
@@ -155,7 +154,6 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
   React.useEffect(() => {
     if (!firstGithub) return;
     setName(firstGithub.name);
-    setOwner(connectorConfigString(firstGithub, 'owner'));
     setIncludeIssues(firstGithub.config.includeIssues !== false);
     setIncludePrs(firstGithub.config.includePullRequests !== false);
     setIncludeFiles(Boolean(firstGithub.config.includeFiles));
@@ -212,8 +210,10 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
 
   const saveGithubConnector = (): void => {
     const poll = Number(pollMinutes);
+    // ADR-017 D1 — repos are auto-detected over OAuth; the manual owner field is
+    // gone, and omitting it here also drops any legacy `owner` from the stored
+    // config on the next save (config is rebuilt, not merged).
     const config = {
-      owner: owner.trim(),
       repositories: [] as string[],
       includeIssues,
       includePullRequests: includePrs,
@@ -534,8 +534,7 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
               </span>
               {(() => {
                 const rs = connectorConfigList(connector, 'repositories');
-                const owner = connectorConfigString(connector, 'owner');
-                return <span className="pc-wire">{rs.length ? `${rs.length} repositor${rs.length === 1 ? 'y' : 'ies'} synced` : owner ? `All repos under ${owner}` : 'All repos the app can access'}</span>;
+                return <span className="pc-wire">{rs.length ? `${rs.length} repositor${rs.length === 1 ? 'y' : 'ies'} synced` : 'All repos the app can access'}</span>;
               })()}
               <span className="pc-wire">
                 Last synced {relTime(connector.lastSuccessAt)}
