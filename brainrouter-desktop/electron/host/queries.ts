@@ -175,6 +175,7 @@ import {
   openDurableRuns,
   listDurableRuns,
   readDurableRunSafe,
+  readRunDetail,
   toRunsListRows,
   toRunDetailView,
 } from '@kinqs/brainrouter-core/orchestration/runs';
@@ -844,12 +845,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       'runs.detail': (args) => {
         const runId = typeof args.runId === 'string' ? args.runId : '';
-        const record = readDurableRunSafe(workspaceRoot, runId);
-        if (!record) return { run: null };
-        // No per-run event journal is retained yet (A40-9), so the snapshot is
-        // absent and toRunDetailView says so honestly rather than drawing an
-        // empty map as though it were the whole run.
-        return { run: toRunDetailView(record, undefined) };
+        // A40-9 — rebuild the map from the run's retained event journal, the same
+        // way the CLI /runs does. A run with no journal reduces to an absent
+        // snapshot and the view says `unavailable` rather than drawing an empty
+        // map as though it were the whole run.
+        const run = readRunDetail(workspaceRoot, runId);
+        return { run: run ?? null };
       },
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
