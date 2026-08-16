@@ -17,6 +17,8 @@ import {
   ImportMemoriesResponse,
   MeResponse,
   MemoriesResponse,
+  OrgSharedMemoriesResponse,
+  ShareMemoryResponse,
   MemoryEvidenceByRecordResponse,
   MemoryStatsResponse,
   MemoryWithEvidenceResponse,
@@ -385,6 +387,18 @@ export class BrainRouterClient {
   getDiagnostics(userId?: string) { return this.get<DiagnosticsBundle>("/api/governance/diagnostics", { userId }); }
   getMemories(params?: CursorPaginationParams & { query?: string; type?: string; scene?: string; skill?: string; archived?: boolean }) {
     return this.get<MemoriesResponse>("/api/memories", params);
+  }
+  /** ADR-017 D4 — the Team's shared memory pool (visibility='org'), member-only. */
+  getOrgSharedMemories(orgId: string, limit = 50) {
+    return this.get<OrgSharedMemoriesResponse>(`/api/memories/org/${encodeURIComponent(orgId)}/shared`, { limit });
+  }
+  /** Share one of your records with a Team (visibility → 'org'). Requires memory:share. */
+  shareMemory(recordId: string, orgId: string) {
+    return this.post<ShareMemoryResponse>(`/api/memories/${encodeURIComponent(recordId)}/share`, { orgId });
+  }
+  /** Make a shared record private again. */
+  unshareMemory(recordId: string, orgId: string) {
+    return this.post<ShareMemoryResponse>(`/api/memories/${encodeURIComponent(recordId)}/unshare`, { orgId });
   }
   archiveMemory(id: string) { return this.deleteReq<{ success: boolean }>(`/api/memories/${id}`); }
   governanceDeleteMemory(id: string, reason: string) { return this.deleteWithBody<{ success: boolean }>(`/api/memories/${id}`, { reason }); }

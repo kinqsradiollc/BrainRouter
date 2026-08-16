@@ -174,6 +174,22 @@ export interface MemoryStatsResponse {
   extraction: unknown;
 }
 
+/** ADR-017 D4 — a memory in the Team's shared pool (visibility='org'). */
+export interface SharedMemoryItem {
+  recordId: string;
+  userId: string;
+  content: string;
+  type: string;
+  priority: number;
+  skillTag: string;
+  visibility: string;
+  createdTime: string;
+}
+/** GET /api/memories/org/:orgId/shared response. */
+export type OrgSharedMemoriesResponse = { shared: SharedMemoryItem[] };
+/** POST /api/memories/:recordId/(share|unshare) response. */
+export type ShareMemoryResponse = { ok: boolean; visibility: string; orgId?: string };
+
 export type MemoriesResponse = {
   memories: MemoryListItem[];
   nextCursor: string | null;
