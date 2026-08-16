@@ -11,6 +11,7 @@
  */
 import type { ExecutionSnapshot } from './reducer.js';
 import type { DurableRunSafeRecord } from './runStore.js';
+import type { ResolvedWorkspaceOrchestrationPlan } from '../profiles/orchestrationProfileResolver.js';
 
 export interface RunsListRow {
   runId: string;
@@ -115,4 +116,91 @@ export function runsJson(rows: readonly RunsListRow[]): string {
 
 export function runDetailJson(view: RunDetailView): string {
   return JSON.stringify({ schemaVersion: 1, run: view }, null, 2);
+}
+
+// ── A40-9 live updates — the terminal-status predicate both hosts poll on ─────
+
+/**
+ * The run statuses that mean "done, stop watching". A live `/runs --watch` (or a
+ * Desktop live view) stops polling once a run reaches one of these; anything else
+ * is still in flight. Kept here so the two hosts cannot disagree about when a run
+ * has finished — the same reason the rest of the projection lives in Core.
+ */
+export const RUN_TERMINAL_STATUSES: readonly string[] = Object.freeze([
+  'succeeded', 'failed', 'blocked', 'interrupted', 'cancelled', 'degraded',
+]);
+
+export function isTerminalRunStatus(status: string): boolean {
+  return RUN_TERMINAL_STATUSES.includes(status);
+}
+
+// ── A40-9 preview/confirm start — the shared preview of a strategy before it runs ─
+
+/**
+ * A40-9/A40-10 — what an explicit-strategy launch WOULD do, rendered before the
+ * user confirms it. Built from the resolved plan so the CLI preview and the
+ * Desktop "Run with strategy" dialog show the SAME validated strategy, effective
+ * stages, and — crucially — whether it will spawn children. A person confirming a
+ * launch is entitled to see one honest answer, not two host-specific ones.
+ */
+export interface PlanPreview {
+  strategyId: string | null;
+  selectionSource: string;
+  workspaceProfileId: string | null;
+  planProfileId: string | null;
+  effectiveParallel: number;
+  /** True if any stage fans out or the plan runs stages in parallel — i.e. it creates children. */
+  createsChildren: boolean;
+  stages: readonly {
+    id: string;
+    objective: string;
+    executor: string;
+    optional: boolean;
+    requiresApproval: boolean;
+    skillIds: readonly string[];
+    fanOut?: { min: number; max: number };
+  }[];
+}
+
+export function toPlanPreview(plan: ResolvedWorkspaceOrchestrationPlan): PlanPreview {
+  return {
+    strategyId: plan.strategyId,
+    selectionSource: plan.selectionSource,
+    workspaceProfileId: plan.workspaceProfileId,
+    planProfileId: plan.planProfileId,
+    effectiveParallel: plan.effectiveParallel,
+    createsChildren: plan.stages.some((stage) => stage.fanOut !== undefined)
+      || plan.effectiveParallel > 1,
+    stages: Object.freeze(plan.stages.map((stage) => ({
+      id: stage.id,
+      objective: stage.objective,
+      executor: stage.executor.kind,
+      optional: stage.optional,
+      requiresApproval: stage.requiresApproval,
+      skillIds: stage.skillIds,
+      ...(stage.fanOut ? { fanOut: stage.fanOut } : {}),
+    }))),
+  };
+}
+
+/** Plain lines for the CLI preview. Desktop renders the same PlanPreview its own way. */
+export function planPreviewLines(preview: PlanPreview): string[] {
+  const lines: string[] = [
+    `strategy: ${preview.strategyId ?? '(direct)'}  [${preview.selectionSource}]`,
+    `profile:  ${preview.planProfileId ?? '—'}` + (preview.workspaceProfileId && preview.workspaceProfileId !== preview.planProfileId ? ` (workspace ${preview.workspaceProfileId})` : ''),
+    preview.createsChildren
+      ? `children: YES — up to ${preview.effectiveParallel} in parallel`
+      : 'children: none (runs on the primary agent)',
+    `stages (${preview.stages.length}):`,
+  ];
+  for (const stage of preview.stages) {
+    const marks = [
+      stage.optional ? 'optional' : null,
+      stage.requiresApproval ? 'approval' : null,
+      stage.fanOut ? `fan-out ${stage.fanOut.min}-${stage.fanOut.max}` : null,
+      stage.skillIds.length ? `skills: ${stage.skillIds.join(',')}` : null,
+    ].filter(Boolean).join(', ');
+    lines.push(`  - ${stage.id} (${stage.executor})${marks ? ` [${marks}]` : ''}: ${stage.objective}`);
+  }
+  return lines;
 }

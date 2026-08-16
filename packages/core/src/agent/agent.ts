@@ -573,6 +573,12 @@ export interface RunTurnOptions {
   hiddenPrompt?: boolean;
   images?: Array<{ mediaType: string; dataBase64: string }>;
   preplanned?: boolean;
+  /**
+   * ADR-040 A40-9 — an explicit-strategy launch (from `/runs start --strategy`).
+   * The turn resolves its topology with this strategy id, so `selectionSource`
+   * is `explicit` and the plan is the one the user previewed and confirmed.
+   */
+  explicitStrategyId?: string;
   /** Host-held capability. It is never serialized into prompt/history/IPC. */
   executionIntent?: ExecutionIntentHandle;
 }

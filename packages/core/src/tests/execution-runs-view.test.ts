@@ -12,9 +12,13 @@ import {
   toRunDetailView,
   runsJson,
   runDetailJson,
+  toPlanPreview,
+  planPreviewLines,
+  isTerminalRunStatus,
 } from '../orchestration/execution/runsView.js';
 import type { DurableRunSafeRecord } from '../orchestration/execution/runStore.js';
 import type { ExecutionSnapshot } from '../orchestration/execution/reducer.js';
+import type { ResolvedWorkspaceOrchestrationPlan } from '../orchestration/profiles/orchestrationProfileResolver.js';
 
 function record(over: Partial<DurableRunSafeRecord> = {}): DurableRunSafeRecord {
   return {
@@ -130,4 +134,66 @@ test('A40-9 drill-down — a stage surfaces the child sessions it spawned', () =
   assert.deepEqual([...review.childSessionIds], ['child-a', 'child-b'], 'the stage carries its children for drill-down');
   const plan = view.nodes.find((n) => n.nodeId === 'plan')!;
   assert.deepEqual(plan.childSessionIds, [], 'a stage that spawned nothing carries an empty list, not undefined');
+});
+
+// ── A40-9 preview/confirm start ─────────────────────────────────────────────
+
+function plan(over: Partial<ResolvedWorkspaceOrchestrationPlan> = {}): ResolvedWorkspaceOrchestrationPlan {
+  return {
+    workspaceProfileId: 'engineering',
+    planProfileId: 'delivery',
+    orchestrationProfileId: 'delivery',
+    strategyId: 'plan-build-verify',
+    selectionSource: 'explicit',
+    matchedSignalIds: [],
+    stages: [
+      { id: 'plan', executor: { kind: 'primary' }, after: [], objective: 'Plan it', skillIds: [], optional: false, requiresApproval: false },
+      { id: 'build', executor: { kind: 'agent', role: 'worker' } as any, after: ['plan'], objective: 'Build it', skillIds: ['git'], optional: false, requiresApproval: true, fanOut: { min: 1, max: 3 } },
+    ],
+    skippedStages: [],
+    effectiveParallel: 3,
+    diagnostics: [],
+    ...over,
+  } as ResolvedWorkspaceOrchestrationPlan;
+}
+
+test('the plan preview surfaces the strategy, its origin, and whether it spawns children', () => {
+  const preview = toPlanPreview(plan());
+  assert.equal(preview.strategyId, 'plan-build-verify');
+  assert.equal(preview.selectionSource, 'explicit');
+  assert.equal(preview.createsChildren, true, 'a fan-out stage / parallel plan creates children');
+  assert.equal(preview.stages.length, 2);
+  assert.deepEqual(preview.stages[1]!.fanOut, { min: 1, max: 3 });
+  assert.equal(preview.stages[1]!.requiresApproval, true);
+});
+
+test('a single-primary plan with no fan-out reports it creates NO children', () => {
+  // The dangerous confusion is the opposite: a preview that implies children a
+  // run will not actually spawn. Mutation-proof: flip createsChildren logic and
+  // one of these two assertions fails.
+  const preview = toPlanPreview(plan({
+    stages: [{ id: 'answer', executor: { kind: 'primary' }, after: [], objective: 'Answer', skillIds: [], optional: false, requiresApproval: false }],
+    effectiveParallel: 1,
+  }));
+  assert.equal(preview.createsChildren, false);
+  const withChildren = toPlanPreview(plan());
+  assert.equal(withChildren.createsChildren, true);
+});
+
+test('the preview lines name the strategy, the child fan-out, and each stage', () => {
+  const lines = planPreviewLines(toPlanPreview(plan())).join('\n');
+  assert.match(lines, /strategy: plan-build-verify\s+\[explicit\]/);
+  assert.match(lines, /children: YES/);
+  assert.match(lines, /build \(agent\).*approval.*fan-out 1-3/);
+});
+
+// ── A40-9 live updates — the terminal-status predicate ──────────────────────
+
+test('isTerminalRunStatus is true only for finished runs', () => {
+  for (const s of ['succeeded', 'failed', 'blocked', 'interrupted', 'cancelled', 'degraded']) {
+    assert.equal(isTerminalRunStatus(s), true, `${s} is terminal`);
+  }
+  for (const s of ['running', 'planned', 'pending', '']) {
+    assert.equal(isTerminalRunStatus(s), false, `${s} is NOT terminal — watch must keep polling`);
+  }
 });

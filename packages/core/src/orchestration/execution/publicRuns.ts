@@ -19,8 +19,13 @@ export {
   toRunDetailView,
   runsJson,
   runDetailJson,
+  isTerminalRunStatus,
+  RUN_TERMINAL_STATUSES,
+  toPlanPreview,
+  planPreviewLines,
   type RunsListRow,
   type RunDetailView,
+  type PlanPreview,
 } from './runsView.js';
 
 // A40-6: bringing the store up to date (migrate legacy ledgers, reconcile
@@ -37,3 +42,28 @@ export {
 export {
   readRunDetail,
 } from './runJournal.js';
+
+// A40-9 preview/confirm start — resolve the plan an explicit-strategy launch
+// WOULD run, as the shared PlanPreview, so the CLI `/runs start` preview and the
+// Desktop "Run with strategy" dialog show one validated answer before the user
+// confirms. Read-only: it resolves topology, it does not launch anything.
+import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
+import { toPlanPreview, type PlanPreview } from './runsView.js';
+
+export interface PreviewTurnStrategyInput {
+  workspaceRoot: string;
+  task: string;
+  /** The explicit strategy id to preview; omitted previews the auto-selected plan. */
+  strategyId?: string;
+  activeCapabilitySkillIds?: readonly string[];
+}
+
+export function previewTurnStrategy(input: PreviewTurnStrategyInput): PlanPreview {
+  const resolution = resolveActiveTurnOrchestration({
+    workspaceRoot: input.workspaceRoot,
+    task: input.task,
+    ...(input.activeCapabilitySkillIds ? { activeCapabilitySkillIds: input.activeCapabilitySkillIds } : {}),
+    ...(input.strategyId ? { explicitStrategyId: input.strategyId } : {}),
+  });
+  return toPlanPreview(resolution.plan);
+}

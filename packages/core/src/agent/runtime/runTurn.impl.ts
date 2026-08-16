@@ -185,6 +185,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       task: prompt,
       activeCapabilitySkillIds: this.activeWorkspaceCapabilities.skills,
       parentDepth: this.agentDepth,
+      ...(opts?.explicitStrategyId ? { explicitStrategyId: opts.explicitStrategyId } : {}),
       // A latched skill already disqualifies the stage controller below, so
       // resolving a plan here only produced a strategy nothing could run — and
       // named it in the turn's telemetry as if it had. Both ends now read the

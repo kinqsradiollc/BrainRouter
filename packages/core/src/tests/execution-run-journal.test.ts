@@ -13,6 +13,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ExecutionEvent } from '@kinqs/brainrouter-agent-protocol';
 import { appendRunEvent, readRunEvents, readRunDetail, RUN_JOURNAL_BOUNDS } from '../orchestration/execution/runJournal.js';
+import { startDurableRun, updateDurableRun } from '../orchestration/execution/runStore.js';
+import { isTerminalRunStatus } from '../orchestration/execution/runsView.js';
 import { runGraphAsCanonicalExecution } from '../orchestration/execution/graphAdapter.js';
 import type { WorkflowGraph } from '../workflow/graph/graph.js';
 
@@ -97,4 +99,25 @@ test('a run with a durable record but NO journal reads back as unavailable, hone
   const detail = readRunDetail(ws, 'run-n')!;
   assert.equal(detail.completeness, 'unavailable');
   assert.ok(detail.caveat && detail.caveat.length > 0);
+});
+
+test('A40-9 live updates — the map grows as events append, and turns terminal when the run finishes', () => {
+  // This is what `/runs <id> --watch` polls: readRunDetail re-reduces the journal
+  // each tick, so a new occurrence appears as it is emitted, and isTerminalRunStatus
+  // tells the watch loop when to stop. The re-read is idempotent (the reducer dedupes
+  // by (executionId, sequence)), so polling the whole file each tick is correct.
+  const ws = tmpWs();
+  startDurableRun({ workspaceRoot: ws, runId: 'live', executionId: 'e', startedAt: '2026-08-16T00:00:00.000Z' });
+  appendRunEvent(ws, 'live', ev(1, { status: 'running' }));
+  const d1 = readRunDetail(ws, 'live')!;
+  assert.equal(isTerminalRunStatus(d1.status), false, 'a running run keeps the watch polling');
+  const before = d1.nodes.length;
+
+  appendRunEvent(ws, 'live', ev(2, { nodeId: 'n1', attempt: 1, status: 'succeeded' }));
+  const d2 = readRunDetail(ws, 'live')!;
+  assert.ok(d2.nodes.length > before, 'the map grew as an event appended — the live update');
+
+  updateDurableRun(ws, 'live', { status: 'succeeded', endedAt: '2026-08-16T00:01:00.000Z' });
+  const d3 = readRunDetail(ws, 'live')!;
+  assert.equal(isTerminalRunStatus(d3.status), true, 'once terminal, the watch loop stops');
 });
