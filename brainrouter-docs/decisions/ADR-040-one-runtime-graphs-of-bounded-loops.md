@@ -856,6 +856,20 @@ accepted decision record checks only A40-0; it makes no implementation claim.
      cannot hold the loop open long enough to fire — converts that silent void into one legible
      failure. Pass count went 5 -> 11 on that change alone.
 
+  **The last skipped A40-2 test is now un-skipped and passing — all twenty-three run.**
+  `root prompt rebuild uses captured instruction mode and personality across an A-to-B-to-A swap`
+  had never passed because its harness waited on a THIRD `listTools` call that a reviewed turn never
+  makes (it reuses the issuance inventory), and its premise — a mid-turn A→B swap that is silently
+  REBUILT from B — describes an unreachable state: `beginExecutionIntentTurn`'s fingerprint check
+  cancels a turn that starts on B, and `assertReviewedTurnCurrent` cancels any swap DURING the
+  reviewed launch. So a root reviewed turn only ever runs on the approved A or cancels — never on the
+  changed policy. The test now asserts those two reachable guarantees directly (the reviewed prompt is
+  built from the approved instruction/personality/review-policy; a mid-flight swap CANCELS the launch),
+  and the descendant-inherits-the-snapshot case remains covered by `reviewed legacy role uses captured
+  restrictive prompt and access`. This was a TEST-INTEGRITY fix: the protection already existed in the
+  product; the harness did not exercise it. The row's remaining open parts (task envelope, closed
+  origin/topology contract, goal/no-goal parity, shared goal supervisor) keep it unchecked.
+
 - [x] **A40-3 — Make saved graph execution fail closed and bounded.** Wire the shared approval port,
   block when absent, enforce agent-node role/access configuration, propagate cancellation, apply
   cumulative execution budgets and required/optional failure rules, and prove bounded loop/
