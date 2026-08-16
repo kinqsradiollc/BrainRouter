@@ -288,6 +288,7 @@ export const BUILTIN_TOOL_SPECS = [
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The shell command to run.' },
+        cwd: { type: 'string', description: 'Optional working directory. Must be inside the workspace or a worktree you have entered (worktree_enter); anything else is rejected. Defaults to the workspace root.' },
         background: { type: 'boolean', description: 'Detach and return an id immediately instead of blocking (poll with task_output). Default false.' }
       },
       required: ['command']

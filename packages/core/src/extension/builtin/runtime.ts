@@ -685,6 +685,21 @@ export async function invokeBuiltinToolRuntime(
       }
       case 'run_command': {
         const cmd = args.command;
+        // ADR-042 D4 — an optional validated `cwd`. The default stays the
+        // workspace root (the pin that stopped a drifted process.cwd() writing
+        // into ~/.brainrouter); a passed cwd is validated against the workspace
+        // SCOPE (primary + entered worktrees) and rejected with the same escape
+        // error otherwise. It is a validated override, never an unpin.
+        let cwdOverride: string | undefined;
+        if (typeof args.cwd === 'string' && args.cwd.trim() !== '') {
+          cwdOverride = this.workspaceScope
+            ? resolveWorkspacePathInScope(this.workspaceScope, args.cwd)
+            : resolveWorkspacePath(this.workspaceRoot, args.cwd);
+          if (!fs.existsSync(cwdOverride) || !fs.statSync(cwdOverride).isDirectory()) {
+            throw new Error(`run_command cwd is not a directory: ${args.cwd}`);
+          }
+        }
+        const effectiveCwd = cwdOverride ?? this.workspaceRoot;
         // CLI-11 — route the shell gate through the unified execution policy
         // (same outcome as the previous `accessMode !== 'shell'` check).
         const shellPolicy = decideExecutionPolicy('shell', this.accessMode);
@@ -857,7 +872,7 @@ export async function invokeBuiltinToolRuntime(
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
-          const bg = startBackgroundShell({ command: cmd, cwd: this.launchCwd, workspaceRoot: this.workspaceRoot });
+          const bg = startBackgroundShell({ command: cmd, cwd: cwdOverride ?? this.launchCwd, workspaceRoot: this.workspaceRoot });
           return JSON.stringify({
             id: bg.id,
             status: bg.status,
@@ -872,9 +887,13 @@ export async function invokeBuiltinToolRuntime(
             : resolvePentestSandbox(this.workspaceRoot));
           return `[pentest Docker/proxy sandbox] Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
         }
+        // The sandbox is rooted at the EFFECTIVE cwd (the entered worktree, if
+        // any); the rest of the scope (primary + other attached roots) is granted
+        // write so a command run in a worktree can still touch the primary tree.
+        const scopeWriteGrants = [this.workspaceRoot, ...(this.attachedRoots ?? [])].filter((r: string) => r !== effectiveCwd);
         const sandboxConfig = resolveSandboxConfig(
-          this.workspaceRoot,
-          { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
+          effectiveCwd,
+          { readPaths: prefs.sandboxReadPaths, writePaths: [...prefs.sandboxWritePaths, ...scopeWriteGrants] },
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
         this.assertInheritedExecutionAuthorityCurrent();
