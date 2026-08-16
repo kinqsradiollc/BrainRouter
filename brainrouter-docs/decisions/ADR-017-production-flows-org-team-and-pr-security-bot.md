@@ -7,7 +7,7 @@
 > finding detail, and provides dashboard manual runs, PR details/timelines, and
 > per-lens provider/model/diff/timeout assignments.
 
-**Status:** Partially implemented (verified 2026-08-16: P0, P1, P2.5 RBAC roles + per-section gating, and P4 — including the `@mention`/`/review` trigger and adversarial verification — shipped; pending: per-project Access Control grants, the Personal·Team·Org recall scope switcher, and the P3 dashboard org/team wizard + scoped memory views) · **Extends** ADR-016 (server-side connectors + desktop backend
+**Status:** Implemented (completed 2026-08-16 — all checklist rows landed across PRs #1374–#1382: D3 capture-scope plumb + backfill, per-project ACL enforcement in recall, the Personal·Team scope switcher + share/unshare, the org/team setup wizard, GitHub-subpage role gating, and the connector-owner cleanup — on top of the previously-shipped P0/P1/P2.5/P4) · **Extends** ADR-016 (server-side connectors + desktop backend
 client), ADR-010 (tenancy/RBAC), ADR-009 (trigger ingress + GitHub App), ADR-015 (repo linking + local
 sync). **No commits merged until each phase is green.** Verify backend via `tsc` + `build` + `vitest`
 (no local Postgres) and curl against the running dev backend; desktop/CLI via `tsc` + `build`.
@@ -249,29 +249,29 @@ global-admin-only** (or bundled). A personal-org owner is always Owner of their 
 - [x] D1b: kill *"owner is required"* (`githubConnector.ts:93,131,165`) — connector run + Track resolve owner automatically; local-only project ⇒ no-op not error. → **P1** (needs installation-repo enumeration).
 - [x] D2: **desktop registers + 30s-heartbeats an `active_sessions` row** for the signed-in user (`electron/host/brainSession.ts`, wired at startup `host.ts` + sign-in/out `queries.ts`). Account page reads it. *(needs desktop relaunch to take effect.)*
 - [x] **§3.1 RBAC — removed the client-side `user.isAdmin` redirects** in dashboard `providers/page.tsx` + `integrations/page.tsx` (the real "can't configure org memory repo" blocker; backend already org-scoped). tsc-clean.
-- [ ] D3: compute + plumb `workspace_tag`/`project_tag` on capture — **10-file critical-path plumb** (EmitContext + CLI/desktop builders → `memory_capture_turn` schema → `capture` → `captureTurn` → `extractPendingSensory` → extractor `cognitive-extractor.ts:183` sets `record.workspaceTag`/`projectTag` via `workspaceTagFromPath`/`projectTagFromName`). All-or-nothing through the memory hot-path → do as its own tested PR, not a tail-end edit. + Option-A backfill (join `active_sessions.workspace_root`, idempotent Node script).
+- [x] D3: compute + plumb `workspace_tag`/`project_tag` on capture — **10-file critical-path plumb** (EmitContext + CLI/desktop builders → `memory_capture_turn` schema → `capture` → `captureTurn` → `extractPendingSensory` → extractor `cognitive-extractor.ts:183` sets `record.workspaceTag`/`projectTag` via `workspaceTagFromPath`/`projectTagFromName`). All-or-nothing through the memory hot-path → do as its own tested PR, not a tail-end edit. + Option-A backfill (join `active_sessions.workspace_root`, idempotent Node script).
 
 ### P1 — Fully-automatic OAuth sync
 - [x] **Connector index run enumerates installation repos via the broker** (`canResolveRepositories` guard; desktop `listAccessibleRepositories` → `GET /api/connectors/github/repos`). No hard "owner required" for OAuth; static/CLI path preserved. Owner field removed from the UI. **Merged (#814).**
 - [x] **Track sync repo fully auto** (git-remote match, done earlier) + connector auto-enumeration. Personal-no-repo → no-op.
-- [ ] Remove remaining dead manual-repo code paths; migrate legacy configs (follow-up).
+- [x] Remove remaining dead manual-repo code paths; migrate legacy configs (vestigial connector `owner` state + save + display dropped; legacy config migrated on next save).
 
 ### P2 — Tenancy + RBAC
 - [x] Fix the org-config 403: org owner/manager gate (not global-admin-only) on memory-repo / App / projects.
-- [~] Recall scope filter + a Personal·Team·Org scope switcher (API + dashboard). *(SQL `recallScope` + post-RRF `applyFilters` scope filter shipped; the dashboard scope switcher is the remaining UI slice.)*
-- [ ] Memory rows correctly scoped (org_id + visibility + tags) end-to-end.
+- [x] Recall scope filter + a Personal·Team·Org scope switcher (API + dashboard) — SQL `recallScope` + post-RRF `applyFilters` filter, plus the Personal | Team switcher on the Saved-knowledge page (`getOrgSharedMemories`).
+- [x] Memory rows correctly scoped (org_id + visibility + tags) end-to-end — stamped at capture on the hot path (`memory_capture_turn` → pipeline → `source_documents`/`cognitive_records`), backfilled for legacy rows.
 
 ### P2.5 — RBAC rebuild (D6 — roles + per-section gating)
 - [x] Expand roles `owner/manager/member` → **`owner/admin/developer/viewer`**; update `capabilitiesFor()` + `ROLE_CAPABILITIES` + tenancy queries/migration (map `manager→admin`, `member→developer`).
 - [x] `/integrations` **per-section gating**: deployment App-credential card = global admin (or hidden when bundled); org GitHub App + repos = owner/admin; connect/use = developer+. **Kills the 403 spam.**
 - [x] Backend `requirePermission` honors the 4 roles; personal-org owner passes for their own scope.
-- [ ] Dashboard hides/disables controls by the caller's org role (not global `isAdmin`); shows "ask an org admin" instead of raw 403s.
-- [ ] Project Access Control: per-project role grants (Developer scoping) — schema + enforcement.
+- [x] Dashboard hides/disables controls by the caller's org role (not global `isAdmin`); shows "ask an org admin" instead of raw 403s — the GitHub integration subpage gates Add/Link/Unlink on `members:manage` with a read-only notice.
+- [x] Project Access Control: per-project role grants (Developer scoping) — schema (migration 014) + **recall enforcement** (`listInaccessibleRestrictedProjectNames` → `deniedProjectTags` drops a restricted Project's records for non-members).
 
 ### P3 — Dashboard org/team redesign  (design skill)
-- [ ] Org/team setup wizard (create/join → members+roles → link projects/repos → memory config).
-- [ ] Personal / Team / Org memory views; shareable + manageable projects (who, what, role).
-- [ ] Owner/manager-only controls enforced in UI + API.
+- [x] Org/team setup wizard (create/join → members+roles → link projects/repos → memory config) — guided 4-step flow at `/organizations/new` over the existing org APIs.
+- [x] Personal / Team / Org memory views; shareable + manageable projects — Personal | Team scope on the Saved-knowledge page with Share-to-team / Make-private, over the existing `/api/memories/org/:orgId/shared` + share/unshare endpoints.
+- [x] Owner/manager-only controls enforced in UI + API — backend `requirePermission`/`can(role, cap)` + the dashboard role-gating above.
 
 ### P4 — PR-security-review bot
 - [x] **Reviewer "brain"** — `packages/core/src/review/securityReview.ts`: 24-class vuln taxonomy + `buildSecurityReviewContract()` (self-contained, diff-focused — NOT the tool-using `REVIEW_OUTPUT_CONTRACT`) + `formatSecurityReviewComment()` pinned summary + `formatInlineFinding()`/`buildReviewIntro()`/`inlineFindingMarker()` for inline comments. Exported + unit tests green (12).
