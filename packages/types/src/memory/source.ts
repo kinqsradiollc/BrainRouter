@@ -22,6 +22,8 @@ export interface SourceDocument {
   projectId?: string | null;
   /** 16-char workspace hash (NULL-tolerant, like cognitive records). */
   workspaceTag: string | null;
+  /** 16-char Project hash (NULL-tolerant) — parity with cognitive_records.project_tag. */
+  projectTag?: string | null;
   kind: SourceDocumentKind;
   /** File path, tool name, or doc URI — null for free-floating transcript turns. */
   uri: string | null;

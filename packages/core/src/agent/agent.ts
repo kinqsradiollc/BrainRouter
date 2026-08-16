@@ -531,7 +531,7 @@ export type { ChatCompletionPayload, ResponsesPayload } from './transport/llmTra
 import type { PromptLayeredMessage } from './transport/llmTransport.js';
 import type { WorkspaceCapabilityResolution } from '../workspace/capabilities.js';
 import type { ActiveTurnOrchestrationResolution } from '../workspace/activeTurnOrchestration.js';
-import { resolveWorkspaceMemoryCaptureContext } from '../workspace/memoryCapture.js';
+import { resolveWorkspaceMemoryCaptureContext, resolveWorkspaceProjectName } from '../workspace/memoryCapture.js';
 import {
   normalizePhasePlanExecutionTarget,
   normalizeWorkflowGraphExecutionTarget,
@@ -3362,14 +3362,17 @@ export class Agent {
         return;
       }
       const workspaceMemoryContext = resolveWorkspaceMemoryCaptureContext(this.workspaceRoot);
+      const projectName = resolveWorkspaceProjectName(this.workspaceRoot);
       const captureRes = await this.mcpClient.callTool('memory_capture_turn', {
         sessionKey: this.sessionKey,
         activeSkill: this.activeSkill,
         // ADR-017 D3 — send the workspace root so the brain hashes it to a stable
         // workspace_tag; without it the main per-turn capture landed null tags and
         // per-workspace recall scoping silently degraded (the `# note` + aux-event
-        // paths already sent it; this was the one hot-path that did not).
+        // paths already sent it; this was the one hot-path that did not). projectName
+        // (from .brainrouter/project.json) hashes to project_tag for Project scope.
         ...(this.workspaceRoot ? { workspaceRoot: this.workspaceRoot } : {}),
+        ...(projectName ? { projectName } : {}),
         ...(workspaceMemoryContext ?? {}),
         messages: [
           { role: 'user', content: userContent, timestamp },

@@ -201,7 +201,7 @@ export class CaptureExtraction extends CapturePersistence {
     }
 
     // MEM-15 — link each record to the source chunk(s) it actually derives from.
-    await this.linkRecordProvenance(userId, recentSensory, uniqueRecords, { orgId, projectId, workspaceTag });
+    await this.linkRecordProvenance(userId, recentSensory, uniqueRecords, { orgId, projectId, workspaceTag, projectTag });
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {

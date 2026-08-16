@@ -9,6 +9,7 @@ import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/exec';
 import { SLASH_COMMANDS } from '@kinqs/brainrouter-core/command';
 import { parseBangCommand, parseNoteCommand } from '../../../runtime/exec/bangCommand.js';
+import { activeProjectName } from '../../../config/project.js';
 import { handleSlashCommand } from '../../prompt/repl.js';
 import {
   parseStackedSkillTokens,
@@ -130,9 +131,11 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
         return;
       }
       try {
+        const noteProjectName = activeProjectName(agent.workspaceRoot);
         const res = await mcpClient.callTool('memory_capture_turn', {
           sessionKey: agent.sessionKey,
           workspaceRoot: agent.workspaceRoot,
+          ...(noteProjectName ? { projectName: noteProjectName } : {}),
           messages: [
             { role: 'user', content: `[user note — remember this] ${noteCmd.note}`, timestamp: Date.now() },
             { role: 'assistant', content: 'Noted and saved to memory.', timestamp: Date.now() },
