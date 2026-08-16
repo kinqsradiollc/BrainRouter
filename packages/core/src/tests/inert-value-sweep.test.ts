@@ -627,8 +627,12 @@ function deadExports(): string[] {
  * executePhasePlan hooks (workflowTool.ts; execution-phase-plan-wiring.test.ts,
  * lastSequence + best-effort-guard mutation-proved), so its emitter export has a
  * non-test caller and left the dead set. The module also left KNOWN_UNWIRED above.
+ *
+ * **Fell again 284 → 283, ADR-040 A40-7 resume emission.** `readDurableRunResumeState`
+ * gained a production caller: the phase-plan emitter reads it to continue a resumed
+ * run's event sequence from where the interrupted run left off.
  */
-const DEAD_EXPORT_CEILING = 284;
+const DEAD_EXPORT_CEILING = 283;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

@@ -19,6 +19,7 @@ import {
   startDurableRun,
   updateDurableRun,
   readDurableRunSafe,
+  readDurableRunResumeState,
   type DurableRunSafeRecord,
 } from './runStore.js';
 
@@ -45,6 +46,15 @@ export interface CanonicalPhasePlanInput {
   workspaceRoot?: string;
   definitionId?: string;
   definitionHash?: string;
+  /**
+   * A40-7 — resume an interrupted run's durable record instead of exclusive-
+   * creating a second one. On resume the emitter RE-ATTACHES to the existing
+   * record (via the CAS-guarded update path, so the store's exclusive-create
+   * guard for fresh launches is untouched) and CONTINUES the event sequence from
+   * where the interrupted run left off, so the resumed events do not collide with
+   * the pre-resume ones.
+   */
+  resume?: boolean;
 }
 
 export interface CanonicalPhasePlanEmitter {
@@ -72,15 +82,29 @@ export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): Canon
   let durable: DurableRunSafeRecord | undefined;
 
   if (input.workspaceRoot && input.runId) {
-    durable = startDurableRun({
-      workspaceRoot: input.workspaceRoot,
-      runId: input.runId,
-      executionId: input.executionId,
-      definitionId: input.definitionId ?? null,
-      definitionHash: input.definitionHash ?? null,
-      startedAt: input.startedAt,
-      resumeState: { lastSequence: 0 },
-    });
+    if (input.resume) {
+      // Re-attach to the interrupted run's record and pick up its sequence, so
+      // the continuation's events extend the same stream rather than colliding
+      // with (or duplicating) the ones already emitted. If the record is somehow
+      // gone, fall through to a fresh start.
+      durable = readDurableRunSafe(input.workspaceRoot, input.runId);
+      if (durable) {
+        const priorSequence = (readDurableRunResumeState(input.workspaceRoot, input.runId)
+          ?.resumeState as { lastSequence?: unknown } | undefined)?.lastSequence;
+        if (typeof priorSequence === 'number' && priorSequence > 0) sequence = priorSequence;
+      }
+    }
+    if (!durable) {
+      durable = startDurableRun({
+        workspaceRoot: input.workspaceRoot,
+        runId: input.runId,
+        executionId: input.executionId,
+        definitionId: input.definitionId ?? null,
+        definitionHash: input.definitionHash ?? null,
+        startedAt: input.startedAt,
+        resumeState: { lastSequence: sequence },
+      });
+    }
   }
 
   const emit = (fields: EmissionFields): void => {

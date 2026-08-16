@@ -986,9 +986,10 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   and `/runs` (CLI, and the same curated subpath Desktop uses) calls it before listing — which also
   WIRES the previously-orphaned migration and reconcile, so both leave the E1 sweep. Eight tests,
   the `running → interrupted` mapping mutation-proved.
-- [~] **A40-7 — PARTIAL. Adapt phase plans and saved graphs to the canonical run.** Emit occurrences,
+- [x] **A40-7 — Adapt phase plans and saved graphs to the canonical run.** Emit occurrences,
   traversals, attempts and decisions; preserve typed compatibility failure mappings; and prove
-  resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests.
+  resume/cancel/idempotency and side-effect-uncertain behavior through process-kill tests. **Every one
+  of these is now shipped and mutation-proved — the row is complete.**
 
   **Shipped in `0f6541638`** (`orchestration/execution/graphAdapter.ts` + emission in the graph
   engine). Saved graphs now emit occurrences and approval decisions into the canonical map, and the
@@ -1061,10 +1062,17 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   execution budget (they cannot bust the run's bound) and stop on cancel. Five tests — default-preserved,
   retry-then-succeed, exhausted, optional-degrades, budget-bounded — and the retry loop mutation-proved.
 
-  **Still open for this row:** only the resume path's durable emission — a resumed run re-attaching to
-  its existing durable record instead of the store's exclusive-create refusing a second start. It is
-  the narrowest remaining item and touches the A40-6 store's create-vs-reattach guard, not the emission
-  vocabulary.
+  **The resume path's durable emission now shipped too — the row is complete.** A resumed run
+  RE-ATTACHES to its interrupted record instead of the store's exclusive-create refusing a second start:
+  the phase-plan emitter takes a `resume` flag, reads the existing record (via `readDurableRunSafe`) and
+  CONTINUES the event sequence from the interrupted run's `lastSequence` (via `readDurableRunResumeState`)
+  so the continuation extends the same stream rather than colliding with the events already emitted, and
+  it finalizes on the SAME record. It re-attaches through the CAS-guarded update path only, so the
+  store's exclusive-create guard for FRESH launches is untouched; if the record is somehow gone it falls
+  back to a fresh start; and like the fresh path it is strictly best-effort, so a mirror failure never
+  breaks a resume. `resumeWorkflowUnchecked` composes it into the resume hooks. Two adapter tests
+  (re-attach + sequence continuity mutation-proved; missing-record fallback), the workflow-resume suite
+  unbroken, and the dead-export ceiling fell 284 → 283 as `readDurableRunResumeState` gained a caller.
 - [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
