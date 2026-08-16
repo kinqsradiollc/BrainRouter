@@ -330,7 +330,7 @@
     "postpack": "node ../../scripts/bundle-content.mjs --package . --clean"
   },
   "dependencies": {
-    "@firecrawl/pdf-inspector-wasm": "^0.1.3",
+    "@firecrawl/pdf-inspector-wasm": "^0.1.4",
     "@kinqs/brainrouter-agent-protocol": "^0.4.20",
     "@kinqs/brainrouter-types": "^0.4.20",
     "@modelcontextprotocol/sdk": "^1.11.0",
