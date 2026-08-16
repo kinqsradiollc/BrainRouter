@@ -32,6 +32,7 @@ function rowToSourceDocument(row: any): SourceDocument {
     orgId: row.org_id ?? null,
     projectId: row.project_id ?? null,
     workspaceTag: row.workspace_tag ?? null,
+    projectTag: row.project_tag ?? null,
     kind: row.kind,
     uri: row.uri ?? null,
     hash: row.hash,
@@ -60,6 +61,7 @@ export interface SourceDocumentScope {
   orgId?: string | null;
   projectId?: string | null;
   workspaceTag?: string | null;
+  projectTag?: string | null;
 }
 
 export interface SourceDocumentListFilters {
@@ -83,8 +85,9 @@ export async function getSourceDocumentByHash(
           AND org_id IS NOT DISTINCT FROM $3
           AND project_id IS NOT DISTINCT FROM $4
           AND workspace_tag IS NOT DISTINCT FROM $5
+          AND project_tag IS NOT DISTINCT FROM $6
         LIMIT 1`,
-      [userId, hash, scope.orgId ?? null, scope.projectId ?? null, scope.workspaceTag ?? null],
+      [userId, hash, scope.orgId ?? null, scope.projectId ?? null, scope.workspaceTag ?? null, scope.projectTag ?? null],
     )
     : await exec.one("SELECT * FROM source_documents WHERE user_id = $1 AND hash = $2 ORDER BY created_at DESC LIMIT 1", [userId, hash]);
   return row ? rowToSourceDocument(row) : null;
@@ -179,6 +182,7 @@ export async function createSourceDocument(exec: Executor, input: Omit<SourceDoc
     orgId: input.orgId ?? null,
     projectId: input.projectId ?? null,
     workspaceTag: input.workspaceTag ?? null,
+    projectTag: input.projectTag ?? null,
   });
   if (existing) return existing;
   const doc: SourceDocument = {
@@ -187,6 +191,7 @@ export async function createSourceDocument(exec: Executor, input: Omit<SourceDoc
     orgId: input.orgId ?? null,
     projectId: input.projectId ?? null,
     workspaceTag: input.workspaceTag ?? null,
+    projectTag: input.projectTag ?? null,
     kind: input.kind,
     uri: input.uri ?? null,
     hash: input.hash,
@@ -195,9 +200,9 @@ export async function createSourceDocument(exec: Executor, input: Omit<SourceDoc
     metadata: input.metadata,
   };
   await exec.run(
-    `INSERT INTO source_documents (id, user_id, org_id, project_id, workspace_tag, kind, uri, hash, title, created_at, metadata_json)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [doc.id, doc.userId, doc.orgId, doc.projectId, doc.workspaceTag, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {})],
+    `INSERT INTO source_documents (id, user_id, org_id, project_id, workspace_tag, project_tag, kind, uri, hash, title, created_at, metadata_json)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [doc.id, doc.userId, doc.orgId, doc.projectId, doc.workspaceTag, doc.projectTag ?? null, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {})],
   );
   return doc;
 }

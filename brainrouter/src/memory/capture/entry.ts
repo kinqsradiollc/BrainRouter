@@ -55,7 +55,7 @@ export class MemoryCapturePipeline extends CaptureExtraction {
     // message as a source document + chunks so the raw content stays
     // retrievable and citable (record→chunk provenance lands in MEM-3).
     // Best-effort + idempotent; never blocks the rest of the turn.
-    await this.ingestTurnSources(userId, sessionKey, messages, { orgId, projectId, workspaceTag });
+    await this.ingestTurnSources(userId, sessionKey, messages, { orgId, projectId, workspaceTag, projectTag });
 
     // 2. Decide if we should trigger Cognitive extraction
     const unextractedCount = await this.store.getUnextractedSensoryCount(userId, sessionKey);
