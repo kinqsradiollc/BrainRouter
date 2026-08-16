@@ -13,25 +13,15 @@
  */
 import React from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+// ADR-040 A40-10 — the row/detail shapes are Core's `runsView` types, not a
+// second copy. A type-only import (erased at build, so it never pulls Core's
+// node-side runStore into the renderer bundle) makes the "one projection, two
+// hosts" guarantee compile-time-enforced: if Core's shape drifts, the panel
+// stops compiling instead of silently disagreeing with the CLI.
+import type { RunsListRow, RunDetailView } from '@kinqs/brainrouter-core/orchestration/runs';
 
-export interface RunsRow {
-  runId: string;
-  executionId: string;
-  status: string;
-  startedAt: string;
-  endedAt?: string;
-  definitionId: string | null;
-  detail: 'summary-only' | 'projected';
-}
-
-export interface RunsDetail {
-  runId: string;
-  executionId: string;
-  status: string;
-  completeness: 'complete' | 'gapped' | 'unavailable';
-  caveat?: string;
-  nodes: Array<{ nodeId: string; attempt: number; iterationPath: number[]; status: string }>;
-}
+export type RunsRow = RunsListRow;
+export type RunsDetail = RunDetailView;
 
 /**
  * Live-state vocabulary. `stale` is deliberately distinct from `error`: a

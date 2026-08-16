@@ -1134,10 +1134,16 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   registration (rename the handler and the test fails) and the honest projection (`summary-only` rows,
   an `unavailable` detail with a caveat and an empty node list, `null` for a missing run).
 
+  **Projection-type de-duplication now shipped.** The panel's `RunsRow`/`RunsDetail` are no longer a
+  parallel copy — they are type aliases to Core's `RunsListRow`/`RunDetailView`, imported type-only
+  (erased at build, so the renderer bundle never pulls Core's node-side run store; verified against a
+  real `vite build`). "One projection, two hosts" is now compile-time-enforced: a bidirectional
+  type-identity guard in `RunsPanel.test.ts` fails the typecheck if the shapes ever diverge
+  (mutation-proved — adding a field to the panel's type breaks the build).
+
   **Still open for this row:** the explicit-strategy-launch UI (preview/confirm start) and authorized
   transcript drill-down — both need visual review and the latter crosses the resume-material boundary;
-  a live/stale host push channel to replace the one-shot mount fetch; de-duplicating the panel's local
-  projection types against Core's `RunsListRow`/`RunDetailView`; and driving the panel open in the
+  a live/stale host push channel to replace the one-shot mount fetch; and driving the panel open in the
   running app to assert rendered contents against live data.
 - [~] **A40-11 — PARTIAL. Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
