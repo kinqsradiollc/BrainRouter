@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-ui",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "private": true,
   "description": "Browser-safe BrainRouter presentation components shared by the dashboard and desktop renderer.",
   "type": "module",
@@ -37,7 +37,7 @@
     "react-dom": "^18.3.1 || ^19.0.0"
   },
   "dependencies": {
-    "@kinqs/brainrouter-core": "^0.4.20"
+    "@kinqs/brainrouter-core": "^0.4.21"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
