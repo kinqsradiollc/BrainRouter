@@ -15,6 +15,11 @@ import {
   phaseStatusToCanonical,
 } from '../orchestration/execution/phasePlanAdapter.js';
 import { reduceExecutionEvents } from '../orchestration/execution/reducer.js';
+import {
+  judgeOptimizationRound,
+  engineeringBuildLoopRound,
+  executionDecisionKindFor,
+} from '../orchestration/execution/optimizationSubgraph.js';
 
 function phase(id: string): WorkflowPhase {
   return { id, title: id } as WorkflowPhase;
@@ -99,4 +104,46 @@ test('phaseStatusToCanonical is a total, honest mapping', () => {
   assert.equal(phaseStatusToCanonical('completed'), 'succeeded');
   assert.equal(phaseStatusToCanonical('partial'), 'degraded');
   assert.equal(phaseStatusToCanonical('failed'), 'failed');
+});
+
+// ── A40-11 — build-loop optimization decisions reach the map ─────────────────
+
+test('A40-11 — an optimization decision the build loop made is projected into the map', () => {
+  // The critic gate scores the run; the loop's `accepted` flag decides. This
+  // records that decision through the shared vocabulary so the map can show it.
+  // Mutation-proof: drop the `payload.decision` line in phasePlanAdapter and the
+  // decision never reaches `snapshot.decisions`, failing this.
+  const emitter = canonicalPhasePlanEmitter(INPUT);
+  emitter.hooks.onPhaseStart?.(phase('implement'), 0, 1);
+  emitter.hooks.onPhaseComplete?.(execution('implement', 'completed'));
+
+  const verdict = judgeOptimizationRound({
+    targetMetricId: 'critic_score',
+    counterMetricIds: [],
+    baseline: [{ metricId: 'critic_score', value: 0.7 }],
+    candidate: [{ metricId: 'critic_score', value: 0.9 }],
+    verifierPassed: true,
+  });
+  assert.equal(verdict.accept, true, 'a rising score with a passing verifier accepts');
+  emitter.emitDecision(
+    { kind: executionDecisionKindFor(verdict.kind), outcome: 'accepted', reasonCodes: verdict.reasonCodes },
+    'critic-gate',
+  );
+  emitter.finish({ status: 'completed', phases: [] } as PhasePlanExecution);
+
+  const snap = reduceExecutionEvents(emitter.events()).snapshot(INPUT.executionId)!;
+  const decision = snap.decisions.find((d) => d.nodeExecutionId === 'critic-gate');
+  assert.ok(decision, 'the optimization decision is projected into the execution map');
+  assert.equal(decision!.outcome, 'accepted');
+  assert.ok(decision!.reasonCodes.length > 0, 'it carries the verdict reason codes, not a raw error string');
+});
+
+test('A40-11 — the retained Engineering merge shim rejects a held build and accepts a merged one', () => {
+  // The mapping Seam 2 uses: verify-green -> pass_rate, review-approval -> the
+  // lint_errors counter-metric (a block is a regression). `merged` still decides
+  // upstream; this only checks the recorded verdict matches the outcome.
+  const held = engineeringBuildLoopRound({ passRateBefore: 0, passRateAfter: 0, lintErrorsBefore: 0, lintErrorsAfter: 1, verifierPassed: false });
+  assert.equal(held.accept, false, 'verify-red / review-blocked records as a rejection');
+  const merged = engineeringBuildLoopRound({ passRateBefore: 0, passRateAfter: 1, lintErrorsBefore: 0, lintErrorsAfter: 0, verifierPassed: true });
+  assert.equal(merged.accept, true, 'verify-green / review-approved records as an acceptance');
 });

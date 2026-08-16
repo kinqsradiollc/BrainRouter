@@ -48,6 +48,14 @@ import {
   type FanOutSlice,
 } from '../../orchestration/workflow/buildLoop.js';
 import { runCritic, type CriticInput, type CriticResult } from '../../review/critic.js';
+// A40-11 — the domain-neutral optimization vocabulary. The build loop's existing
+// gates stay the authority; these express the SAME accept/reject as a canonical
+// decision so the execution map can show the loop's real behavior.
+import {
+  judgeOptimizationRound,
+  engineeringBuildLoopRound,
+  executionDecisionKindFor,
+} from '../../orchestration/execution/optimizationSubgraph.js';
 import {
   consumeExecutionDispatchReceipt,
   rejectExecutionDispatchReceipt,
@@ -443,6 +451,12 @@ async function runWorkflowUnchecked(
     const finishCanonical = (result: PhasePlanExecution): void => {
       try { canonical?.finish(result); } catch { /* best-effort — canonical emission never blocks a build */ }
     };
+    // A40-11 — record an optimization decision the loop already made into the map.
+    // Best-effort and side-effect-free: the gate that DECIDED stays upstream; this
+    // only makes the decision visible, and never blocks the build.
+    const emitBuildDecision = (kind: string, outcome: string, reasonCodes: readonly string[], nodeId: string): void => {
+      try { canonical?.emitDecision({ kind, outcome, reasonCodes }, nodeId); } catch { /* best-effort */ }
+    };
 
     // WF-BG — background mode: kick the run off DETACHED so a long fan-out doesn't
     // block the REPL turn. The durable ledger (visible via /workflows + the bg
@@ -538,12 +552,47 @@ async function runWorkflowUnchecked(
         criticGate = refined.outcome;
         try { recordRunCritic(ws, slug, criticGate); }
         catch { /* ledger write is best-effort — never block the merge gate */ }
+        // A40-11 — the critic gate is the honest numeric round: candidate score vs
+        // the accept threshold, with the verifier as the independent witness. The
+        // `accepted` flag above is the authority; this records how it was reached.
+        const verdict = judgeOptimizationRound({
+          targetMetricId: 'critic_score',
+          counterMetricIds: [],
+          baseline: [{ metricId: 'critic_score', value: criticGate.threshold }],
+          candidate: [{ metricId: 'critic_score', value: criticGate.score }],
+          verifierPassed: executionVerifyGreen(execution),
+        });
+        emitBuildDecision(
+          executionDecisionKindFor(verdict.kind),
+          criticGate.accepted ? 'accepted' : 'rejected',
+          verdict.reasonCodes,
+          'critic-gate',
+        );
       }
     }
 
     // BUILD-LOOP P2 — gate + merge the shared worktree (or preserve it as a patch).
     assertAuthorityCurrent?.();
     const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
+    if (buildMerge) {
+      // A40-11 — the Engineering build-loop compat shape, retained during migration:
+      // verify-green maps to the target `pass_rate`, review-approval to the
+      // `lint_errors` counter-metric (a block is a regression). `merged` — i.e.
+      // `verifyGreen && reviewApproved` — remains the deciding gate upstream.
+      const verdict = engineeringBuildLoopRound({
+        passRateBefore: 0,
+        passRateAfter: buildMerge.verifyGreen ? 1 : 0,
+        lintErrorsBefore: 0,
+        lintErrorsAfter: buildMerge.reviewApproved ? 0 : 1,
+        verifierPassed: buildMerge.verifyGreen,
+      });
+      emitBuildDecision(
+        buildMerge.merged ? executionDecisionKindFor('verifier') : executionDecisionKindFor('rollback'),
+        buildMerge.merged ? 'merged' : 'held',
+        verdict.reasonCodes,
+        'build-merge',
+      );
+    }
     // BUILD-LOOP P2.5 — fan-out: cross-worktree synthesis gate over the held slices.
     assertAuthorityCurrent?.();
     const fanOutMerge = isFanOutBuild ? finalizeFanOutBuild(ws, collectFanOutSlices(ws, execution), reviewPhaseOutput(execution)) : undefined;
