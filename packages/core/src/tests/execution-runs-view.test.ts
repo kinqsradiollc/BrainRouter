@@ -118,3 +118,16 @@ test('the json listing carries no resume material', () => {
   assert.equal(serialized.includes('resumeState'), false);
   assert.equal(serialized.includes('protected'), false);
 });
+
+test('A40-9 drill-down — a stage surfaces the child sessions it spawned', () => {
+  const view = toRunDetailView(record(), snapshot({
+    occurrences: [
+      { nodeExecutionId: 's1', nodeId: 'review', attempt: 1, iterationPath: [], status: 'succeeded', childSessionIds: ['child-a', 'child-b'], usage: { promptTokens: 0, completionTokens: 0, toolCalls: 0, wallClockMs: 0 }, terminalReasonCodes: [] },
+      { nodeExecutionId: 's2', nodeId: 'plan', attempt: 1, iterationPath: [], status: 'succeeded', childSessionIds: [], usage: { promptTokens: 0, completionTokens: 0, toolCalls: 0, wallClockMs: 0 }, terminalReasonCodes: [] },
+    ],
+  }));
+  const review = view.nodes.find((n) => n.nodeId === 'review')!;
+  assert.deepEqual([...review.childSessionIds], ['child-a', 'child-b'], 'the stage carries its children for drill-down');
+  const plan = view.nodes.find((n) => n.nodeId === 'plan')!;
+  assert.deepEqual(plan.childSessionIds, [], 'a stage that spawned nothing carries an empty list, not undefined');
+});

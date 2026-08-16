@@ -631,8 +631,12 @@ function deadExports(): string[] {
  * **Fell again 284 → 283, ADR-040 A40-7 resume emission.** `readDurableRunResumeState`
  * gained a production caller: the phase-plan emitter reads it to continue a resumed
  * run's event sequence from where the interrupted run left off.
+ *
+ * **Fell again 283 → 282, ADR-040 A40-9 retained journal.** `reduceExecutionEvents`
+ * gained a production caller: `readRunDetail` reduces a run's retained event journal
+ * so `/runs <id>` rebuilds the map from disk instead of reporting `unavailable`.
  */
-const DEAD_EXPORT_CEILING = 283;
+const DEAD_EXPORT_CEILING = 282;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

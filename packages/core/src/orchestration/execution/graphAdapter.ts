@@ -26,6 +26,7 @@ import {
   readDurableRunSafe,
   type DurableRunSafeRecord,
 } from './runStore.js';
+import { appendRunEvent } from './runJournal.js';
 
 export interface CanonicalGraphRunInput {
   graph: WorkflowGraph;
@@ -108,6 +109,8 @@ export async function runGraphAsCanonicalExecution(
     const event = toExecutionEvent(emission, input.sessionKey, input.startedAt, input.goalId);
     events.push(event);
     store.apply(event);
+    // A40-9 — retain the event so `/runs` can rebuild the map from disk later.
+    if (input.workspaceRoot && input.runId) appendRunEvent(input.workspaceRoot, input.runId, event);
     if (!input.workspaceRoot || !durable) return;
     // Persist as we go. A run that saves only at the end has no resume point at
     // the exact moment it needs one.

@@ -22,6 +22,7 @@ import {
   readDurableRunResumeState,
   type DurableRunSafeRecord,
 } from './runStore.js';
+import { appendRunEvent } from './runJournal.js';
 
 /**
  * A phase's terminal state maps onto the canonical vocabulary. `partial` is
@@ -133,6 +134,8 @@ export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): Canon
     };
     events.push(event);
     store.apply(event);
+    // A40-9 — retain the event so `/runs` can rebuild the map from disk later.
+    if (input.workspaceRoot && input.runId) appendRunEvent(input.workspaceRoot, input.runId, event);
     if (input.workspaceRoot && input.runId && durable) {
       durable = updateDurableRun(
         input.workspaceRoot,

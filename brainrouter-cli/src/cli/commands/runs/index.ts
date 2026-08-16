@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import {
   listDurableRuns,
   readDurableRunSafe,
+  readRunDetail,
   toRunsListRows,
   toRunDetailView,
   runsJson,
@@ -82,10 +83,12 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
     return true;
   }
 
-  // Retained runs keep their summary, not their event stream — so detail is
-  // built with an absent snapshot and the view says what it cannot show,
-  // rather than drawing an empty map as though the run did nothing.
-  const view = toRunDetailView(record, undefined);
+  // A40-9 — retained replay: rebuild the map from the run's retained event
+  // journal. A run with no journal reduces to an absent snapshot, and the view
+  // still says so honestly rather than drawing an empty map as though the run did
+  // nothing. (`?? toRunDetailView(record, undefined)` is a never-hit safety net —
+  // the record was just found, so `readRunDetail` returns a view.)
+  const view = readRunDetail(workspaceRoot, runId) ?? toRunDetailView(record, undefined);
   if (wantsJson) { console.log(runDetailJson(view)); return true; }
 
   console.log(`\n  ${chalk.bold(view.runId)}  ${statusColor(view.status)}`);
@@ -96,6 +99,11 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
     for (const node of view.nodes) {
       const path = node.iterationPath.length ? chalk.dim(`@${node.iterationPath.join('.')}`) : '';
       console.log(`    ${node.nodeId}${path}  ${statusColor(node.status)}  ${chalk.dim(`attempt ${node.attempt}`)}`);
+      // A40-9 — drill-down: the child sessions this stage spawned, so a run can be
+      // traced into the transcripts it produced.
+      for (const child of node.childSessionIds) {
+        console.log(chalk.dim(`        ↳ child ${child}`));
+      }
     }
   }
   console.log('');

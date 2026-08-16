@@ -1110,8 +1110,17 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   has no business holding resume material, and the package-boundary check enforces that rather than
   a comment asking nicely.
 
-  **Still open for this row:** preview/confirm start, live updates, retained replay, goal
-  continuation, and authorized child-transcript drill-down.
+  **Retained replay now shipped** (`orchestration/execution/runJournal.ts`). A run's events are kept in
+  an append-only JSONL journal beside its durable record, written best-effort as they are emitted (both
+  the graph and phase-plan adapters), and `readRunDetail` reads them back through the SAME reducer the
+  live view uses — so `/runs <id>` and Desktop Runs rebuild the real execution map from disk instead of
+  reporting `unavailable`. Bounded by a byte ceiling (a run past it reduces to `gapped`, honestly, not
+  a silent truncation); torn last lines are skipped rather than aborting the read; the writer stays off
+  the host surface, hosts get the reader only. Five tests, including a real graph run read back from
+  disk to the same map it produced live; the journal append mutation-proved.
+
+  **Still open for this row:** preview/confirm start, live updates, goal continuation, and authorized
+  child-transcript drill-down.
 - [~] **A40-10 — PARTIAL. Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
   Design with normal no-goal turns visible by default, preview/confirm, live/reconnect state,
   accessible graph/list fallback, details and authorized transcript drill-down; validate

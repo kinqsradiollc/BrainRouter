@@ -30,3 +30,10 @@ export {
   openDurableRuns,
   type DurableRunsOpenResult,
 } from './runStoreMigration.js';
+
+// A40-9 — retained replay: read a run's durable record + retained event journal
+// and project the detail. Hosts get the READER only; `appendRunEvent` (the writer)
+// stays internal to the emitters, off this surface.
+export {
+  readRunDetail,
+} from './runJournal.js';
