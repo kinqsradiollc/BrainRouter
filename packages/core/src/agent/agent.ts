@@ -123,7 +123,7 @@ import { listAll as listAgentDefinitions } from '../orchestration/agents/agentRe
 import { ownershipWriteViolation } from '../orchestration/ownership/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
-import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './fs/workspaceFs.js';
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch, type WorkspaceScope } from './fs/workspaceFs.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
@@ -886,8 +886,39 @@ export class Agent {
     if (value === this.#workspaceRoot) return;
     if (this.#workspaceRoot !== undefined) {
       this.invalidateExecutionIntentAuthority();
+      // ADR-042 D1/D2 — attached worktrees belong to the OLD primary's trust
+      // domain (same-repo membership was derived from it). A new primary is a
+      // new domain, so the attachment set is cleared, never carried across.
+      this.#attachedRoots = [];
     }
     this.#workspaceRoot = value;
+  }
+
+  // ADR-042 D1 — same-repo worktrees this session has explicitly entered
+  // (`worktree_enter`). Empty by default, so single-root behavior is unchanged
+  // until the agent opts in. Reset whenever the primary root changes (above).
+  #attachedRoots: string[] = [];
+  /** A snapshot of the attached same-repo worktree roots (absolute, realpath'd). */
+  public get attachedRoots(): readonly string[] {
+    return this.#attachedRoots;
+  }
+  /** The session's full workspace scope: primary root + attached worktrees. */
+  public get workspaceScope(): WorkspaceScope {
+    return { primaryRoot: this.workspaceRoot, attachedRoots: this.#attachedRoots };
+  }
+  /**
+   * Attach a same-repo worktree root for file access (idempotent, capped). The
+   * caller is responsible for the D2 derivation check (`resolveAttachableWorktree`)
+   * — this only records an already-validated root. Realpath'd so scope checks
+   * compare canonically.
+   */
+  public attachWorktree(root: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* keep as given */ }
+    if (canonical === this.workspaceRoot) return; // the primary is always in scope
+    if (this.#attachedRoots.includes(canonical)) return;
+    if (this.#attachedRoots.length >= 16) this.#attachedRoots.shift(); // bounded
+    this.#attachedRoots.push(canonical);
   }
   public launchCwd: string;
   /** Stable identity for the currently running turn; reset at turn finalization. */

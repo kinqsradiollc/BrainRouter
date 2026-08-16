@@ -12,7 +12,7 @@ export interface BuiltinToolRuntimePort {
 }
 
 const CAPABILITY_TOOLS = {
-  filesystem: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'notebook_edit'],
+  filesystem: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'notebook_edit', 'worktree_list', 'worktree_enter'],
   shell: ['run_command', 'task_output', 'wait_until', 'computer_use', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write'],
   'web-research': ['fetch_url', 'web_search', 'research_note', 'research_brief'],
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],

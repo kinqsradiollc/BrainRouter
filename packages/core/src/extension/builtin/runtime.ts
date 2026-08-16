@@ -103,7 +103,8 @@ import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAc
 import { truncateFullRead } from '../../agent/fs/readTruncation.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
-import { resolveWorkspacePath, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
+import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
+import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
@@ -289,8 +290,56 @@ export async function invokeBuiltinToolRuntime(
     // the launching shell's cwd (e.g. /resume from another dir), and cwd can
     // drift in unexpected ways. Explicit beats implicit here.
     const resolveHere = (p: string, opts: { forWrite?: boolean } = {}) =>
-      resolveWorkspacePath(this.workspaceRoot, p, opts);
+      resolveWorkspacePathInScope(
+        // `this` is the Agent; its scope carries any entered worktrees (ADR-042
+        // D1). Falls back to a single-root scope for any non-Agent caller.
+        this.workspaceScope ?? singleRootScope(this.workspaceRoot),
+        p,
+        opts,
+      );
     switch (name) {
+      // ADR-042 D3 — worktrees the agent can enter. `worktree_list` is the
+      // structured, agent-facing inventory; `worktree_enter` attaches a listed
+      // same-repo worktree (D2 derivation) so its files resolve. Non-destructive
+      // and reversible — unlike `/cd`, it widens scope without moving the anchor.
+      case 'worktree_list': {
+        const list = listWorktreesStructured(this.workspaceRoot, undefined, { withDirty: true });
+        const attached = new Set((this.attachedRoots ?? []).map((r: string) => path.resolve(r)));
+        return JSON.stringify({
+          primaryRoot: this.workspaceRoot,
+          worktrees: list.map((w) => ({
+            path: w.path,
+            branch: w.branch,
+            detached: w.detached || undefined,
+            bare: w.bare || undefined,
+            locked: w.locked || undefined,
+            lockedReason: w.lockedReason,
+            prunable: w.prunable || undefined,
+            prunableReason: w.prunableReason,
+            dirty: w.dirty,
+            current: w.isSelf || undefined,
+            attached: attached.has(path.resolve(w.path)) || undefined,
+          })),
+        }, null, 2);
+      }
+      case 'worktree_enter': {
+        if (this.reviewSourceSafety) {
+          throw new Error('worktree_enter is disabled while reviewing untrusted source.');
+        }
+        const target = typeof args.target === 'string' ? args.target
+          : typeof args.path === 'string' ? args.path
+          : typeof args.branch === 'string' ? args.branch
+          : '';
+        const res = resolveAttachableWorktree(this.workspaceRoot, target);
+        if (!res.ok) throw new Error(res.reason);
+        if (typeof this.attachWorktree === 'function') this.attachWorktree(res.info.path);
+        return JSON.stringify({
+          entered: res.info.path,
+          branch: res.info.branch,
+          detached: res.info.detached || undefined,
+          note: 'Attached for this repository — files under this worktree now resolve for read and edit. The exec default cwd still points at the primary root; pass an explicit cwd to run commands there.',
+        });
+      }
       // ADR-028 D6 — the planner. User-scoped, so no workspace is threaded.
       case 'planner_today': {
         const date = typeof args.date === 'string' ? args.date : new Date().toISOString().slice(0, 10);
