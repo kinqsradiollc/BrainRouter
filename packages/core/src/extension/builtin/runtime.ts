@@ -105,6 +105,7 @@ import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
+import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
@@ -339,6 +340,73 @@ export async function invokeBuiltinToolRuntime(
           detached: res.info.detached || undefined,
           note: 'Attached for this repository — files under this worktree now resolve for read and edit. The exec default cwd still points at the primary root; pass an explicit cwd to run commands there.',
         });
+      }
+      case 'worktree_create': {
+        if (this.reviewSourceSafety) {
+          throw new Error('worktree_create is disabled while reviewing untrusted source.');
+        }
+        const branch = typeof args.branch === 'string' ? args.branch
+          : typeof args.name === 'string' ? args.name : '';
+        const fromRef = typeof args.from === 'string' && args.from.trim() ? args.from.trim() : 'HEAD';
+        const created = createNamedWorktree(this.workspaceRoot, branch, fromRef);
+        if ('error' in created) throw new Error(created.error);
+        if (typeof this.attachWorktree === 'function') this.attachWorktree(created.worktreeRoot);
+        return JSON.stringify({
+          created: created.worktreeRoot,
+          branch: created.branch,
+          from: fromRef,
+          attached: true,
+          note: 'A new worktree on this branch, attached for read and edit. Run commands there by passing cwd to run_command; finish with worktree_done once the work is committed or merged.',
+        });
+      }
+      case 'worktree_done': {
+        const target = typeof args.path === 'string' ? args.path
+          : typeof args.target === 'string' ? args.target : '';
+        if (!target.trim()) {
+          throw new Error('worktree_done requires a worktree path or branch. Run worktree_list to see them.');
+        }
+        const list = listWorktreesStructured(this.workspaceRoot, undefined, { withDirty: true });
+        const asPath = path.isAbsolute(target) ? path.resolve(target) : path.resolve(this.workspaceRoot, target);
+        const match = list.find((w) => path.resolve(w.path) === asPath) ?? list.find((w) => w.branch === target.trim());
+        if (!match) {
+          throw new Error(`No git worktree of this repository matches "${target}". Run worktree_list.`);
+        }
+        if (match.isSelf) {
+          throw new Error(`"${target}" is the current workspace root — worktree_done cannot remove it.`);
+        }
+        const force = args.force === true;
+        // Uncommitted work is preserved by default: surface it and stop, unless
+        // the caller explicitly forces (which discards it).
+        if (match.dirty && !force) {
+          return JSON.stringify({
+            removed: false,
+            path: match.path,
+            branch: match.branch,
+            reason: 'This worktree has uncommitted changes. Commit or push them first, or call worktree_done with force:true to discard them.',
+          });
+        }
+        // Route the removal through the SAME destructive-command guard as a
+        // hand-typed `git worktree remove` (worktree-remove rule): the user's
+        // intent authorizes it, otherwise a silent agent is refused and an
+        // attended one is asked.
+        const verdict = evaluateDestructiveCommand(`git worktree remove ${match.path}`, {
+          userIntent: this.lastUserPrompt,
+          headSha: gitHeadSha(this.workspaceRoot),
+          agentAuthoredCommits: this.agentAuthoredCommits,
+        });
+        if (verdict.decision === 'block') {
+          if (this.silent || (!this.interactionPort && !this.prompter)) {
+            return JSON.stringify({ removed: false, path: match.path, reason: `${verdict.rule}: ${verdict.reason}` });
+          }
+          const approved = this.interactionPort
+            ? await this.interactionPort.confirm({ title: 'Remove worktree?', detail: `${match.path}\n\n${verdict.reason}`, dangerous: true, tool: 'worktree_done' })
+            : await this.prompter.askYesNo(`${verdict.reason}\nRemove it? (y/N) `, false);
+          if (!approved) return JSON.stringify({ removed: false, path: match.path, reason: 'Removal declined.' });
+        }
+        const removed = removeWorktreeAt(this.workspaceRoot, match.path, { force });
+        if (!removed.ok) throw new Error(removed.error ?? 'git worktree remove failed.');
+        if (typeof this.detachWorktree === 'function') this.detachWorktree(match.path);
+        return JSON.stringify({ removed: true, path: match.path, branch: match.branch });
       }
       // ADR-028 D6 — the planner. User-scoped, so no workspace is threaded.
       case 'planner_today': {
