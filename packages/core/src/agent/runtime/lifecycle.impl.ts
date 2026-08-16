@@ -12,7 +12,7 @@ import { extensionHookHandlers } from '../../extension/registry.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { callMcpTool } from '../../mcp/mcpUtils.js';
 import { decideAnchorAction, hashBriefingContent, wrapMidSessionRefresh } from '../../memory/anchorPin.js';
-import { listOtherWorktrees } from '../../worktree/concurrentWorktrees.js';
+import { worktreeFeatureMap } from '../../worktree/concurrentWorktrees.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan } from '../../memory/briefing.js';
 import { countEntityTokens as countEntityTokensFromText, decideMemoryBriefing, resolveRecallMode as resolveRecallModeFromEnv, type BriefingDecision } from '../../memory/briefingTriggers.js';
 import { emitAgentEvent } from '../../memory/memoryEvents.js';
@@ -167,7 +167,7 @@ export function createSystemMessage(this: Agent) {
       codePromptPrefix: getCliKnobs().codePromptPrefix,
       // WORKTREE-SAFETY — passive awareness of OTHER git worktrees in this repo so
       // a concurrent agent doesn't clobber another's files/branch. Best-effort.
-      activeWorktrees: listOtherWorktrees(this.workspaceRoot),
+      activeWorktrees: worktreeFeatureMap(this.workspaceRoot),
     };
     const generatedLayers = this.systemPromptOverride ? undefined : buildPromptLayers(promptContext);
     const base = this.systemPromptOverride ?? buildSystemPrompt(promptContext);

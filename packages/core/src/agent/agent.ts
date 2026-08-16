@@ -123,7 +123,7 @@ import { listAll as listAgentDefinitions } from '../orchestration/agents/agentRe
 import { ownershipWriteViolation } from '../orchestration/ownership/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
-import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './fs/workspaceFs.js';
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch, type WorkspaceScope } from './fs/workspaceFs.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
@@ -886,8 +886,88 @@ export class Agent {
     if (value === this.#workspaceRoot) return;
     if (this.#workspaceRoot !== undefined) {
       this.invalidateExecutionIntentAuthority();
+      // ADR-042 D1/D2 — attached worktrees belong to the OLD primary's trust
+      // domain (same-repo membership was derived from it). A new primary is a
+      // new domain, so the attachment set is cleared, never carried across.
+      this.#attachedRoots = [];
+      this.#readOnlyRoots.clear();
     }
     this.#workspaceRoot = value;
+  }
+
+  // ADR-042 D1 — same-repo worktrees this session has explicitly entered
+  // (`worktree_enter`). Empty by default, so single-root behavior is unchanged
+  // until the agent opts in. Reset whenever the primary root changes (above).
+  #attachedRoots: string[] = [];
+  // ADR-042 D6 — worktrees attached READ-ONLY because a live foreign session
+  // owns them: path (realpath'd) -> owner session key. Reads resolve; writes
+  // are refused with the owner named. Reset with the primary root (above).
+  #readOnlyRoots: Map<string, string> = new Map();
+  /** A snapshot of the attached same-repo worktree roots (absolute, realpath'd). */
+  public get attachedRoots(): readonly string[] {
+    return this.#attachedRoots;
+  }
+  /** The session's full workspace scope: primary root + attached worktrees. */
+  public get workspaceScope(): WorkspaceScope {
+    return {
+      primaryRoot: this.workspaceRoot,
+      attachedRoots: this.#attachedRoots,
+      readOnlyRoots: [...this.#readOnlyRoots.keys()],
+    };
+  }
+  /**
+   * Attach a same-repo worktree root for file access (idempotent, capped). The
+   * caller is responsible for the D2 derivation check (`resolveAttachableWorktree`)
+   * — this only records an already-validated root. Realpath'd so scope checks
+   * compare canonically.
+   */
+  public attachWorktree(root: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* keep as given */ }
+    if (canonical === this.workspaceRoot) return; // the primary is always in scope
+    if (this.#attachedRoots.includes(canonical)) return;
+    if (this.#attachedRoots.length >= 16) this.#attachedRoots.shift(); // bounded
+    this.#attachedRoots.push(canonical);
+  }
+
+  /**
+   * ADR-042 S4 — detach a previously-entered worktree from the scope (e.g. after
+   * worktree_done removes it). Idempotent; matches on the realpath or the raw
+   * path so a removed directory (whose realpath now fails) still drops.
+   */
+  public detachWorktree(root: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* dir may be gone post-removal */ }
+    this.#attachedRoots = this.#attachedRoots.filter((r) => r !== canonical && r !== root);
+    this.#readOnlyRoots.delete(canonical);
+    this.#readOnlyRoots.delete(root);
+  }
+
+  /**
+   * ADR-042 D6 — attach a worktree READ-ONLY because a live foreign session
+   * (`owner`) owns it. Its files resolve for READ; writes are refused with the
+   * owner named. Never both read-only and read/write.
+   */
+  public attachReadOnlyWorktree(root: string, owner: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* keep as given */ }
+    if (canonical === this.workspaceRoot) return;
+    this.#attachedRoots = this.#attachedRoots.filter((r) => r !== canonical); // never both
+    this.#readOnlyRoots.set(canonical, owner);
+  }
+
+  /**
+   * The owning session of the read-only worktree that would contain `inputPath`,
+   * or null. Resolved lexically against the primary anchor the same way the path
+   * resolver does, so the tool layer can refuse a write before it is attempted.
+   */
+  public readOnlyWorktreeOwner(inputPath: string): string | null {
+    if (this.#readOnlyRoots.size === 0 || typeof inputPath !== 'string' || !inputPath.trim()) return null;
+    const abs = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(this.workspaceRoot, inputPath);
+    for (const [root, owner] of this.#readOnlyRoots) {
+      if (isPathInside(root, abs)) return owner;
+    }
+    return null;
   }
   public launchCwd: string;
   /** Stable identity for the currently running turn; reset at turn finalization. */

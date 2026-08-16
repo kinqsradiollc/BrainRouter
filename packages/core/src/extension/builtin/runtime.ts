@@ -103,7 +103,10 @@ import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAc
 import { truncateFullRead } from '../../agent/fs/readTruncation.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
-import { resolveWorkspacePath, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
+import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
+import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
+import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
+import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
@@ -289,8 +292,151 @@ export async function invokeBuiltinToolRuntime(
     // the launching shell's cwd (e.g. /resume from another dir), and cwd can
     // drift in unexpected ways. Explicit beats implicit here.
     const resolveHere = (p: string, opts: { forWrite?: boolean } = {}) =>
-      resolveWorkspacePath(this.workspaceRoot, p, opts);
+      resolveWorkspacePathInScope(
+        // `this` is the Agent; its scope carries any entered worktrees (ADR-042
+        // D1). Falls back to a single-root scope for any non-Agent caller.
+        this.workspaceScope ?? singleRootScope(this.workspaceRoot),
+        p,
+        opts,
+      );
+    // ADR-042 D6 — a write into a worktree owned by a live foreign session is
+    // refused with the owner named, BEFORE resolveHere (edit/notebook resolve
+    // for read, so the escape guard alone would not catch them).
+    const readOnlyGuard = (p: string) => {
+      const owner = typeof this.readOnlyWorktreeOwner === 'function' ? this.readOnlyWorktreeOwner(p) : null;
+      if (owner) {
+        throw new Error(`Cannot write ${p}: it is in a worktree owned by session ${owner} (attached read-only). Coordinate with them, or re-enter it with override once they are done.`);
+      }
+    };
     switch (name) {
+      // ADR-042 D3 — worktrees the agent can enter. `worktree_list` is the
+      // structured, agent-facing inventory; `worktree_enter` attaches a listed
+      // same-repo worktree (D2 derivation) so its files resolve. Non-destructive
+      // and reversible — unlike `/cd`, it widens scope without moving the anchor.
+      case 'worktree_list': {
+        const list = listWorktreesStructured(this.workspaceRoot, undefined, { withDirty: true });
+        const attached = new Set((this.attachedRoots ?? []).map((r: string) => path.resolve(r)));
+        return JSON.stringify({
+          primaryRoot: this.workspaceRoot,
+          worktrees: list.map((w) => ({
+            path: w.path,
+            branch: w.branch,
+            detached: w.detached || undefined,
+            bare: w.bare || undefined,
+            locked: w.locked || undefined,
+            lockedReason: w.lockedReason,
+            prunable: w.prunable || undefined,
+            prunableReason: w.prunableReason,
+            dirty: w.dirty,
+            current: w.isSelf || undefined,
+            attached: attached.has(path.resolve(w.path)) || undefined,
+          })),
+        }, null, 2);
+      }
+      case 'worktree_enter': {
+        if (this.reviewSourceSafety) {
+          throw new Error('worktree_enter is disabled while reviewing untrusted source.');
+        }
+        const target = typeof args.target === 'string' ? args.target
+          : typeof args.path === 'string' ? args.path
+          : typeof args.branch === 'string' ? args.branch
+          : '';
+        const res = resolveAttachableWorktree(this.workspaceRoot, target);
+        if (!res.ok) throw new Error(res.reason);
+        // ADR-042 D6 — if a LIVE foreign session owns this worktree, attach it
+        // read-only (writes refused, owner named) unless the user overrides.
+        const override = args.override === true || args.force === true;
+        const foreignOwner = !override && this.sessionKey
+          ? liveForeignOwner(this.workspaceRoot, res.info.path, this.sessionKey)
+          : null;
+        if (foreignOwner && typeof this.attachReadOnlyWorktree === 'function') {
+          this.attachReadOnlyWorktree(res.info.path, foreignOwner);
+          return JSON.stringify({
+            entered: res.info.path,
+            branch: res.info.branch,
+            readOnly: true,
+            owner: foreignOwner,
+            note: `Attached READ-ONLY — session ${foreignOwner} is working in this worktree. You can read it; writes are refused. Pass override:true to take it read/write anyway.`,
+          });
+        }
+        if (typeof this.attachWorktree === 'function') this.attachWorktree(res.info.path);
+        if (this.sessionKey) { try { recordWorktreeOwner(this.workspaceRoot, res.info.path, this.sessionKey); } catch { /* best-effort */ } }
+        return JSON.stringify({
+          entered: res.info.path,
+          branch: res.info.branch,
+          detached: res.info.detached || undefined,
+          note: 'Attached for this repository — files under this worktree now resolve for read and edit. The exec default cwd still points at the primary root; pass an explicit cwd to run commands there.',
+        });
+      }
+      case 'worktree_create': {
+        if (this.reviewSourceSafety) {
+          throw new Error('worktree_create is disabled while reviewing untrusted source.');
+        }
+        const branch = typeof args.branch === 'string' ? args.branch
+          : typeof args.name === 'string' ? args.name : '';
+        const fromRef = typeof args.from === 'string' && args.from.trim() ? args.from.trim() : 'HEAD';
+        const created = createNamedWorktree(this.workspaceRoot, branch, fromRef);
+        if ('error' in created) throw new Error(created.error);
+        if (typeof this.attachWorktree === 'function') this.attachWorktree(created.worktreeRoot);
+        if (this.sessionKey) { try { recordWorktreeOwner(this.workspaceRoot, created.worktreeRoot, this.sessionKey); } catch { /* best-effort */ } }
+        return JSON.stringify({
+          created: created.worktreeRoot,
+          branch: created.branch,
+          from: fromRef,
+          attached: true,
+          note: 'A new worktree on this branch, attached for read and edit. Run commands there by passing cwd to run_command; finish with worktree_done once the work is committed or merged.',
+        });
+      }
+      case 'worktree_done': {
+        const target = typeof args.path === 'string' ? args.path
+          : typeof args.target === 'string' ? args.target : '';
+        if (!target.trim()) {
+          throw new Error('worktree_done requires a worktree path or branch. Run worktree_list to see them.');
+        }
+        const list = listWorktreesStructured(this.workspaceRoot, undefined, { withDirty: true });
+        const asPath = path.isAbsolute(target) ? path.resolve(target) : path.resolve(this.workspaceRoot, target);
+        const match = list.find((w) => path.resolve(w.path) === asPath) ?? list.find((w) => w.branch === target.trim());
+        if (!match) {
+          throw new Error(`No git worktree of this repository matches "${target}". Run worktree_list.`);
+        }
+        if (match.isSelf) {
+          throw new Error(`"${target}" is the current workspace root — worktree_done cannot remove it.`);
+        }
+        const force = args.force === true;
+        // Uncommitted work is preserved by default: surface it and stop, unless
+        // the caller explicitly forces (which discards it).
+        if (match.dirty && !force) {
+          return JSON.stringify({
+            removed: false,
+            path: match.path,
+            branch: match.branch,
+            reason: 'This worktree has uncommitted changes. Commit or push them first, or call worktree_done with force:true to discard them.',
+          });
+        }
+        // Route the removal through the SAME destructive-command guard as a
+        // hand-typed `git worktree remove` (worktree-remove rule): the user's
+        // intent authorizes it, otherwise a silent agent is refused and an
+        // attended one is asked.
+        const verdict = evaluateDestructiveCommand(`git worktree remove ${match.path}`, {
+          userIntent: this.lastUserPrompt,
+          headSha: gitHeadSha(this.workspaceRoot),
+          agentAuthoredCommits: this.agentAuthoredCommits,
+        });
+        if (verdict.decision === 'block') {
+          if (this.silent || (!this.interactionPort && !this.prompter)) {
+            return JSON.stringify({ removed: false, path: match.path, reason: `${verdict.rule}: ${verdict.reason}` });
+          }
+          const approved = this.interactionPort
+            ? await this.interactionPort.confirm({ title: 'Remove worktree?', detail: `${match.path}\n\n${verdict.reason}`, dangerous: true, tool: 'worktree_done' })
+            : await this.prompter.askYesNo(`${verdict.reason}\nRemove it? (y/N) `, false);
+          if (!approved) return JSON.stringify({ removed: false, path: match.path, reason: 'Removal declined.' });
+        }
+        const removed = removeWorktreeAt(this.workspaceRoot, match.path, { force });
+        if (!removed.ok) throw new Error(removed.error ?? 'git worktree remove failed.');
+        if (typeof this.detachWorktree === 'function') this.detachWorktree(match.path);
+        try { clearWorktreeOwner(this.workspaceRoot, match.path); } catch { /* best-effort */ }
+        return JSON.stringify({ removed: true, path: match.path, branch: match.branch });
+      }
       // ADR-028 D6 — the planner. User-scoped, so no workspace is threaded.
       case 'planner_today': {
         const date = typeof args.date === 'string' ? args.date : new Date().toISOString().slice(0, 10);
@@ -480,6 +626,7 @@ export async function invokeBuiltinToolRuntime(
         return lines.slice(startIdx - 1, endIdx).join('\n');
       }
       case 'write_file': {
+        readOnlyGuard(args.path);
         const resolved = resolveHere(args.path, { forWrite: true });
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
@@ -511,6 +658,7 @@ export async function invokeBuiltinToolRuntime(
         return `Successfully wrote file: ${args.path}` + writeNotice + reindexNotice;
       }
       case 'notebook_edit': {
+        readOnlyGuard(args.path);
         const resolved = resolveHere(args.path);
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
@@ -533,6 +681,7 @@ export async function invokeBuiltinToolRuntime(
         return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
       }
       case 'edit_file': {
+        readOnlyGuard(args.path);
         const resolved = resolveHere(args.path);
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
@@ -636,6 +785,21 @@ export async function invokeBuiltinToolRuntime(
       }
       case 'run_command': {
         const cmd = args.command;
+        // ADR-042 D4 — an optional validated `cwd`. The default stays the
+        // workspace root (the pin that stopped a drifted process.cwd() writing
+        // into ~/.brainrouter); a passed cwd is validated against the workspace
+        // SCOPE (primary + entered worktrees) and rejected with the same escape
+        // error otherwise. It is a validated override, never an unpin.
+        let cwdOverride: string | undefined;
+        if (typeof args.cwd === 'string' && args.cwd.trim() !== '') {
+          cwdOverride = this.workspaceScope
+            ? resolveWorkspacePathInScope(this.workspaceScope, args.cwd)
+            : resolveWorkspacePath(this.workspaceRoot, args.cwd);
+          if (!fs.existsSync(cwdOverride) || !fs.statSync(cwdOverride).isDirectory()) {
+            throw new Error(`run_command cwd is not a directory: ${args.cwd}`);
+          }
+        }
+        const effectiveCwd = cwdOverride ?? this.workspaceRoot;
         // CLI-11 — route the shell gate through the unified execution policy
         // (same outcome as the previous `accessMode !== 'shell'` check).
         const shellPolicy = decideExecutionPolicy('shell', this.accessMode);
@@ -808,7 +972,7 @@ export async function invokeBuiltinToolRuntime(
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
-          const bg = startBackgroundShell({ command: cmd, cwd: this.launchCwd, workspaceRoot: this.workspaceRoot });
+          const bg = startBackgroundShell({ command: cmd, cwd: cwdOverride ?? this.launchCwd, workspaceRoot: this.workspaceRoot });
           return JSON.stringify({
             id: bg.id,
             status: bg.status,
@@ -823,9 +987,13 @@ export async function invokeBuiltinToolRuntime(
             : resolvePentestSandbox(this.workspaceRoot));
           return `[pentest Docker/proxy sandbox] Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
         }
+        // The sandbox is rooted at the EFFECTIVE cwd (the entered worktree, if
+        // any); the rest of the scope (primary + other attached roots) is granted
+        // write so a command run in a worktree can still touch the primary tree.
+        const scopeWriteGrants = [this.workspaceRoot, ...(this.attachedRoots ?? [])].filter((r: string) => r !== effectiveCwd);
         const sandboxConfig = resolveSandboxConfig(
-          this.workspaceRoot,
-          { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
+          effectiveCwd,
+          { readPaths: prefs.sandboxReadPaths, writePaths: [...prefs.sandboxWritePaths, ...scopeWriteGrants] },
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
         this.assertInheritedExecutionAuthorityCurrent();

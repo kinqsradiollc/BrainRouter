@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import type { WorktreeAwarenessHost } from './awareness/host/contracts.js';
 import { nodeWorktreeAwarenessHost } from './awareness/host/nodeWorktreeAwarenessHost.js';
+import { listWorktreeOwners } from './ownership/worktreeOwnership.js';
 
 export type { WorktreeAwarenessHost } from './awareness/host/contracts.js';
 
@@ -49,4 +50,154 @@ export function listOtherWorktrees(
   } catch {
     return [];
   }
+}
+
+/**
+ * ADR-042 D2/D3 — structured worktree inventory. `parseWorktreePorcelain`
+ * (above) yields display strings for the prompt line; the agent-facing
+ * `worktree_list`/`worktree_enter` tools need the fields as data.
+ */
+export interface WorktreeInfo {
+  /** Absolute path git reports for the worktree. */
+  path: string;
+  /** Branch name (no `refs/heads/`), or null when detached / bare. */
+  branch: string | null;
+  /** HEAD sha, when git reports one. */
+  head: string | null;
+  detached: boolean;
+  bare: boolean;
+  locked: boolean;
+  lockedReason?: string;
+  /** Directory is gone (moved/deleted without `git worktree remove`). */
+  prunable: boolean;
+  prunableReason?: string;
+  /** True for the block whose path === the queried root (the primary). */
+  isSelf: boolean;
+  /** Best-effort uncommitted-tracked-changes flag (host-computed). */
+  dirty?: boolean;
+}
+
+/**
+ * Parse `git worktree list --porcelain` into structured entries, INCLUDING the
+ * queried root (flagged `isSelf`) — unlike `parseWorktreePorcelain`, which drops
+ * it. Pure; the derivation rule (D2) is "membership in this list", nothing else.
+ */
+export function parseWorktreePorcelainStructured(output: string, selfPath: string): WorktreeInfo[] {
+  const self = path.resolve(selfPath);
+  const out: WorktreeInfo[] = [];
+  for (const block of output.split(/\n\s*\n/)) {
+    const wt = block.match(/^worktree\s+(.+)$/m);
+    if (!wt) continue;
+    const wtPath = wt[1].trim();
+    const branchMatch = block.match(/^branch\s+refs\/heads\/(.+)$/m);
+    const headMatch = block.match(/^HEAD\s+([0-9a-f]+)$/m);
+    const lockedMatch = block.match(/^locked(?:\s+(.*))?$/m);
+    const prunableMatch = block.match(/^prunable(?:\s+(.*))?$/m);
+    out.push({
+      path: wtPath,
+      branch: branchMatch ? branchMatch[1].trim() : null,
+      head: headMatch ? headMatch[1] : null,
+      detached: /^detached\b/m.test(block),
+      bare: /^bare\b/m.test(block),
+      locked: !!lockedMatch,
+      lockedReason: lockedMatch?.[1]?.trim() || undefined,
+      prunable: !!prunableMatch,
+      prunableReason: prunableMatch?.[1]?.trim() || undefined,
+      isSelf: path.resolve(wtPath) === self,
+    });
+  }
+  return out;
+}
+
+/**
+ * The structured inventory of every worktree of the repo containing
+ * `workspaceRoot` (including the root itself), capped and best-effort. Returns
+ * `[]` when it isn't a git repo or on any error — awareness must not throw.
+ * When `withDirty` is set, fills the best-effort `dirty` flag per non-prunable
+ * entry via the host.
+ */
+export function listWorktreesStructured(
+  workspaceRoot: string,
+  host: WorktreeAwarenessHost = nodeWorktreeAwarenessHost,
+  opts: { withDirty?: boolean } = {},
+): WorktreeInfo[] {
+  let entries: WorktreeInfo[];
+  try {
+    entries = parseWorktreePorcelainStructured(host.listPorcelain(workspaceRoot), workspaceRoot).slice(0, 24);
+  } catch {
+    return [];
+  }
+  if (opts.withDirty && typeof host.isDirty === 'function') {
+    for (const e of entries) {
+      if (!e.prunable && !e.bare) {
+        try { e.dirty = host.isDirty(e.path); } catch { /* best-effort */ }
+      }
+    }
+  }
+  return entries;
+}
+
+export type AttachableResult =
+  | { ok: true; info: WorktreeInfo }
+  | { ok: false; reason: string };
+
+/**
+ * D2 derivation rule as a decision: is `target` (a worktree path OR a branch
+ * name) an attachable worktree of this repo? Attachable iff git lists it, it is
+ * not the current root, and its directory still exists (not prunable / not
+ * bare). Every refusal carries the reason and the fix.
+ */
+export function resolveAttachableWorktree(
+  workspaceRoot: string,
+  target: string,
+  host: WorktreeAwarenessHost = nodeWorktreeAwarenessHost,
+): AttachableResult {
+  const raw = String(target ?? '').trim();
+  if (!raw) return { ok: false, reason: 'A worktree path or branch name is required. Run worktree_list to see the attachable worktrees.' };
+  const list = listWorktreesStructured(workspaceRoot, host);
+  if (list.length === 0) return { ok: false, reason: 'No git worktrees are visible from this workspace (not a git repository, or git is unavailable).' };
+  const asPath = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(workspaceRoot, raw);
+  const match =
+    list.find((w) => path.resolve(w.path) === asPath) ??
+    list.find((w) => w.branch === raw);
+  if (!match) {
+    return { ok: false, reason: `No git worktree of this repository matches "${target}". Run worktree_list to see attachable worktrees — only same-repository worktrees can be entered.` };
+  }
+  if (match.isSelf) return { ok: false, reason: `"${target}" is the current workspace root — it is already active.` };
+  if (match.bare) return { ok: false, reason: `"${target}" is the bare repository, not a checkout — there are no files to enter.` };
+  if (match.prunable) {
+    return { ok: false, reason: `The worktree at ${match.path} is prunable${match.prunableReason ? ` (${match.prunableReason})` : ''} — its directory is gone. Run \`git worktree prune\` or restore it, then try again.` };
+  }
+  return { ok: true, info: match };
+}
+
+/**
+ * ADR-042 D5 — the feature map for the Runtime Context: `branch → path → owner`
+ * for the OTHER worktrees of this repo, from the structured inventory merged
+ * with the ownership registry (D6). Replaces the bare "stay away" line with who
+ * is where. Degrades to the plain awareness list if the structured inventory
+ * can't be built. Capped; never throws.
+ */
+export function worktreeFeatureMap(
+  workspaceRoot: string,
+  host: WorktreeAwarenessHost = nodeWorktreeAwarenessHost,
+): string[] {
+  let list: WorktreeInfo[];
+  try {
+    list = listWorktreesStructured(workspaceRoot, host);
+  } catch {
+    return listOtherWorktrees(workspaceRoot, host);
+  }
+  if (list.length <= 1) return [];
+  let owners: Record<string, { sessionKey?: string }> = {};
+  try { owners = listWorktreeOwners(workspaceRoot) as Record<string, { sessionKey?: string }>; } catch { owners = {}; }
+  const lines: string[] = [];
+  for (const w of list) {
+    if (w.isSelf) continue;
+    const branch = w.branch ?? (w.detached ? 'detached' : 'unknown');
+    const owner = owners[path.resolve(w.path)]?.sessionKey;
+    const flags = [w.prunable ? 'prunable' : null, owner ? `owned by ${owner}` : null].filter(Boolean).join(', ');
+    lines.push(`${branch} → ${w.path}${flags ? ` (${flags})` : ''}`);
+  }
+  return lines.slice(0, 12);
 }
