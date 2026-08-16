@@ -39,6 +39,13 @@ export interface RunDetailView {
     attempt: number;
     iterationPath: readonly number[];
     status: string;
+    /**
+     * A40-9 — the child sessions this stage spawned, so a run detail can be
+     * DRILLED INTO the transcripts it produced. These are session references, not
+     * resume material, so they belong on the rendering surface. Empty for a stage
+     * that spawned nothing.
+     */
+    childSessionIds: readonly string[];
   }[];
   usage: { promptTokens: number; completionTokens: number; toolCalls: number; wallClockMs: number };
 }
@@ -88,6 +95,7 @@ export function toRunDetailView(
       attempt: o.attempt,
       iterationPath: o.iterationPath,
       status: o.status,
+      childSessionIds: o.childSessionIds,
     }))),
     usage: snapshot.usage,
   };
