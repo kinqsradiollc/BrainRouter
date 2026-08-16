@@ -14,6 +14,7 @@ import {
   DEFAULTS_ARE_CORPUS_GATED,
   SAFE_BASELINE_STRATEGY,
   assertCorpusGateHonored,
+  assertTopologyOriginProvenance,
 } from '../orchestration/execution/adaptiveActivation.js';
 import { resolveActiveTurnOrchestration } from '../workspace/activeTurnOrchestration.js';
 
@@ -135,4 +136,31 @@ test('every live turn resolution surfaces the corpus gate state', () => {
   assert.equal(resolution.adaptive.defaultsGated, true, 'the gate state rides on the resolution');
   assert.equal(resolution.adaptive.defaultsGated, DEFAULTS_ARE_CORPUS_GATED);
   assert.equal(resolution.adaptive.eligible, false, 'a preplanned turn is the executor, not an adaptive candidate');
+});
+
+// ── A40-2 — the closed topology-origin provenance contract ──────────────────
+
+test('A40-2 — an explicit-user topology origin requires an actual explicit choice', () => {
+  // The chokepoint against a model presenting its own selection as the user's.
+  // Mutation-proof: drop the explicit-user branch and the first assertion stops throwing.
+  assert.throws(() => assertTopologyOriginProvenance({ origin: 'explicit-user', matchedSignalCount: 0 }), /explicit strategy choice/);
+  assert.doesNotThrow(() => assertTopologyOriginProvenance({ origin: 'explicit-user', explicitStrategyId: 'deep-review', matchedSignalCount: 0 }));
+});
+
+test('A40-2 — an adaptive topology origin requires matched task signals', () => {
+  assert.throws(() => assertTopologyOriginProvenance({ origin: 'adaptive', matchedSignalCount: 0 }), /matched task signals/);
+  assert.doesNotThrow(() => assertTopologyOriginProvenance({ origin: 'adaptive', matchedSignalCount: 2 }));
+});
+
+test('A40-2 — workspace-default and fallback origins carry no extra provenance requirement', () => {
+  assert.doesNotThrow(() => assertTopologyOriginProvenance({ origin: 'workspace-default', matchedSignalCount: 0 }));
+  assert.doesNotThrow(() => assertTopologyOriginProvenance({ origin: 'fallback-direct', matchedSignalCount: 0 }));
+});
+
+test('A40-2 — every live turn resolution carries a validated, closed topology origin', () => {
+  const resolution = resolveActiveTurnOrchestration({ workspaceRoot: '/nonexistent-ws', task: 'x', preplanned: true });
+  assert.ok(
+    ['explicit-user', 'adaptive', 'workspace-default', 'fallback-direct'].includes(resolution.topologyOrigin),
+    'the origin is one of the closed set, validated by the finalizer',
+  );
 });

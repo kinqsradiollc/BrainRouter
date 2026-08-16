@@ -7,3 +7,13 @@
 // symbols that shipped before the split.
 export * from './store/goalStore.js';
 export * from './prompt/goalKickoff.js';
+
+export {
+  recordGoalContinuation,
+  readGoalContinuationLedger,
+  goalContinuationHistory,
+  goalContinuationReasonCode,
+  GOAL_SUPERVISOR_MAX_RECORDS,
+  type GoalContinuationRecord,
+  type GoalContinuationReasonCode,
+} from './supervisor/goalSupervisor.js';
