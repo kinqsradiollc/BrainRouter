@@ -117,6 +117,26 @@ export async function removeProjectMember(exec: Executor, projectId: string, use
   await exec.run(`DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`, [projectId, userId]);
 }
 
+/**
+ * ADR-017 D4 — the NAMES of restricted projects in `orgId` that `userId` may NOT
+ * access: `restricted = true` AND not a project member AND not an org
+ * owner/admin (legacy `manager` included). Recall hashes these to project_tags
+ * and drops matching records, so a restricted Project's memory never leaks to a
+ * non-member. Exact inverse of the `getAccessibleProject` access rule.
+ */
+export async function listInaccessibleRestrictedProjectNames(exec: Executor, orgId: string, userId: string): Promise<string[]> {
+  const rows = await exec.rows<{ name: string }>(
+    `SELECT p.name
+       FROM projects p
+      WHERE p.org_id = $1
+        AND p.restricted = true
+        AND NOT EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.project_id AND pm.user_id = $2)
+        AND NOT EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = p.org_id AND om.user_id = $2 AND om.role IN ('owner','admin','manager'))`,
+    [orgId, userId],
+  );
+  return rows.map((r) => String(r.name));
+}
+
 export async function listProjectMembers(exec: Executor, projectId: string): Promise<ProjectMemberRecord[]> {
   const rows = await exec.rows<any>(`SELECT project_id, user_id, role, created_at FROM project_members WHERE project_id = $1`, [projectId]);
   return rows.map((r) => ({ projectId: String(r.project_id), userId: String(r.user_id), role: String(r.role), createdAt: String(r.created_at) }));

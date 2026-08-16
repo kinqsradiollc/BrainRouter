@@ -551,6 +551,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listAccessibleProjects(orgId: string, userId: string, isOrgAdmin: boolean): Promise<projects.ProjectRecord[]> { return projects.listAccessibleProjects(this.exec, orgId, userId, isOrgAdmin); }
   public addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void> { return projects.addProjectMember(this.exec, projectId, userId, role, now); }
   public removeProjectMember(projectId: string, userId: string): Promise<void> { return projects.removeProjectMember(this.exec, projectId, userId); }
+  public listInaccessibleRestrictedProjectNames(orgId: string, userId: string): Promise<string[]> { return projects.listInaccessibleRestrictedProjectNames(this.exec, orgId, userId); }
   // ── project knowledge bases (ADR-021) ─────────────────────────────────────
   public createKnowledgeBase(record: KnowledgeBaseRecord): Promise<void> { return knowledgeBases.createKnowledgeBase(this.exec, record); }
   public getKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<KnowledgeBaseRecord | null> { return knowledgeBases.getKnowledgeBase(this.exec, baseId, orgId, projectId); }
