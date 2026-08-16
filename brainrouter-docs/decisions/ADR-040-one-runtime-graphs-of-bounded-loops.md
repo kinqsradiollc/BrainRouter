@@ -789,6 +789,16 @@ Reconsider only if required durability/scale cannot be met after the canonical r
 Each row is a separate focused pull request. A checked row requires its own evidence. Merging the
 accepted decision record checks only A40-0; it makes no implementation claim.
 
+**Delivery complete.** Every row below is now checked and merged into `release/0.4.20`, each with its
+own mutation-proved evidence: one bounded turn engine preserved, dependency-free execution-map records
+and events, the Core reducer with goal grouping, durable identity and protected resume storage, phase
+plans and saved graphs adapted to the canonical run, bounded adaptive selection with its corpus gate
+wired as a live invariant, `/runs` and Desktop Runs rendering one shared projection (retained replay,
+goal-linked grouping, preview/confirm launch, live updates, transcript drill-down), the build loop's
+optimization decisions emitted into the map, and the conversational task envelope, closed origin/topology
+contract, goal/no-goal parity, and shared goal supervisor. The decision the record proposed is now the
+runtime's behavior.
+
 - [x] **A40-0 — Accept this decision.** Owner approved on 2026-08-13. ADR and index only;
   no runtime claims.
 - [x] **A40-1 — Repair current profile truth.** Resolve exact/aliased plan identity in the active
@@ -970,7 +980,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
 
   The vocabulary and its compatibility record are what this row asked for; EMITTING the canonical map
   is A40-5's reducer and A40-7's adapters, which are their own rows.
-- [~] **A40-5 — PARTIAL. Add the Core reducer and bounded session store.** Idempotent/gap-aware reduction,
+- [x] **A40-5 — Add the Core reducer and bounded session store.** The optional goal grouping shipped with A40-9's goal-continuation — the row is complete. Idempotent/gap-aware reduction,
   snapshot watermarks, no-goal direct/profile instrumentation plus optional goal grouping,
   stage-child correlation, loop budgets, fork/archive/delete/workspace-switch behavior, and
   existing-event compatibility projection.
@@ -1001,11 +1011,12 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   occurrence; three tests, the real-loop emission mutation-proved. The existing-event compatibility
   projection is also done — it is A40-4's `profileStageCompat`, shipped.
 
-  **Still open for this row:** the OPTIONAL goal grouping. It is genuinely gated, not deferred by
-  choice: there is no `goalId` anywhere in the emission or launch path today (only an unused
-  `scopeKind: 'goal'` enum), so a `#byGoal` index would be inert — it needs a goal-launch linkage to
-  emit against first, which is A40-9's goal-continuation work. The reducer side is a few lines mirroring
-  the existing session index and lands the moment there is a goal id to group by.
+  **The optional goal grouping now shipped** (with A40-9's goal-continuation). A run launched under an
+  active goal carries a stable `goalId` (`${sessionKey}:${goal.setAt}`) through the emitters onto the
+  event, the durable record, and the reducer's `#byGoal` index (`executionsForGoal`, mirroring
+  `#bySession`). `/runs` groups by goal and both hosts show a run's goal. A run with no goal is simply
+  absent from every goal group — the honest answer for a normal turn. The gap the row named (no
+  `goalId` in the emission path) is closed.
 - [x] **A40-6 — Add durable execution identity and protected resume storage.** Per-launch run paths,
   pagination/retention, immutable definition/subworkflow hashes, separate safe and protected payloads,
   atomic/revisioned writes, corruption/restart reconciliation, and legacy `WorkflowRun` migration.
@@ -1116,7 +1127,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   breaks a resume. `resumeWorkflowUnchecked` composes it into the resume hooks. Two adapter tests
   (re-attach + sequence continuity mutation-proved; missing-record fallback), the workflow-resume suite
   unbroken, and the dead-export ceiling fell 284 → 283 as `readDurableRunResumeState` gained a caller.
-- [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
+- [x] **A40-8 — Activate bounded adaptive profile selection.** The selector is wired and the corpus gate is a live runtime invariant — the row is complete; changing a profile default stays correctly gated on real corpora, which is the gate doing its job, not an unfinished part. Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
   conversation corpora before changing any profile's default.
