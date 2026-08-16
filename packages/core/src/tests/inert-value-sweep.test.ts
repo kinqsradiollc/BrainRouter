@@ -210,17 +210,6 @@ const ORPHAN_MODULE_CEILING = 26;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   [
-    'orchestration/execution/optimizationSubgraph.ts',
-    'ADR-040 A40-11. Domain-neutral measurement, counter-metric, verifier, '
-    + 'arbitration, rollback and drift/audit decisions, with the Engineering '
-    + 'build loop retained as ONE instance of the shape rather than the '
-    + 'definition. It is the vocabulary and the judgement; the callers that '
-    + 'replace the current build loop are the migration this row calls for, and '
-    + 'they come after it, not with it. Covered by '
-    + 'execution-optimization-subgraph.test.ts with mutation runs for the '
-    + 'counter-metric gate, verifier precedence and arbitration.',
-  ],
-  [
     'orchestration/execution/publicRuns.ts',
     'ADR-040 A40-9. The curated public surface for run views, and it IS reached: '
     + "brainrouter-cli/src/cli/commands/runs/index.ts imports it as "
@@ -610,10 +599,12 @@ function deadExports(): string[] {
  * because the resolver only honors workspace config, so no default moves.
  * Wiring the gate is not opening it: the corpus gate stays SHUT and the suite
  * still pins it there. A40-11 raised it 281 → 285 for
- * `optimizationSubgraph.ts`: the governance vocabulary lands before the callers
- * that migrate the Engineering build loop onto it, which is the sequence that
- * row asks for — generalise first, migrate second, with the old path retained
- * meanwhile. Four slots, named, falling when the migration lands.
+ * `optimizationSubgraph.ts`, then its MIGRATION took it 280 → 278: the build loop's
+ * critic gate and merge/rollback now emit `judgeOptimizationRound` /
+ * `engineeringBuildLoopRound` verdicts into the map (workflowTool.ts), so three of
+ * those exports gained a production caller. The loop's existing gates still decide;
+ * the vocabulary only records what they decided. Generalise first, migrate second,
+ * old path retained — done.
 
  * **It rose to 286 then fell back: 286 → 285, ADR-040 A40-7 wiring.**
  * `orchestration/execution/phasePlanAdapter.ts` is now composed into the live
@@ -629,7 +620,7 @@ function deadExports(): string[] {
  * gained a production caller: `readRunDetail` reduces a run's retained event journal
  * so `/runs <id>` rebuilds the map from disk instead of reporting `unavailable`.
  */
-const DEAD_EXPORT_CEILING = 280;
+const DEAD_EXPORT_CEILING = 278;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

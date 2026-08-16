@@ -1211,7 +1211,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   transcript drill-down — both need visual review and the latter crosses the resume-material boundary;
   a live/stale host push channel to replace the one-shot mount fetch; and driving the panel open in the
   running app to assert rendered contents against live data.
-- [~] **A40-11 — PARTIAL. Generalize optimization subgraphs.** Add domain-neutral measurement, counter-metric,
+- [x] **A40-11 — Generalize optimization subgraphs.** The vocabulary and the migration are both done — the row is complete. Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during
   migration.
@@ -1397,6 +1397,20 @@ The desired result is not “BrainRouter uses graphs.” It is:
 
   The Engineering build loop is retained as ONE instance of the shape, expressed in general terms.
 
-  **Still open for this row:** the migration itself — replacing the current build-loop callers with
-  these decisions, and emitting them into the map. Generalise first, migrate second, with the old
-  path retained meanwhile, is the sequence this row asks for.
+  **The migration now shipped — the row is complete.** The live Engineering build loop emits its
+  optimization decisions into the canonical map, with the old gates retained as the authority:
+
+  - the phase-plan emitter gained `emitDecision` (`phasePlanAdapter.ts`), so a `/build` run — which
+    goes through the phase-plan path — can carry a decision into `snapshot.decisions`, not just the
+    graph path. Mutation-proved: drop the decision payload line and the projection is empty.
+  - the critic gate (`workflowTool.ts`) records `judgeOptimizationRound` over the candidate score vs
+    the accept threshold, with `executionVerifyGreen` as the independent verifier — the honest numeric
+    round. The gate's own `accepted` flag still DECIDES; the verdict only records how.
+  - the merge/rollback records `engineeringBuildLoopRound` (the retained Engineering compat shape:
+    verify-green → `pass_rate`, review-approval → the `lint_errors` counter-metric), emitting `merged`
+    vs `held`. `verifyGreen && reviewApproved` still decides the merge upstream.
+
+  Every emission is best-effort and side-effect-free — a canonical-emit failure drops the record,
+  never the build. `optimizationSubgraph.ts` left the E1 KNOWN_UNWIRED set as three of its exports
+  gained a production caller (dead-export ceiling 280 → 278). The old path is retained: nothing about
+  what the loop DOES changed, only that its decisions are now visible in the map.

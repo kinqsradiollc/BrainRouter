@@ -65,6 +65,12 @@ export interface CanonicalPhasePlanEmitter {
   readonly hooks: ExecuteHooks;
   /** Call once, after `executePhasePlan` resolves, with its result. */
   finish(result: PhasePlanExecution): void;
+  /**
+   * A40-11 — record an optimization decision (a build-loop accept/reject/rollback)
+   * into the map. Best-effort like every emission here; the decision the loop
+   * actually acted on stays the loop's, this only makes it visible.
+   */
+  emitDecision(decision: { kind: string; outcome: string; reasonCodes: readonly string[] }, nodeId?: string): void;
   snapshot(): ExecutionSnapshot | undefined;
   events(): readonly ExecutionEvent[];
   durable(): DurableRunSafeRecord | undefined;
@@ -76,6 +82,8 @@ interface EmissionFields {
   iterationPath?: readonly number[];
   status?: string;
   childSessionIds?: readonly string[];
+  /** A40-11 — an optimization decision (accept/reject/rollback) this event records. */
+  decision?: { kind: string; outcome: string; reasonCodes: readonly string[] };
 }
 
 export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): CanonicalPhasePlanEmitter {
@@ -119,6 +127,7 @@ export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): Canon
     if (fields.iterationPath !== undefined) payload.iterationPath = [...fields.iterationPath];
     if (fields.status !== undefined) payload.status = fields.status;
     if (fields.childSessionIds !== undefined) payload.childSessionIds = [...fields.childSessionIds];
+    if (fields.decision !== undefined) payload.decision = { ...fields.decision, reasonCodes: [...fields.decision.reasonCodes] };
     const event: ExecutionEvent = {
       schemaVersion: EXECUTION_MAP_SCHEMA_VERSION,
       // Identity is (execution, sequence): stable across a replay so the reducer
@@ -168,6 +177,9 @@ export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): Canon
 
   return {
     hooks,
+    emitDecision: (decision, nodeId) => {
+      emit({ decision, ...(nodeId !== undefined ? { nodeId } : {}) });
+    },
     finish: (result: PhasePlanExecution) => {
       emit({ status: phaseStatusToCanonical(result.status) });
       if (input.workspaceRoot && input.runId && durable) {
