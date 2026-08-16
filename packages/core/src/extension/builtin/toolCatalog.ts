@@ -49,6 +49,8 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // is non-destructive (it widens scope, never mutates files), so read tier.
   { name: 'worktree_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'worktree_enter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'worktree_create', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'worktree_done', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'grep_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'glob_files', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'fetch_url', accessTier: 'read', actionKind: 'network', parallelSafe: true },

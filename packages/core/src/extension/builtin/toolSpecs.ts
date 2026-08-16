@@ -1038,6 +1038,30 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'worktree_create',
+    description: 'Create a NEW git worktree on a NAMED branch for THIS repository (under BrainRouter\'s worktree home) and attach it for read and edit — the way to put a feature in its own worktree. Pass branch (required) and optionally from (a ref to branch off, default HEAD). Run commands there by passing cwd to run_command; finish with worktree_done.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        branch: { type: 'string', description: 'The new branch name for the worktree.' },
+        from: { type: 'string', description: 'Optional ref to branch off (default HEAD).' }
+      },
+      required: ['branch']
+    }
+  },
+  {
+    name: 'worktree_done',
+    description: 'Finish with a git worktree of THIS repository and remove it. Pass path or branch (from worktree_list). Uncommitted changes are PRESERVED by default — the tool reports them and stops; pass force:true to discard them and remove anyway. Removal is routed through the same safety guard as a hand-typed `git worktree remove`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The worktree path or branch to remove (from worktree_list).' },
+        force: { type: 'boolean', description: 'Discard uncommitted changes and remove anyway. Default false.' }
+      },
+      required: ['path']
+    }
+  },
+  {
     name: 'worktree_enter',
     description: 'Attach an existing git worktree of THIS repository so its files resolve for read and edit. Pass a worktree path or a branch name (from worktree_list). Non-destructive and reversible: it widens the workspace without moving the primary root, and it only accepts worktrees git already lists (same repository, same objects). Refuses a worktree whose directory is gone (prunable) with a pointer to `git worktree prune`.',
     inputSchema: {

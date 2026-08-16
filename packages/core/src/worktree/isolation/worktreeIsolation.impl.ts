@@ -320,6 +320,61 @@ export function createDetachedWorktree(
 }
 
 /**
+ * ADR-042 S4 (D3) — create a NAMED-branch worktree under worktreeBase(). Unlike
+ * createDetachedWorktree (which mints detached HEADs for child isolation), this
+ * is what "a feature lives in a worktree" needs: a branch first, the worktree as
+ * its home. Returns the created path + branch, or `{ error }` carrying git's
+ * reason. The branch name is metacharacter-checked before it reaches git.
+ */
+export function createNamedWorktree(
+  parentWorkspaceRoot: string,
+  branch: string,
+  fromRef = 'HEAD',
+): { repoRoot: string; worktreeRoot: string; branch: string } | { error: string } {
+  const name = String(branch ?? '').trim();
+  if (!name) return { error: 'A branch name is required.' };
+  if (name.startsWith('-') || name.startsWith('/') || name.includes('..') || /[\s~^:?*\[\]\\]/.test(name)) return { error: `Invalid branch name: ${branch}` };
+  let root: string;
+  try { root = host.realpath(parentWorkspaceRoot); } catch { return { error: 'Workspace path cannot be resolved.' }; }
+  const repoRoot = gitRoot(root);
+  if (!repoRoot) return { error: 'Not a git repository — cannot create a worktree.' };
+  const worktreeRoot = path.join(worktreeBase(), safeName(path.basename(repoRoot)), safeName(name));
+  if (host.exists(worktreeRoot)) return { error: `A worktree directory already exists at ${worktreeRoot}.` };
+  const base = host.runGit(repoRoot, ['rev-parse', '--verify', `${fromRef}^{commit}`]);
+  if (!base.ok || !/^[a-f0-9]{40,64}$/i.test(base.stdout.trim())) return { error: `Cannot resolve --from ref: ${fromRef}` };
+  try { host.mkdir(path.dirname(worktreeRoot)); } catch { /* best-effort; git errors if truly unwritable */ }
+  const created = host.runGit(repoRoot, ['worktree', 'add', '-b', name, worktreeRoot, base.stdout.trim()]);
+  if (!created.ok) return { error: created.stderr.trim() || `git worktree add failed for branch ${name}.` };
+  let real = worktreeRoot;
+  try { real = host.realpath(worktreeRoot); } catch { /* raw path */ }
+  return { repoRoot, worktreeRoot: real, branch: name };
+}
+
+/**
+ * ADR-042 S4 (D3) — remove a worktree via `git worktree remove`. Git refuses to
+ * remove a DIRTY worktree unless force is set, so uncommitted work is preserved
+ * by default; the caller (worktree_done) surfaces the dirt and routes removal
+ * through the destructive-command guard before calling this. Never `--force`s
+ * on its own.
+ */
+export function removeWorktreeAt(
+  parentWorkspaceRoot: string,
+  worktreePath: string,
+  opts: { force?: boolean } = {},
+): { ok: boolean; error?: string } {
+  let root: string;
+  try { root = host.realpath(parentWorkspaceRoot); } catch { return { ok: false, error: 'Workspace path cannot be resolved.' }; }
+  const repoRoot = gitRoot(root);
+  if (!repoRoot) return { ok: false, error: 'Not a git repository.' };
+  const args = ['worktree', 'remove'];
+  if (opts.force) args.push('--force');
+  args.push(worktreePath);
+  const r = host.runGit(repoRoot, args);
+  if (!r.ok) return { ok: false, error: r.stderr.trim() || 'git worktree remove failed.' };
+  return { ok: true };
+}
+
+/**
  * Capture a child worktree's changes, optionally merge them back onto the parent
  * tree, then remove the worktree. This is BOTH halves of the isolation contract:
  *

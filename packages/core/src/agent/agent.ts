@@ -920,6 +920,17 @@ export class Agent {
     if (this.#attachedRoots.length >= 16) this.#attachedRoots.shift(); // bounded
     this.#attachedRoots.push(canonical);
   }
+
+  /**
+   * ADR-042 S4 — detach a previously-entered worktree from the scope (e.g. after
+   * worktree_done removes it). Idempotent; matches on the realpath or the raw
+   * path so a removed directory (whose realpath now fails) still drops.
+   */
+  public detachWorktree(root: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* dir may be gone post-removal */ }
+    this.#attachedRoots = this.#attachedRoots.filter((r) => r !== canonical && r !== root);
+  }
   public launchCwd: string;
   /** Stable identity for the currently running turn; reset at turn finalization. */
   public turnExecutionId: string | null = null;
