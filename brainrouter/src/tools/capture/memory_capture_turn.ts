@@ -75,7 +75,7 @@ export const memoryCaptureTurnToolSchema = {
   }
 } as const;
 
-export async function handleMemoryCaptureTurn(args: any, options?: { defaultUserId?: string }) {
+export async function handleMemoryCaptureTurn(args: any, options?: { defaultUserId?: string; defaultOrgId?: string }) {
   const params = z.object({
     userId: z.string().optional(),
     sessionKey: z.string(),
@@ -110,6 +110,10 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
       activeSkill: params.activeSkill,
       skillHints: params.skillHints,
       memoryTags: params.memoryTags,
+      // ADR-017 D4 — org scope is server-authoritative: it comes from the
+      // authenticated MCP connection (defaultOrgId), never a client argument,
+      // so a caller can't write into another org's memory (mirrors memory_recall).
+      orgId: options?.defaultOrgId ?? null,
       workspaceTag: workspaceTagFromPath(params.workspaceRoot),
       projectTag: projectTagFromName(params.projectName)
     });

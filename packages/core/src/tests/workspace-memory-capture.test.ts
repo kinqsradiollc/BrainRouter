@@ -69,7 +69,10 @@ test('capture replaces manifest memory tags across workspace switches', async ()
     await agent.captureTurn('Compare the sources.', 'Compared the sources.');
 
     assert.deepEqual(calls.map((call) => call.memoryTags), [['engineering'], ['research']]);
-    assert.equal(calls.some((call) => Object.hasOwn(call, 'workspaceRoot')), false);
+    // ADR-017 D3 — the main per-turn capture now sends the workspace root so the
+    // brain hashes it to a stable workspace_tag; it tracks the active workspace
+    // across switches (previously this hot path sent no workspaceRoot at all).
+    assert.deepEqual(calls.map((call) => call.workspaceRoot), [engineering, research]);
   } finally {
     fs.rmSync(engineering, { recursive: true, force: true });
     fs.rmSync(research, { recursive: true, force: true });
@@ -90,7 +93,7 @@ test('capture keeps the exact legacy memory context when no manifest exists', as
 
     assert.equal(calls.length, 1);
     assert.equal(Object.hasOwn(calls[0], 'memoryTags'), false);
-    assert.equal(Object.hasOwn(calls[0], 'workspaceRoot'), false);
+    assert.equal(calls[0].workspaceRoot, workspace); // ADR-017 D3 — workspace root now sent (drives workspace_tag)
     assert.equal(Object.hasOwn(calls[0], 'projectName'), false);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });

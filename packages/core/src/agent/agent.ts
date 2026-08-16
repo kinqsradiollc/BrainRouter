@@ -3365,6 +3365,11 @@ export class Agent {
       const captureRes = await this.mcpClient.callTool('memory_capture_turn', {
         sessionKey: this.sessionKey,
         activeSkill: this.activeSkill,
+        // ADR-017 D3 — send the workspace root so the brain hashes it to a stable
+        // workspace_tag; without it the main per-turn capture landed null tags and
+        // per-workspace recall scoping silently degraded (the `# note` + aux-event
+        // paths already sent it; this was the one hot-path that did not).
+        ...(this.workspaceRoot ? { workspaceRoot: this.workspaceRoot } : {}),
         ...(workspaceMemoryContext ?? {}),
         messages: [
           { role: 'user', content: userContent, timestamp },
