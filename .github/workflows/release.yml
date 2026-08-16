@@ -1,0 +1,148 @@
+name: Release
+run-name: Release ${{ inputs.version }}${{ inputs.dry_run && ' (dry run)' || '' }}
+
+# Manually-triggered npm release. Nothing about the version is hardcoded — you
+# pass it in as `version`, the workflow sets it across every package.json (via
+# scripts/set-version.mjs) and publishes the seven public packages in dependency
+# order. Pushing the `v<version>` tag then triggers release-desktop.yml, which
+# builds the desktop binaries and attaches them to the same GitHub Release.
+#
+# HOW TO RUN (manually, on GitHub):
+#   • UI:  Actions tab → "Release" → "Run workflow" → pick the branch
+#          (e.g. release/0.4.20), type the version (e.g. 0.4.20), Run.
+#   • CLI: gh workflow run release.yml --ref release/0.4.20 -f version=0.4.20
+#          (add -f dry_run=true to build + version-check without publishing)
+#
+# PREREQUISITE (one-time, owner): add an npm automation token as a repo secret
+# named NPM_TOKEN — Settings → Secrets and variables → Actions → New secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.4.20 (no leading v)"
+        required: true
+        type: string
+      dry_run:
+        description: "Build + set version, but do NOT publish, tag, or release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # commit the version bump, push the tag, create the Release
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the dispatched branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # full history + tags for tagging
+
+      - name: Setup Node 22.x (npm registry auth)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'   # writes .npmrc reading NODE_AUTH_TOKEN
+
+      - name: Install (deterministic)
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'   # desktop electron binary isn't needed to publish
+
+      - name: Set version to ${{ inputs.version }} everywhere
+        # Idempotent: a no-op when the branch is already at this version.
+        run: node scripts/set-version.mjs "${{ inputs.version }}"
+
+      - name: Build the publishable packages
+        # Publish's per-package prepack rebuilds each one, but building first
+        # guarantees every dependency's dist exists before a dependent is packed.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          npm run build:packages
+          npm run build -w @kinqs/brainrouter-mcp-server
+          npm run build -w @kinqs/brainrouter-cli
+
+      - name: Commit the version bump (best-effort)
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "release: v${{ inputs.version }} — bump versions"
+            git push || echo "::warning::could not push the version bump (protected branch?) — set the version on the branch before releasing"
+          else
+            echo "version already ${{ inputs.version }} on this branch — nothing to commit"
+          fi
+
+      - name: Publish to npm (dependency order)
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is not set — add it in Settings → Secrets and variables → Actions"; exit 1
+          fi
+          for pkg in \
+            packages/types \
+            packages/agent-protocol \
+            packages/hooks \
+            packages/core \
+            packages/sdk \
+            brainrouter \
+            brainrouter-cli; do
+            name=$(node -p "require('./$pkg/package.json').name")
+            echo "── publishing $name@${{ inputs.version }} ($pkg) ──"
+            # Idempotent re-runs: skip a package already published at this version.
+            if npm view "$name@${{ inputs.version }}" version >/dev/null 2>&1; then
+              echo "$name@${{ inputs.version }} already on npm — skipping"
+            else
+              npm publish -w "$pkg" --access public
+            fi
+          done
+
+      - name: Tag v${{ inputs.version }} and push (triggers desktop binaries)
+        if: ${{ !inputs.dry_run }}
+        run: |
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "tag v${{ inputs.version }} already exists — skipping"
+          else
+            git tag "v${{ inputs.version }}"
+            git push origin "v${{ inputs.version }}"
+          fi
+
+      - name: Create the GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="brainrouter-docs/releases/${{ inputs.version }}.md"
+          if gh release view "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "release v${{ inputs.version }} already exists — leaving it"
+          elif [ -f "$notes" ]; then
+            gh release create "v${{ inputs.version }}" --title "${{ inputs.version }}" --notes-file "$notes"
+          else
+            echo "::warning::no brainrouter-docs/releases/${{ inputs.version }}.md — generating notes from commits"
+            gh release create "v${{ inputs.version }}" --title "${{ inputs.version }}" --generate-notes
+          fi
+
+      - name: Summary
+        run: |
+          echo "### Release ${{ inputs.version }}${{ inputs.dry_run && ' (dry run)' || '' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Packages set to \`${{ inputs.version }}\` and built." >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "- Dry run — nothing published, tagged, or released." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Published 7 packages, tagged \`v${{ inputs.version }}\`, cut the GitHub Release." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Desktop binaries build via release-desktop.yml on the tag." >> "$GITHUB_STEP_SUMMARY"
+          fi
