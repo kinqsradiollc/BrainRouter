@@ -92,6 +92,11 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
     for (const node of view.nodes) {
       const path = node.iterationPath.length ? chalk.dim(`@${node.iterationPath.join('.')}`) : '';
       console.log(`    ${node.nodeId}${path}  ${statusColor(node.status)}  ${chalk.dim(`attempt ${node.attempt}`)}`);
+      // A40-9 — drill-down: the child sessions this stage spawned, so a run can be
+      // traced into the transcripts it produced.
+      for (const child of node.childSessionIds) {
+        console.log(chalk.dim(`        ↳ child ${child}`));
+      }
     }
   }
   console.log('');
