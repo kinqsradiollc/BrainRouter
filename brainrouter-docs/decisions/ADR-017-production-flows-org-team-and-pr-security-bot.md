@@ -7,7 +7,7 @@
 > finding detail, and provides dashboard manual runs, PR details/timelines, and
 > per-lens provider/model/diff/timeout assignments.
 
-**Status:** Proposed (design; phased) · **Extends** ADR-016 (server-side connectors + desktop backend
+**Status:** Partially implemented (verified 2026-08-16: P0, P1, P2.5 RBAC roles + per-section gating, and P4 — including the `@mention`/`/review` trigger and adversarial verification — shipped; pending: per-project Access Control grants, the Personal·Team·Org recall scope switcher, and the P3 dashboard org/team wizard + scoped memory views) · **Extends** ADR-016 (server-side connectors + desktop backend
 client), ADR-010 (tenancy/RBAC), ADR-009 (trigger ingress + GitHub App), ADR-015 (repo linking + local
 sync). **No commits merged until each phase is green.** Verify backend via `tsc` + `build` + `vitest`
 (no local Postgres) and curl against the running dev backend; desktop/CLI via `tsc` + `build`.
@@ -145,6 +145,13 @@ one broker, one memory plane — no manual repo/owner anywhere.
     a re-run skips findings already surfaced, so the review says "N **new** findings" instead of
     stacking. Grouped-review 422 falls back to posting comments individually.
 
+- **⟨as-built⟩ Verification now gates the single diff turn.** The "posts directly" wording above is
+  superseded: the diff review is wrapped by `reflectOnReviewFindings` + the durable exact-head repository
+  **assurance gate** (`reviews/diffReviewAssurance.ts`), which computes the blocking finding set, suppresses
+  inline comments on a stale/superseded head, and sets the gating check-run conclusion — so nothing is posted
+  that has not survived verification. A `/review`/`@brainrouter review` comment re-fires both lenses via
+  `issue_comment` (`parseReviewCommand`), resolving the head SHA from the PR.
+
 - **⟨2026-07-08 as-built⟩ Multi-LENS reviews + gating check-runs + full CI (Strix parity → superset).**
   The bot is no longer security-only. The security path was refactored into a **lens abstraction**
   (`review/reviewLens.ts` — one parameterized `runPrReview(input, deps, lens)` + shared renderers), so a
@@ -238,8 +245,8 @@ global-admin-only** (or bundled). A personal-org owner is always Owner of their 
 ## Checklist
 
 ### P0 — Safe, small bug fixes (do first)
-- [~] D1a: **one of the two duplicate install links removed** (ConnectorSettings OAuth-account copy). Owner/Repository field removal is coupled to D1b (killing the throw) → done together in P1.
-- [ ] D1b: kill *"owner is required"* (`githubConnector.ts:93,131,165`) — connector run + Track resolve owner automatically; local-only project ⇒ no-op not error. → **P1** (needs installation-repo enumeration).
+- [x] D1a: **one of the two duplicate install links removed** (ConnectorSettings OAuth-account copy). Owner/Repository field removal is coupled to D1b (killing the throw) → done together in P1.
+- [x] D1b: kill *"owner is required"* (`githubConnector.ts:93,131,165`) — connector run + Track resolve owner automatically; local-only project ⇒ no-op not error. → **P1** (needs installation-repo enumeration).
 - [x] D2: **desktop registers + 30s-heartbeats an `active_sessions` row** for the signed-in user (`electron/host/brainSession.ts`, wired at startup `host.ts` + sign-in/out `queries.ts`). Account page reads it. *(needs desktop relaunch to take effect.)*
 - [x] **§3.1 RBAC — removed the client-side `user.isAdmin` redirects** in dashboard `providers/page.tsx` + `integrations/page.tsx` (the real "can't configure org memory repo" blocker; backend already org-scoped). tsc-clean.
 - [ ] D3: compute + plumb `workspace_tag`/`project_tag` on capture — **10-file critical-path plumb** (EmitContext + CLI/desktop builders → `memory_capture_turn` schema → `capture` → `captureTurn` → `extractPendingSensory` → extractor `cognitive-extractor.ts:183` sets `record.workspaceTag`/`projectTag` via `workspaceTagFromPath`/`projectTagFromName`). All-or-nothing through the memory hot-path → do as its own tested PR, not a tail-end edit. + Option-A backfill (join `active_sessions.workspace_root`, idempotent Node script).
@@ -250,14 +257,14 @@ global-admin-only** (or bundled). A personal-org owner is always Owner of their 
 - [ ] Remove remaining dead manual-repo code paths; migrate legacy configs (follow-up).
 
 ### P2 — Tenancy + RBAC
-- [ ] Fix the org-config 403: org owner/manager gate (not global-admin-only) on memory-repo / App / projects.
-- [ ] Recall scope filter + a Personal·Team·Org scope switcher (API + dashboard).
+- [x] Fix the org-config 403: org owner/manager gate (not global-admin-only) on memory-repo / App / projects.
+- [~] Recall scope filter + a Personal·Team·Org scope switcher (API + dashboard). *(SQL `recallScope` + post-RRF `applyFilters` scope filter shipped; the dashboard scope switcher is the remaining UI slice.)*
 - [ ] Memory rows correctly scoped (org_id + visibility + tags) end-to-end.
 
 ### P2.5 — RBAC rebuild (D6 — roles + per-section gating)
-- [ ] Expand roles `owner/manager/member` → **`owner/admin/developer/viewer`**; update `capabilitiesFor()` + `ROLE_CAPABILITIES` + tenancy queries/migration (map `manager→admin`, `member→developer`).
-- [ ] `/integrations` **per-section gating**: deployment App-credential card = global admin (or hidden when bundled); org GitHub App + repos = owner/admin; connect/use = developer+. **Kills the 403 spam.**
-- [ ] Backend `requirePermission` honors the 4 roles; personal-org owner passes for their own scope.
+- [x] Expand roles `owner/manager/member` → **`owner/admin/developer/viewer`**; update `capabilitiesFor()` + `ROLE_CAPABILITIES` + tenancy queries/migration (map `manager→admin`, `member→developer`).
+- [x] `/integrations` **per-section gating**: deployment App-credential card = global admin (or hidden when bundled); org GitHub App + repos = owner/admin; connect/use = developer+. **Kills the 403 spam.**
+- [x] Backend `requirePermission` honors the 4 roles; personal-org owner passes for their own scope.
 - [ ] Dashboard hides/disables controls by the caller's org role (not global `isAdmin`); shows "ask an org admin" instead of raw 403s.
 - [ ] Project Access Control: per-project role grants (Developer scoping) — schema + enforcement.
 
@@ -272,8 +279,8 @@ global-admin-only** (or bundled). A personal-org owner is always Owner of their 
 - [x] `pr-security-review` backend executor (`integrations/prSecurityReview.ts`): installation token → fetch PR diff → single-shot security review → **grouped PR review with inline `suggestion` comments** + idempotent pinned summary. DI'd + 7 unit tests green.
 - [x] GitHub App configured live (App `4237068`, installation `145021499`): Pull-requests + Issues R/W accepted, `pull_request`+`issue_comment` events, webhook URL+secret — verified end-to-end on a test PR (3 findings, applyable suggestions).
 - [x] Idempotent post-back (marker-keyed summary + per-finding `brs-finding` dedup across pushes); least-privilege installation token; "no issues" path; grouped-review 422 → per-comment fallback.
-- [ ] Adversarial verify pass before posting (single-shot bot posts directly today; verification pass is a follow-up).
-- [ ] `@mention` review trigger via `issue_comment` (event subscribed; executor path TBD).
+- [x] Adversarial verify pass before posting — a reflection pass (`reflectOnReviewFindings`) plus a durable, exact-head repository **assurance gate** (`reviews/diffReviewAssurance.ts`) now decide publication: the gate computes the blocking finding set, suppresses inline comments on a stale/superseded/failed head, and sets the check-run conclusion — no finding reaches the PR without surviving verification (per the ADR-033 review-quality work).
+- [x] `@mention`/`/review` trigger via `issue_comment` — `parseReviewCommand` (`githubWebhook.ts`) matches the comment and re-fires both lenses through the executor, resolving the head SHA from the PR when the comment carries none; the summary shows a Re-run / Manage action row (`REVIEW_ACTION_FOOTER`).
 
 ## Risks & mitigations
 - **Auth changes can lock users out** → no `token_version`/JWT-middleware changes ship untested; reuse existing tested primitives (`rotate-key`, `requireAnyAuth`, installation tokens).
