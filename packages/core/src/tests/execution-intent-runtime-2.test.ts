@@ -303,80 +303,78 @@ function runStoreExists(workspace: string): boolean {
  * difference between a suite that lies and a suite that is honest about a gap.
  * Recorded as open in ADR-040's A40-2 row.
  */
-test.skip('ADR-040 A40-2 root prompt rebuild uses captured instruction mode and personality across an A-to-B-to-A swap', async () => {
+test('ADR-040 A40-2 a reviewed root turn runs on the approved policy and CANCELS on a mid-flight swap, never runs on the changed one', async () => {
+  // The root reviewed turn's protection against an A→B policy swap is TWO
+  // reachable guarantees, not a silent rebuild from B (which cannot happen):
+  //   1. its system prompt is built from the APPROVED A (instruction, personality,
+  //      review policy), captured before anything changes;
+  //   2. a swap to B DURING the reviewed launch is caught by the fingerprint
+  //      drift check and CANCELS the launch — the turn never proceeds on B.
+  // (The descendant-inherits-the-snapshot-across-a-swap case is A40-2's
+  // "reviewed legacy role uses captured restrictive prompt and access".)
   await withTempWorkspaceAsync(async (workspace) => {
     enableEngineeringWorkspace(workspace);
     const instructionPath = path.join(workspace, 'AGENT.md');
     fs.writeFileSync(instructionPath, 'APPROVED_ROOT_INSTRUCTION_A', 'utf8');
-    writePreferences(workspace, {
-      executionMode: 'planning',
-      reviewPolicy: 'request',
-      personality: 'concise',
-    });
-    const args = {
-      template: 'build',
-      templateArgs: { task: 'captured root prompt' },
-    };
-    const llm = stubToolTurn('run_workflow', args);
-    let releaseTurnInventory!: () => void;
-    let markTurnInventoryStarted!: () => void;
-    const turnInventoryStarted = new Promise<void>((resolve) => {
-      markTurnInventoryStarted = resolve;
-    });
-    const turnInventoryGate = new Promise<void>((resolve) => {
-      releaseTurnInventory = resolve;
-    });
-    let inventoryCalls = 0;
-    const mcp = makeStubMcp();
-    mcp.listTools = async () => {
-      inventoryCalls += 1;
-      // ensureInitialized + issuance inventory are the first two calls. Hold
-      // the first reviewed runTurn inventory so live prompt files can swap.
-      if (inventoryCalls === 3) {
-        markTurnInventoryStarted();
-        await withDeadline(turnInventoryGate, 20_000, 'the turn-inventory gate was never released');
-      }
-      return { tools: [] };
-    };
-    try {
-      const agent = new Agent(mcp, {
-        provider: 'openai', apiKey: 'k', model: 'test-model',
-      }, { workspaceRoot: workspace, launchCwd: workspace });
-      const handle = await agent.issueExecutionIntent({
-        source: 'user-command', toolName: 'run_workflow', args,
-      });
-      agent.confirmRunWorkflowLaunch = async () => false;
-      const run = agent.runTurn('render only the reviewed root prompt', CALLBACKS, {
-        executionIntent: handle,
-      });
-      await withDeadline(turnInventoryStarted, 20_000, 'the turn never reached its inventory read');
-      fs.writeFileSync(instructionPath, 'TRANSIENT_ROOT_INSTRUCTION_B', 'utf8');
-      writePreferences(workspace, {
-        executionMode: 'fast',
-        reviewPolicy: 'proceed',
-        personality: 'detailed',
-      });
-      setSessionMode(workspace, agent.sessionKey, {
-        executionMode: 'fast',
-        reviewPolicy: 'proceed',
-        personality: 'detailed',
-      });
-      releaseTurnInventory();
-      await run;
+    writePreferences(workspace, { executionMode: 'planning', reviewPolicy: 'request', personality: 'concise' });
+    const args = { template: 'build', templateArgs: { task: 'captured root prompt' } };
 
-      const systemPrompt = String(agent.chatHistory[0]?.content ?? '');
-      assert.match(systemPrompt, /APPROVED_ROOT_INSTRUCTION_A/);
-      assert.doesNotMatch(systemPrompt, /TRANSIENT_ROOT_INSTRUCTION_B/);
-      assert.match(systemPrompt, /Communication style: concise/);
-      assert.doesNotMatch(systemPrompt, /Communication style: detailed/);
-      assert.match(systemPrompt, /current review policy is `request`/i);
-      assert.doesNotMatch(systemPrompt, /current review policy is `proceed`/i);
+    const systemPrompts: string[] = [];
+    const originalFetch = globalThis.fetch;
+    let mainCall = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        tools?: Array<{ function?: { name?: string } }>;
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const toolNames = (body.tools ?? []).map((t) => t.function?.name ?? '');
+      if (toolNames.length === 0) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"strategy":"answer-direct","reasoning":"d","subtasks":[]}' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 3 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      systemPrompts.push(String(body.messages?.find((mm) => mm.role === 'system')?.content ?? ''));
+      const message = mainCall === 0
+        ? { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'run_workflow', arguments: JSON.stringify(args) } }] }
+        : { content: 'done' };
+      mainCall += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message }], usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    const mcp = makeStubMcp();
+    mcp.listTools = async () => ({ tools: [] });
+    try {
+      const agent = new Agent(mcp, { provider: 'openai', apiKey: 'k', model: 'test-model' },
+        { workspaceRoot: workspace, launchCwd: workspace });
+      const handle = await agent.issueExecutionIntent({ source: 'user-command', toolName: 'run_workflow', args });
+      agent.confirmRunWorkflowLaunch = async () => {
+        // The A→B swap lands DURING the reviewed launch, past turn start. It must
+        // be caught as drift and cancel the launch — not silently proceed on B.
+        fs.writeFileSync(instructionPath, 'TRANSIENT_ROOT_INSTRUCTION_B', 'utf8');
+        writePreferences(workspace, { executionMode: 'fast', reviewPolicy: 'proceed', personality: 'detailed' });
+        setSessionMode(workspace, agent.sessionKey, { executionMode: 'fast', reviewPolicy: 'proceed', personality: 'detailed' });
+        return false;
+      };
+
+      // Guarantee 2: the mid-flight swap cancels the reviewed launch.
+      await assert.rejects(
+        agent.runTurn('render only the reviewed root prompt', CALLBACKS, { executionIntent: handle }),
+        /reviewed workspace, profile, role, access, skill, permission, model-routing, or delegation policy changed/,
+        'a mid-flight policy swap must CANCEL the reviewed launch, never run it on the changed policy',
+      );
+
+      // Guarantee 1: the prompt the reviewed turn was built from is the APPROVED A.
+      const reviewedPrompt = systemPrompts[0] ?? '';
+      assert.match(reviewedPrompt, /APPROVED_ROOT_INSTRUCTION_A/, 'reviewed root prompt uses the approved instruction');
+      assert.doesNotMatch(reviewedPrompt, /TRANSIENT_ROOT_INSTRUCTION_B/);
+      assert.match(reviewedPrompt, /Communication style: concise/, 'reviewed root prompt uses the approved personality');
+      assert.match(reviewedPrompt, /current review policy is `request`/i, 'reviewed root prompt uses the approved review policy');
     } finally {
-      releaseTurnInventory?.();
-      fs.writeFileSync(instructionPath, 'APPROVED_ROOT_INSTRUCTION_A', 'utf8');
-      llm.restore();
+      globalThis.fetch = originalFetch;
     }
-    assert.equal(fs.readFileSync(instructionPath, 'utf8'), 'APPROVED_ROOT_INSTRUCTION_A');
   });
 });
 
