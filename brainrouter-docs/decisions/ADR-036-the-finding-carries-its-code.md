@@ -1,6 +1,6 @@
 # ADR-036 — The finding carries its code
 
-**Status:** PROPOSED — for owner review. Verified still unimplemented 2026-08-16: the finding contract already carries `codeExcerpt`/`diffHunk` and desktop renders a code frame, but nothing persists the excerpt with the durable finding (`039_review_finding_lifecycle.sql` has no excerpt column) and the dashboard review console still shows only `file:line`.
+**Status:** Accepted — implemented (2026-08-16, owner-accepted). D1/D6: `review_findings` now persists `code_excerpt` + `code_replacement` (migration 064), redacted on the way IN via `redactReviewSourceText` and bounded, threaded through `findingInput`/`normalizeFinding` (not part of the fingerprint) and surfaced by `listReviewFindingsForOrg`. D2–D5: the dashboard PR-review finding detail renders the finding's own hunk — reviewed lines + before/after proposal — via `ReviewCodeFrame`, escaped (untrusted source rendered as data), bounded with the truncation stated, using the `parseHunk`/`excerptRows`/`findingRows` logic ported verbatim from the desktop panel (one classification across surfaces, ADR-029). Open questions 1/3/5 (expandable context, syntax highlighter, deleted-file state) remain follow-ups.
 **Depends on:** ADR-033 (review that finds things, and says where), ADR-025 (assurance programs),
 ADR-019 (dashboard org/workspace context), ADR-028 (surfaces that tell the truth).
 
