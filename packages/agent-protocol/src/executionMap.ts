@@ -162,6 +162,13 @@ export interface ExecutionEvent {
   executionId: string;
   executionSequence: number;
   sessionKey: string;
+  /**
+   * ADR-040 A40-9 goal-continuation / A40-5 goal grouping — the goal this run
+   * belongs to, when it was launched under an active goal. Absent for a normal
+   * no-goal turn; a run is never RETROFITTED into a goal, so the reducer groups
+   * only what was emitted with the link already present.
+   */
+  goalId?: string;
   emittedAt: string;
   causationEventId?: string;
   nodeExecutionId?: string;

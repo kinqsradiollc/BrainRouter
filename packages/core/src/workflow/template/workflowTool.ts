@@ -57,6 +57,8 @@ import {
   canonicalPhasePlanEmitter,
   type CanonicalPhasePlanEmitter,
 } from '../../orchestration/execution/phasePlanAdapter.js';
+// A40-9 goal-continuation — link a run to the goal it was launched under.
+import { readGoal } from '../../goal/store/goalStore.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */
@@ -405,12 +407,22 @@ async function runWorkflowUnchecked(
     // runId records the first run only; that is an accepted best-effort limit.
     const canonical: CanonicalPhasePlanEmitter | undefined = (() => {
       try {
+        // Best-effort: a goal-read failure omits the link, it never disables the mirror.
+        let goalId: string | undefined;
+        try {
+          const g = readGoal(ws, ctx.parentSessionKey);
+          // Goals have no id of their own; a goal INSTANCE is identified by its
+          // scope and the moment it was set. A new goal resets setAt, so this key
+          // changes exactly when the goal does — which is the grouping boundary.
+          goalId = g ? `${ctx.parentSessionKey ?? 'local'}:${g.setAt}` : undefined;
+        } catch { goalId = undefined; }
         return canonicalPhasePlanEmitter({
           executionId: ctx.executionLaunch?.parentExecutionId ?? slug,
           sessionKey: ctx.parentSessionKey ?? 'local',
           startedAt: new Date().toISOString(),
           runId: ctx.executionLaunch?.runId ?? slug,
           workspaceRoot: ws,
+          goalId,
         });
       } catch {
         return undefined;
@@ -712,12 +724,18 @@ async function resumeWorkflowUnchecked(slug: string, ctx: OrchestrationContext, 
   const resumeHooks: ExecuteHooks = { ...makeRunHooks(ws, slug), signal: ctx.interruptSignal };
   const canonicalResume = (() => {
     try {
+      let goalId: string | undefined;
+      try {
+        const g = readGoal(ws, ctx.parentSessionKey);
+        goalId = g ? `${ctx.parentSessionKey ?? 'local'}:${g.setAt}` : undefined;
+      } catch { goalId = undefined; }
       return canonicalPhasePlanEmitter({
         executionId: run.parentExecutionId ?? slug,
         sessionKey: ctx.parentSessionKey ?? 'local',
         startedAt: new Date().toISOString(),
         runId: run.runId ?? slug,
         workspaceRoot: ws,
+        goalId,
         resume: true,
       });
     } catch {

@@ -19,6 +19,8 @@ export interface RunsListRow {
   startedAt: string;
   endedAt?: string;
   definitionId: string | null;
+  /** A40-5 — the goal this run belongs to, so a listing can be grouped by goal. */
+  goalId?: string | null;
   /**
    * What the row is allowed to claim. A listing built only from the durable
    * record has no event stream behind it, so it must not imply one.
@@ -30,6 +32,8 @@ export interface RunDetailView {
   runId: string;
   executionId: string;
   status: string;
+  /** A40-9 — the goal this run was launched under, from the durable record. */
+  goalId?: string | null;
   /** Carried from the snapshot, never inferred from status. */
   completeness: 'complete' | 'gapped' | 'unavailable';
   /** Present only when completeness is not `complete`. */
@@ -58,6 +62,7 @@ export function toRunsListRows(records: readonly DurableRunSafeRecord[]): readon
     startedAt: record.startedAt,
     endedAt: record.endedAt,
     definitionId: record.definitionId,
+    goalId: record.goalId,
     detail: 'summary-only' as const,
   })));
 }
@@ -76,6 +81,7 @@ export function toRunDetailView(
       runId: record.runId,
       executionId: record.executionId,
       status: record.status,
+      goalId: record.goalId,
       completeness: 'unavailable',
       caveat: 'No execution events are retained for this run — only its summary is known.',
       nodes: Object.freeze([]),
@@ -86,6 +92,7 @@ export function toRunDetailView(
     runId: record.runId,
     executionId: record.executionId,
     status: record.status,
+    goalId: record.goalId,
     completeness: snapshot.completeness,
     caveat: snapshot.completeness === 'gapped'
       ? 'Some events are missing, so this map is incomplete. What is shown is accurate; what is absent is unknown.'

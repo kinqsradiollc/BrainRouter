@@ -85,7 +85,12 @@ let migrationAttempted = new Set<string>();
 // outright the first time a workspace ran with BRAINROUTER_HOME pointing
 // somewhere else. That is someone's reviewed role definitions gone, not stale
 // runtime state, and the rescue-copy above never covered them either.
-const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json', 'agents']);
+// `runs/` holds durable execution-map records (ADR-040 A40-6). `runStore.ts`
+// reads and writes them ONLY at the raw `<ws>/.brainrouter/runs` path — never at
+// the home state root — so relocating them here orphans every durable run the
+// moment a workspace first migrates. Like `workflows/` and `agents/`, they are
+// workspace-local by their store's design and must stay put.
+const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json', 'agents', 'runs']);
 const WORKSPACE_MANIFEST_CLAIM_PATTERN = /^\.workspace\.json\.[0-9]+\.[0-9a-f]{24}\.claim$/;
 
 function isWorkspaceLocalArtifact(entryName: string): boolean {
