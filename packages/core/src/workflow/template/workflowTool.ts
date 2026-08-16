@@ -704,7 +704,40 @@ async function resumeWorkflowUnchecked(slug: string, ctx: OrchestrationContext, 
     getCliKnobs().maxConcurrentChildren ?? 8,
     buildLoop ? { workspaceRootOverride: buildLoop.workspaceRoot } : isFanOutBuild ? { holdWorktree: true } : undefined,
   );
-  const execution = await executePhasePlan(plan, runner, { ...makeRunHooks(ws, slug), signal: ctx.interruptSignal }, { completed, priorOutputs });
+  // ADR-040 A40-7 — mirror the RESUME onto the canonical map too, RE-ATTACHING to
+  // the interrupted run's durable record (matching the fresh run's identity) rather
+  // than starting a second one. Best-effort exactly like the fresh path: a mirror
+  // failure never breaks a resume, and the emitter continues the event sequence so
+  // the resumed events extend the stream instead of colliding with the earlier ones.
+  const resumeHooks: ExecuteHooks = { ...makeRunHooks(ws, slug), signal: ctx.interruptSignal };
+  const canonicalResume = (() => {
+    try {
+      return canonicalPhasePlanEmitter({
+        executionId: run.parentExecutionId ?? slug,
+        sessionKey: ctx.parentSessionKey ?? 'local',
+        startedAt: new Date().toISOString(),
+        runId: run.runId ?? slug,
+        workspaceRoot: ws,
+        resume: true,
+      });
+    } catch {
+      return undefined;
+    }
+  })();
+  if (canonicalResume) {
+    const baseStart = resumeHooks.onPhaseStart;
+    const baseComplete = resumeHooks.onPhaseComplete;
+    resumeHooks.onPhaseStart = (phase, index, total) => {
+      baseStart?.(phase, index, total);
+      try { canonicalResume.hooks.onPhaseStart?.(phase, index, total); } catch { /* best-effort */ }
+    };
+    resumeHooks.onPhaseComplete = (phaseExecution) => {
+      baseComplete?.(phaseExecution);
+      try { canonicalResume.hooks.onPhaseComplete?.(phaseExecution); } catch { /* best-effort */ }
+    };
+  }
+  const execution = await executePhasePlan(plan, runner, resumeHooks, { completed, priorOutputs });
+  try { canonicalResume?.finish(execution); } catch { /* best-effort — canonical mirror never blocks a resume */ }
   const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
   const fanOutMerge = isFanOutBuild ? finalizeFanOutBuild(ws, collectFanOutSlices(ws, execution), reviewPhaseOutput(execution)) : undefined;
   return JSON.stringify(
