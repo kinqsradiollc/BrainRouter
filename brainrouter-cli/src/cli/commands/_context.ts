@@ -28,6 +28,8 @@ export interface RunAgentTurnOptions {
   agent?: Agent;
   ephemeral?: boolean;
   executionIntent?: ExecutionIntentHandle;
+  /** ADR-040 A40-9 — explicit-strategy launch previewed and confirmed via `/runs start`. */
+  explicitStrategyId?: string;
 }
 
 /**

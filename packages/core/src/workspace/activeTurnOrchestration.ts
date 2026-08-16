@@ -90,6 +90,8 @@ export function resolveActiveTurnOrchestration(input: {
   task: string;
   activeCapabilitySkillIds?: readonly string[];
   parentDepth?: number;
+  /** ADR-040 A40-9 — explicit-strategy launch: resolve this exact strategy id. */
+  explicitStrategyId?: string;
   /**
    * The caller already chose this turn's workflow — a slash command that
    * assembled a review/commit prompt, or a latched skill. Signal detection reads
@@ -159,6 +161,7 @@ export function resolveActiveTurnOrchestration(input: {
     installedSkillIds,
     workspaceSkillIds: new Set(workspaceSkillIds),
     capabilitySkillIds: new Set(input.activeCapabilitySkillIds ?? []),
+    ...(input.explicitStrategyId ? { explicitStrategyId: input.explicitStrategyId } : {}),
     delegationPolicy: resolveDelegationPolicy(readPreferences(input.workspaceRoot)),
     runtimeLimits: {
       maxConcurrentChildren: getCliKnobs().maxConcurrentChildren,

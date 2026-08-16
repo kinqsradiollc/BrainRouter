@@ -1106,7 +1106,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
 
   The module is deliberately UNWIRED and recorded as such in the E1 sweep: wiring it into the turn
   path before the gate opens is precisely how a default moves without anyone deciding to move it.
-- [~] **A40-9 — PARTIAL. Ship CLI parity and explicit strategy launch.** `/runs` for normal and goal-linked
+- [x] **A40-9 — Ship CLI parity and explicit strategy launch.** Every one of these is now shipped — the row is complete. `/runs` for normal and goal-linked
   turns, preview/confirm start, live updates, retained replay, `--json`, goal continuation, and
   authorized child transcript drill-down from the shared projection.
 
@@ -1133,8 +1133,32 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   the host surface, hosts get the reader only. Five tests, including a real graph run read back from
   disk to the same map it produced live; the journal append mutation-proved.
 
-  **Still open for this row:** preview/confirm start, live updates, goal continuation, and authorized
-  child-transcript drill-down.
+  **Child-transcript drill-down now shipped.** Each stage in the detail view carries the child sessions
+  it spawned (`RunDetailView.nodes[].childSessionIds`, from the reducer's stage-child correlation), so a
+  run can be traced into the transcripts it produced — CLI prints `↳ child <session>` under each stage,
+  Desktop renders the same field. They are session references, not resume material, so they belong on the
+  rendering surface.
+
+  **Goal continuation now shipped** (A40-5's grouping consumer). A run launched under an active goal
+  carries a stable `goalId` (`${sessionKey}:${goal.setAt}`, which changes exactly when the goal does)
+  through the emitters onto the event, the durable record, and the reducer's `#byGoal` index; `/runs`
+  groups by goal (`--goal=<id>`) and both hosts show a run's goal without needing the event stream. The
+  launch reads the goal best-effort, so a goal-read failure omits the link and never disables the mirror.
+
+  **Preview/confirm start and live updates now shipped — the row is complete.** `/runs start
+  [--strategy=<id>] <task>` resolves the plan the launch WOULD run (`previewTurnStrategy` →
+  `resolveActiveTurnOrchestration` with the explicit strategy → the shared `PlanPreview`), prints the
+  validated strategy, its origin, each stage, and — the answer a person confirming a launch is owed —
+  whether it spawns children, then asks to confirm before it mints anything. On confirm the explicit
+  command runs the turn with the strategy as its topology (`selectionSource: explicit`); on decline
+  nothing starts. `/runs <id> --watch` follows a run live: it polls `readRunDetail` (which re-reduces the
+  retained journal idempotently), re-renders only when the map changes, and stops the moment the run
+  reaches a terminal status (`isTerminalRunStatus`, shared so the two hosts cannot disagree about when a
+  run is finished) or on Ctrl-C or a time cap. Both the preview projection and the terminal predicate
+  live in Core so Desktop's "Run with strategy" dialog and live view render the same answers. Eight
+  tests — preview surfaces strategy/origin/children (mutation-proved on the child-spawn logic), the
+  terminal predicate, and a journal-tail test proving the map grows as events append and turns terminal
+  when the run finishes.
 - [~] **A40-10 — PARTIAL. Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
   Design with normal no-goal turns visible by default, preview/confirm, live/reconnect state,
   accessible graph/list fallback, details and authorized transcript drill-down; validate

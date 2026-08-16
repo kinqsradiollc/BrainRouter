@@ -399,7 +399,10 @@ export function installTurnRunner(ctx: RunChatContext): void {
         onNotice: (notice) => {
           if (notice?.message) controller!.push.memory(notice.level ?? 'info', `✂️ ${notice.message}`);
         },
-      }, options.executionIntent ? { executionIntent: options.executionIntent } : undefined);
+      }, (options.executionIntent || options.explicitStrategyId) ? {
+        ...(options.executionIntent ? { executionIntent: options.executionIntent } : {}),
+        ...(options.explicitStrategyId ? { explicitStrategyId: options.explicitStrategyId } : {}),
+      } : undefined);
 
       parentDone = true;
       // Flush any pending batch-spawn notice + final fleet snapshot so
