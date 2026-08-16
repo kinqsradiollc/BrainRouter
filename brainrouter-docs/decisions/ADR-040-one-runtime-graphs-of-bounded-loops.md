@@ -797,7 +797,7 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   Local evidence: the 17-profile Core matrix and Core/CLI/Desktop identity, fail-closed,
   propagation, onboarding, and telemetry suites pass; hosted CI and the automated security review
   remain this slice's merge gates.
-- [~] **A40-2 — PARTIAL. Add conversational task envelopes, trusted intent, and execution-tree policy.**
+- [x] **A40-2 — Add conversational task envelopes, trusted intent, and execution-tree policy.** All four remaining parts are now shipped — the row is complete.
   Evaluate every eligible top-level turn from bounded user/confirmed task context, make a normal
   turn the root when no goal exists, define/validate explicit topology and strategy provenance,
   reject planner/model self-authorization, parent durable children, and keep the Core goal
@@ -805,8 +805,37 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   the trusted-intent slice binds one exact CLI or host-reviewed phase launch to an opaque,
   single-use live-Agent capability, preserves parent/launch lineage in legacy-readable ledgers,
   purpose-limits the reviewed turn, and carries a revocable policy-bound lease through declared
-  descendants. The conversational task envelope, closed origin/topology contract, goal/no-goal
-  parity, and shared Core goal supervisor remain open, so this row stays unchecked.
+  descendants. The four parts that had remained open are now
+  shipped:
+
+  **Conversational task envelope** (`workspace/conversationTaskEnvelope.ts`, wired at
+  `runTurn.impl.ts`). Selection reads a bounded envelope, not the latest sentence and not the whole
+  transcript: an elliptical CONTINUATION follow-up ("now implement that", "go ahead") inherits the
+  last unresolved user task's shape — or, when a goal is active, its objective as confirmed task
+  context — instead of losing it and dropping to direct (§8.2 step 3). A message with its own task is
+  a new task; a pure acknowledgement ("ok", "thanks") is NOT a continuation, so it inherits nothing
+  and takes the direct fallback (§8.2 step 4). It reads only user-authored text — assistant/planner
+  output never becomes a durable shape — and the carry is size-bounded. Eight tests.
+
+  **Closed origin/topology contract** (`adaptiveActivation.ts`). `TopologyOrigin` names the one closed
+  origin vocabulary (`AdaptiveDiagnostics['source']`), and `assertTopologyOriginProvenance` validates
+  it at the selection layer: an `explicit-user` origin requires an actual explicit choice (a model
+  cannot present its selection as the user's), an `adaptive` origin requires matched signals (never a
+  bare preference). The finalizer runs it on every resolution and surfaces the validated origin. This
+  is the selection-layer half of "reject planner/model self-authorization"; the durable-execution half
+  is the trusted-intent slice already shipped. Four tests.
+
+  **Goal/no-goal parity** (§8.2). Enforced structurally and pinned by test: the resolver takes no goal
+  input, and the goal-conditioned skill activation runs AFTER topology resolution, so goal presence
+  cannot change per-turn selection. A goal whose objective is redundant with the unresolved task yields
+  an EQUIVALENT plan (identity, source, matched signals, origin) to stating that task with no goal; a
+  contextless acknowledgement takes direct either way. Three fixture-parity tests.
+
+  **Shared Core goal supervisor** (`goal/supervisor/goalSupervisor.ts`). CLI no longer mirrors the
+  continuation logic — both hosts now call `decideGoalContinuation` (one decision, same reason codes) —
+  and a Core-owned supervisor records the CONTENT-FREE continue/stop/budget reason between turns, keyed
+  by the goal instance, so the CLI and Desktop share one continuation history. It is optional and never
+  read by the resolver (parity holds). Bounded, best-effort. Five tests, wired into both hosts.
 
   **Shipped in `30904ff5f`.** Authority is a capability and not a claim: handles are object
   identities in a `WeakMap`, bound to workspace/session/user, TTL-bounded (5 min, 15 min ceiling),

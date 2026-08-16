@@ -71,6 +71,7 @@ import {
   refreshWorkspaceCapabilityState,
 } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
+import { buildTurnTaskEnvelope } from '../../workspace/conversationTaskEnvelope.js';
 import { resolveRequiredSkillActivation } from '../../workspace/requiredSkillActivation.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import {
@@ -178,11 +179,28 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // profile beside that bounded launch.
       clearWorkspaceCapabilityState(this);
     } else refreshWorkspaceCapabilityState(this, prompt);
+    // ADR-040 A40-2 — bounded conversation task envelope. An elliptical follow-up
+    // ("now implement that") inherits the last unresolved user task's shape — or,
+    // when a goal is active, its objective as confirmed task context — instead of
+    // losing it and dropping to direct. A message with its own task shape, or a
+    // contextless acknowledgement with nothing to inherit, is unchanged. Reads only
+    // user-authored text; assistant/planner output never becomes a durable shape.
+    const priorUserMessages = this.chatHistory
+      .filter((m) => m?.role === 'user' && typeof m.content === 'string' && m.content !== prompt)
+      .map((m) => m.content as string);
+    const taskEnvelope = buildTurnTaskEnvelope({
+      currentMessage: prompt,
+      priorUserMessages,
+      ...(this.reviewSourceSafety ? {} : (() => {
+        const g = readGoal(this.workspaceRoot, this.sessionKey);
+        return g?.text ? { goalObjective: g.text } : {};
+      })()),
+    });
     const activeTurnOrchestration = resolveActiveTurnOrchestration({
       workspaceRoot: inheritedReviewedExecution
         ? executionPolicyWorkspaceRoot
         : this.workspaceRoot,
-      task: prompt,
+      task: taskEnvelope.signalText,
       activeCapabilitySkillIds: this.activeWorkspaceCapabilities.skills,
       parentDepth: this.agentDepth,
       ...(opts?.explicitStrategyId ? { explicitStrategyId: opts.explicitStrategyId } : {}),

@@ -107,6 +107,44 @@ export function assertCorpusGateHonored(selection: {
 }
 
 /**
+ * ADR-040 A40-2 — the CLOSED topology-origin contract.
+ *
+ * A topology selection has exactly one legitimate origin, and it is the same
+ * vocabulary `AdaptiveDiagnostics.source` already carries. Naming it closes the
+ * contract: a selection cannot claim an origin the code has no case for, and both
+ * hosts read one field instead of reconciling two enums.
+ */
+export type TopologyOrigin = AdaptiveDiagnostics['source'];
+
+/**
+ * Validate that a topology selection's provenance matches its claimed origin.
+ * This is the "reject planner/model self-authorization" chokepoint at the
+ * selection layer: an `explicit-user` origin must have an actual explicit choice
+ * behind it (a model cannot forge one into being), and an `adaptive` origin must
+ * have matched workspace signals behind it (never a bare model preference). The
+ * resolver already produces only legitimate origins, so this never fires today —
+ * which is exactly what makes it an invariant worth asserting rather than trusting.
+ */
+export function assertTopologyOriginProvenance(input: {
+  origin: TopologyOrigin;
+  explicitStrategyId?: string | null;
+  matchedSignalCount: number;
+}): void {
+  if (input.origin === 'explicit-user' && !input.explicitStrategyId) {
+    throw new Error(
+      'ADR-040 A40-2: an `explicit-user` topology origin requires an explicit strategy choice — '
+      + 'a model-authored selection may not present itself as the user\'s.',
+    );
+  }
+  if (input.origin === 'adaptive' && input.matchedSignalCount === 0) {
+    throw new Error(
+      'ADR-040 A40-2: an `adaptive` topology origin requires matched task signals — '
+      + 'a selection with no signal behind it is a preference, not a provenance.',
+    );
+  }
+}
+
+/**
  * Build the diagnostics for one turn.
  *
  * `direct` is the baseline for a reason that is easy to lose: every other

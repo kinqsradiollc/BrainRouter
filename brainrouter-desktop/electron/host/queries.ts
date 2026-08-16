@@ -281,6 +281,7 @@ import {
   resumeGoal,
   editGoal,
   decideGoalContinuation,
+  recordGoalContinuation,
   buildGoalContinuationPrompt,
   goalCorrectiveNotice,
   tickGoalIteration,
@@ -3981,6 +3982,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         let strikes = goalStrikes.get(sk) ?? 0;
         if (lastTurnToolCalls > 0) strikes = 0;
         const decision = decideGoalContinuation(goal, { lastTurnToolCalls, lastGoalTransition, noToolStrikes: strikes });
+        // A40-2 goal supervisor — record the content-free continuation reason under
+        // this goal instance, so the Desktop host and the CLI share one history.
+        recordGoalContinuation(workspaceRoot, sk, { goalId: `${sk}:${goal.setAt}`, decision, at: new Date().toISOString() });
         if (decision.kind === 'continue') {
           tickGoalIteration(workspaceRoot, sk);
           strikes = decision.corrective ? strikes + 1 : 0;

@@ -19,8 +19,10 @@ import {
   adaptiveEligibility,
   adaptiveDiagnostics,
   assertCorpusGateHonored,
+  assertTopologyOriginProvenance,
   type AdaptiveDiagnostics,
   type AdaptiveEligibilityInput,
+  type TopologyOrigin,
 } from '../orchestration/execution/adaptiveActivation.js';
 import { detectOrchestrationTaskSignals } from '../orchestration/profiles/taskSignals.js';
 import { readPreferences } from '../session/preferences/preferencesStore.js';
@@ -42,6 +44,8 @@ export interface ActiveTurnOrchestrationResolution {
    * enforces that while it is true no selection may move a system default.
    */
   adaptive: AdaptiveDiagnostics;
+  /** ADR-040 A40-2 — the CLOSED, validated topology origin (= `adaptive.source`). */
+  topologyOrigin: TopologyOrigin;
 }
 
 /**
@@ -71,7 +75,14 @@ function withAdaptive(
     selectionSource: plan.selectionSource,
     matchedSignalCount: plan.matchedSignalIds.length,
   });
-  return { plan, taskSignalIds, source, adaptive };
+  // A40-2 — validate the topology origin's provenance (the closed contract): an
+  // explicit origin needs an explicit choice, an adaptive one needs signals.
+  assertTopologyOriginProvenance({
+    origin: adaptive.source,
+    explicitStrategyId: eligibilityInput.explicitStrategyId,
+    matchedSignalCount: plan.matchedSignalIds.length,
+  });
+  return { plan, taskSignalIds, source, adaptive, topologyOrigin: adaptive.source };
 }
 
 /**
