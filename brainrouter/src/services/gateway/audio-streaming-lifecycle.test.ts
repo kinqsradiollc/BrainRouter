@@ -12,6 +12,7 @@ import {
 } from "./audio-streaming-protocol.js";
 import {
   attachFrame,
+  attachWhenAdmitted,
   audioFrame,
   closed,
   connect,
@@ -142,9 +143,12 @@ describe("gateway persistent audio lifecycle contracts", () => {
     first.terminate();
     await firstClosed;
 
-    const retried = await connect(gateway);
-    retried.send(attachFrame({ sessionId: "meeting_after_pending_release" }));
-    expect(await nextJson(retried)).toMatchObject({ type: "attached" });
+    // The pending slot is released inside the server's socket-close handler,
+    // which runs after `firstClosed` (the client's own close) resolves. Poll
+    // until that release lands rather than racing it — an unguarded reconnect
+    // here is what flaked as `Unexpected server response: 429` under CI load.
+    const { message } = await attachWhenAdmitted(gateway, { sessionId: "meeting_after_pending_release" });
+    expect(message).toMatchObject({ type: "attached" });
   });
 
   it("bounds authenticated principal streams and releases quota on ordinary close", async () => {
@@ -163,9 +167,13 @@ describe("gateway persistent audio lifecycle contracts", () => {
     const firstClosed = closed(first);
     first.close();
     await firstClosed;
-    const retried = await connect(gateway);
-    retried.send(attachFrame({ sessionId: "meeting_principal_3" }));
-    expect(await nextJson(retried)).toMatchObject({ type: "attached" });
+    // Same release-after-client-close race as the pending-slot test: the
+    // principal quota is freed in the server's socket-close handler, so a raced
+    // reattach would transiently be denied with `overloaded`. `port.open` is
+    // only invoked after a successful promote, so the polled retries leave the
+    // expected call count intact.
+    const { message } = await attachWhenAdmitted(gateway, { sessionId: "meeting_principal_3" });
+    expect(message).toMatchObject({ type: "attached" });
     expect(port.open).toHaveBeenCalledTimes(2);
   });
 

@@ -15,6 +15,7 @@ import { WebSocket } from "ws";
 import { GatewayAuthError, MODEL_INVOKE_SCOPE } from "./auth.js";
 import type { GatewayAudioStreamingController, GatewayAudioStreamingOptions } from "./audio-streaming-server.js";
 import {
+  GATEWAY_AUDIO_STREAM_CLOSE,
   GATEWAY_AUDIO_STREAM_PATH,
   type GatewayAudioStreamHandlers,
   type GatewayAudioStreamOpenInput,
@@ -186,6 +187,55 @@ export function rejectedUpgrade(
     socket.once("open", () => reject(new Error("upgrade unexpectedly succeeded")));
     socket.once("error", () => undefined);
   });
+}
+
+/**
+ * Connect and attach, retrying only while the server still reports the prior
+ * stream's admission slot as occupied.
+ *
+ * Admission leases are released inside the server's socket-close handler, which
+ * runs asynchronously *after* a disconnecting client observes its own close
+ * (the promise returned by `closed(socket)`). A fresh same-IP / same-principal
+ * stream can therefore race that release: the upgrade is transiently rejected
+ * with HTTP 429, or the attach is denied with an `overloaded` close, even
+ * though the departing stream is already on its way out. Both are the same
+ * not-yet-released condition, so poll — bounded exactly like `waitFor`
+ * (100 × 5ms) — until the slot frees and the attach is accepted. Any other
+ * close code is a genuine failure and is surfaced immediately.
+ */
+export async function attachWhenAdmitted(
+  gateway: RunningGateway,
+  overrides: Record<string, unknown> = {},
+): Promise<{ readonly socket: WebSocket; readonly message: Record<string, unknown> }> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    let socket: WebSocket;
+    try {
+      socket = await connect(gateway);
+    } catch (error) {
+      if (isAdmissionFull(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        continue;
+      }
+      throw error;
+    }
+    socket.send(attachFrame(overrides));
+    const result = await nextJsonOrClose(socket);
+    if (result.kind === "message") return { socket, message: result.value };
+    if (result.code === GATEWAY_AUDIO_STREAM_CLOSE.overloaded) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      continue;
+    }
+    throw new Error(`stream attach closed unexpectedly with code ${result.code}`);
+  }
+  throw new Error("stream admission was not released before the deadline");
+}
+
+function isAdmissionFull(error: unknown): boolean {
+  // `ws` reports a rejected upgrade that has no `unexpected-response` listener
+  // as an Error whose message embeds the HTTP status ("Unexpected server
+  // response: 429"). 429 is the admission backstop declining a still-occupied
+  // slot; every other status is a real upgrade failure.
+  return error instanceof Error && /\b429\b/.test(error.message);
 }
 
 export function nextJson(socket: WebSocket): Promise<Record<string, unknown>> {
