@@ -145,6 +145,21 @@ deep dives.
   across all 17 profiles, activates only bounded validated strategy selection, fails graph authority
   and approvals closed, treats optimization as a grounded verifier/counter-metric/rollback graph,
   and defines one safe execution map rendered as Desktop Runs and a CLI timeline/JSON view.
+  [ADR-041 plug-and-play runtime](decisions/ADR-041-plug-and-play-runtime.md) —
+  proposed decision to make providers, capability ports, phase hooks, and product-wide dispatch
+  tables runtime-swappable through the existing `ExtensionHost`. Replaces the frozen
+  `PROVIDER_REGISTRY` with a live `ProviderRegistry`, extracts `FilesystemPort` / `ShellPort` /
+  `SubprocessPort` from the 1,600-line tool runtime monolith, adds `IAgent` and phase hooks to the
+  agent loop, replaces four hard-coded dispatch structures with typed registries (MCP, CLI, desktop,
+  API), formalises `IMemoryStoreComposite` to eliminate 73 `as unknown as *Store` casts, and
+  introduces a provider-neutral `StreamChunk` streaming protocol.
+
+  [ADR-042 worktrees the agent can enter](decisions/ADR-042-worktrees-the-agent-can-enter.md) —
+  proposed decision for multi-root workspaces: worktree-aware tools, entering sibling worktrees, and a
+  sandbox profile that still lets git operate.
+  [ADR-043 egress at the user's edge](decisions/ADR-043-egress-at-the-users-edge.md) —
+  proposed decision to route each user's provider traffic from their own edge IP without the credential
+  ever leaving the server (a remote-capable seam per ADR-041 D12).
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 

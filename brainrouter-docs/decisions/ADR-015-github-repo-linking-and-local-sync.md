@@ -1,6 +1,6 @@
 # ADR-015 — GitHub Repository Linking: Authorization Across Plans + Local-First Sync
 
-**Status:** Proposed (design locked; implementation phased) · **Extends** ADR-009 (trigger-ingress
+**Status:** Partially implemented (verified 2026-08-16: P0/P1a/P1b/P2/P4 shipped — including `repoUrl` finally consumed; pending: P1c repoTag-scoped capture and the P3 desktop repo-linking surface; §D1 superseded by ADR-016 and P5 delivered by ADR-017's unified GitHub App; note `ingestRepoFiles` currently has no production caller) · **Extends** ADR-009 (trigger-ingress
 GitHub App), ADR-010 (multi-tenancy), ADR-014 (projects / repos). **Does not commit** until the
 program below is agreed and each phase is verified.
 
