@@ -37,7 +37,7 @@ jobs:
       # its base, so a green runtime build validates all of them). GHA cache keeps
       # the npm-ci + workspace-build layers warm across runs.
       - name: Build brain (runtime target)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/brain/Dockerfile
@@ -69,7 +69,7 @@ jobs:
           cache: npm
 
       - name: Build the whisper sidecar image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/stt
           file: deploy/stt/Dockerfile
