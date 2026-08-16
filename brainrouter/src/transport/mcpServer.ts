@@ -504,7 +504,7 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
             return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
           }
           return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
-        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
+        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
         case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
