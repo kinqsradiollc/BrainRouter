@@ -16,6 +16,8 @@ import type {
   WorktreeChangeCapture,
 } from './contracts.js';
 import { nodeWorktreeIsolationHost as host } from './host/nodeWorktreeIsolationHost.js';
+import { resolveAttachableWorktree } from '../concurrentWorktrees.js';
+import { liveForeignOwner } from '../ownership/worktreeOwnership.js';
 
 interface PrepareChildWorkspaceInput {
   parentWorkspaceRoot: string;
@@ -23,6 +25,15 @@ interface PrepareChildWorkspaceInput {
   childId: string;
   access: AccessMode;
   mode: ChildWorkspaceIsolationMode;
+  /**
+   * ADR-042 D7 — resume an EXISTING worktree instead of minting a fresh detached
+   * copy. When set and the target is a listed worktree of this repo not owned by
+   * a live foreign session, the child's workspaceRoot IS that worktree. Not
+   * resumable ⇒ `fallback: 'create'` mints as usual, otherwise it fails.
+   */
+  attachTo?: { path?: string; branch?: string; fallback?: 'create' };
+  /** The parent's session key — so an attach can tell self-owned from foreign (D6). */
+  selfSessionKey?: string;
 }
 
 function isInside(parent: string, candidate: string): boolean {
@@ -94,6 +105,31 @@ export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildW
     const notice = 'Child workspace isolation requested, but the parent workspace is not inside a git repository.';
     if (input.mode === 'git-worktree') throw new Error(notice);
     return { workspaceRoot: parentWorkspaceRoot, launchCwd: parentLaunchCwd, isolated: false, notice };
+  }
+
+  // ADR-042 D7 — resume an existing worktree rather than minting one.
+  if (input.attachTo && (input.attachTo.path || input.attachTo.branch)) {
+    const target = input.attachTo.path ?? input.attachTo.branch ?? '';
+    const res = resolveAttachableWorktree(parentWorkspaceRoot, target);
+    const foreign = res.ok && input.selfSessionKey
+      ? liveForeignOwner(parentWorkspaceRoot, res.info.path, input.selfSessionKey)
+      : null;
+    if (res.ok && !foreign) {
+      const real = host.realpath(res.info.path);
+      return {
+        workspaceRoot: real,
+        launchCwd: launchCwdInWorktree(repoRoot, parentLaunchCwd, real),
+        isolated: true,
+        isolation: { kind: 'git-worktree', sourceRoot: repoRoot, worktreeRoot: real },
+      };
+    }
+    if (input.attachTo.fallback !== 'create') {
+      const why = foreign ? `it is owned by a live session (${foreign})` : (res.ok ? 'it is not resumable' : res.reason);
+      const notice = `Child worktree attach to "${target}" failed: ${why}. Pass fallback:'create' to mint a fresh worktree instead.`;
+      if (input.mode === 'git-worktree') throw new Error(notice);
+      return { workspaceRoot: parentWorkspaceRoot, launchCwd: parentLaunchCwd, isolated: false, notice };
+    }
+    // fallback: 'create' — fall through to the mint path below.
   }
 
   const worktreeRoot = defaultWorktreePath(repoRoot, input.childId);
