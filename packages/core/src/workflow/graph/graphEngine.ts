@@ -522,17 +522,39 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
       .filter((e) => activeEdges.has(e.id))
       .map((e) => ({ id: e.source, output: ctx.nodes[e.source] }));
     try {
-      const rec = node.type === 'subworkflow'
-        ? await runSubWorkflow(node, ctx, deps, opts)
-        : await runSingleNode(node, ctx, deps, upstream);
+      // ADR-040 A40-7 — opt-in, bounded per-node retry. `retries` defaults to 0
+      // (a single attempt — identical to the prior behavior) and is clamped to 5.
+      // Each attempt emits its OWN occurrence with its real attempt number, so a
+      // node that failed then recovered SHOWS the recovery instead of pretending
+      // it worked first try. Node-execution throws are caught here so they are
+      // retryable and, once exhausted, fall through to the SAME required/optional
+      // handling as a returned error. Each retry draws from the shared execution
+      // budget (retries can never bust the run's bound) and a cancel stops them.
+      const maxAttempts = 1 + Math.max(0, Math.min(5, Math.floor(Number((node.data as { retries?: unknown } | undefined)?.retries ?? 0)) || 0));
+      let rec!: NodeRunRecord;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (attempt > 1) {
+          if (deps.signal?.aborted) { rec = { id, type: node.type, status: 'error', error: 'run canceled' }; break; }
+          if (opts.budget.remaining <= 0) break;
+          opts.budget.remaining -= 1;
+        }
+        try {
+          rec = node.type === 'subworkflow'
+            ? await runSubWorkflow(node, ctx, deps, opts)
+            : await runSingleNode(node, ctx, deps, upstream);
+        } catch (err) {
+          rec = { id, type: node.type, status: 'error', error: err instanceof Error ? err.message : String(err) };
+        }
+        opts.emit({
+          nodeId: id,
+          attempt,
+          iterationPath: opts.depth > 0 ? [opts.depth] : [],
+          status: rec.status === 'ok' ? 'succeeded' : rec.status === 'skipped' ? 'skipped' : 'failed',
+        });
+        if (rec.status !== 'error') break;
+      }
       records[id] = rec;
       ctx.nodes[id] = rec.output;
-      opts.emit({
-        nodeId: id,
-        attempt: 1,
-        iterationPath: opts.depth > 0 ? [opts.depth] : [],
-        status: rec.status === 'ok' ? 'succeeded' : rec.status === 'skipped' ? 'skipped' : 'failed',
-      });
       if (node.type === 'approval') {
         const approvedOutput = rec.output as { approved?: boolean; unattended?: boolean } | undefined;
         opts.emit({

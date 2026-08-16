@@ -1051,9 +1051,20 @@ accepted decision record checks only A40-0; it makes no implementation claim.
   `node-failed` and a proof that a raw error carrying a secret never becomes a reason code; the mapping
   is mutation-proved.
 
-  **Still open for this row:** retry attempts as first-class emissions (this needs real per-node retry
-  semantics in the engine, not a bare counter); and the resume path's durable emission (gated today by
-  the store's exclusive-create).
+  **Retry attempts now shipped as real, first-class emissions — not a bare counter.** The graph engine
+  gained OPT-IN, bounded per-node retry: a node declares `retries` (default 0 — a single attempt, so
+  every existing graph is untouched; clamped to 5), and a failed attempt re-runs, emitting its OWN
+  occurrence with its real attempt number. A node that failed then recovered now SHOWS attempts 1, 2, 3
+  instead of pretending it worked first try. Node-execution throws are caught so they are retryable and,
+  once exhausted, fall through to the SAME required/optional handling as a returned error — so an
+  optional node degrades and a required one fails, exactly as before. Retries draw from the shared
+  execution budget (they cannot bust the run's bound) and stop on cancel. Five tests — default-preserved,
+  retry-then-succeed, exhausted, optional-degrades, budget-bounded — and the retry loop mutation-proved.
+
+  **Still open for this row:** only the resume path's durable emission — a resumed run re-attaching to
+  its existing durable record instead of the store's exclusive-create refusing a second start. It is
+  the narrowest remaining item and touches the A40-6 store's create-vs-reattach guard, not the emission
+  vocabulary.
 - [~] **A40-8 — PARTIAL. Activate bounded adaptive profile selection.** Wire the existing managed selector
   through every eligible top-level conversational turn in the shared Core path, with or without a
   goal; include direct as the safe baseline, expose diagnostics, and pass fresh/elliptical/contextless
