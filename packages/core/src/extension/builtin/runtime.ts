@@ -106,6 +106,7 @@ import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js'
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
+import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
@@ -298,6 +299,15 @@ export async function invokeBuiltinToolRuntime(
         p,
         opts,
       );
+    // ADR-042 D6 — a write into a worktree owned by a live foreign session is
+    // refused with the owner named, BEFORE resolveHere (edit/notebook resolve
+    // for read, so the escape guard alone would not catch them).
+    const readOnlyGuard = (p: string) => {
+      const owner = typeof this.readOnlyWorktreeOwner === 'function' ? this.readOnlyWorktreeOwner(p) : null;
+      if (owner) {
+        throw new Error(`Cannot write ${p}: it is in a worktree owned by session ${owner} (attached read-only). Coordinate with them, or re-enter it with override once they are done.`);
+      }
+    };
     switch (name) {
       // ADR-042 D3 — worktrees the agent can enter. `worktree_list` is the
       // structured, agent-facing inventory; `worktree_enter` attaches a listed
@@ -333,7 +343,24 @@ export async function invokeBuiltinToolRuntime(
           : '';
         const res = resolveAttachableWorktree(this.workspaceRoot, target);
         if (!res.ok) throw new Error(res.reason);
+        // ADR-042 D6 — if a LIVE foreign session owns this worktree, attach it
+        // read-only (writes refused, owner named) unless the user overrides.
+        const override = args.override === true || args.force === true;
+        const foreignOwner = !override && this.sessionKey
+          ? liveForeignOwner(this.workspaceRoot, res.info.path, this.sessionKey)
+          : null;
+        if (foreignOwner && typeof this.attachReadOnlyWorktree === 'function') {
+          this.attachReadOnlyWorktree(res.info.path, foreignOwner);
+          return JSON.stringify({
+            entered: res.info.path,
+            branch: res.info.branch,
+            readOnly: true,
+            owner: foreignOwner,
+            note: `Attached READ-ONLY — session ${foreignOwner} is working in this worktree. You can read it; writes are refused. Pass override:true to take it read/write anyway.`,
+          });
+        }
         if (typeof this.attachWorktree === 'function') this.attachWorktree(res.info.path);
+        if (this.sessionKey) { try { recordWorktreeOwner(this.workspaceRoot, res.info.path, this.sessionKey); } catch { /* best-effort */ } }
         return JSON.stringify({
           entered: res.info.path,
           branch: res.info.branch,
@@ -351,6 +378,7 @@ export async function invokeBuiltinToolRuntime(
         const created = createNamedWorktree(this.workspaceRoot, branch, fromRef);
         if ('error' in created) throw new Error(created.error);
         if (typeof this.attachWorktree === 'function') this.attachWorktree(created.worktreeRoot);
+        if (this.sessionKey) { try { recordWorktreeOwner(this.workspaceRoot, created.worktreeRoot, this.sessionKey); } catch { /* best-effort */ } }
         return JSON.stringify({
           created: created.worktreeRoot,
           branch: created.branch,
@@ -406,6 +434,7 @@ export async function invokeBuiltinToolRuntime(
         const removed = removeWorktreeAt(this.workspaceRoot, match.path, { force });
         if (!removed.ok) throw new Error(removed.error ?? 'git worktree remove failed.');
         if (typeof this.detachWorktree === 'function') this.detachWorktree(match.path);
+        try { clearWorktreeOwner(this.workspaceRoot, match.path); } catch { /* best-effort */ }
         return JSON.stringify({ removed: true, path: match.path, branch: match.branch });
       }
       // ADR-028 D6 — the planner. User-scoped, so no workspace is threaded.
@@ -597,6 +626,7 @@ export async function invokeBuiltinToolRuntime(
         return lines.slice(startIdx - 1, endIdx).join('\n');
       }
       case 'write_file': {
+        readOnlyGuard(args.path);
         const resolved = resolveHere(args.path, { forWrite: true });
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
@@ -628,6 +658,7 @@ export async function invokeBuiltinToolRuntime(
         return `Successfully wrote file: ${args.path}` + writeNotice + reindexNotice;
       }
       case 'notebook_edit': {
+        readOnlyGuard(args.path);
         const resolved = resolveHere(args.path);
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
@@ -650,6 +681,7 @@ export async function invokeBuiltinToolRuntime(
         return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
       }
       case 'edit_file': {
+        readOnlyGuard(args.path);
         const resolved = resolveHere(args.path);
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);

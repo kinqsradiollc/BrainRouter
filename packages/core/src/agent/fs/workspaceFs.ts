@@ -38,6 +38,12 @@ export interface WorkspaceScope {
   readonly primaryRoot: string;
   /** Additional roots the session may read/write (ADR-042: same-repo worktrees). */
   readonly attachedRoots: readonly string[];
+  /**
+   * ADR-042 D6 — roots attached READ-ONLY (a worktree a live foreign session
+   * owns). Readable like any other root; writes into them are excluded from the
+   * write set here and refused with the owner named at the tool layer.
+   */
+  readonly readOnlyRoots?: readonly string[];
 }
 
 /** A single-root scope — the default that keeps every pre-ADR-042 caller unchanged. */
@@ -64,7 +70,11 @@ export function resolveWorkspacePathInScope(
   inputPath: string,
   options: { forWrite?: boolean } = {},
 ): string {
-  const roots = scopeRoots(scope);
+  // ADR-042 D6 — writes resolve against the writable set (primary + read/write
+  // worktrees); reads may also reach read-only attached worktrees. Empty
+  // readOnlyRoots ⇒ identical sets ⇒ byte-identical to the pre-D6 behavior.
+  const writeRoots = scopeRoots(scope);
+  const roots = options.forWrite ? writeRoots : [...writeRoots, ...(scope.readOnlyRoots ?? [])];
   if (typeof inputPath !== 'string' || inputPath.trim() === '') {
     throw new Error('Path must be a non-empty string.');
   }
