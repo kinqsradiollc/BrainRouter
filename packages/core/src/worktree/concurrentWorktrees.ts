@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import type { WorktreeAwarenessHost } from './awareness/host/contracts.js';
 import { nodeWorktreeAwarenessHost } from './awareness/host/nodeWorktreeAwarenessHost.js';
+import { listWorktreeOwners } from './ownership/worktreeOwnership.js';
 
 export type { WorktreeAwarenessHost } from './awareness/host/contracts.js';
 
@@ -168,4 +169,35 @@ export function resolveAttachableWorktree(
     return { ok: false, reason: `The worktree at ${match.path} is prunable${match.prunableReason ? ` (${match.prunableReason})` : ''} — its directory is gone. Run \`git worktree prune\` or restore it, then try again.` };
   }
   return { ok: true, info: match };
+}
+
+/**
+ * ADR-042 D5 — the feature map for the Runtime Context: `branch → path → owner`
+ * for the OTHER worktrees of this repo, from the structured inventory merged
+ * with the ownership registry (D6). Replaces the bare "stay away" line with who
+ * is where. Degrades to the plain awareness list if the structured inventory
+ * can't be built. Capped; never throws.
+ */
+export function worktreeFeatureMap(
+  workspaceRoot: string,
+  host: WorktreeAwarenessHost = nodeWorktreeAwarenessHost,
+): string[] {
+  let list: WorktreeInfo[];
+  try {
+    list = listWorktreesStructured(workspaceRoot, host);
+  } catch {
+    return listOtherWorktrees(workspaceRoot, host);
+  }
+  if (list.length <= 1) return [];
+  let owners: Record<string, { sessionKey?: string }> = {};
+  try { owners = listWorktreeOwners(workspaceRoot) as Record<string, { sessionKey?: string }>; } catch { owners = {}; }
+  const lines: string[] = [];
+  for (const w of list) {
+    if (w.isSelf) continue;
+    const branch = w.branch ?? (w.detached ? 'detached' : 'unknown');
+    const owner = owners[path.resolve(w.path)]?.sessionKey;
+    const flags = [w.prunable ? 'prunable' : null, owner ? `owned by ${owner}` : null].filter(Boolean).join(', ');
+    lines.push(`${branch} → ${w.path}${flags ? ` (${flags})` : ''}`);
+  }
+  return lines.slice(0, 12);
 }
