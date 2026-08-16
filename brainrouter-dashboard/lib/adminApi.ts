@@ -284,6 +284,7 @@ export interface ReviewJob {
   blocking: number | null;
   findingsDetail?: {
     file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
+    codeExcerpt?: string; replacement?: string; diffHunk?: string;
     preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
     firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
   }[];
