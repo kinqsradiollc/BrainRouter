@@ -174,6 +174,7 @@ import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type S
 import {
   openDurableRuns,
   listDurableRuns,
+  previewTurnStrategy,
   readDurableRunSafe,
   readRunDetail,
   toRunsListRows,
@@ -851,6 +852,35 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // map as though it were the whole run.
         const run = readRunDetail(workspaceRoot, runId);
         return { run: run ?? null };
+      },
+      // A40-10 — explicit strategy launch: preview the plan a strategy would run,
+      // so "Run with strategy" shows the validated strategy, its stages, and
+      // whether it spawns children before the user confirms. Read-only; the same
+      // PlanPreview the CLI `/runs start` renders.
+      'runs.preview': (args) => {
+        const task = typeof args.task === 'string' ? args.task : '';
+        const strategyId = typeof args.strategyId === 'string' && args.strategyId ? args.strategyId : undefined;
+        if (!task.trim()) return { preview: null };
+        try {
+          return { preview: previewTurnStrategy({ workspaceRoot, task, ...(strategyId ? { strategyId } : {}) }) };
+        } catch {
+          return { preview: null };
+        }
+      },
+      // A40-10 — the confirmed launch. The explicit UI action is the trusted
+      // action; the turn runs with the chosen strategy as its topology
+      // (selectionSource `explicit`). Fire-and-forget like the CLI, so the panel
+      // does not block on a long run.
+      'runs.start': (args) => {
+        const task = typeof args.task === 'string' ? args.task : '';
+        const strategyId = typeof args.strategyId === 'string' && args.strategyId ? args.strategyId : undefined;
+        if (!task.trim()) return { started: false };
+        void getActiveAgent().runTurn(
+          task,
+          { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} },
+          strategyId ? { explicitStrategyId: strategyId } : {},
+        );
+        return { started: true };
       },
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
