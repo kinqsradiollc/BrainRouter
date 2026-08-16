@@ -193,7 +193,7 @@ function OrgsInner() {
 
       {/* Create */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
-        <div className="settings-cardhead"><h3>Create an organization</h3></div>
+        <div className="settings-cardhead"><h3>Create an organization</h3><Link href="/organizations/new" className="settings-link">Guided team setup →</Link></div>
         <form onSubmit={createOrg} className="org-create">
           <label className="settings-label org-create__name">Organization name
             <input
