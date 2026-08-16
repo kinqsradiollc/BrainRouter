@@ -1,6 +1,6 @@
 # ADR-037 — Credentials the page cannot read
 
-**Status:** PROPOSED — for owner review. This changes how every dashboard session authenticates, so
+**Status:** PROPOSED — for owner review. Verified still unimplemented 2026-08-16: all three credentials remain in `localStorage` (`lib/client-auth.ts`), no cookie/CSRF layer exists, and a `*` allowlist still combines with `Access-Control-Allow-Credentials` (`securityHeaders.ts`); the merged revocable-session work remains the only mitigation. This changes how every dashboard session authenticates, so
 it wants a decision rather than a patch.
 **Depends on:** ADR-028 (surfaces that tell the truth), ADR-017 (production program), and the
 session work merged in `feat(auth): revocable sessions, refresh-token theft detection`.

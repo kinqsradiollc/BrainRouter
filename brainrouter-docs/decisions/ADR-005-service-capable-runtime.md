@@ -1,6 +1,6 @@
 # ADR-005 — Service-capable BrainRouter: promote the brain to a deployable runtime (remote-or-embedded)
 
-**Status:** proposed (0.4.16) · **Supersedes:** none · **Builds on:** [ADR-003](ADR-003-core-package-extraction.md) (core extraction), [ADR-004](ADR-004-backend-modularization.md) (backend service ports)
+**Status:** Accepted — implemented (verified 2026-08-16: `cli.brainUrl` + remote pool, Atlas-over-MCP, tenancy, deployable brain image all shipped; the "embedded stays default" premise was later narrowed by ADR-007's SQLite removal) · **Supersedes:** none · **Builds on:** [ADR-003](ADR-003-core-package-extraction.md) (core extraction), [ADR-004](ADR-004-backend-modularization.md) (backend service ports)
 
 > Make BrainRouter's **stateful capabilities** — the brain (memory recall +
 > cognition), Atlas (the codebase knowledge graph), and orchestration/federation

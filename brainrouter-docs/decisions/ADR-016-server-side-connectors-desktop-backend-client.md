@@ -1,6 +1,6 @@
 # ADR-016 — Server-Side Connectors + Desktop as a Backend Client
 
-**Status:** Proposed (design; phased) · **Supersedes** ADR-015 §D1 (per-plan best-fit auth) with a
+**Status:** Accepted — implemented (verified 2026-08-16: C0–C5 all shipped — per-user sealed `connector_configs` store, server OAuth broker with GitHub device flow, `connector_sync` job executor, org-scoped connector routes, desktop repointed off local connector files) · **Supersedes** ADR-015 §D1 (per-plan best-fit auth) with a
 single unified model · **Extends** ADR-010 (tenancy), ADR-009 (GitHub App). **No commits** until the
 program is agreed and each phase is verified.
 

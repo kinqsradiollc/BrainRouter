@@ -1,6 +1,6 @@
 # ADR-036 — The finding carries its code
 
-**Status:** PROPOSED — for owner review.
+**Status:** PROPOSED — for owner review. Verified still unimplemented 2026-08-16: the finding contract already carries `codeExcerpt`/`diffHunk` and desktop renders a code frame, but nothing persists the excerpt with the durable finding (`039_review_finding_lifecycle.sql` has no excerpt column) and the dashboard review console still shows only `file:line`.
 **Depends on:** ADR-033 (review that finds things, and says where), ADR-025 (assurance programs),
 ADR-019 (dashboard org/workspace context), ADR-028 (surfaces that tell the truth).
 

@@ -1,6 +1,6 @@
 # ADR-039 — The half of security a model cannot see
 
-**Status:** PROPOSED — for owner review.
+**Status:** PROPOSED — for owner review. Verified still unimplemented 2026-08-16: no flow-analysis engine, barrier/source/sink model pack, database-build stage, or path-carrying evidence exists, and the D8 licence question is open; the SARIF export and pentest agent are the model-side half the ADR already counts as covered (the pentest sandbox provisions scratch space for semgrep/trivy as agent-invocable tools — `review/pentestSandbox.ts:49` — which is tool availability, not this ADR's engine pipeline).
 **Depends on:** ADR-033 (review that finds things, and says where), ADR-036 (the finding carries its
 code), ADR-025 (assurance programs), ADR-032 (an agent that gets better and cannot get worse).
 

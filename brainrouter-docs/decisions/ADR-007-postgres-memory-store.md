@@ -1,6 +1,6 @@
 # ADR-007 — Postgres + pgvector memory store (behind `IMemoryStore`), SQLite stays the embedded default
 
-**Status:** proposed (0.4.16) · **Supersedes:** none · **Builds on:** [ADR-004](ADR-004-backend-modularization.md) (the `IMemoryStore` port), [ADR-005](ADR-005-service-capable-runtime.md) (service-capable), [ADR-006](ADR-006-service-decomposition-map.md) (DB as an external service)
+**Status:** Accepted — implemented, then exceeded (verified 2026-08-16: PostgresMemoryStore + pgvector shipped; SQLite was subsequently REMOVED entirely, so the "SQLite stays the embedded default" and dual-backend-CI clauses no longer hold) · **Supersedes:** none · **Builds on:** [ADR-004](ADR-004-backend-modularization.md) (the `IMemoryStore` port), [ADR-005](ADR-005-service-capable-runtime.md) (service-capable), [ADR-006](ADR-006-service-decomposition-map.md) (DB as an external service)
 
 > Add a **Postgres + pgvector** backend for the brain's memory, selected behind
 > the existing `IMemoryStore` port by one config knob, so a brain can be

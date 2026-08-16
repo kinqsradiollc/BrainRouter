@@ -1,6 +1,6 @@
 # ADR-004 — Modularize the `brainrouter/` MCP-server / memory backend
 
-**Status:** proposed (0.4.15) · **Supersedes:** none · **Mirrors:** [ADR-003](ADR-003-core-package-extraction.md)
+**Status:** Accepted — implemented (verified 2026-08-16: all phases landed; Phase 5 deferred by design; `contracts/` scoped to the HTTP envelope only) · **Supersedes:** none · **Mirrors:** [ADR-003](ADR-003-core-package-extraction.md)
 
 > Do for the backend what ADR-003 did for the CLI/desktop: replace a
 > **layer-based, god-file** layout with a **domain-categorized** one, extract
