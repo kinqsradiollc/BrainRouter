@@ -33,6 +33,8 @@ export interface CanonicalGraphRunInput {
   executionId: string;
   runId: string;
   sessionKey: string;
+  /** A40-9 goal-continuation — the goal this graph run was launched under, if any. */
+  goalId?: string;
   /** Absent = project in memory only; present = also persist for resume. */
   workspaceRoot?: string;
   startedAt: string;
@@ -51,6 +53,7 @@ export function toExecutionEvent(
   emission: GraphExecutionEmission,
   sessionKey: string,
   emittedAt: string,
+  goalId?: string,
 ): ExecutionEvent {
   const payload: Record<string, unknown> = {};
   if (emission.nodeId !== undefined) payload.nodeId = emission.nodeId;
@@ -70,6 +73,7 @@ export function toExecutionEvent(
     executionId: emission.executionId,
     executionSequence: emission.executionSequence,
     sessionKey,
+    ...(goalId !== undefined ? { goalId } : {}),
     emittedAt,
     nodeExecutionId: emission.nodeId,
     payload,
@@ -94,13 +98,14 @@ export async function runGraphAsCanonicalExecution(
       executionId: input.executionId,
       definitionId: input.definitionId ?? null,
       definitionHash: input.definitionHash ?? null,
+      goalId: input.goalId,
       startedAt: input.startedAt,
       resumeState: { lastSequence: 0 },
     });
   }
 
   const emit = (emission: GraphExecutionEmission): void => {
-    const event = toExecutionEvent(emission, input.sessionKey, input.startedAt);
+    const event = toExecutionEvent(emission, input.sessionKey, input.startedAt, input.goalId);
     events.push(event);
     store.apply(event);
     if (!input.workspaceRoot || !durable) return;

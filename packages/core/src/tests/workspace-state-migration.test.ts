@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getStateFile } from '../storage/store.js';
+import { readDurableRunSafe } from '../orchestration/execution/runStore.js';
 
 function withMigratingWorkspace(fn: (workspace: string) => void): void {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-migrate-ws-'));
@@ -80,5 +81,29 @@ test('the migration still sweeps genuinely stale runtime state', () => {
       false,
       'unrecognised runtime state is still swept out of the workspace tree',
     );
+  });
+});
+
+test('the migration keeps durable execution-map runs where the run store reads them', () => {
+  // ADR-040 A40-6: `runStore` reads and writes durable runs ONLY at the raw
+  // <ws>/.brainrouter/runs path. If the migration relocated them to the home
+  // root, every run would still LOOK present on disk but be invisible to the
+  // store — an orphaned run reads exactly like a run that never happened.
+  // Mutation-proof: drop 'runs' from the preserved set and readDurableRunSafe
+  // returns null here.
+  withMigratingWorkspace((workspace) => {
+    const runDir = path.join(workspace, '.brainrouter', 'runs', 'kept-run');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'safe.json'), JSON.stringify({
+      schemaVersion: 1, runId: 'kept-run', executionId: 'x', definitionId: null,
+      definitionHash: null, subworkflowHashes: [], status: 'succeeded',
+      startedAt: '2026-08-16T00:00:00.000Z', revision: 1,
+    }), 'utf8');
+
+    // Any state read triggers the migration through getWorkspaceStateRoot.
+    getStateFile(workspace, 'hooks.json');
+
+    const record = readDurableRunSafe(workspace, 'kept-run');
+    assert.equal(record?.runId, 'kept-run', 'the durable run survives the migration and stays readable by its store');
   });
 });

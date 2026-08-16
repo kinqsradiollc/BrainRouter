@@ -98,6 +98,8 @@ export interface ExecutionSnapshot {
   terminalReasonCodes: readonly string[];
   /** A40-5 — loop budgets (allowed vs used), one per loop node that ran. */
   loopBudgets: readonly ProjectedLoopBudget[];
+  /** A40-9 — the goal this run was launched under, when any. */
+  goalId?: string;
   usage: ExecutionUsage;
   /** Sequences observed but NOT applied because something before them is missing. */
   pendingSequences: readonly number[];
@@ -119,6 +121,12 @@ interface ExecutionState {
   executionId: string;
   /** The session this execution belongs to; the key for session-scoped ops. */
   sessionKey: string;
+  /**
+   * A40-9 goal-continuation — the goal this run was launched under, when any.
+   * Set once from the first event that carries it; a run is never retrofitted
+   * into a goal it did not emit under.
+   */
+  goalId?: string;
   status: ExecutionStatus;
   watermark: number;
   seenEventIds: Set<string>;
@@ -178,6 +186,8 @@ export class ExecutionSessionStore {
   readonly #bySession = new Map<string, Set<string>>();
   /** A40-5 — child sessionKey -> the execution that spawned it, for stage-child correlation. */
   readonly #byChildSession = new Map<string, string>();
+  /** A40-5 goal grouping — execution ids per goal, mirroring #bySession. */
+  readonly #byGoal = new Map<string, Set<string>>();
 
   /** Insertion-ordered eviction; the oldest execution goes first. */
   #evictIfNeeded(): void {
@@ -195,6 +205,10 @@ export class ExecutionSessionStore {
     if (!state) return;
     this.#bySession.get(state.sessionKey)?.delete(executionId);
     if (this.#bySession.get(state.sessionKey)?.size === 0) this.#bySession.delete(state.sessionKey);
+    if (state.goalId) {
+      this.#byGoal.get(state.goalId)?.delete(executionId);
+      if (this.#byGoal.get(state.goalId)?.size === 0) this.#byGoal.delete(state.goalId);
+    }
     for (const occurrence of state.occurrences.values()) {
       for (const childId of occurrence.childSessionIds) {
         if (this.#byChildSession.get(childId) === executionId) this.#byChildSession.delete(childId);
@@ -202,7 +216,7 @@ export class ExecutionSessionStore {
     }
   }
 
-  #stateFor(executionId: string, sessionKey: string): ExecutionState {
+  #stateFor(executionId: string, sessionKey: string, goalId?: string): ExecutionState {
     let state = this.#executions.get(executionId);
     if (!state) {
       state = {
@@ -222,11 +236,17 @@ export class ExecutionSessionStore {
         truncated: false,
         gapped: false,
         archived: false,
+        goalId,
       };
       this.#executions.set(executionId, state);
       let ids = this.#bySession.get(sessionKey);
       if (!ids) { ids = new Set(); this.#bySession.set(sessionKey, ids); }
       ids.add(executionId);
+      if (goalId) {
+        let gids = this.#byGoal.get(goalId);
+        if (!gids) { gids = new Set(); this.#byGoal.set(goalId, gids); }
+        gids.add(executionId);
+      }
       this.#evictIfNeeded();
     }
     return state;
@@ -237,7 +257,7 @@ export class ExecutionSessionStore {
    * sequence at or below the watermark, or a transition a terminal run refuses.
    */
   apply(event: ExecutionEvent): boolean {
-    const state = this.#stateFor(event.executionId, event.sessionKey);
+    const state = this.#stateFor(event.executionId, event.sessionKey, event.goalId);
 
     // Idempotency first: a replayed event is not new information.
     if (state.seenEventIds.has(event.eventId)) return false;
@@ -412,6 +432,7 @@ export class ExecutionSessionStore {
       traversals: Object.freeze([...state.traversals]),
       terminalReasonCodes: state.terminalReasonCodes,
       loopBudgets: Object.freeze([...state.loopBudgets]),
+      goalId: state.goalId,
       usage: state.usage,
       pendingSequences: Object.freeze([...state.pending.keys()].sort((a, b) => a - b)),
       truncated: state.truncated,
@@ -440,6 +461,24 @@ export class ExecutionSessionStore {
    */
   executionsForSession(sessionKey: string, opts: { includeArchived?: boolean } = {}): readonly string[] {
     const ids = this.#bySession.get(sessionKey);
+    if (!ids) return Object.freeze([]);
+    const out: string[] = [];
+    for (const id of ids) {
+      const state = this.#executions.get(id);
+      if (!state) continue;
+      if (state.archived && !opts.includeArchived) continue;
+      out.push(id);
+    }
+    return Object.freeze(out);
+  }
+
+  /**
+   * A40-5 goal grouping — the execution ids launched under a goal, newest-
+   * insertion last. Mirrors `executionsForSession`; a run with no goal link is
+   * simply not here, which is the honest answer for a normal no-goal turn.
+   */
+  executionsForGoal(goalId: string, opts: { includeArchived?: boolean } = {}): readonly string[] {
+    const ids = this.#byGoal.get(goalId);
     if (!ids) return Object.freeze([]);
     const out: string[] = [];
     for (const id of ids) {

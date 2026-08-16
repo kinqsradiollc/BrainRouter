@@ -35,6 +35,8 @@ export interface DurableRunSafeRecord {
   /** Immutable: what was launched, fixed at launch time. */
   definitionId: string | null;
   definitionHash: string | null;
+  /** A40-9 — the goal this run was launched under, fixed at launch; null for a normal turn. */
+  goalId?: string | null;
   subworkflowHashes: readonly string[];
   status: string;
   startedAt: string;
@@ -87,6 +89,7 @@ export interface StartRunInput {
   executionId: string;
   definitionId?: string | null;
   definitionHash?: string | null;
+  goalId?: string | null;
   subworkflowHashes?: readonly string[];
   startedAt: string;
   resumeState?: unknown;
@@ -102,6 +105,7 @@ export function startDurableRun(input: StartRunInput): DurableRunSafeRecord {
     executionId: input.executionId,
     definitionId: input.definitionId ?? null,
     definitionHash: input.definitionHash ?? null,
+    goalId: input.goalId ?? null,
     subworkflowHashes: Object.freeze([...(input.subworkflowHashes ?? [])]),
     status: 'running',
     startedAt: input.startedAt,
@@ -227,9 +231,12 @@ function allRunRecords(workspaceRoot: string): DurableRunSafeRecord[] {
 /** Paged listing, newest first. Corrupt entries are skipped, never thrown on. */
 export function listDurableRuns(
   workspaceRoot: string,
-  options: { limit?: number; cursor?: string | null } = {},
+  options: { limit?: number; cursor?: string | null; goalId?: string | null } = {},
 ): DurableRunListing {
-  const records = allRunRecords(workspaceRoot);
+  const all = allRunRecords(workspaceRoot);
+  // A40-5 goal grouping — restrict to one goal's runs when asked, before paging,
+  // so the cursor walks the filtered set rather than skipping across goals.
+  const records = options.goalId ? all.filter((r) => r.goalId === options.goalId) : all;
   const start = options.cursor ? records.findIndex((r) => r.runId === options.cursor) + 1 : 0;
   const limit = Math.min(options.limit ?? RUN_STORE_BOUNDS.maxPageSize, RUN_STORE_BOUNDS.maxPageSize);
   const page = records.slice(start, start + limit);

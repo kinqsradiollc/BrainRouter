@@ -46,6 +46,8 @@ export interface CanonicalPhasePlanInput {
   workspaceRoot?: string;
   definitionId?: string;
   definitionHash?: string;
+  /** A40-9 goal-continuation — the goal this phase run was launched under, if any. */
+  goalId?: string;
   /**
    * A40-7 — resume an interrupted run's durable record instead of exclusive-
    * creating a second one. On resume the emitter RE-ATTACHES to the existing
@@ -100,6 +102,7 @@ export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): Canon
         runId: input.runId,
         executionId: input.executionId,
         definitionId: input.definitionId ?? null,
+        goalId: input.goalId,
         definitionHash: input.definitionHash ?? null,
         startedAt: input.startedAt,
         resumeState: { lastSequence: sequence },
@@ -123,6 +126,7 @@ export function canonicalPhasePlanEmitter(input: CanonicalPhasePlanInput): Canon
       executionId: input.executionId,
       executionSequence: sequence,
       sessionKey: input.sessionKey,
+      ...(input.goalId !== undefined ? { goalId: input.goalId } : {}),
       emittedAt: input.startedAt,
       nodeExecutionId: fields.nodeId,
       payload,

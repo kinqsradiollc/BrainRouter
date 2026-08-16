@@ -22,6 +22,7 @@ function printUsage(): void {
   console.log(chalk.bold('\n/runs — what actually ran\n'));
   console.log('  /runs                    recent runs, newest first');
   console.log('  /runs <runId>            one run in detail');
+  console.log('  /runs --goal=<goalId>    only runs launched under one goal');
   console.log('  /runs --json             machine-readable listing');
   console.log('  /runs <runId> --json     machine-readable detail');
   console.log('');
@@ -39,6 +40,8 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
   if (command !== '/runs') return false;
 
   const wantsJson = args.includes('--json');
+  // A40-5 goal grouping — restrict the listing to one goal's runs.
+  const goalId = args.find((a) => a.startsWith('--goal='))?.slice('--goal='.length) || undefined;
   const positional = args.filter((a) => !a.startsWith('--'));
   const workspaceRoot = ctx.agent.workspaceRoot;
 
@@ -51,10 +54,12 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
   try { openDurableRuns(workspaceRoot); } catch { /* listing still works */ }
 
   if (!positional.length) {
-    const rows = toRunsListRows(listDurableRuns(workspaceRoot, { limit: 20 }).runs);
+    const rows = toRunsListRows(listDurableRuns(workspaceRoot, { limit: 20, goalId }).runs);
     if (wantsJson) { console.log(runsJson(rows)); return true; }
     if (!rows.length) {
-      console.log(chalk.dim('\n  No runs recorded for this workspace yet.\n'));
+      console.log(chalk.dim(goalId
+        ? `\n  No runs recorded under goal ${goalId}.\n`
+        : '\n  No runs recorded for this workspace yet.\n'));
       return true;
     }
     console.log('');
@@ -62,7 +67,8 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
       const when = row.startedAt.replace('T', ' ').slice(0, 19);
       console.log(
         `  ${chalk.bold(row.runId.padEnd(24))} ${statusColor(row.status).padEnd(20)} ` +
-        `${chalk.dim(when)}  ${chalk.dim(row.definitionId ?? '—')}`,
+        `${chalk.dim(when)}  ${chalk.dim(row.definitionId ?? '—')}` +
+        (row.goalId ? `  ${chalk.dim(`goal ${row.goalId}`)}` : ''),
       );
     }
     console.log(chalk.dim('\n  /runs <runId> for the execution map.\n'));
@@ -83,6 +89,7 @@ export async function tryHandleRunsCommand(ctx: CommandContext): Promise<boolean
   if (wantsJson) { console.log(runDetailJson(view)); return true; }
 
   console.log(`\n  ${chalk.bold(view.runId)}  ${statusColor(view.status)}`);
+  if (view.goalId) console.log(chalk.dim(`  goal ${view.goalId}`));
   if (view.caveat) console.log(chalk.yellow(`  ${view.caveat}`));
   if (view.nodes.length) {
     console.log('');
