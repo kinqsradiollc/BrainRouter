@@ -8,7 +8,8 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { connectionNotice, rowDetailLabel, statusTone, type RunsRow, type RunsDetail } from './RunsPanel.js';
+import { connectionNotice, rowDetailLabel, statusTone, isRunTerminal, previewChildrenSummary, type RunsRow, type RunsDetail, type RunsPreview } from './RunsPanel.js';
+import { isTerminalRunStatus, RUN_TERMINAL_STATUSES } from '@kinqs/brainrouter-core/orchestration/runs';
 import type { RunsListRow, RunDetailView } from '@kinqs/brainrouter-core/orchestration/runs';
 
 // ADR-040 A40-10 — compile-time drift guard: the panel's row/detail types ARE
@@ -59,4 +60,19 @@ test('the panel is registered so it can actually be opened', async () => {
   const runs = PANEL_DEFS.find((p) => p.id === 'runs');
   assert.ok(runs, 'runs must be in the panel catalog');
   assert.equal(runs!.title, 'Runs');
+});
+
+test('A40-10 — the panel terminal-status set matches Core, so live polling stops exactly when the CLI would', () => {
+  for (const status of RUN_TERMINAL_STATUSES) assert.equal(isRunTerminal(status), true, `${status} is terminal`);
+  for (const status of ['running', 'planned', 'pending']) {
+    assert.equal(isRunTerminal(status), isTerminalRunStatus(status), `${status} agrees with Core`);
+  }
+});
+
+test('A40-10 — the strategy preview tells the person whether a launch spawns children', () => {
+  const spawns = previewChildrenSummary({ createsChildren: true, effectiveParallel: 3 } as RunsPreview);
+  assert.match(spawns, /Spawns child agents/);
+  assert.match(spawns, /up to 3/);
+  const solo = previewChildrenSummary({ createsChildren: false, effectiveParallel: 1 } as RunsPreview);
+  assert.match(solo, /no child agents/i);
 });

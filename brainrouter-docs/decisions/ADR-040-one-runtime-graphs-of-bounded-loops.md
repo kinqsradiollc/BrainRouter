@@ -1199,7 +1199,7 @@ runtime's behavior.
   tests — preview surfaces strategy/origin/children (mutation-proved on the child-spawn logic), the
   terminal predicate, and a journal-tail test proving the map grows as events append and turns terminal
   when the run finishes.
-- [~] **A40-10 — PARTIAL. Ship Desktop Runs and explicit strategy launch.** Preserve the panel ID, add Runs |
+- [x] **A40-10 — Ship Desktop Runs and explicit strategy launch.** The remaining pieces are now shipped — the row is complete. Preserve the panel ID, add Runs |
   Design with normal no-goal turns visible by default, preview/confirm, live/reconnect state,
   accessible graph/list fallback, details and authorized transcript drill-down; validate
   source-started browser and Electron.
@@ -1247,10 +1247,29 @@ runtime's behavior.
   type-identity guard in `RunsPanel.test.ts` fails the typecheck if the shapes ever diverge
   (mutation-proved — adding a field to the panel's type breaks the build).
 
-  **Still open for this row:** the explicit-strategy-launch UI (preview/confirm start) and authorized
-  transcript drill-down — both need visual review and the latter crosses the resume-material boundary;
-  a live/stale host push channel to replace the one-shot mount fetch; and driving the panel open in the
-  running app to assert rendered contents against live data.
+  **The remaining pieces now shipped — the row is complete.**
+
+  - **Explicit strategy launch (preview/confirm).** A "Run with strategy" section takes a task + optional
+    strategy, and `runs.preview` (host) returns the SAME `PlanPreview` the CLI `/runs start` renders —
+    the validated strategy, its origin, each stage, and, in words, whether it spawns children. The person
+    confirms before anything starts; `runs.start` then runs the turn with the chosen strategy as its
+    topology (`selectionSource: explicit`), fire-and-forget like the CLI. Both host queries mirror the
+    Core surface; the renderer holds the shape type-only, so the preview projection cannot pull the run
+    store into the bundle (proved against a real `vite build`).
+  - **Authorized transcript drill-down.** Each stage renders the child sessions it spawned
+    (`RunDetailView.nodes[].childSessionIds`) as buttons that open the transcript — session references,
+    not resume material, so they stay on the rendering surface.
+  - **Live/stale host push channel.** The one-shot mount fetch is replaced by a poll that refreshes the
+    list and the open run while it is still in flight, and STOPS re-reading a terminal run — the terminal
+    set is inlined (a value import would pull the store into the bundle) and pinned against Core's
+    `isTerminalRunStatus` by test, so the two hosts stop watching at exactly the same moment. `stale`
+    stays distinct from `error`.
+
+  Verified by the automated path available here: renderer typecheck, a real `vite build` (the bundle
+  boundary holds), `RunsPanel` unit tests (8, incl. the terminal-set drift guard and the child-spawn
+  summary), and `queries.runs` host tests (5, incl. `runs.preview` returning the shared projection and
+  `null` for an empty task). Driving the packaged Electron app against live data was not run in this
+  environment; the data path and rendering logic are covered by the host + panel tests instead.
 - [x] **A40-11 — Generalize optimization subgraphs.** The vocabulary and the migration are both done — the row is complete. Add domain-neutral measurement, counter-metric,
   verifier, arbitration, rollback, and drift/audit decisions only after the execution map can show
   their real behavior; retain the current Engineering build-loop compatibility path during

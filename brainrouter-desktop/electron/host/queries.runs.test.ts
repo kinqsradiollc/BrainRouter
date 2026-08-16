@@ -81,3 +81,18 @@ test('A40-10 runs.detail returns null for a run that does not exist', async () =
   const { run } = await call(workspaceRoot, 'runs.detail', { runId: 'ghost' });
   assert.equal(run, null);
 });
+
+test('A40-10 runs.preview returns the shared PlanPreview a launch would run', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'br-runs-preview-'));
+  const { preview } = await call(workspaceRoot, 'runs.preview', { task: 'implement the billing service' });
+  assert.ok(preview, 'a preview is returned for a real task');
+  assert.ok('selectionSource' in preview, 'it carries the topology origin');
+  assert.ok(Array.isArray(preview.stages), 'it lists the stages');
+  assert.equal(typeof preview.createsChildren, 'boolean', 'it says whether the launch spawns children');
+});
+
+test('A40-10 runs.preview returns null for an empty task — there is nothing to preview', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'br-runs-preview-empty-'));
+  const { preview } = await call(workspaceRoot, 'runs.preview', { task: '   ' });
+  assert.equal(preview, null);
+});
