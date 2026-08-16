@@ -213,6 +213,9 @@ export function orchestrationTurnSpanAttributes(
     orchestration_profile_id: resolution.plan.planProfileId,
     orchestration_strategy_id: resolution.plan.strategyId,
     orchestration_selection_source: resolution.plan.selectionSource,
+    // ADR-040 A40-8 — the corpus gate state and adaptive-eligibility, surfaced.
+    orchestration_defaults_gated: resolution.adaptive.defaultsGated,
+    orchestration_adaptive_source: resolution.adaptive.source,
     orchestration_stage_count: resolution.plan.stages.length,
     orchestration_signal_ids: resolution.taskSignalIds.join(','),
     orchestration_source: resolution.source,

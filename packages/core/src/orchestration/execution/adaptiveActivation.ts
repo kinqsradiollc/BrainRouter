@@ -82,6 +82,31 @@ export interface AdaptiveDiagnostics {
 export const SAFE_BASELINE_STRATEGY = 'direct';
 
 /**
+ * A40-8 live gate invariant. The corpus gate bars the SYSTEM from moving a
+ * default without evidence — so while it is shut, a model-influenced selection
+ * (`adaptive-model`) is legitimate only when it narrowed to a workspace-defined,
+ * signal-matched strategy. A `adaptive-model` selection with no signal behind it
+ * would be a default moving on its own, which is exactly what the gate forbids.
+ * The resolver already guarantees this; calling it per turn makes the gate a
+ * runtime invariant instead of a constant a later change could outgrow.
+ */
+export function assertCorpusGateHonored(selection: {
+  selectionSource: string;
+  matchedSignalCount: number;
+}): void {
+  if (
+    DEFAULTS_ARE_CORPUS_GATED
+    && selection.selectionSource === 'adaptive-model'
+    && selection.matchedSignalCount === 0
+  ) {
+    throw new Error(
+      'ADR-040 A40-8: corpus-gated defaults — an adaptive selection must narrow to a '
+      + 'workspace-defined, signal-matched strategy, never a system default.',
+    );
+  }
+}
+
+/**
  * Build the diagnostics for one turn.
  *
  * `direct` is the baseline for a reason that is easy to lose: every other

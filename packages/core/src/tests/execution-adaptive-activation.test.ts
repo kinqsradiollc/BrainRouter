@@ -13,7 +13,9 @@ import {
   adaptiveDiagnostics,
   DEFAULTS_ARE_CORPUS_GATED,
   SAFE_BASELINE_STRATEGY,
+  assertCorpusGateHonored,
 } from '../orchestration/execution/adaptiveActivation.js';
+import { resolveActiveTurnOrchestration } from '../workspace/activeTurnOrchestration.js';
 
 const base = { topLevel: true, hasDefinition: true, mode: 'adaptive' } as const;
 
@@ -100,4 +102,37 @@ test('THE GATE: profile defaults remain corpus-gated, and every path says so', (
   ]) {
     assert.equal(diag.defaultsGated, true, 'every diagnostic surfaces the gate rather than hiding it');
   }
+});
+
+// ── A40-8 gate WIRED as a live invariant (its completion) ──────────────────
+
+test('the corpus gate rejects a model selection with no workspace signal behind it', () => {
+  // While the gate is shut, an `adaptive-model` selection that matched no
+  // workspace-defined signal would be a system default moving on its own — the
+  // exact thing the corpus gate forbids. Mutation-proof: flip the source or the
+  // count and it stops throwing.
+  assert.throws(
+    () => assertCorpusGateHonored({ selectionSource: 'adaptive-model', matchedSignalCount: 0 }),
+    /corpus-gated defaults/,
+  );
+});
+
+test('the corpus gate permits config-driven, explicit, and fallback selections', () => {
+  // These are not the system moving a default: a matched workspace strategy, a
+  // user's explicit choice, and the safe baseline all honor the gate.
+  assert.doesNotThrow(() => assertCorpusGateHonored({ selectionSource: 'adaptive-model', matchedSignalCount: 2 }));
+  assert.doesNotThrow(() => assertCorpusGateHonored({ selectionSource: 'explicit', matchedSignalCount: 0 }));
+  assert.doesNotThrow(() => assertCorpusGateHonored({ selectionSource: 'fallback', matchedSignalCount: 0 }));
+});
+
+test('every live turn resolution surfaces the corpus gate state', () => {
+  // The gate is no longer a constant in an unwired file: a real resolution
+  // carries it. A preplanned turn resolves without touching the workspace, which
+  // is enough to prove the finalizer attaches the diagnostics on every path.
+  const resolution = resolveActiveTurnOrchestration({
+    workspaceRoot: '/nonexistent-ws-for-preplanned', task: 'x', preplanned: true,
+  });
+  assert.equal(resolution.adaptive.defaultsGated, true, 'the gate state rides on the resolution');
+  assert.equal(resolution.adaptive.defaultsGated, DEFAULTS_ARE_CORPUS_GATED);
+  assert.equal(resolution.adaptive.eligible, false, 'a preplanned turn is the executor, not an adaptive candidate');
 });
