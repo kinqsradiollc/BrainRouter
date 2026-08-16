@@ -78,10 +78,16 @@ function GithubInner() {
   const linked = projects.filter((p) => p.repoUrl);
   const linkedUrls = new Set(linked.map((p) => (p.repoUrl ?? "").replace(/\.git$/, "")));
   const available = repos.filter((r) => !linkedUrls.has(r.url.replace(/\.git$/, "")));
+  // ADR-017 D6 — repo linking is owner/admin-only (backend gates createProject/
+  // deleteProject on `members:manage`). Gate the in-app mutations to match and
+  // show a read-only notice, instead of rendering the controls and 403ing.
+  const activeMembership = orgs.find((o) => o.orgId === activeOrg);
+  const canManage = Boolean(user?.isAdmin || activeMembership?.capabilities.includes("members:manage"));
   const shown = search.trim() ? available.filter((r) => r.fullName.toLowerCase().includes(search.trim().toLowerCase())) : available;
   const connectedOwner = ownerOf(repos);
 
   async function linkRepo(repo: Repo) {
+    if (!canManage) return;
     setBusy(repo.url);
     try {
       await adminApi.createProject(activeOrg, { name: repo.fullName, repoUrl: repo.url });
@@ -91,6 +97,7 @@ function GithubInner() {
     finally { setBusy(""); }
   }
   async function unlink(p: Project) {
+    if (!canManage) return;
     setBusy(p.projectId);
     try { await adminApi.deleteProject(activeOrg, p.projectId); await load(activeOrg); }
     catch (e) { setError(e instanceof Error ? e.message : "Failed to remove repository"); }
@@ -112,6 +119,11 @@ function GithubInner() {
         </label>
       )}
       {error && <div className="settings-note settings-note--error">{error}</div>}
+      {!canManage && !loading && activeOrg && (
+        <div className="settings-note" style={{ marginTop: "var(--spacing-12)" }}>
+          You have read-only access to this Team&apos;s repositories. Ask an org owner or admin to link or remove repositories.
+        </div>
+      )}
 
       {/* Connection */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
@@ -140,7 +152,7 @@ function GithubInner() {
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
         <div className="settings-cardhead">
           <div><h3>Repositories</h3><div className="settings-hint">Repositories linked to this workspace.</div></div>
-          <PremiumButton size="small" variant="ghost" disabled={!status?.installed} onClick={() => { setAdding((v) => !v); setSearch(""); }}>
+          <PremiumButton size="small" variant="ghost" disabled={!status?.installed || !canManage} onClick={() => { setAdding((v) => !v); setSearch(""); }}>
             {adding ? "Close" : "+ Add repository"}
           </PremiumButton>
         </div>
@@ -155,7 +167,7 @@ function GithubInner() {
               ) : shown.map((r) => (
                 <div key={r.url} className="prov-modelrow">
                   <span className="org-member__id" title={r.fullName}>{r.fullName}{r.private && <span className="settings-badge settings-badge--muted" style={{ marginLeft: 6 }}>private</span>}</span>
-                  <PremiumButton size="small" variant="primary" disabled={busy === r.url} onClick={() => linkRepo(r)}>{busy === r.url ? "Linking…" : "Link"}</PremiumButton>
+                  <PremiumButton size="small" variant="primary" disabled={busy === r.url || !canManage} onClick={() => linkRepo(r)}>{busy === r.url ? "Linking…" : "Link"}</PremiumButton>
                 </div>
               ))}
             </div>
@@ -175,7 +187,7 @@ function GithubInner() {
                     <strong>{p.name}</strong>
                     <div className="settings-hint"><a href={p.repoUrl ?? "#"} target="_blank" rel="noreferrer" className="settings-link">{url}</a> · <code>{branch}</code></div>
                   </div>
-                  <button className="org-iconbtn" title="Unlink repository" aria-label={`Unlink ${p.name}`} disabled={busy === p.projectId} onClick={() => unlink(p)}>✕</button>
+                  <button className="org-iconbtn" title="Unlink repository" aria-label={`Unlink ${p.name}`} disabled={busy === p.projectId || !canManage} onClick={() => unlink(p)}>✕</button>
                 </div>
               );
             })}
