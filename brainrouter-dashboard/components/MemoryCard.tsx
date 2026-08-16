@@ -9,11 +9,15 @@ interface MemoryCardProps {
   memory: MemoryListItem;
   selected?: boolean;
   onSelect?: (id: string, selected: boolean) => void;
-  onEdit: (memory: MemoryListItem) => void;
-  onDelete: (id: string) => void;
+  onEdit?: (memory: MemoryListItem) => void;
+  onDelete?: (id: string) => void;
+  /** ADR-017 D4 — share this record with the active Team (personal view). */
+  onShare?: (id: string) => void;
+  /** ADR-017 D4 — make a shared record private again (Team view, owner only). */
+  onUnshare?: (id: string) => void;
 }
 
-export function MemoryCard({ memory, selected = false, onSelect, onEdit, onDelete }: MemoryCardProps) {
+export function MemoryCard({ memory, selected = false, onSelect, onEdit, onDelete, onShare, onUnshare }: MemoryCardProps) {
   const priority = Math.max(0, Math.min(100, Math.round((memory.priority ?? 0) * 100)));
   return (
     <motion.article
@@ -38,12 +42,26 @@ export function MemoryCard({ memory, selected = false, onSelect, onEdit, onDelet
           {memory.archived && <span className="badge">Archived</span>}
         </div>
         <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
-          <PremiumButton variant="ghost" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => onEdit(memory)}>
-            Edit
-          </PremiumButton>
-          <PremiumButton variant="danger" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => onDelete(memory.recordId)}>
-            Delete
-          </PremiumButton>
+          {onShare && (
+            <PremiumButton variant="ghost" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => onShare(memory.recordId)}>
+              Share to team
+            </PremiumButton>
+          )}
+          {onUnshare && (
+            <PremiumButton variant="ghost" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => onUnshare(memory.recordId)}>
+              Make private
+            </PremiumButton>
+          )}
+          {onEdit && (
+            <PremiumButton variant="ghost" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => onEdit(memory)}>
+              Edit
+            </PremiumButton>
+          )}
+          {onDelete && (
+            <PremiumButton variant="danger" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => onDelete(memory.recordId)}>
+              Delete
+            </PremiumButton>
+          )}
         </div>
       </div>
 
