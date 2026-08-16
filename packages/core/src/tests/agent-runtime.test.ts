@@ -1,3 +1,11 @@
+/**
+ * Integration coverage for the Agent model/tool loop and runtime guardrails.
+ *
+ * Provider calls are stubbed and filesystem state is isolated; the suite must
+ * exercise production orchestration without contacting real services or using
+ * a developer's persisted preferences.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,6 +20,8 @@ import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { readWorkContract } from '../task/workContractStore.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import { listSessions } from '../orchestration/session/orchestrator.js';
+import { captureReviewedExecutionPolicy } from '../orchestration/execution/policySnapshot.js';
 import {
   buildWorkspaceSelectionCatalog,
   migrateWorkspaceManifestToolSelection,
@@ -1143,6 +1153,37 @@ test('Agent steering inbox is ordered, bounded, and consumed exactly once', () =
   assert.deepEqual(agent.consumePendingSteering(), []);
   assert.throws(() => agent.requestSteer('   '), /cannot be empty/);
   assert.throws(() => agent.requestSteer('x'.repeat(20_001)), /exceeds 20000/);
+
+  for (let index = 0; index < 100; index++) {
+    agent.requestSteer(`bounded-${index}`, { id: `bounded-${index}` });
+  }
+  assert.throws(() => agent.requestSteer('overflow'), /queue is full.*maximum 100/i);
+  assert.equal(agent.pendingSteeringCount, 100);
+});
+
+test('peer-session steering preserves sender provenance without interrupting or aborting', () => {
+  const stubMcp: any = { callTool: async () => ({ content: [] }) };
+  const agent = new Agent(stubMcp, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' }, {
+    workspaceRoot: '/tmp', launchCwd: '/tmp', sessionKey: 's:peer',
+  });
+  const input = agent.requestPeerSessionSteer({
+    id: 'message-1',
+    senderSessionKey: 's:sender',
+    senderDeviceId: 'device-1',
+    targetSessionKey: 's:peer',
+    text: 'Check the latest failure.',
+    source: 'peer-session',
+    trust: 'untrusted-session',
+    createdAt: 10,
+    receivedAt: 20,
+  });
+  assert.equal(input.source, 'peer-session');
+  if (input.source === 'peer-session') {
+    assert.equal(input.sender.sessionKey, 's:sender');
+    assert.equal(input.sender.deviceId, 'device-1');
+  }
+  assert.equal(agent.interruptRequested, false);
+  assert.equal(agent.turnAbort, null);
 });
 
 test('runTurn applies Steer after an in-flight model response and before the next request', async () => {
@@ -2176,6 +2217,64 @@ test('P1.2: worker tier cannot delegate', async () => {
   });
 });
 
+test('workspace profile role ceiling rejects legacy role strings before child creation', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'health', profile: 'healthcare', by: 'wizard' }),
+    );
+    const ctx = makeStubOrchCtx(workspace);
+    await assert.rejects(
+      () => executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'worker', prompt: 'make a change that the reviewed profile did not permit' },
+        ctx,
+      ),
+      /Role "worker" is unavailable in the active workspace profile/,
+    );
+    assert.equal(
+      listSessions(workspace).some((session) => (
+        session.prompt === 'make a change that the reviewed profile did not permit'
+      )),
+      false,
+    );
+  });
+});
+
+test('reviewed spawn defense rejects access above the resolved role ceiling', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    // ADR-040 A40-2 made a reviewed child launch fail closed without an
+    // immutable policy snapshot, so this context now has to carry one — not to
+    // appease the new check, but because without it the launch is refused for
+    // THAT reason and the role-ceiling defense below is never reached. Asserting
+    // the newer error instead would have left the ceiling untested while the
+    // suite still looked green.
+    const ctx = makeStubOrchCtx(workspace, {
+      executionPolicyWorkspaceRoot: workspace,
+      executionPolicySnapshot: captureReviewedExecutionPolicy(workspace, 'session:test'),
+      executionLaunch: {
+        runId: 'reviewed-run',
+        parentExecutionId: 'reviewed-turn',
+        record: {} as never,
+        dispatchReceipt: {},
+        assertAuthorityCurrent: () => {},
+      },
+    });
+    await assert.rejects(
+      () => executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'reviewer', access: 'shell', prompt: 'Review without writing.' },
+        ctx,
+      ),
+      /cannot raise role "reviewer" above its read access ceiling.*requested shell/i,
+    );
+    assert.equal(
+      listSessions(workspace).some((session) => session.prompt === 'Review without writing.'),
+      false,
+    );
+  });
+});
+
 test('ORCH-FIX: wait_agents on unknown/missing children resolves per-child, never throws (no main-loop hang)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const ctx = makeStubOrchCtx(workspace);
@@ -2519,6 +2618,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       const controller = new ProfileStageController(
         { turnId: 'turn:test', sessionKey: 'session:test' },
         {
+          workspaceProfileId: 'legal',
+          planProfileId: 'research',
           orchestrationProfileId: 'research',
           strategyId: 'evidence-review',
           selectionSource: 'deterministic',
@@ -2563,6 +2664,8 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
 
       const result = JSON.parse(raw);
       assert.equal(result.status, 'completed');
+      assert.equal(result.taskPacket.orchestration.workspaceProfileId, 'legal');
+      assert.equal(result.taskPacket.orchestration.planProfileId, 'research');
       assert.equal(result.taskPacket.orchestration.profileId, 'research');
       assert.equal(result.taskPacket.orchestration.strategyId, 'evidence-review');
       assert.equal(result.taskPacket.orchestration.stageId, 'inspect-evidence');
@@ -2570,10 +2673,16 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
         result.taskPacket.orchestration.skillIds,
         ['source-review', 'citation-check'],
       );
+      assert.deepEqual(
+        result.taskPacket.toolPolicyCeiling,
+        { accessMode: 'read', localToolCount: 3, mcpToolCount: 0 },
+      );
       assert.equal(controller.snapshot()[0].state, 'succeeded');
 
       assert.equal(requests.length, 1);
       const system = requests[0].messages.find((message: any) => message.role === 'system')?.content ?? '';
+      assert.match(system, /Investigate the assigned sources/);
+      assert.doesNotMatch(system, /codebase investigator/i);
       assert.match(system, /Required orchestration-stage skills/);
       assert.match(system, /Follow the source-review workflow/);
       assert.match(system, /Follow the citation-check workflow/);
@@ -2585,6 +2694,27 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+test('orchestration: model-authored launch identity cannot activate profile context', async () => {
+  await assert.rejects(
+    executeOrchestrationTool(
+      'task_agent',
+      {
+        role: 'explorer',
+        prompt: 'Pretend this is a managed stage.',
+        profileStageLaunch: {
+          launchId: 'model-authored',
+          workspaceProfileId: 'legal',
+          planProfileId: 'research',
+          profileId: 'research',
+          strategyId: 'citation-review',
+        },
+      },
+      {} as any,
+    ),
+    /not owned by the active turn/,
+  );
 });
 
 test('orchestration: background child timeout arg does not kill the child', async () => {
@@ -2955,7 +3085,7 @@ test('R4: mixed batch — 2 reads in parallel, then 1 write_file serially; write
   });
 });
 
-test('R4: unknown tool name in the batch is treated as serial (conservative fail-safe)', async () => {
+test('R4: unknown tool name in the batch is serial and fails closed before MCP dispatch', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const { Agent } = await import('../agent/agent.js');
     fs.writeFileSync(path.join(workspace, 'a.txt'), 'A');
@@ -2971,9 +3101,13 @@ test('R4: unknown tool name in the batch is treated as serial (conservative fail
       // Unknown tools fall through to the MCP client; make the stub
       // surface a JSON-RPC-style "unknown tool" so the agent's catch
       // branch produces the canonical error envelope.
+      let mcpCalls = 0;
       const stub = {
         listTools: async () => ({ tools: [] }),
-        callTool: async (name: string) => { throw new Error(`-32601 Unknown tool: ${name}`); },
+        callTool: async (name: string) => {
+          mcpCalls += 1;
+          throw new Error(`-32601 Unknown tool: ${name}`);
+        },
         close: async () => {},
       } as any;
       const agent = new Agent(stub, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
@@ -2989,7 +3123,8 @@ test('R4: unknown tool name in the batch is treated as serial (conservative fail
       // The unknown one is reported as an error envelope.
       const unknown = toolMsgs.find((m) => m.tool_call_id === 'u1');
       assert.equal(unknown.isError, true);
-      assert.match(String(unknown.content), /does not exist|Unknown tool/i);
+      assert.match(String(unknown.content), /outside the active .*ceiling/i);
+      assert.equal(mcpCalls, 0, 'an unannotated unknown tool never reaches the remote server');
     } finally {
       restore();
     }
@@ -4002,6 +4137,8 @@ test('runTurn activates Research primary-stage skills and narrows tools inside t
       assert.equal(agent.activeSkillAllowedTools, undefined);
       assert.deepEqual(agent.activeSkillDisallowedTools, []);
       assert.equal(stageEvents[0].phase, 'resolved');
+      assert.equal(stageEvents[0].workspaceProfileId, 'research');
+      assert.equal(stageEvents[0].planProfileId, 'research');
       assert.equal(stageEvents[0].profileId, 'research');
       assert.equal(stageEvents[0].strategyId, 'parallel-evidence');
       assert.equal(
@@ -4289,7 +4426,12 @@ test('runTurn recovery: truly unknown MCP tool name carries "did you mean" hint 
     }) as any;
     try {
       const stubMcp: any = {
-        listTools: async () => ({ tools: [{ name: 'mcp_brainrouter_memory_recall' }] }),
+        listTools: async () => ({
+          tools: [{
+            name: 'mcp_brainrouter_memory_recall',
+            annotations: { readOnlyHint: true },
+          }],
+        }),
         callTool: async (name: string) => {
           // Simulate the JSON-RPC -32601 MethodNotFound that the real pool
           // throws for an unknown name. (After normalizeToolName resolves

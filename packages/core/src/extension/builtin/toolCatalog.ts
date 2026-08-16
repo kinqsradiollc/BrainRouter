@@ -79,6 +79,27 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // (connectors.json); running one is shell-tier (network I/O + memory writes),
   // registered further below with the command-execution surface.
   { name: 'connector_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // ADR-028 D6 — the planner. Reads are read-tier and parallel-safe; writes are
+  // not parallel-safe because two concurrent writes to the same user-scoped
+  // file would each read-modify-write and one would lose.
+  { name: 'planner_today', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'planner_find', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // Writes are `file_edit`: the planner cache IS a file, and classifying them
+  // as read-only would exempt them from the write policy that governs every
+  // other durable mutation.
+  { name: 'planner_add', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'planner_schedule', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'planner_complete', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  // ADR-029 C3 — the workspace reference verbs, classified the same way the
+  // planner's are: resolving is a read, and the writers touch user-scoped
+  // store files, so they are `file_edit` and serialized. `workspace_link`
+  // read-modify-writes the referring record's text, which is precisely the
+  // shape two concurrent calls would lose an edit in — and `workspace_update`
+  // does the same to whatever record it is given.
+  { name: 'workspace_resolve', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'workspace_create', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'workspace_update', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'workspace_link', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
   // Pentest findings and finalization write only to the isolated review state;
   // the pentest runtime's allowlist is the security boundary around them.
   { name: 'file_vulnerability', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
@@ -95,7 +116,12 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'task_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: true, runtimePort: 'orchestration', childAccessPolicy: 'single' },
   { name: 'delegate_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: true, runtimePort: 'orchestration', childAccessPolicy: 'single', dynamicNamePrefix: 'delegate_' },
   { name: 'spawn_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', advertised: false, childAccessPolicy: 'single' },
-  { name: 'spawn_agents', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', advertised: false, childAccessPolicy: 'batch' },
+  // `spawn_agents` is advertised but `spawn_agent` is not: the batch form is the
+  // only spawn primitive with the per-child ownership-glob gate that makes
+  // parallel WRITERS safe, and four prompt surfaces (systemPrompt, breadthHint,
+  // nextAction, the fan-out guard) instruct the model to call it by name. The
+  // singular adds nothing task_agent/delegate_agent do not already cover.
+  { name: 'spawn_agents', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', childAccessPolicy: 'batch' },
   { name: 'list_agents', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, runtimePort: 'orchestration' },
   { name: 'wait_agent', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, runtimePort: 'orchestration' },
   { name: 'wait_agents', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, runtimePort: 'orchestration' },

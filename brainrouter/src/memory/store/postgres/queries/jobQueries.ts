@@ -16,6 +16,7 @@ import type {
 import { jobRowToRecord, asNumber, pg } from "../converters.js";
 import type { Executor } from "./executor.js";
 import { reconcileFindingLifecycle, type LifecycleCurrentFinding, type LifecycleFindingInput } from "../../../../reviews/findingLifecycle.js";
+import { redactReviewSourceText } from "@kinqs/brainrouter-core/review";
 import type { PoolClient } from "pg";
 
 const JOB_COLUMNS =
@@ -64,6 +65,10 @@ function findingInput(value: unknown): LifecycleFindingInput | null {
   if (!file || !title) return null;
   const line = positiveInteger(row.line);
   const endLine = positiveInteger(row.endLine);
+  // ADR-036 D5/D6 — bound the excerpt/replacement (cleanText caps length) and
+  // redact secrets on the way IN, so the stored code carries no credential.
+  const codeExcerpt = cleanText(row.codeExcerpt, 20_000);
+  const replacement = cleanText(row.replacement, 20_000);
   return {
     file,
     ...(line ? { line } : {}),
@@ -73,6 +78,8 @@ function findingInput(value: unknown): LifecycleFindingInput | null {
     ...(cleanText(row.cwe, 50) ? { cwe: cleanText(row.cwe, 50) } : {}),
     ...(row.preExisting === true ? { preExisting: true } : {}),
     ...(row.suggestable === true ? { suggestable: true } : {}),
+    ...(codeExcerpt ? { codeExcerpt: redactReviewSourceText(codeExcerpt) } : {}),
+    ...(replacement ? { replacement: redactReviewSourceText(replacement) } : {}),
   };
 }
 
@@ -199,11 +206,12 @@ export async function reconcileCompletedReviewProjection(client: PoolClient, job
         `INSERT INTO review_findings
           (id, org_id, forge, repository, pr_number, lens, fingerprint, status, severity, title, file_path,
            line_start, line_end, cwe, pre_existing, suggestable, first_seen_review_id, last_seen_review_id,
-           first_seen_sha, last_seen_sha, first_seen_at, last_seen_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+           first_seen_sha, last_seen_sha, first_seen_at, last_seen_at, updated_at, code_excerpt, code_replacement)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
         [findingId, orgId, forge, repository, prNumber, lens, transition.fingerprint, finding.severity, finding.title,
           finding.file, finding.line ?? null, finding.endLine ?? null, finding.cwe ?? null, finding.preExisting === true,
-          finding.suggestable === true, job.id, job.id, headSha ?? null, headSha ?? null, job.occurredAt, job.occurredAt, job.occurredAt],
+          finding.suggestable === true, job.id, job.id, headSha ?? null, headSha ?? null, job.occurredAt, job.occurredAt, job.occurredAt,
+          finding.codeExcerpt ?? null, finding.replacement ?? null],
       );
     } else if ((transition.type === "observed" || transition.type === "reopened") && findingId && finding) {
       const reopened = transition.type === "reopened";
@@ -211,7 +219,7 @@ export async function reconcileCompletedReviewProjection(client: PoolClient, job
         `UPDATE review_findings SET
            fingerprint = $1, severity = $2, title = $3, file_path = $4, line_start = $5, line_end = $6,
            cwe = $7, pre_existing = $8, suggestable = $9, last_seen_review_id = $10, last_seen_sha = $11,
-           last_seen_at = $12, updated_at = $12,
+           last_seen_at = $12, updated_at = $12, code_excerpt = $15, code_replacement = $16,
            status = CASE WHEN $13 THEN 'open' ELSE status END,
            fixed_review_id = CASE WHEN $13 THEN NULL ELSE fixed_review_id END,
            fixed_sha = CASE WHEN $13 THEN NULL ELSE fixed_sha END,
@@ -220,7 +228,7 @@ export async function reconcileCompletedReviewProjection(client: PoolClient, job
          WHERE id = $14`,
         [transition.fingerprint, finding.severity, finding.title, finding.file, finding.line ?? null, finding.endLine ?? null,
           finding.cwe ?? null, finding.preExisting === true, finding.suggestable === true, job.id, headSha ?? null,
-          job.occurredAt, reopened, findingId],
+          job.occurredAt, reopened, findingId, finding.codeExcerpt ?? null, finding.replacement ?? null],
       );
     } else if (transition.type === "fixed" && findingId) {
       await client.query(
@@ -269,7 +277,11 @@ function withHistoricalCoverage(rawOutput: unknown, rawProgress: unknown): Recor
   for (const event of progress) {
     const kind = cleanText(event.kind, 100) ?? "";
     const data = objectValue(event.data);
-    if (kind === "diff-fetched") {
+    // ADR-033 D2 moved the unit count onto its own event: the plan is not known
+    // until the exact-revision graph has been consulted, which is after the diff
+    // arrives. Both kinds are read so rows written before that split still
+    // project their coverage.
+    if (kind === "diff-fetched" || kind === "review-units-planned") {
       totalParts = Math.max(totalParts, Math.max(0, Math.floor(Number(data.parts) || 0)));
       unreviewedParts = Math.max(unreviewedParts, Math.max(0, Math.floor(Number(data.unreviewedParts) || 0)));
     }
@@ -769,6 +781,7 @@ export async function listReviewFindingsForOrg(
              severity, title, file_path, status AS issue_status,
              jsonb_strip_nulls(jsonb_build_object(
                'file', file_path, 'line', line_start, 'endLine', line_end,
+               'codeExcerpt', code_excerpt, 'replacement', code_replacement,
                'severity', severity, 'title', title, 'cwe', cwe,
                'preExisting', CASE WHEN pre_existing THEN true ELSE NULL END,
                'suggestable', CASE WHEN suggestable THEN true ELSE NULL END,

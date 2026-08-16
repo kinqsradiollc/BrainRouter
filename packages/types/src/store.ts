@@ -1,10 +1,25 @@
+/**
+ * Storage-port contracts shared by Brain implementations and their callers.
+ *
+ * This module is type-only: it defines persistence capabilities and result
+ * shapes without selecting a database, transport, clock, or runtime policy.
+ */
+
 import type {
   ActiveSessionFilters,
+  ActiveSessionClaim,
   ActiveSessionRecord,
   ActiveSessionUsage,
+  LegacySessionMessageSendInput,
+  LegacySessionMessageSendOptions,
   SessionInboxFilters,
-  SessionInboxKind,
   SessionInboxRecord,
+  SessionMessageReceiptAckInput,
+  SessionMessageReceiptFilters,
+  SessionMessageRouteOptions,
+  SessionMessageSendInput,
+  SessionMessageSendResult,
+  SessionMessageTransitionInput,
   PendingDelegationRecord,
   PendingDelegationEnqueueInput,
   PendingDelegationFilters,
@@ -77,6 +92,8 @@ export interface MemoryListFilters {
   scene?: string;
   skill?: string;
   archived?: boolean;
+  /** Generic owner-only surfaces must exclude organization-scoped learned records. */
+  excludeLearned?: boolean;
 }
 
 export interface MemoryListItem {
@@ -152,7 +169,7 @@ export interface IMemoryStore {
   importMemories(userId: string, data: MemoryImport): Promise<ImportResult>;
   hardDeleteMemory(userId: string, recordId: string, reason: string): Promise<void>;
   searchCognitiveFts(userId: string, query: string, limit: number): Promise<CognitiveFtsResult[]>;
-  searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]>;
+  searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string, orgId?: string): Promise<CognitiveFtsResult[]>;
   /**
    * Federation Stage 1 (0.4.0) — batch lookup of `workspace_tag` for a
    * set of record ids. Used by the recall pipeline when a workspace
@@ -167,12 +184,16 @@ export interface IMemoryStore {
   /**
    * Federation Stage 2 (0.4.0) — active-session registry surface.
    *
-   * - `registerActiveSession` upserts a row keyed by `(sessionKey, userId)`.
+   * - `registerActiveSession` upserts a row keyed by the server-pinned
+   *   `(orgId, userId, sessionKey)` tenant tuple.
    *   On insert, `startedAt` is set to the provided value; on conflict it
    *   is preserved (so a re-register does not reset session start time).
-   *   `lastHeartbeatAt` always advances to the provided value.
+   *   Claimed transport registrations use the database clock for
+   *   `lastHeartbeatAt`; claim-less compatibility callers retain their
+   *   provided value.
    * - `heartbeatActiveSession` updates `lastHeartbeatAt` (and optionally
-   *   `usage`) for an existing row. Returns `true` when a row was
+   *   `usage`) for an existing row. Claimed heartbeats use the database clock
+   *   so process skew cannot change lease liveness. Returns `true` when a row was
    *   updated, `false` when no matching session existed (callers can
    *   re-register on that signal). MUST NOT write to `operation_log`
    *   — heartbeats are 1/30s × N peers, audit volume would explode.
@@ -182,12 +203,18 @@ export interface IMemoryStore {
    * - `sweepActiveSessions` deletes rows older than the given threshold.
    *   Returns the count removed.
    */
-  registerActiveSession(record: ActiveSessionRecord): Promise<ActiveSessionRecord>;
+  /**
+   * Omit `claim` only for trusted in-process compatibility callers and tests.
+   * Every transport-facing registration must provide its server-owned claim.
+   */
+  registerActiveSession(record: ActiveSessionRecord, claim?: ActiveSessionClaim): Promise<ActiveSessionRecord>;
   heartbeatActiveSession(
     userId: string,
     sessionKey: string,
     at: string,
     usage?: ActiveSessionUsage | null,
+    orgId?: string | null,
+    claim?: ActiveSessionClaim,
   ): Promise<boolean>;
   /**
    * Federation Stage 2 follow-up: graceful unregister on clean CLI exit.
@@ -195,30 +222,54 @@ export interface IMemoryStore {
    * existed (idempotent — safe to call multiple times). The 5-min
    * sweeper still acts as the safety net for hard kills.
    */
-  unregisterActiveSession(userId: string, sessionKey: string): Promise<boolean>;
+  /** True only while `claimToken` is the unexpired owner of the exact address. */
+  ownsActiveSessionClaim(
+    orgId: string | null,
+    userId: string,
+    sessionKey: string,
+    claimToken: string,
+  ): Promise<boolean>;
+  unregisterActiveSession(
+    userId: string,
+    sessionKey: string,
+    orgId?: string | null,
+    claimToken?: string,
+  ): Promise<boolean>;
+  /** Release every address held by one closing MCP transport. */
+  releaseActiveSessionClaims(claimToken: string): Promise<number>;
   listActiveSessions(filters: ActiveSessionFilters): Promise<ActiveSessionRecord[]>;
   sweepActiveSessions(olderThanMs: number): Promise<number>;
 
   /**
    * Federation Stage 3 (0.4.0) — cross-CLI messaging.
    *
-   * - `sendSessionMessage` writes one row PER recipient. The caller
-   *   passes the literal addressing string (`sessionKey`, `clientKind:*`,
-   *   or `*`); the store resolves it against `active_sessions` at send
-   *   time and fans out. Returns the persisted ids so the sender can
-   *   surface "delivered to N peers" feedback.
-   * - `readSessionInbox` returns undelivered rows for the given session
-   *   (or all rows when `includeDelivered: true`). When called without
-   *   `peek`, the caller will follow up with `ackSessionInbox` on the
-   *   ids it accepted; this two-step shape lets a flaky reader replay
-   *   on crash without losing messages.
-   * - `ackSessionInbox` stamps `delivered_at = ?`. Idempotent.
-   * - `sweepSessionInbox` deletes delivered rows older than the
-   *   threshold (keeps the table from growing unbounded).
+   * `routeSessionMessage` is the authoritative path: it verifies the active
+   * sender and exact tenant tuple, resolves only active recipients, applies
+   * fanout and queue limits atomically, and deduplicates on the sender's
+   * `messageId`. `sendSessionMessage` remains as a personal-tenant-compatible
+   * adapter for existing callers.
    */
-  sendSessionMessage(record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">, options?: { idGenerator?: () => string; now?: string }): Promise<SessionInboxRecord[]>;
+  routeSessionMessage(
+    input: SessionMessageSendInput,
+    options?: SessionMessageRouteOptions,
+  ): Promise<SessionMessageSendResult>;
+  sendSessionMessage(
+    record: LegacySessionMessageSendInput,
+    options?: LegacySessionMessageSendOptions,
+  ): Promise<SessionInboxRecord[]>;
   readSessionInbox(filters: SessionInboxFilters): Promise<SessionInboxRecord[]>;
-  ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): Promise<number>;
+  ackSessionInbox(
+    userId: string,
+    toSessionKey: string,
+    ids: string[],
+    at: string,
+    orgId?: string | null,
+    claimToken?: string,
+  ): Promise<number>;
+  transitionSessionMessages(input: SessionMessageTransitionInput): Promise<SessionInboxRecord[]>;
+  readSessionMessageReceipts(filters: SessionMessageReceiptFilters): Promise<SessionInboxRecord[]>;
+  ackSessionMessageReceipts(input: SessionMessageReceiptAckInput): Promise<number>;
+  expireSessionMessages(at?: string): Promise<number>;
   sweepSessionInbox(olderThanMs: number): Promise<number>;
 
   /**

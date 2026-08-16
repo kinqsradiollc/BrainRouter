@@ -8,9 +8,99 @@ import {
 } from '@kinqs/brainrouter-types';
 
 type AccountConfig = {
-  cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } };
-  servers?: Record<string, { identity?: string; apiKey?: string; url?: string }>;
+  cli?: { account?: { url?: string; userId?: string; orgId?: string; displayName?: string; email?: string } };
+  servers?: Record<string, {
+    identity?: string;
+    apiKey?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  }>;
 };
+
+const BRAINROUTER_ORG_HEADER = 'X-BrainRouter-Org';
+
+function isBrainRouterServer(id: string, server: { identity?: string }): boolean {
+  return server.identity === 'brainrouter' || /^brainrouter/i.test(id);
+}
+
+/**
+ * ADR-032 D8 — record which tenant this install is currently working as.
+ *
+ * Sign-in writes `userId`; the ACTIVE ORG is a later, separate choice that the
+ * user can change at any time from the workspace switcher, so it cannot be
+ * captured once at sign-in without going stale the first time they switch. The
+ * learned store keys on `cli.account`, and core reads that file rather than
+ * renderer state, so the switcher's selection has to land here to have any
+ * effect on the partition.
+ *
+ * Pure on purpose: the decision (what changes, and whether anything changed at
+ * all) is separable from the config write, so it can be tested without a disk.
+ *
+ * An empty/unknown org clears the field rather than storing `''`. An absent org
+ * means PERSONAL, and personal is the safe reading — a lesson learned in one
+ * customer's workspace reaching another is a data leak with a pleasant name.
+ * Signed-out installs are left alone entirely: an org id with no account behind
+ * it would claim a tenancy nothing established.
+ */
+export function withAccountOrgId(
+  config: unknown,
+  orgId: unknown,
+): { changed: boolean; next: AccountConfig } {
+  const source = (config ?? {}) as AccountConfig;
+  const next: AccountConfig = {
+    ...source,
+    ...(source.cli ? {
+      cli: {
+        ...source.cli,
+        ...(source.cli.account ? { account: { ...source.cli.account } } : {}),
+      },
+    } : {}),
+    ...(source.servers ? {
+      servers: Object.fromEntries(Object.entries(source.servers).map(([id, server]) => [
+        id,
+        { ...server, ...(server.headers ? { headers: { ...server.headers } } : {}) },
+      ])),
+    } : {}),
+  };
+  const account = next.cli?.account;
+  if (!account) return { changed: false, next };
+  const desired = typeof orgId === 'string' ? orgId.trim() : '';
+  const current = typeof account.orgId === 'string' ? account.orgId.trim() : '';
+  let changed = desired !== current;
+  if (changed) {
+    if (desired) account.orgId = desired;
+    else delete account.orgId;
+  }
+
+  // The learned ledger and the central memory lifecycle must cross the same
+  // tenant boundary. HTTP MCP transport headers are fixed at connection time,
+  // so persist the selected org on every BrainRouter profile; the host then
+  // reconnects those profiles before constructing a replacement Agent.
+  for (const [id, server] of Object.entries(next.servers ?? {})) {
+    if (!isBrainRouterServer(id, server)) continue;
+    const headers = { ...(server.headers ?? {}) };
+    let foundDesired = false;
+    let headerChanged = false;
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() !== BRAINROUTER_ORG_HEADER.toLowerCase()) continue;
+      if (key === BRAINROUTER_ORG_HEADER && headers[key] === desired && desired && !foundDesired) {
+        foundDesired = true;
+        continue;
+      }
+      delete headers[key];
+      headerChanged = true;
+    }
+    if (desired && !foundDesired) {
+      headers[BRAINROUTER_ORG_HEADER] = desired;
+      headerChanged = true;
+    }
+    if (!headerChanged) continue;
+    if (Object.keys(headers).length) server.headers = headers;
+    else delete server.headers;
+    changed = true;
+  }
+  return { changed, next };
+}
 
 type FetchResponse = {
   ok: boolean;
@@ -399,7 +489,8 @@ export async function resolveBrainRouterAccountContext(
   config: unknown,
   fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<BrainRouterAccountContext | null> {
-  const account = resolveBrainRouterAccountApi(config);
+  const candidate = asRecord(config) as AccountConfig;
+  const account = resolveBrainRouterAccountApi(candidate);
   if (!account) return null;
   const response = await fetchImpl(`${account.baseUrl}/api/orgs`, {
     headers: { Authorization: `Bearer ${account.apiKey}` },
@@ -409,7 +500,12 @@ export async function resolveBrainRouterAccountContext(
   const orgs = Array.isArray(body.orgs)
     ? body.orgs.map(asRecord).filter((org) => typeof org.orgId === 'string')
     : [];
-  const org = orgs.find((entry) => entry.isDefault === true) ?? orgs[0];
+  const selectedOrgId = String(candidate.cli?.account?.orgId ?? '').trim();
+  const selected = orgs.find((entry) => selectedOrgId && String(entry.orgId).trim() === selectedOrgId);
+  if (selectedOrgId && !selected) {
+    throw new Error('The selected BrainRouter organization is no longer available. Choose an active organization.');
+  }
+  const org = selected ?? orgs.find((entry) => entry.isDefault === true) ?? orgs[0];
   if (!org) throw new Error('No active BrainRouter organization is available.');
   const orgId = String(org.orgId).trim();
   if (!orgId) throw new Error('No active BrainRouter organization is available.');

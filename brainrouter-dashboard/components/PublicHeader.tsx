@@ -8,12 +8,16 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { STATIC_PRESENTATION } from "../lib/presentation";
 
 const DOCS_URL = "https://github.com/kinqsradiollc/BrainRouter/tree/HEAD/brainrouter-docs";
+/**
+ * Routes only — no deep links into the homepage's own sections. Section
+ * anchors here were named for an engineering frame the product has moved off
+ * ("Workbench", "Surfaces"), and a header link that silently scrolls nowhere
+ * when a section is renamed is worse than one fewer link. Anything added back
+ * has to be a route that exists.
+ */
 const NAV = [
   { label: "Home", href: "/" },
-  { label: "Workbench", href: "/#platform" },
-  { label: "Knowledge", href: "/#knowledge" },
-  { label: "Surfaces", href: "/#workflows" },
-  { label: "About", href: "/about" },
+  { label: "How it works", href: "/about" },
 ] as const;
 
 export function PublicHeader() {

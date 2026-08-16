@@ -22,6 +22,24 @@ import { WORKSPACE_PROFILE_PLUGIN_DEFINITIONS } from '../workspace/profilePlugin
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROFILES_DIR = path.join(PACKAGE_ROOT, 'orchestration-profiles');
+const SKILL_LIBRARY = path.resolve(PACKAGE_ROOT, '..', '..', 'skills');
+
+/**
+ * Skill IDs as the monorepo library defines them (`skills/<category>/<id>/SKILL.md`).
+ * Falls back to the package's generated copy outside the monorepo.
+ */
+function librarySkillIds(): string[] {
+  const root = fs.existsSync(SKILL_LIBRARY) ? SKILL_LIBRARY : path.join(PACKAGE_ROOT, 'skills');
+  const ids: string[] = [];
+  for (const category of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!category.isDirectory()) continue;
+    for (const skill of fs.readdirSync(path.join(root, category.name), { withFileTypes: true })) {
+      if (!skill.isDirectory()) continue;
+      if (fs.existsSync(path.join(root, category.name, skill.name, 'SKILL.md'))) ids.push(skill.name);
+    }
+  }
+  return ids.sort();
+}
 
 test('P23-2 bundled orchestration profile files and parsed ids have exact parity', () => {
   const files = fs.readdirSync(PROFILES_DIR)
@@ -53,27 +71,20 @@ test('P23-2 bundled reference catalog is derived from physical role and skill as
     'verifier',
     'worker',
   ]);
-  const coreSkillIds = [
-    'adr-skill',
-    'bootstrap-skill',
-    'changelog-generator',
-    'code-review-and-quality',
-    'conventions-skill',
-    'debugging-and-error-recovery',
-    'handover-skill',
-    'incremental-skill',
-    'planning-skill',
-    'shipping-skill',
-    'spec-driven-skill',
-    'testing-skill',
-    'verify-loop',
-  ];
+  // ADR-031 D2b: the package carries the WHOLE library, generated from the
+  // monorepo root at build time, so the expectation is read from that library
+  // rather than pinned to a list. Reading the source rather than the generated
+  // copy is the point — this fails if the copy that ships is short of it.
+  const coreSkillIds = librarySkillIds();
   const profileSkillIds = [...new Set(
     WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.flatMap((plugin) => [...plugin.skillIds]),
   )].sort();
+  // Deduped: a capability pack may own a skill the library also has under the
+  // same ID (the frontend pack's a11y/taste/browser-testing), and the package
+  // root wins for a managed workspace while the reference catalog is a set.
   assert.deepEqual(
     [...references.skillIds].sort(),
-    [...coreSkillIds, ...profileSkillIds].sort(),
+    [...new Set([...coreSkillIds, ...profileSkillIds])].sort(),
   );
   assert.deepEqual(
     [...references.roles.values()]
@@ -107,11 +118,17 @@ test('P23-2 Engineering plan preserves profile ceilings and expected strategy su
   assert.deepEqual(plan.rolePolicy.availableRoles, preset.orchestration.availableRoles);
   assert.deepEqual(plan.rolePolicy.disabledRoles, preset.orchestration.disabledRoles);
   assert.equal(plan.limits.maxParallel, preset.orchestration.maxParallel);
+  // The ORDER here is the routing contract, not decoration: deterministic
+  // selection takes the first signal-matched strategy in file order, and a
+  // security review matches both `security-review` and `review`. Sorting these
+  // keys reroutes every security review to the generic lens, so this assertion
+  // is what turns a well-meaning alphabetization into a red build.
   assert.deepEqual(plan.strategies.map((strategy) => strategy.id), [
     'direct',
     'investigate',
     'design',
     'delivery',
+    'security-review-only',
     'review-only',
   ]);
 
@@ -126,9 +143,16 @@ test('P23-2 Engineering plan preserves profile ceilings and expected strategy su
       ['implement', 'role'],
       ['review', 'role'],
       ['verify', 'role'],
+      ['challenge', 'role'],
       ['deliver', 'primary'],
     ],
   );
+  // The adversary must stay OPTIONAL: a workspace missing the reviewer role or
+  // the review skill would otherwise take the whole delivery strategy down to
+  // the `direct` fallback rather than losing one stage.
+  const challenge = delivery?.stages.find((stage) => stage.id === 'challenge');
+  assert.equal(challenge?.optional, true);
+  assert.equal(challenge?.executor.kind === 'role' ? challenge.executor.roleId : null, 'reviewer');
   const mismatchedContracts = plan.strategies.flatMap((strategy) =>
     strategy.stages.flatMap((stage) =>
       stage.executor.kind === 'role' && stage.expectedOutput?.contractId !== stage.executor.roleId

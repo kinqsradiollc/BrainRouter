@@ -34,14 +34,22 @@ export type ChangesetFile = { path: string; status: string; added: number; remov
 export type DeliveryMeta = {
   id: string;
   mode: 'queue' | 'steer';
-  state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled';
+  state: 'queued' | 'steered' | 'applied' | 'expired' | 'running' | 'completed' | 'canceled';
   position?: number;
   receipt?: SteeringReceiptEventView;
 };
 
 export type ChatRow =
   | { id: number | string; kind: 'user'; text: string; ts: number; delivery?: DeliveryMeta }
-  | { id: number | string; kind: 'delivery'; text: string; ts: number; source: 'extension'; delivery: DeliveryMeta }
+  | {
+      id: number | string;
+      kind: 'delivery';
+      text: string;
+      ts: number;
+      source: 'extension' | 'peer-session';
+      sender?: { sessionKey: string; deviceId?: string; clientKind?: 'cli' | 'desktop'; workspaceRoot?: string; title?: string; transport?: 'local' | 'remote'; sentAt?: number };
+      delivery: DeliveryMeta;
+    }
   | { id: number | string; kind: 'assistant'; text: string; ts: number }
   | { id: number | string; kind: 'status'; text: string; ts: number; action?: 'plan' }
   | { id: number | string; kind: 'error'; text: string; detail?: string; ts: number }

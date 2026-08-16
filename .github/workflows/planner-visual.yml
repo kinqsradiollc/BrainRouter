@@ -1,0 +1,164 @@
+name: Planner Visual & Usability
+
+# ADR-038 is a cross-host contract. Run every pull request so the aggregate
+# check can be selected as a stable branch-protection requirement; path filters
+# would leave that required check pending on otherwise unrelated pull requests.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: planner-visual-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard_chromium:
+    name: Dashboard Chromium (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      # Pin the browser lane to an explicitly provisioned Chrome-for-Testing
+      # binary instead of relying on the runner image's mutable browser path.
+      - name: Setup stable Chromium
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # This lane never launches Electron; avoid downloading its runtime.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Build Dashboard package dependencies
+        run: npm run build:packages:dashboard
+
+      - name: Build Dashboard host
+        run: npm run build --workspace dashboard
+
+      - name: Run Dashboard visual and usability gate
+        env:
+          CHROMIUM_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          # GitHub's isolated Ubuntu runner disables the user namespaces that
+          # Chrome-for-Testing needs for its own sandbox.
+          BRAINROUTER_CHROMIUM_NO_SANDBOX: '1'
+        run: >-
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24"
+          node brainrouter-desktop/scripts/planner-visual-gate.mjs
+          --dashboard
+          --browser "$CHROMIUM_PATH"
+          --output brainrouter-desktop/.planner-visual/dashboard-linux
+
+      - name: Upload Dashboard visual evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: planner-visual-dashboard-linux
+          path: brainrouter-desktop/.planner-visual/dashboard-linux/
+          if-no-files-found: warn
+          include-hidden-files: true
+
+  electron_native:
+    name: Electron (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos
+          - runner: windows-latest
+            platform: windows
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      # These lanes launch the real development Electron binary, so installation
+      # must not inherit the skip flag used by non-Electron CI jobs.
+      - name: Install dependencies with Electron
+        run: npm ci
+
+      - name: Ensure Electron runtime (macOS)
+        if: runner.os == 'macOS'
+        run: env -u ELECTRON_SKIP_BINARY_DOWNLOAD npm rebuild electron
+
+      - name: Ensure Electron runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+          npm rebuild electron
+
+      - name: Verify Electron runtime
+        run: node -e "const fs=require('node:fs');const executable=require('electron');if(!fs.existsSync(executable))throw new Error('Electron runtime was not installed');console.log(executable)"
+
+      - name: Build Desktop package dependencies
+        run: npm --prefix brainrouter-desktop run build:deps
+
+      - name: Build Desktop host
+        # The renderer's transform phase exhausts Node's default ~2 GB heap on
+        # the hosted runners — "Reached heap limit Allocation failed" — while the
+        # OUTPUT is well inside the release budget. It is the graph being large,
+        # not the bundle: `verify-visual-release.mjs` still gates the shipped
+        # size, so raising this cannot hide a bundle regression.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run build --workspace brainrouter-desktop
+
+      - name: Run native Electron visual and usability gate
+        run: >-
+          node brainrouter-desktop/scripts/planner-visual-gate.mjs
+          --electron
+          --output brainrouter-desktop/.planner-visual/electron-${{ matrix.platform }}
+
+      - name: Upload Electron visual evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: planner-visual-electron-${{ matrix.platform }}
+          path: brainrouter-desktop/.planner-visual/electron-${{ matrix.platform }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+
+  planner_visual_required:
+    name: Planner Visual & Usability (required)
+    if: always()
+    needs:
+      - dashboard_chromium
+      - electron_native
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every visual lane
+        env:
+          DASHBOARD_RESULT: ${{ needs.dashboard_chromium.result }}
+          ELECTRON_RESULT: ${{ needs.electron_native.result }}
+        run: |
+          echo "Dashboard Chromium: $DASHBOARD_RESULT"
+          echo "Native Electron matrix: $ELECTRON_RESULT"
+          if [[ "$DASHBOARD_RESULT" != 'success' || "$ELECTRON_RESULT" != 'success' ]]; then
+            exit 1
+          fi

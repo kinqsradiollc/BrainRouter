@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
+  buildWorkspaceOnboardingSources,
   buildWorkspaceSelectionCatalog,
   createWorkspaceManifest,
+  workspaceProfilesForOnboarding,
   WORKSPACE_MANIFEST_VERSION,
+  type WorkspaceOnboardingSources,
 } from '@kinqs/brainrouter-core/workspace';
 import {
   applyProjectOnboardingEdits,
@@ -13,6 +19,45 @@ import {
 } from '../cli/commands/init/onboardingDraft.js';
 
 const root = '/Users/dev/example';
+
+type WorkspaceOrchestrationProfiles = WorkspaceOnboardingSources['orchestrationProfiles'];
+
+function orchestrationProfiles(unavailableIds: string[] = []): WorkspaceOrchestrationProfiles {
+  return {
+    entries: new Map(),
+    unavailableIds: new Set(unavailableIds),
+    diagnostics: [],
+  };
+}
+
+function marketingEdits(): Parameters<typeof finalizeCatalogReviewedProjectOnboarding>[1] {
+  return {
+    personaDefault: 'marketer',
+    personasEnabled: ['marketer'],
+    orchestrationMode: 'adaptive',
+    orchestrationAvailableRoles: ['reviewer'],
+    orchestrationDisabledRoles: ['fleet'],
+    orchestrationMaxParallel: 3,
+    capabilitiesEnabled: [],
+    capabilitiesDisabled: [],
+    skillPacks: [],
+    skillsEnabled: [],
+    skillsDisabled: [],
+    toolProfiles: [
+      'workspace-files',
+      'project-knowledge',
+      'memory-context',
+      'artifacts',
+      'planning-session',
+      'browser',
+    ],
+    toolsEnabled: [],
+    toolsDenied: [],
+    memoryTags: ['marketing'],
+    memoryCaptureHint: 'decisions',
+    instructions: 'AGENT.md',
+  };
+}
 
 test('engineering drafts use one engineer with frontend and backend task capabilities', () => {
   const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'engineering' });
@@ -149,4 +194,74 @@ test('catalog-reviewed setup rejects a free-text persona ID', () => {
     }, buildWorkspaceSelectionCatalog()),
     /Reviewed persona selection is no longer available/,
   );
+});
+
+test('catalog-reviewed setup accepts roles from a declared bundled plan alias', () => {
+  const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'marketing' });
+  const reviewed = finalizeCatalogReviewedProjectOnboarding(
+    draft,
+    marketingEdits(),
+    buildWorkspaceSelectionCatalog(),
+    orchestrationProfiles(),
+  );
+
+  assert.deepEqual(reviewed.orchestration.availableRoles, ['reviewer']);
+});
+
+test('catalog-reviewed setup rejects roles when an invalid exact claim blocks alias fallback', () => {
+  const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'marketing' });
+  assert.throws(
+    () => finalizeCatalogReviewedProjectOnboarding(
+      draft,
+      marketingEdits(),
+      buildWorkspaceSelectionCatalog(),
+      orchestrationProfiles(['marketing']),
+    ),
+    /Reviewed role selection is no longer available/,
+  );
+});
+
+test('catalog-reviewed CLI finalization accepts every untouched workspace profile', () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboarding-draft-'));
+  try {
+    const sources = buildWorkspaceOnboardingSources(workspaceRoot);
+
+    for (const profile of workspaceProfilesForOnboarding()) {
+      const draft = createProjectOnboardingDraft({
+        workspaceRoot,
+        profile: profile.id,
+        now: () => '2026-08-13T00:00:00.000Z',
+      });
+      const reviewed = finalizeCatalogReviewedProjectOnboarding(
+        draft,
+        {
+          personaDefault: draft.persona.default,
+          personasEnabled: [...draft.persona.enabled],
+          orchestrationMode: draft.orchestration.mode,
+          orchestrationAvailableRoles: [...draft.orchestration.availableRoles],
+          orchestrationDisabledRoles: [...draft.orchestration.disabledRoles],
+          orchestrationMaxParallel: draft.orchestration.maxParallel,
+          capabilitiesEnabled: [...draft.capabilities.enabled],
+          capabilitiesDisabled: [...draft.capabilities.disabled],
+          skillPacks: [...draft.skills.packs],
+          skillsEnabled: [...draft.skills.enabled],
+          skillsDisabled: [...draft.skills.disabled],
+          toolProfiles: [...draft.tools.profiles],
+          toolsEnabled: [...(draft.tools.enabled ?? [])],
+          toolsDenied: [...draft.tools.deny],
+          memoryTags: [...draft.memory.tags],
+          memoryCaptureHint: draft.memory.captureHint,
+          instructions: draft.instructions,
+        },
+        sources.catalog,
+        sources.orchestrationProfiles,
+      );
+
+      assert.equal(reviewed.profile, profile.id, `${profile.id}: workspace identity`);
+      assert.equal(reviewed.orchestration.mode, profile.orchestration.mode, `${profile.id}: mode`);
+      assert.equal(reviewed.version, 3, `${profile.id}: explicit catalog manifest`);
+    }
+  } finally {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
 });

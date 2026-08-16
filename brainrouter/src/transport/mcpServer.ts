@@ -8,8 +8,13 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, RequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  HOST_LEARNING_REQUEST_METHOD,
+  SESSION_MESSAGE_NOTIFICATION_METHOD,
+} from '@kinqs/brainrouter-core/mcp';
 import { z } from 'zod';
+import { z as z4 } from 'zod/v4';
 import { Registry } from '../registry.js';
 import { isClientDisconnectError } from '../transport-errors.js';
 import { recordToolCall } from '../observability/metrics.js';
@@ -17,6 +22,7 @@ import { VERSION } from '../version.js';
 import { memoryEngine } from '../memory/engine.js';
 import { knowledgeActorFromAuth } from '../knowledge/contracts/actor.js';
 import type { Role } from '../tenancy/rbac.js';
+import type { SessionDeliveryHub } from '../services/sessionDeliveryHub.js';
 
 // Import tools — grouped per domain; each barrel re-exports its modules' public
 // surface (schemas + handlers). See tools/<domain>/index.ts.
@@ -53,7 +59,7 @@ import {
   memoryCreateRequirementToolSchema, handleMemoryCreateRequirement,
 } from '../tools/capture/index.js';
 import {
-  memoryGovernanceToolSchemas, handleMemoryGovernanceTool,
+  memoryGovernanceToolSchemas, handleMemoryGovernanceTool, handleHostLearningRequest,
   memoryEngineeringToolSchemas, handleMemoryEngineeringTool,
   memoryExplainToolSchema, handleMemoryExplainRecall,
   memoryHookToolSchemas, handleMemoryHookTool,
@@ -71,6 +77,8 @@ import {
   sessionSendToolSchema, handleSessionSend,
   sessionInboxReadToolSchema, handleSessionInboxRead,
   sessionInboxAckToolSchema, handleSessionInboxAck,
+  sessionReceiptsToolSchema, handleSessionReceipts,
+  sessionReceiptsAckToolSchema, handleSessionReceiptsAck,
   sessionDelegateTaskToolSchema, handleSessionDelegateTask,
   sessionDelegationsToolSchema, handleSessionDelegations,
   memoryResolveSessionToolSchema, handleMemoryResolveSession,
@@ -120,9 +128,74 @@ import {
 } from '../tools/workspace/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
+const HostLearningRequestSchema = RequestSchema.extend({
+  method: z4.literal(HOST_LEARNING_REQUEST_METHOD),
+  params: z4.discriminatedUnion("operation", [
+    z4.strictObject({ operation: z4.literal("identity") }),
+    z4.strictObject({
+      operation: z4.literal("correct"),
+      input: z4.strictObject({
+        itemId: z4.string().regex(/^lrn_[a-f0-9]{18}$/),
+        statement: z4.string().trim().min(1).max(400),
+        falsifier: z4.string().trim().min(1).max(400),
+        expectation: z4.string().trim().min(1).max(400),
+      }),
+    }),
+    z4.strictObject({
+      operation: z4.literal("record"),
+      input: z4.record(z4.string(), z4.unknown()),
+    }),
+    z4.strictObject({
+      operation: z4.literal("revert"),
+      input: z4.record(z4.string(), z4.unknown()),
+    }),
+    z4.strictObject({
+      operation: z4.literal("outcome"),
+      input: z4.strictObject({
+        recordId: z4.string().trim().min(1).max(200),
+        itemId: z4.string().regex(/^lrn_[a-f0-9]{18}$/),
+        sessionIdentity: z4.string().regex(/^[a-f0-9]{64}$/),
+        outcome: z4.enum(["confirmed", "contradicted"]),
+        detail: z4.string().max(240),
+      }),
+    }),
+    z4.strictObject({
+      operation: z4.literal("sync"),
+      input: z4.record(z4.string(), z4.unknown()),
+    }),
+    z4.strictObject({
+      operation: z4.literal("lifecycle"),
+      input: z4.record(z4.string(), z4.unknown()),
+    }),
+  ]),
+});
+
+export interface BuildMcpServerOptions {
+  defaultUserId?: string;
+  isAdmin?: boolean;
+  defaultOrgId?: string;
+  defaultRole?: Role;
+  /** Stable for one MCP transport; used to reap every bound session on close. */
+  connectionId?: string;
+  sessionDeliveryHub?: SessionDeliveryHub;
+}
+
+const CLAIM_REQUIRED_SESSION_TOOLS = new Set([
+  'session_register',
+  'session_heartbeat',
+  'session_unregister',
+  'session_send',
+  'session_inbox_read',
+  'session_inbox_ack',
+  'session_receipts',
+  'session_receipts_ack',
+]);
 
 export // ─── Server factory ───────────────────────────────────────────────────────────
-function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean; defaultOrgId?: string; defaultRole?: Role }): Server {
+function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Server {
+  if (Boolean(options?.connectionId) !== Boolean(options?.sessionDeliveryHub)) {
+    throw new Error('MCP session messaging requires both a connection id and delivery hub');
+  }
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
   // C1 (ADR-016) — the caller's active org, pinned server-side so recall can
@@ -134,6 +207,25 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
     role: options?.defaultRole,
     isAdmin,
   });
+  const validateDeliveryClaim = options?.connectionId
+    ? (binding: { connectionId: string; orgId: string | null; userId: string; sessionKey: string }) =>
+        memoryEngine.store.ownsActiveSessionClaim(
+          binding.orgId,
+          binding.userId,
+          binding.sessionKey,
+          binding.connectionId,
+        )
+    : undefined;
+  const authorizeOwnedSession = options?.sessionDeliveryHub && options.connectionId
+    ? async (orgId: string | null, userId: string, sessionKey: string) =>
+        options.sessionDeliveryHub!.owns(options.connectionId!, orgId, userId, sessionKey)
+        && await memoryEngine.store.ownsActiveSessionClaim(
+          orgId,
+          userId,
+          sessionKey,
+          options.connectionId!,
+        )
+    : undefined;
   // Connectors are workspace-scoped file state (connectors.json under the
   // BrainRouter home). Use the resolved local workspace root; fall back to cwd.
   const connectorWorkspaceRoot = registry.getLocalRoot() ?? process.cwd();
@@ -280,6 +372,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       sessionSendToolSchema,
       sessionInboxReadToolSchema,
       sessionInboxAckToolSchema,
+      sessionReceiptsToolSchema,
+      sessionReceiptsAckToolSchema,
       sessionDelegateTaskToolSchema,
       sessionDelegationsToolSchema,
       memorySearchToolSchema,
@@ -341,10 +435,38 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
     ],
   }));
 
+  // Learned mutations are protocol-level host lifecycle requests, never MCP
+  // tools. The Agent adapter can emit only tools/call, while CLI/Desktop hosts
+  // hold this typed request capability directly.
+  server.setRequestHandler(HostLearningRequestSchema, async (request) => {
+    try {
+      return await handleHostLearningRequest(request.params, { defaultUserId, defaultOrgId });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Invalid host learning request: ${error.errors.map((entry) => entry.message).join(', ')}`,
+        );
+      }
+      throw error;
+    }
+  });
+
   // ── Tool dispatcher ────────────────────────────────────────────────────────
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const __startedAt = Date.now();
     try {
+      if (CLAIM_REQUIRED_SESSION_TOOLS.has(request.params.name) && !options?.connectionId) {
+        const result = {
+          isError: true,
+          content: [{
+            type: 'text' as const,
+            text: `${request.params.name} requires a server-owned MCP connection claim`,
+          }],
+        };
+        recordToolCall(request.params.name, false, Date.now() - __startedAt);
+        return result;
+      }
       // AUTHZ (IDOR fix) — the HTTP /mcp transport authenticates per-user and
       // builds this server with that user's id as `defaultUserId`. A
       // client-supplied `userId` argument must never override it, or one
@@ -382,20 +504,111 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
             return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
           }
           return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
-        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
+        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
         case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
-        case 'session_register': return await handleSessionRegister(request.params.arguments, { defaultUserId });
-        case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, { defaultUserId });
-        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, { defaultUserId });
-        case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId });
-        case 'session_send': return await handleSessionSend(request.params.arguments, { defaultUserId });
-        case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, { defaultUserId });
-        case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, { defaultUserId });
+        case 'session_register': return await handleSessionRegister(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          onRegistered: options?.sessionDeliveryHub && options.connectionId
+            ? (orgId, userId, sessionKey, messageWakeVersion, registrationAttemptId) => {
+                const committed = options.sessionDeliveryHub!.commitReservation({
+                  connectionId: options.connectionId!,
+                  orgId,
+                  userId,
+                  sessionKey,
+                  ...(messageWakeVersion === 1
+                    ? {
+                        notify: (wake) => server.notification({
+                          method: SESSION_MESSAGE_NOTIFICATION_METHOD,
+                          params: wake,
+                        } as any),
+                      }
+                    : {}),
+                }, registrationAttemptId);
+                if (!committed) {
+                  throw new Error('the session registration reservation is no longer current');
+                }
+              }
+            : undefined,
+          authorizeRegistration: options?.sessionDeliveryHub && options.connectionId
+            ? (orgId, userId, sessionKey, registrationAttemptId) => options.sessionDeliveryHub!.reserve(
+                options.connectionId!,
+                orgId,
+                userId,
+                sessionKey,
+                registrationAttemptId,
+              )
+            : undefined,
+          onRegistrationFailed: options?.sessionDeliveryHub && options.connectionId
+            ? (orgId, userId, sessionKey, registrationAttemptId) => options.sessionDeliveryHub!.releaseReservation(
+                options.connectionId!,
+                orgId,
+                userId,
+                sessionKey,
+                registrationAttemptId,
+              )
+            : undefined,
+        });
+        case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          authorizeSession: authorizeOwnedSession,
+        });
+        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          onUnregistered: options?.sessionDeliveryHub && options.connectionId
+            ? (orgId, userId, sessionKey) => options.sessionDeliveryHub!.unbind(
+                orgId,
+                userId,
+                sessionKey,
+                options.connectionId,
+              )
+            : undefined,
+          authorizeSession: authorizeOwnedSession,
+        });
+        case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId, defaultOrgId });
+        case 'session_send': return await handleSessionSend(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          onPersisted: options?.sessionDeliveryHub
+            ? (rows) => options.sessionDeliveryHub!.notifyPersisted(rows, validateDeliveryClaim)
+            : undefined,
+          authorizeSession: authorizeOwnedSession,
+        });
+        case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          authorizeSession: authorizeOwnedSession,
+        });
+        case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          authorizeSession: authorizeOwnedSession,
+        });
+        case 'session_receipts': return await handleSessionReceipts(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          authorizeSession: authorizeOwnedSession,
+        });
+        case 'session_receipts_ack': return await handleSessionReceiptsAck(request.params.arguments, {
+          defaultUserId,
+          defaultOrgId,
+          claimToken: options?.connectionId,
+          authorizeSession: authorizeOwnedSession,
+        });
         case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
         case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
-        case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
+        case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'vulnerability_intelligence': return await handleVulnerabilityIntelligence(request.params.arguments);
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
@@ -412,7 +625,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_audit':
         case 'memory_diagnostics':
         case 'memory_verify_anchors':
-          return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId });
+          return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_debug_trace_save':
         case 'memory_debug_trace_search':
         case 'memory_failed_attempts':
@@ -444,7 +657,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_reindex_source':
           return await handleMemoryReindexSource(request.params.arguments, { defaultUserId });
         case 'memory_record_lesson':
-          return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId });
+          return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_create_requirement':
           return await handleMemoryCreateRequirement(request.params.arguments, { defaultUserId });
         case 'memory_capture_artifact':

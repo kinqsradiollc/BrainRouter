@@ -1,7 +1,10 @@
 # BrainRouter Whisper STT sidecar — first-party speech-to-text for Meetings.
 # Builds whisper.cpp from a pinned release, bundles ffmpeg + a tiny Node wrapper
-# exposing POST /inference (raw audio -> { text }). Internal-network only; never
-# published to the host, so the single-:3747 door invariant holds.
+# exposing POST /inference (raw audio -> { text }) and POST /stream (ADR-035 D10
+# live transcription). In the shipped stack it is `expose:`d to the compose
+# network only, so clients still have the single :3747 door; the dev composes
+# publish it on 127.0.0.1:3752 so it can be probed by hand, which is loopback
+# and not the LAN, but is not "never".
 
 # ── build whisper.cpp ────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS build
@@ -29,7 +32,7 @@ COPY --from=build /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 # (e.g. ggml-small.bin / ggml-medium.bin) or mount a model volume + set WHISPER_MODEL.
 ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 RUN mkdir -p /models && curl -fsSL "${WHISPER_MODEL_URL}" -o /models/ggml-base.en.bin
-COPY server.mjs /app/server.mjs
+COPY server.mjs stream.mjs /app/
 ENV STT_PORT=3752 \
     WHISPER_MODEL=/models/ggml-base.en.bin \
     WHISPER_BIN=whisper-cli

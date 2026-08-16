@@ -25,6 +25,9 @@ const SIGNAL_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ['remediation', /\b(?:remediate|fix the findings|resolve vulnerabilities|address review findings)\b/i],
   ['reproducibility-check', /\b(?:reproducib|replicate|methodology check|verify the results)\b/i],
   ['review', /\b(?:code review|security review|review the changes|review this pr)\b/i],
+  // Overlaps `review` on purpose: a security review fires BOTH signals, and the
+  // strategy order in the plan file is what decides which lens gets the task.
+  ['security-review', /\b(?:security review|security audit|threat model|vulnerabilit(?:y|ies) (?:review|audit|sweep))\b/i],
   ['small-scope', /\b(?:small change|quick fix|one[- ]file|single[- ]file|minor adjustment)\b/i],
   ['source-explanation', /\b(?:explain (?:this )?(?:source|paper|chapter|concept)|teach me|walk me through)\b/i],
   ['writing-revision', /\b(?:revise|rewrite|edit (?:this )?(?:draft|article|document)|improve (?:this )?writing)\b/i],

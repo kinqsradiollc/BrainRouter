@@ -79,12 +79,18 @@ jobs:
         # Root `build` fans out to every workspace via `npm run build -ws
         # --if-present`. Packages without a build script (none currently,
         # but covered) are skipped.
+        # The desktop renderer's transform phase exhausts Node's default
+        # ~2 GB heap on the hosted runners. The OUTPUT stays gated by
+        # `verify-visual-release.mjs`, so this cannot hide a bundle regression —
+        # it is the module graph being large, not the bundle.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run build
 
       - name: Run tests
         # Root `test` fans out via `-ws --if-present`. brainrouter uses
-        # vitest, brainrouter-cli rebuilds + runs node --test, dashboard
-        # has no test script and is skipped.
+        # Vitest, brainrouter-cli rebuilds + runs node --test, and Dashboard
+        # runs its TypeScript adapter and route-contract suites.
         run: npm run test
         env:
           NODE_NO_WARNINGS: '1'
@@ -114,6 +120,12 @@ jobs:
       - name: Build all workspaces
         # tsc --noEmit resolves cross-workspace types from each package's built
         # dist (package exports), so the graph must be built before typecheck.
+        # The desktop renderer's transform phase exhausts Node's default
+        # ~2 GB heap on the hosted runners. The OUTPUT stays gated by
+        # `verify-visual-release.mjs`, so this cannot hide a bundle regression —
+        # it is the module graph being large, not the bundle.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run build
       - name: Typecheck (all workspaces)
         run: npm run typecheck

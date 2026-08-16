@@ -37,6 +37,34 @@ test("MEM-2′ captureTurn ingests a substantial message as a transcript source 
   }
 });
 
+test("ADR-017 D3/D4 — captureTurn stamps org_id + workspace_tag on the source document", async () => {
+  const { store, pipe, cleanup } = await freshPipeline();
+  try {
+    await pipe.captureTurn({
+      userId: "u1",
+      sessionKey: "s1",
+      orgId: "org_acme",
+      workspaceTag: "ws_deadbeefcafe0001",
+      projectTag: "pj_cafef00dbeef0002",
+      messages: [{ role: "user", content: BIG, timestamp: TS }],
+    });
+    const doc = await store.getSourceDocumentByHash("u1", contentHash(redactSensitiveMemoryText(BIG)));
+    assert.ok(doc, "a source document was created");
+    assert.equal(doc!.orgId, "org_acme", "org_id is scoped from the capture call");
+    assert.equal(doc!.workspaceTag, "ws_deadbeefcafe0001", "workspace_tag is scoped from the capture call");
+    assert.equal(doc!.projectTag, "pj_cafef00dbeef0002", "project_tag is scoped from the capture call (ADR-017 D3)");
+    // Scoped lookup only returns the doc when org_id + workspace_tag match — proves the columns were persisted, not defaulted to null.
+    const scoped = await store.getSourceDocumentByHash("u1", contentHash(redactSensitiveMemoryText(BIG)), { orgId: "org_acme", workspaceTag: "ws_deadbeefcafe0001", projectTag: "pj_cafef00dbeef0002" });
+    assert.ok(scoped, "scoped lookup finds the doc under its org + workspace + project");
+    const wrongOrg = await store.getSourceDocumentByHash("u1", contentHash(redactSensitiveMemoryText(BIG)), { orgId: "org_other", workspaceTag: "ws_deadbeefcafe0001" });
+    assert.equal(wrongOrg, null, "another org cannot see this org's source doc");
+    const wrongProject = await store.getSourceDocumentByHash("u1", contentHash(redactSensitiveMemoryText(BIG)), { orgId: "org_acme", workspaceTag: "ws_deadbeefcafe0001", projectTag: "pj_different" });
+    assert.equal(wrongProject, null, "a different project scope cannot see this project's source doc");
+  } finally {
+    await cleanup();
+  }
+});
+
 test("MEM-2′ skips trivial messages (below the char threshold)", async () => {
   const { store, pipe, cleanup } = await freshPipeline();
   try {

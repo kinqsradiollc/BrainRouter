@@ -5,6 +5,7 @@
 // second clone. Pure + dependency-light so desktop (electron), backend, and CLI can
 // all share one definition.
 import crypto from 'node:crypto';
+import { stripTrailingSlashes, stripLeadingSlashes } from '../../util/trimEdges.js';
 
 /**
  * Canonicalize a git remote URL to a stable `host/owner/repo…` identity.
@@ -38,7 +39,7 @@ export function normalizeRepoUrl(raw: string): string {
     }
   }
   host = host.toLowerCase().replace(/^www\./, '');
-  path = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+  path = stripTrailingSlashes(stripLeadingSlashes(path)).replace(/\.git$/i, '');
   if (!host || !path.includes('/')) return '';
   return `${host}/${path}`.toLowerCase();
 }

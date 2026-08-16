@@ -53,6 +53,10 @@ test('code-link automation: branch then PR advance an item and done back-links i
     const originalFetch = globalThis.fetch;
     const captured: Array<Record<string, unknown>> = [];
     let llmCalls = 0;
+    // ADR-034 D1 names a session once on its first finalized turn. That call is
+    // bounded, toolless, and outside the turn loop, so it gets its own seam and
+    // `llmCalls` keeps counting only the model steps of the turn itself.
+    let titleCalls = 0;
     setCliKnobOverride(automationOverride(true));
     globalThis.fetch = (async () => {
       llmCalls += 1;
@@ -96,6 +100,10 @@ test('code-link automation: branch then PR advance an item and done back-links i
     try {
       const agent = new Agent(mcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, sessionKey, silent: false,
+        sessionTitleModelCall: async () => {
+          titleCalls += 1;
+          return { content: 'Request tracing evidence' };
+        },
       });
       await agent.runTurn('link the implementation evidence', {
         onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
@@ -104,6 +112,7 @@ test('code-link automation: branch then PR advance an item and done back-links i
 
       const completed = getWorkItem(workspace, workItem.id)!;
       assert.equal(llmCalls, 4);
+      assert.equal(titleCalls, 1, 'first-turn naming is the only model call outside the turn loop');
       assert.equal(completed.statusCategory, 'completed');
       assert.equal(completed.codeLinks.length, 2);
       assert.ok(getRequirement(workspace, requirement.id)?.taskIds.includes(workItem.id));

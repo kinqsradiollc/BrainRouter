@@ -51,7 +51,7 @@ export function InfoAndGateDialogs(p: InfoAndGateDialogsProps): React.ReactEleme
             <div className="dialog-title"><Icon name="shield" size={15} /> Review required before {gateBlock.kind}</div>
             <div className="dialog-detail">{gateBlock.reason}</div>
             <div className="dialog-actions" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="primary" onClick={() => { const g = gateBlock; setGateBlock(null); ensurePanel('review'); if (g.status !== 'blocked') { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); } }}>
+              <button className="primary" onClick={() => { const g = gateBlock; setGateBlock(null); ensurePanel('stack'); if (g.status !== 'blocked') { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); } }}>
                 {gateBlock.status === 'blocked' ? 'Open review' : 'Run review'}
               </button>
               <button className="deny" onClick={() => { const g = gateBlock; setGateBlock(null); pendingGitRef.current = null; runGit(g.kind, g.msg, { bypass: true }); setToast(`${g.kind === 'commit' ? 'Commit' : 'Push'} — review bypassed.`); }}>

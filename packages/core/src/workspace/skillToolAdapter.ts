@@ -13,6 +13,7 @@ import { parse as parseYaml } from 'yaml';
 import { loadWorkspaceManifest } from './manifest.js';
 import {
   inspectWorkspaceProfilePlugins,
+  workspaceProfilePluginSkillIds,
   type AvailableWorkspaceProfilePlugin,
 } from './profilePlugins.js';
 import { resolveWorkspaceSkillSelection } from './skillSelection.js';
@@ -292,6 +293,8 @@ function resolvePolicy(
   const selection = resolveWorkspaceSkillSelection({ manifest, activeCapabilities, catalog });
   const packageSkills = new Map<string, PackageSkill>();
   for (const plugin of catalog.available) {
+    // Owned skills only: a pack's `librarySkillIds` have no file under its root
+    // and are served from the shipped library by the ordinary catalog path.
     for (const id of plugin.skillIds) {
       const skill = readPackageSkill(plugin, id);
       if (skill) packageSkills.set(id, skill);
@@ -302,7 +305,7 @@ function resolvePolicy(
     ambientSkillIds: selection.ambientSkillIds,
     disabledSkillIds: new Set(selection.disabledSkillIds),
     managedSkillIds: new Set(
-      [...catalog.available, ...catalog.unavailable].flatMap((plugin) => [...plugin.skillIds]),
+      [...catalog.available, ...catalog.unavailable].flatMap(workspaceProfilePluginSkillIds),
     ),
     packageSkills,
   };

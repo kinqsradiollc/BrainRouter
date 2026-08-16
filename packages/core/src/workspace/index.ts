@@ -8,6 +8,8 @@ export * from './manifest.js';
 export * from './manifestClaim.js';
 export * from './onboardingTransaction.js';
 export * from './capabilities.js';
+// ADR-031 D5 — the design artifact a workspace's frontend capability follows.
+export * from './designArtifact.js';
 export * from './profileSuggest.js';
 export * from './fileWrite.js';
 export * from './repositoryScan.js';
@@ -22,6 +24,7 @@ export * from './personaRegistry.js';
 export * from './profilePlugins.js';
 export * from './activeTurnOrchestration.js';
 export * from './profileRecommendations.js';
+export * from './orchestrationPlanIdentity.js';
 export * from './profileOrchestrationDefaults.js';
 export * from './onboardingPreview.js';
 export * from './onboardingSources.js';

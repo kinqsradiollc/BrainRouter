@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadWorkspaceManifest } from './manifest.js';
 
 export const WORKSPACE_MEMORY_CAPTURE_MAX_TAGS = 32;
@@ -38,4 +40,25 @@ export function resolveWorkspaceMemoryCaptureContext(
   }
 
   return { memoryTags };
+}
+
+/**
+ * ADR-017 D3 — the active Project name for a workspace, from its
+ * `.brainrouter/project.json` marker (`{ "name": "acme-platform" }`); null when
+ * absent/invalid. The brain hashes this to a stable `project_tag` so recall can
+ * scope to a logical Project that spans several workspaces. Kept independent of
+ * the workspace manifest: a project marker can exist with no manifest, and must
+ * still tag captures.
+ */
+export function resolveWorkspaceProjectName(workspaceRoot: string): string | null {
+  if (!workspaceRoot) return null;
+  try {
+    const file = path.join(workspaceRoot, '.brainrouter', 'project.json');
+    if (!fs.existsSync(file)) return null;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const name = typeof parsed?.name === 'string' ? parsed.name.trim() : '';
+    return name.length > 0 ? name : null;
+  } catch {
+    return null;
+  }
 }

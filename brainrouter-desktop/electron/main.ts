@@ -48,6 +48,7 @@ import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from '
 import { createComputerUsePort } from './computerUse.js';
 import { hardenWebviewPreferences, isAllowedArtifactWebviewSrc } from './webviewPolicy.js';
 import { registerMeetingsBridge } from './meetingsBridge.js';
+import { registerMeetingCaptureBridge } from './meetingCaptureBridge.js';
 import { registerChatSyncBridge } from './chatSyncBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
@@ -57,6 +58,11 @@ import { isBrowserCommand } from './browser/protocol.js';
 import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.js';
 import { shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
+import {
+  broadcastActiveOrgSelection,
+  isActiveOrgSelectionQuery,
+  isInternalActiveOrgResult,
+} from './activeOrgHostBroadcast.js';
 import { initAutoUpdate } from './updater.js';
 import { configurePackagedSmokeProfile } from './packagedSmokeBootstrap.js';
 import { runPackagedBrowserSmokeIfRequested } from './packagedBrowserSmoke.js';
@@ -96,6 +102,7 @@ interface WinPool {
   agentBrowserControl: BrowserAgentControlManager;
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
+let activeOrgBroadcastSequence = 0;
 
 // D26-1 — appearance is a small app-level preference rather than renderer-only
 // state. Main resolves the native signals before BrowserWindow creation so the
@@ -411,6 +418,13 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       handleSecretRequest(host, msg);
       return;
     }
+    if (isInternalActiveOrgResult(msg)) {
+      const result = (msg as { event?: { ok?: boolean; error?: string } }).event;
+      if (result?.ok === false) {
+        console.error(`[brainrouter-desktop main] background host org rebind failed: ${result.error ?? 'unknown error'}`);
+      }
+      return;
+    }
     if (msg && typeof msg === 'object') {
       const ev = (msg as { event?: { kind?: string; sessionKey?: string } }).event;
       const kind = ev?.kind;
@@ -454,7 +468,7 @@ function retireHost(wp: WinPool, workspaceRoot: string): void {
   wp.hosts.delete(workspaceRoot);
   wp.lastSession.delete(workspaceRoot);
   try { host.postMessage({ kind: 'shutdown' }); } catch { /* already gone */ }
-  setTimeout(() => { try { host.kill(); } catch { /* already exited */ } }, 1_500);
+  setTimeout(() => { try { host.kill(); } catch { /* already exited */ } }, 5_000);
 }
 
 /**
@@ -586,7 +600,11 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     for (const [id, w] of wins) {
       if (w.win !== win) continue;
       w.agentBrowserControl.dispose();
-      for (const [root, host] of w.hosts) { w.retiring.add(root); try { host.postMessage({ kind: 'shutdown' }); } catch { /* gone */ } }
+      for (const [root, host] of w.hosts) {
+        w.retiring.add(root);
+        try { host.postMessage({ kind: 'shutdown' }); } catch { /* gone */ }
+        setTimeout(() => { try { host.kill(); } catch { /* already exited */ } }, 5_000);
+      }
       w.browser.dispose();
       wins.delete(id);
     }
@@ -606,7 +624,55 @@ app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
 // make the icon vanish). Assigned once the app is ready.
 let tray: ReturnType<typeof setupTray> = null;
 
+/**
+ * ADR-035 D6 — one process per `userData` directory, which Electron does not do
+ * by default.
+ *
+ * The meeting capture store, its boot recovery pass and the transcription
+ * supervisor all assume they are the only writer of that directory, and the
+ * supervisor is what now answers "is somebody recording into this capture?" —
+ * exactly, for every window, because every window is in this process. A SECOND
+ * process is the one case that answer cannot cover, and it is not hypothetical:
+ * the boot pass runs on every launch, so a second launch rewrote a live
+ * capture's record to `stopped` and adopted the chunk the first one had just
+ * written, after which every remaining chunk of that meeting failed `EEXIST` for
+ * ever. Detecting that from inside was what the previous round's lease was for,
+ * and a timing heuristic is a poor substitute for not having two writers.
+ *
+ * The lock is per user-data directory, so the browser e2e harness (which
+ * launches with its own `--user-data-dir`) is unaffected. A second launch hands
+ * its working directory to the primary instance and quits, which is what a
+ * person double-clicking the app a second time means by it.
+ */
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, _argv, workingDirectory) => {
+    // Deferred until ready: the primary instance may still be starting up when
+    // a second launch arrives, and a `BrowserWindow` before `ready` throws.
+    void app.whenReady().then(() => {
+      const root = workingDirectory || readRecents()[0] || process.cwd();
+      trustWorkspace(root);
+      // Focuses an existing window for that workspace, or opens one — the same
+      // call the first launch makes, so a second launch is not a second kind of
+      // start-up.
+      openWorkspaceWindow(root);
+      for (const wp of wins.values()) {
+        if (wp.win.isDestroyed()) continue;
+        if (wp.win.isMinimized()) wp.win.restore();
+      }
+    });
+  });
+}
+
 app.whenReady().then(() => {
+  // `app.quit()` above is a request, and `ready` can still arrive before it
+  // completes. A losing instance that went on to open a window and register the
+  // capture bridge would be the second writer of the `userData` directory this
+  // lock exists to prevent — for the seconds it took to die, which is long
+  // enough for a boot pass to run.
+  if (!isPrimaryInstance) return;
   appearancePreference = readAppearancePreference();
   nativeTheme.themeSource = nativeThemeSource(appearancePreference);
   nativeTheme.on('updated', publishAppearanceState);
@@ -649,6 +715,24 @@ app.whenReady().then(() => {
     if (!isAgentCommand(raw)) return;
     // Route to the ACTIVE workspace's host; background hosts keep running untouched.
     const host = wp.pool.activeRoot ? wp.hosts.get(wp.pool.activeRoot) : undefined;
+    if (isActiveOrgSelectionQuery(raw)) {
+      const selectedOrgId = typeof raw.args?.orgId === 'string' ? raw.args.orgId.trim() : '';
+      if (selectedOrgId) {
+        for (const candidate of wins.values()) {
+          if (!candidate.win.isDestroyed()) {
+            candidate.win.webContents.send('active-org-changed', { orgId: selectedOrgId });
+          }
+        }
+      }
+      const liveHosts = [...wins.values()].flatMap((candidate) => [...candidate.hosts.values()]);
+      broadcastActiveOrgSelection(
+        raw,
+        host,
+        liveHosts,
+        `${Date.now().toString(36)}-${++activeOrgBroadcastSequence}`,
+      );
+      return;
+    }
     host?.postMessage(raw);
   });
 
@@ -832,6 +916,10 @@ app.whenReady().then(() => {
     return { recents: markWorkspaceReordered(dragged, target) };
   });
   registerMeetingsBridge();
+  // ADR-035 D1 — meeting audio is written by main, which outlives a renderer
+  // crash. Registered here so the boot recovery pass runs before any window can
+  // press Record.
+  registerMeetingCaptureBridge();
   registerChatSyncBridge();
   ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
   ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());

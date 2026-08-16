@@ -128,6 +128,9 @@ test('sprint guard: a normal tool turn creates and captures the sprint cascade o
     const originalFetch = globalThis.fetch;
     const captured: Array<Record<string, unknown>> = [];
     let llmCalls = 0;
+    // ADR-034 D1's first-turn naming call is bounded, toolless, and outside the
+    // turn loop. Its own seam keeps `llmCalls` a pure turn-step count.
+    let titleCalls = 0;
     setCliKnobOverride(automationOverride(false, true));
     globalThis.fetch = (async () => {
       llmCalls += 1;
@@ -146,11 +149,16 @@ test('sprint guard: a normal tool turn creates and captures the sprint cascade o
     try {
       const agent = new Agent(mcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, sessionKey, silent: false,
+        sessionTitleModelCall: async () => {
+          titleCalls += 1;
+          return { content: 'Sprint intake cascade' };
+        },
       });
       await agent.runTurn('inspect current work', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       assert.equal(llmCalls, 2, 'sprint automation is deterministic and must not re-prompt');
+      assert.equal(titleCalls, 1, 'first-turn naming is the only model call outside the turn loop');
       assert.equal(listSprints(workspace).length, 1);
       const actions = captured
         .map((call) => (call.messages as Array<{ content: string }> | undefined)?.[1]?.content)
@@ -178,6 +186,9 @@ test('goal completion automation: completes the plan-anchored requirement once',
     const originalFetch = globalThis.fetch;
     const captured: Array<Record<string, unknown>> = [];
     let llmCalls = 0;
+    // See the sprint guard above: ADR-034 D1 naming gets its own seam so this
+    // count stays a turn-step count.
+    let titleCalls = 0;
     setCliKnobOverride(automationOverride(false, false));
     globalThis.fetch = (async () => {
       llmCalls += 1;
@@ -196,11 +207,16 @@ test('goal completion automation: completes the plan-anchored requirement once',
     try {
       const agent = new Agent(mcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, sessionKey, silent: false,
+        sessionTitleModelCall: async () => {
+          titleCalls += 1;
+          return { content: 'Tracing goal completion' };
+        },
       });
       await agent.runTurn('finish the goal', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       assert.equal(llmCalls, 2);
+      assert.equal(titleCalls, 1, 'first-turn naming is the only model call outside the turn loop');
       assert.equal(getRequirement(workspace, requirement.id)?.status, 'done');
       assert.equal(getRequirement(workspace, requirement.id)?.linkedMemoryIds.length, 1);
     } finally {

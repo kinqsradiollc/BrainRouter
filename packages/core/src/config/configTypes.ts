@@ -432,7 +432,43 @@ export interface TriggersCliKnobs {
   ciNudge?: boolean;
 }
 
+/**
+ * The signed-in BrainRouter account as it is stored under `cli.account`. Typed
+ * here because core now READS it: ADR-032 D8 keys the learned store on
+ * `(org_id, user_id)`, and this is the only place either id exists on a client.
+ *
+ * Who actually writes it, because the partition is only as good as its writer:
+ *
+ * - **`userId`** (with `url`/`displayName`/`email`) — the DESKTOP sign-in, at its
+ *   credential commit point.
+ * - **`orgId`** — the desktop workspace switcher, on the settled selection. It is
+ *   deliberately not captured at sign-in: the active org is a later choice the
+ *   user can change, and a value frozen at sign-in would be wrong from the first
+ *   switch onward.
+ * - **The CLI does not persist either id.** After connecting, it asks a hidden
+ *   host-only RPC for the user and org already pinned by the authenticated MCP
+ *   session, then pins those values directly on the Agent. If that proof is
+ *   unavailable for an authenticated BrainRouter profile, learning is disabled
+ *   for the launch instead of collapsing several accounts into `local`.
+ *
+ * Deliberately excludes the credential fields the desktop also stores under this
+ * block — secrets are write-only (`scrubCliSecrets`), and a type that names them
+ * invites a reader.
+ */
+export interface CliAccountIdentity {
+  /** Account API base the profile was issued by. */
+  url?: string;
+  /** Stable account id. Absent on a personal install that never signed in. */
+  userId?: string;
+  /** Active organization. Absent means personal, never "any org". */
+  orgId?: string;
+  displayName?: string;
+  email?: string;
+}
+
 export interface CliKnobs {
+  /** Who is signed in. See `CliAccountIdentity`. */
+  account?: CliAccountIdentity;
   // ---- planning / orchestration -----------------------------------------
   /**
    * NEXT-ACTION PLANNER (0.4.7). Default 'on'. A focused pre-flight reasoning
@@ -623,24 +659,44 @@ export interface CliKnobs {
    * settable per-launch via `--safe-mode` / `BRAINROUTER_SAFE_MODE`. Default false.
    */
   safeMode?: boolean;
-  /**
-   * ADR-027 D2 — which execution engine drives a turn.
-   *
-   * `loop` (default) is the established turn loop. `graph` runs the typed
-   * graph executor: conditional routing, checkpoints folded after each node,
-   * and human-in-the-loop interrupts that resume at the SUCCESSOR of the
-   * interrupting node.
-   *
-   * Both ship, and the choice is a setting rather than a migration, because
-   * the two are good at different things. The loop is better for open-ended
-   * conversational work where the next step genuinely depends on what the
-   * model just said. The graph is better for work with a known shape that
-   * must survive interruption — review pipelines, migrations, anything where
-   * "resume exactly once, after the effect that already happened" matters.
-   * Replacing one with the other would trade a real strength for a different
-   * real strength; carrying both costs a branch at dispatch.
+  /*
+   * `executionEngine` used to live here (ADR-027 D2, ADR-028 C1) and was
+   * retired 2026-08-12 along with the graph executor it selected. It is left
+   * documented rather than silently dropped because a config file in the wild
+   * may still carry it: the key is now ignored, and ignoring it changes
+   * nothing, because `graph` never ran a turn.
    */
-  executionEngine?: 'loop' | 'graph';
+  /**
+   * ADR-028 H3 — how eagerly a change becomes a stacked pull request.
+   *
+   * `auto` advises (plan shape, or diff size + separability); `always` stacks
+   * whenever the plan permits it; `never` opts out. Defaults to `auto`, because
+   * someone who has never used stacks should not have their first pull request
+   * silently become one.
+   */
+  stackingMode?: 'auto' | 'always' | 'never';
+  /**
+   * ADR-028 F7 — the comprehension review, which runs as a SUBAGENT.
+   *
+   * Writing questions about consequences and rejected alternatives needs a
+   * model reasoning over what it just built; a renderer heuristic would produce
+   * the trivia F7 refuses by name. `off` hides the panel entirely, because a
+   * surface that cannot do its job is worse than no surface.
+   */
+  comprehension?: {
+    enabled?: boolean;
+    /** Blank uses the session model. */
+    model?: string;
+    /** 3–7. Above that it is homework, not a review. */
+    questions?: number;
+  };
+  /**
+   * ADR-028 I1 — whether missing tooling installs itself on startup.
+   *
+   * `safe` (default) installs only what changes nothing outside the tool's own
+   * extension directory; `off` detects and offers without installing.
+   */
+  autoInstallTools?: 'off' | 'safe';
   /**
    * CC-CONFIG-A5 — provenance/attribution controls for generated commit + PR bodies.
    * `sessionUrl` (default true): include the BrainRouter provenance/session footer.
@@ -1206,8 +1262,9 @@ export interface ResolvedCliKnobs {
   enforceVersionRange: boolean;
   /** CC-CONFIG-A1 — safe/troubleshooting mode. */
   safeMode: boolean;
-  /** ADR-027 D2 — turn loop or typed graph executor. Both ship; this selects. */
-  executionEngine: 'loop' | 'graph';
+  stackingMode: 'auto' | 'always' | 'never';
+  comprehension: { enabled: boolean; model: string; questions: number };
+  autoInstallTools: 'off' | 'safe';
   /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */

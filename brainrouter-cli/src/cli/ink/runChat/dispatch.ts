@@ -1,9 +1,15 @@
+/**
+ * Serialized CLI input dispatcher for commands, skills, and model turns.
+ * Central dispatch preserves input order and ensures host commands are handled
+ * as commands rather than becoming model-visible conversation content.
+ */
 import type readline from 'node:readline';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/exec';
 import { SLASH_COMMANDS } from '@kinqs/brainrouter-core/command';
 import { parseBangCommand, parseNoteCommand } from '../../../runtime/exec/bangCommand.js';
+import { activeProjectName } from '../../../config/project.js';
 import { handleSlashCommand } from '../../prompt/repl.js';
 import {
   parseStackedSkillTokens,
@@ -33,11 +39,12 @@ export function installDispatch(ctx: RunChatContext): void {
     try {
       const captured = await captureConsoleOutput(() =>
         handleSlashCommand(command, args, agent, mcpClient, config, rl as readline.Interface, {
+          federation: ctx.federation,
           refreshPromptForMode: ctx.refreshFooter,
           replaceBanner: (text: string) => ctx.controller?.replaceBanner(text),
           isProcessing: () => ctx.isProcessing,
-          runAgentTurn: (prompt: string) => { void ctx.runChatTurn(prompt); },
-          runAgentTurnAsync: (prompt: string) => ctx.runChatTurn(prompt),
+          runAgentTurn: (prompt, options) => { void ctx.runChatTurn(prompt, options); },
+          runAgentTurnAsync: (prompt, options) => ctx.runChatTurn(prompt, options),
         }),
       );
       const output = captured.output.trimEnd();
@@ -124,9 +131,11 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
         return;
       }
       try {
+        const noteProjectName = activeProjectName(agent.workspaceRoot);
         const res = await mcpClient.callTool('memory_capture_turn', {
           sessionKey: agent.sessionKey,
           workspaceRoot: agent.workspaceRoot,
+          ...(noteProjectName ? { projectName: noteProjectName } : {}),
           messages: [
             { role: 'user', content: `[user note — remember this] ${noteCmd.note}`, timestamp: Date.now() },
             { role: 'assistant', content: 'Noted and saved to memory.', timestamp: Date.now() },

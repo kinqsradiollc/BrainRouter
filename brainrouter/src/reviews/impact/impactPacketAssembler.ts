@@ -7,24 +7,24 @@ import type {
   AssuranceImpactContext,
   AssuranceImpactPacket,
   AssuranceImpactPacketAssembly,
+  AssuranceImpactRelationship,
   AssuranceSourceLocation,
   AssuranceSourceToSinkPath,
 } from '@kinqs/brainrouter-types/review';
 import type { AssuranceOperationCancellation, RepositoryAssuranceImpactPort } from '@kinqs/brainrouter-core/review';
 import type { CheckoutIndexResolver, ParserBackedIndexResolver } from '../index/graphTypes.js';
+import type { RepositoryContextArtifact } from '../repository-context/contracts.js';
+import {
+  isSensitiveReviewSourcePath,
+  redactReviewSourceText,
+} from '../repository-context/source-safety.js';
 import { selectImpactGraph, type SecurityBoundaryClassifier, type SelectedImpactContext } from './graphTraversal.js';
 
 const DEFAULT_MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024;
 const SNIPPET_CONTEXT_LINES = 4;
 const SNIPPET_MAX_LINES = 80;
 
-export interface ImpactPacketArtifact {
-  ref: string;
-  revisionSha: string;
-  path: string;
-  content: string;
-  byteCount: number;
-}
+export type ImpactPacketArtifact = RepositoryContextArtifact;
 
 export interface ImpactPacketRedactionInput {
   policyId: string;
@@ -98,7 +98,10 @@ function truncateUtf8(value: string, maxBytes: number): { value: string; truncat
   };
 }
 
-function snippet(source: string, locations: AssuranceSourceLocation[]): string {
+function snippet(source: string, locations: AssuranceSourceLocation[]): {
+  content: string;
+  sourceLocation: AssuranceSourceLocation;
+} {
   const lines = source.split(/\r?\n/);
   const lineNumbers = locations.flatMap((location) => [location.line ?? 1, location.endLine ?? location.line ?? 1]);
   const first = Math.max(1, Math.min(...lineNumbers) - SNIPPET_CONTEXT_LINES);
@@ -106,10 +109,56 @@ function snippet(source: string, locations: AssuranceSourceLocation[]): string {
     lines.length,
     Math.min(Math.max(...lineNumbers) + SNIPPET_CONTEXT_LINES, first + SNIPPET_MAX_LINES - 1),
   );
-  return lines
+  const content = lines
     .slice(first - 1, last)
     .map((line, index) => `${String(first + index).padStart(5, ' ')} | ${line}`)
     .join('\n');
+  return {
+    content,
+    sourceLocation: {
+      path: locations[0]?.path ?? '',
+      line: first,
+      endLine: last,
+    },
+  };
+}
+
+function serializedSourceLocation(
+  path: string,
+  content: string,
+  fallback: AssuranceSourceLocation,
+): AssuranceSourceLocation {
+  const lineNumbers = [...content.matchAll(/^\s*(\d+)\s+\|/gm)].map((match) => Number(match[1]));
+  if (lineNumbers.length === 0) return { ...fallback, path };
+  return {
+    path,
+    line: lineNumbers[0],
+    endLine: lineNumbers[lineNumbers.length - 1],
+  };
+}
+
+function stableImpactRoles(roles: Iterable<AssuranceImpactRelationship>): AssuranceImpactRelationship[] {
+  return [...new Set(roles)].sort();
+}
+
+function impactRolesByPath(
+  changed: AssuranceSourceLocation,
+  context: readonly AssuranceImpactContext[],
+  sourceToSinkPaths: readonly AssuranceSourceToSinkPath[],
+): Map<string, AssuranceImpactRelationship[]> {
+  const roles = new Map<string, AssuranceImpactRelationship[]>();
+  const add = (path: string, role: AssuranceImpactRelationship): void => {
+    roles.set(path, stableImpactRoles([...(roles.get(path) ?? []), role]));
+  };
+  add(changed.path, 'changed');
+  for (const item of context) {
+    if (item.evidence.location?.path) add(item.evidence.location.path, item.relationship);
+  }
+  for (const path of sourceToSinkPaths) {
+    add(path.source.path, 'source_to_sink');
+    add(path.sink.path, 'source_to_sink');
+  }
+  return roles;
 }
 
 async function canceled(cancellation: AssuranceOperationCancellation | undefined): Promise<boolean> {
@@ -148,7 +197,14 @@ export class DeterministicImpactPacketAssembler implements RepositoryAssuranceIm
 
   resolveArtifact(ref: string): ImpactPacketArtifact | null {
     const artifact = this.artifacts.get(ref);
-    return artifact ? { ...artifact } : null;
+    return artifact
+      ? {
+          ...artifact,
+          anchorLocations: artifact.anchorLocations.map((location) => ({ ...location })),
+          sourceLocation: { ...artifact.sourceLocation },
+          roles: [...artifact.roles],
+        }
+      : null;
   }
 
   releaseArtifacts(refs: Iterable<string>): void {
@@ -285,10 +341,13 @@ export class DeterministicImpactPacketAssembler implements RepositoryAssuranceIm
           .filter((location): location is AssuranceSourceLocation => Boolean(location)),
         ...sourceToSinkPaths.flatMap((path) => [path.source, path.sink]),
       ]);
+      const rolesByPath = impactRolesByPath(changed, orderedContext, sourceToSinkPaths);
       const artifactResult = await this.buildArtifacts(
         input,
         packetId,
+        changed,
         locations,
+        rolesByPath,
         eligiblePaths,
         cancellation,
       );
@@ -364,7 +423,9 @@ export class DeterministicImpactPacketAssembler implements RepositoryAssuranceIm
   private async buildArtifacts(
     input: AssembleAssuranceImpactPacketsInput,
     packetId: string,
+    changed: AssuranceSourceLocation,
     locations: AssuranceSourceLocation[],
+    rolesByPath: ReadonlyMap<string, AssuranceImpactRelationship[]>,
     eligiblePaths: Set<string>,
     cancellation: AssuranceOperationCancellation | undefined,
   ): Promise<{
@@ -375,13 +436,29 @@ export class DeterministicImpactPacketAssembler implements RepositoryAssuranceIm
     if (locations.some((location) => !isEligibleInventoryPath(location.path, eligiblePaths))) {
       throw new Error('Impact packet context paths must belong to the exact source inventory.');
     }
+    const sensitivePaths = [...new Set(
+      locations.map((location) => location.path).filter(isSensitiveReviewSourcePath),
+    )].sort();
+    const safeLocations = locations.filter(
+      (location) => !isSensitiveReviewSourcePath(location.path),
+    );
     const grouped = new Map<string, AssuranceSourceLocation[]>();
-    for (const location of locations) {
+    for (const location of safeLocations) {
       grouped.set(location.path, [...(grouped.get(location.path) ?? []), location]);
     }
     const paths = [...grouped.keys()];
     const selectedPaths = paths.slice(0, input.limits.maxFilesPerPacket);
     const limitations: AssuranceCoverageLimitation[] = [];
+    if (sensitivePaths.length > 0) {
+      limitations.push(
+        limitation(
+          `${packetId}:sensitive-source-policy`,
+          'IMPACT_SENSITIVE_SOURCE_PATH',
+          `${sensitivePaths.length} credential-bearing or sensitive source paths were excluded by review policy.`,
+          sensitivePaths,
+        ),
+      );
+    }
     if (paths.length > selectedPaths.length) {
       limitations.push(
         limitation(
@@ -412,14 +489,16 @@ export class DeterministicImpactPacketAssembler implements RepositoryAssuranceIm
         );
         continue;
       }
-      const rawSnippet = snippet(source, grouped.get(path) ?? [{ path }]);
+      const selectedLocations = grouped.get(path) ?? [{ path }];
+      const rawSnippet = snippet(source, selectedLocations);
       let redacted: string;
       try {
         redacted = await this.options.redact({
           policyId: input.redactionPolicyId,
           path,
-          content: rawSnippet,
+          content: rawSnippet.content,
         });
+        redacted = redactReviewSourceText(redacted);
       } catch {
         throw new Error('Impact packet redaction failed.');
       }
@@ -440,7 +519,9 @@ export class DeterministicImpactPacketAssembler implements RepositoryAssuranceIm
       const artifact: ImpactPacketArtifact = {
         ref,
         revisionSha: input.revision.headSha,
-        path,
+        anchorLocations: [{ ...changed }],
+        sourceLocation: serializedSourceLocation(path, bounded.value, rawSnippet.sourceLocation),
+        roles: stableImpactRoles(rolesByPath.get(path) ?? ['reference']),
         content: bounded.value,
         byteCount: Buffer.byteLength(bounded.value),
       };

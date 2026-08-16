@@ -1,7 +1,18 @@
+/**
+ * Active-session MCP registration and presence tools.
+ *
+ * Authenticated tenant/claim context is server-owned, and every caller-supplied
+ * exact session key uses the same bounded control-free identity contract as
+ * local messaging before it can reach storage or connection ownership.
+ */
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../../memory/engine.js";
-import type { ActiveSessionUsage } from "@kinqs/brainrouter-types";
+import { requireSessionKey } from "@kinqs/brainrouter-core/session";
+import {
+  type ActiveSessionClaim,
+  type ActiveSessionUsage,
+} from "@kinqs/brainrouter-types";
 
 /**
  * Federation Stage 2 (0.4.0) — three MCP tools backing the active-session
@@ -54,6 +65,19 @@ function withUpdatedAt(
   return { ...usage, updatedAt: usage.updatedAt ?? fallback };
 }
 
+function connectionClaim(claimToken: string | undefined): ActiveSessionClaim | undefined {
+  if (!claimToken) return undefined;
+  return { token: claimToken };
+}
+
+const exactSessionKeySchema = z.string().superRefine((value, context) => {
+  try {
+    requireSessionKey(value);
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "invalid exact session key" });
+  }
+});
+
 // ── session_register ────────────────────────────────────────────────────
 
 export const sessionRegisterToolSchema = {
@@ -71,10 +95,19 @@ export const sessionRegisterToolSchema = {
       clientKind: {
         type: "string",
         description:
-          "Client self-report. Known kinds: `brainrouter-cli`, `claude-code`, `codex`, `cursor`, `gemini-cli`. Free-form; unknown values fall through.",
+          "Client self-report. First-party kinds identify BrainRouter CLI or Desktop; custom values remain display metadata only.",
       },
       workspaceRoot: { type: "string", description: "Absolute workspace path; '' when unknown." },
+      deviceId: { type: "string", description: "Persisted install UUID for display and route merging; never used as an address." },
+      title: { type: "string", description: "Human-readable discovery label; never used for routing." },
+      titleSource: { type: "string", enum: ["derived", "agent", "hook", "human"] },
+      state: { type: "string", enum: ["idle", "working", "waiting"] },
       metadata: { type: "object", description: "Free-form per-client metadata." },
+      messageWakeVersion: {
+        type: "number",
+        enum: [1],
+        description: "Advertise support for the ADR-034 message-id MCP wake notification.",
+      },
       usage: {
         type: "object",
         description: "Optional initial usage snapshot (tokens / USD).",
@@ -85,31 +118,129 @@ export const sessionRegisterToolSchema = {
 
 const sessionRegisterSchema = z.object({
   userId: z.string().optional(),
-  sessionKey: z.string().optional(),
+  sessionKey: exactSessionKeySchema.optional(),
   clientKind: z.string().optional(),
   workspaceRoot: z.string().optional(),
+  deviceId: z.string().uuid().optional(),
+  title: z.string().trim().min(1).max(60).refine((value) => !/[\r\n]/.test(value), "title must be one line").optional(),
+  titleSource: z.enum(["derived", "agent", "hook", "human"]).optional(),
+  state: z.enum(["idle", "working", "waiting"]).optional(),
   metadata: z.record(z.unknown()).optional(),
+  messageWakeVersion: z.literal(1).optional(),
   usage: usageSchema,
 });
 
-export async function handleSessionRegister(args: any, options?: { defaultUserId?: string }) {
+export async function handleSessionRegister(
+  args: any,
+  options?: {
+    defaultUserId?: string;
+    defaultOrgId?: string;
+    /** Server-minted identity for this MCP transport; never tool-controlled. */
+    claimToken?: string;
+    onRegistered?: (
+      orgId: string | null,
+      userId: string,
+      sessionKey: string,
+      messageWakeVersion: 1 | undefined,
+      registrationAttemptId: string,
+    ) => void | Promise<void>;
+    authorizeRegistration?: (
+      orgId: string | null,
+      userId: string,
+      sessionKey: string,
+      registrationAttemptId: string,
+    ) => boolean | Promise<boolean>;
+    onRegistrationFailed?: (
+      orgId: string | null,
+      userId: string,
+      sessionKey: string,
+      registrationAttemptId: string,
+    ) => void | Promise<void>;
+  },
+) {
+  let reserved: {
+    orgId: string | null;
+    userId: string;
+    sessionKey: string;
+    registrationAttemptId: string;
+    claimPersisted: boolean;
+  } | undefined;
   try {
     const params = sessionRegisterSchema.parse(args ?? {});
-    const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
+    const effectiveUserId = options?.defaultUserId ?? params.userId ?? "default";
+    const effectiveOrgId = options?.defaultOrgId?.trim() || null;
     const now = new Date().toISOString();
     const sessionKey = params.sessionKey ?? randomUUID();
-    const record = await memoryEngine.store.registerActiveSession({
+    const registrationAttemptId = randomUUID();
+    if (options?.authorizeRegistration && !await options.authorizeRegistration(
+      effectiveOrgId,
+      effectiveUserId,
       sessionKey,
+      registrationAttemptId,
+    )) {
+      throw new Error("this live session key is already bound to another MCP connection");
+    }
+    if (options?.authorizeRegistration) {
+      reserved = {
+        orgId: effectiveOrgId,
+        userId: effectiveUserId,
+        sessionKey,
+        registrationAttemptId,
+        claimPersisted: false,
+      };
+    }
+    const registration = {
+      sessionKey,
+      orgId: effectiveOrgId,
       userId: effectiveUserId,
       clientKind: params.clientKind ?? "http-unknown",
       workspaceRoot: params.workspaceRoot ?? "",
       startedAt: now,
       lastHeartbeatAt: now,
-      metadata: params.metadata ?? {},
+      metadata: {
+        ...(params.metadata ?? {}),
+        deviceId: params.deviceId,
+        title: params.title,
+        titleSource: params.titleSource,
+        state: params.state,
+        messageWakeVersion: params.messageWakeVersion,
+      },
       usage: withUpdatedAt(params.usage, now),
-    });
+    };
+    const claim = connectionClaim(options?.claimToken);
+    const record = claim
+      ? await memoryEngine.store.registerActiveSession(registration, claim)
+      : await memoryEngine.store.registerActiveSession(registration);
+    if (reserved) reserved.claimPersisted = options?.claimToken !== undefined;
+    await options?.onRegistered?.(
+      effectiveOrgId,
+      effectiveUserId,
+      record.sessionKey,
+      params.messageWakeVersion,
+      registrationAttemptId,
+    );
     return toolResult({ session: record });
   } catch (err) {
+    if (reserved) {
+      if (reserved.claimPersisted && options?.claimToken) {
+        try {
+          await memoryEngine.store.unregisterActiveSession(
+            reserved.userId,
+            reserved.sessionKey,
+            reserved.orgId,
+            options.claimToken,
+          );
+        } catch { /* the renewable lease remains the crash cleanup path */ }
+      }
+      try {
+        await options?.onRegistrationFailed?.(
+          reserved.orgId,
+          reserved.userId,
+          reserved.sessionKey,
+          reserved.registrationAttemptId,
+        );
+      } catch { /* the connection teardown remains a second cleanup path */ }
+    }
     return toolError("session_register", err);
   }
 }
@@ -136,21 +267,38 @@ export const sessionHeartbeatToolSchema = {
 
 const sessionHeartbeatSchema = z.object({
   userId: z.string().optional(),
-  sessionKey: z.string(),
+  sessionKey: exactSessionKeySchema,
   usage: usageSchema,
 });
 
-export async function handleSessionHeartbeat(args: any, options?: { defaultUserId?: string }) {
+export async function handleSessionHeartbeat(
+  args: any,
+  options?: {
+    defaultUserId?: string;
+    defaultOrgId?: string;
+    claimToken?: string;
+    authorizeSession?: (orgId: string | null, userId: string, sessionKey: string) => boolean | Promise<boolean>;
+  },
+) {
   try {
     const params = sessionHeartbeatSchema.parse(args ?? {});
-    const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
+    const effectiveUserId = options?.defaultUserId ?? params.userId ?? "default";
+    const effectiveOrgId = options?.defaultOrgId?.trim() || null;
+    if (options?.authorizeSession && !await options.authorizeSession(effectiveOrgId, effectiveUserId, params.sessionKey)) {
+      throw new Error("the authenticated MCP connection does not own this session key");
+    }
     const now = new Date().toISOString();
-    const updated = await memoryEngine.store.heartbeatActiveSession(
+    const claim = connectionClaim(options?.claimToken);
+    const heartbeatArgs = [
       effectiveUserId,
       params.sessionKey,
       now,
       withUpdatedAt(params.usage, now) ?? null,
-    );
+      effectiveOrgId,
+    ] as const;
+    const updated = claim
+      ? await memoryEngine.store.heartbeatActiveSession(...heartbeatArgs, claim)
+      : await memoryEngine.store.heartbeatActiveSession(...heartbeatArgs);
     return toolResult({ updated, at: now });
   } catch (err) {
     return toolError("session_heartbeat", err);
@@ -175,14 +323,35 @@ export const sessionUnregisterToolSchema = {
 
 const sessionUnregisterSchema = z.object({
   userId: z.string().optional(),
-  sessionKey: z.string(),
+  sessionKey: exactSessionKeySchema,
 });
 
-export async function handleSessionUnregister(args: any, options?: { defaultUserId?: string }) {
+export async function handleSessionUnregister(
+  args: any,
+  options?: {
+    defaultUserId?: string;
+    defaultOrgId?: string;
+    claimToken?: string;
+    onUnregistered?: (orgId: string | null, userId: string, sessionKey: string) => void | Promise<void>;
+    authorizeSession?: (orgId: string | null, userId: string, sessionKey: string) => boolean | Promise<boolean>;
+  },
+) {
   try {
     const params = sessionUnregisterSchema.parse(args ?? {});
-    const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
-    const deleted = await memoryEngine.store.unregisterActiveSession(effectiveUserId, params.sessionKey);
+    const effectiveUserId = options?.defaultUserId ?? params.userId ?? "default";
+    const effectiveOrgId = options?.defaultOrgId?.trim() || null;
+    if (options?.authorizeSession && !await options.authorizeSession(effectiveOrgId, effectiveUserId, params.sessionKey)) {
+      throw new Error("the authenticated MCP connection does not own this session key");
+    }
+    const deleted = options?.claimToken
+      ? await memoryEngine.store.unregisterActiveSession(
+          effectiveUserId,
+          params.sessionKey,
+          effectiveOrgId,
+          options.claimToken,
+        )
+      : await memoryEngine.store.unregisterActiveSession(effectiveUserId, params.sessionKey, effectiveOrgId);
+    try { await options?.onUnregistered?.(effectiveOrgId, effectiveUserId, params.sessionKey); } catch { /* best effort */ }
     return toolResult({ deleted });
   } catch (err) {
     return toolError("session_unregister", err);
@@ -223,12 +392,13 @@ const sessionListSchema = z.object({
   includeUsage: z.boolean().optional(),
 });
 
-export async function handleSessionList(args: any, options?: { defaultUserId?: string }) {
+export async function handleSessionList(args: any, options?: { defaultUserId?: string; defaultOrgId?: string }) {
   try {
     const params = sessionListSchema.parse(args ?? {});
-    const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
+    const effectiveUserId = options?.defaultUserId ?? params.userId ?? "default";
     const sessions = await memoryEngine.store.listActiveSessions({
       userId: effectiveUserId,
+      orgId: options?.defaultOrgId?.trim() || null,
       clientKind: params.clientKind,
       workspaceRoot: params.workspaceRoot,
       includeStale: params.includeStale,

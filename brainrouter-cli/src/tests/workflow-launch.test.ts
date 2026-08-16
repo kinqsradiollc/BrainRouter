@@ -6,17 +6,23 @@ import type { WorkflowRun } from '@kinqs/brainrouter-core/workflow';
 // ── buildWorkflowRunKickoff ──────────────────────────────────────────────────
 
 test('WF-LAUNCH buildWorkflowRunKickoff: valid template → run_workflow kickoff prompt', () => {
-  const r = buildWorkflowRunKickoff('compare', { targets: ['A', 'B'] });
+  const r = buildWorkflowRunKickoff('compare', { targets: ['A', 'B'] }, 'run-a1b2c3');
   assert.equal(r.ok, true);
   if (r.ok) {
     assert.match(r.prompt, /run_workflow/);
     assert.match(r.prompt, /template="compare"/);
     assert.match(r.prompt, /"targets":\["A","B"\]/);
+    assert.match(r.prompt, /slug="run-a1b2c3"/);
+    assert.deepEqual(r.toolArgs, {
+      template: 'compare',
+      templateArgs: { targets: ['A', 'B'] },
+      slug: 'run-a1b2c3',
+    });
   }
 });
 
 test('WF-LAUNCH buildWorkflowRunKickoff: empty template → usage error (lists templates)', () => {
-  const r = buildWorkflowRunKickoff('', {});
+  const r = buildWorkflowRunKickoff('', {}, 'run-a1b2c3');
   assert.equal(r.ok, false);
   if (!r.ok) {
     assert.match(r.error, /Usage/);
@@ -25,9 +31,26 @@ test('WF-LAUNCH buildWorkflowRunKickoff: empty template → usage error (lists t
 });
 
 test('WF-LAUNCH buildWorkflowRunKickoff: invalid args → template error, no launch', () => {
-  const r = buildWorkflowRunKickoff('compare', { targets: ['only-one'] }); // needs ≥2
+  const r = buildWorkflowRunKickoff('compare', { targets: ['only-one'] }, 'run-a1b2c3'); // needs ≥2
   assert.equal(r.ok, false);
   if (!r.ok) assert.match(r.error, /targets/);
+});
+
+test('WF-LAUNCH buildWorkflowRunKickoff: oversized template fan-out is rejected before launch', () => {
+  const r = buildWorkflowRunKickoff(
+    'compare',
+    { targets: Array.from({ length: 17 }, (_, index) => `target-${index}`) },
+    'run-a1b2c3',
+  );
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.error, /16-child limit/i);
+});
+
+test('WF-LAUNCH buildWorkflowRunKickoff: malformed or oversized slug fails before launch', () => {
+  for (const slug of ['Uppercase', 'run_with_underscore', `run-${'a'.repeat(45)}`]) {
+    const r = buildWorkflowRunKickoff('compare', { targets: ['A', 'B'] }, slug);
+    assert.equal(r.ok, false, `slug ${slug} must be rejected`);
+  }
 });
 
 // ── parseTemplateArgs ────────────────────────────────────────────────────────

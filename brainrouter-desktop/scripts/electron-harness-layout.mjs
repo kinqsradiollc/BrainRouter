@@ -33,5 +33,9 @@ export function createElectronHarnessEnvironment(layout, baseEnvironment = proce
     USERPROFILE: layout.home,
     BRAINROUTER_HOME: layout.state,
     BRAINROUTER_DESKTOP_WORKSPACE: layout.workspace,
+    // Qualification may exercise an external-link control, but a hosted runner
+    // must never launch a person's browser. The host still validates and
+    // acknowledges the HTTPS target; it only suppresses the OS side effect.
+    BRAINROUTER_ELECTRON_HARNESS: '1',
   };
 }

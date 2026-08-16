@@ -38,6 +38,16 @@ function recallScope(userParam: string, orgParam: string): string {
     )))`;
 }
 
+/** Learned records are tenant projections, not ordinary user-owned memories.
+ * A user can belong to several orgs, so the owner predicate alone is not an
+ * authorization boundary for these rows. With no pinned org, fail closed by
+ * excluding learned projections entirely. */
+function learnedOrgScope(orgParam?: string): string {
+  return orgParam
+    ? `(r.metadata_json::jsonb -> 'learned' IS NULL OR r.org_id = ${orgParam})`
+    : `r.metadata_json::jsonb -> 'learned' IS NULL`;
+}
+
 export async function searchCognitiveFts(exec: Executor, userId: string, query: string, limit: number, orgId?: string): Promise<CognitiveFtsResult[]> {
   if (!ftsHasTerms(query)) return [];
   // ADR-010 P5b — when the caller's org is known, ALSO retrieve org-shared records
@@ -52,7 +62,8 @@ export async function searchCognitiveFts(exec: Executor, userId: string, query: 
             r.session_key, r.timestamp_str, r.created_time, r.citation_count,
             ts_rank(r.content_tsv, plainto_tsquery('english', $2)) AS rank
        FROM cognitive_records r
-      WHERE ${scope} AND r.content_tsv @@ plainto_tsquery('english', $2)
+      WHERE ${scope} AND ${learnedOrgScope(orgId ? "$4" : undefined)}
+        AND r.content_tsv @@ plainto_tsquery('english', $2)
         AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY rank DESC
       LIMIT $3`,
@@ -78,20 +89,29 @@ export async function searchCognitiveFts(exec: Executor, userId: string, query: 
   });
 }
 
-export async function searchCognitiveFtsAsOf(exec: Executor, userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]> {
+export async function searchCognitiveFtsAsOf(
+  exec: Executor,
+  userId: string,
+  query: string,
+  limit: number,
+  asOf: string,
+  orgId?: string,
+): Promise<CognitiveFtsResult[]> {
   if (!ftsHasTerms(query)) return [];
+  const params = orgId ? [userId, query, asOf, limit, orgId] : [userId, query, asOf, limit];
   const rows = await exec.rows<any>(
     `SELECT r.record_id, r.user_id, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
             r.session_key, r.timestamp_str, r.created_time,
             ts_rank(r.content_tsv, plainto_tsquery('english', $2)) AS rank
        FROM cognitive_records r
-      WHERE r.user_id = $1 AND r.content_tsv @@ plainto_tsquery('english', $2)
+      WHERE r.user_id = $1 AND ${learnedOrgScope(orgId ? "$5" : undefined)}
+        AND r.content_tsv @@ plainto_tsquery('english', $2)
         AND r.created_time <= $3
         AND (r.invalid_at IS NULL OR r.invalid_at > $3)
         AND r.archived = 0
       ORDER BY rank DESC
       LIMIT $4`,
-    [userId, query, asOf, limit],
+    params,
   );
   return rows.map((r) => ({
     record_id: r.record_id, user_id: r.user_id, content: r.content, type: r.type,
@@ -140,7 +160,8 @@ export async function searchCognitiveVec(exec: Executor, vec: VecContext, userId
               r.session_key, r.timestamp_str, r.created_time
          FROM cognitive_vec v
          JOIN cognitive_records r ON v.record_id = r.record_id
-        WHERE ${scope} AND r.invalid_at IS NULL AND r.archived = 0
+        WHERE ${scope} AND ${learnedOrgScope(orgId ? "$4" : undefined)}
+          AND r.invalid_at IS NULL AND r.archived = 0
         ORDER BY v.embedding <=> $1::vector
         LIMIT $3`,
       params,

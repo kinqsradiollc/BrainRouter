@@ -18,27 +18,41 @@
  * When no `spawnAgent` factory is supplied (unit tests), the core degrades to
  * the original single-agent behavior — including interrupt-and-defer for a
  * switch requested mid-turn — because one agent can't safely run two turns.
+ *
+ * ADR-040 A40-2 — reviewed durable launches have a host-only seam. The
+ * renderer cannot mint or transport authority: this module asks the active
+ * Agent for an opaque intent and returns only that same object to its runTurn.
  */
+import { randomUUID } from 'node:crypto';
 import {
   createCallbackBridge,
   InteractionBroker,
   isAgentCommand,
+  toExplicitConfirmDecision,
   type AgentCommand,
   type AgentEvent,
   type AgentEventMessage,
   type AgentImage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
+import type { ExecutionIntentHandle } from '@kinqs/brainrouter-types/agent';
 import {
   InputQueue,
   drainExternalSteering,
+  normalizeExplicitSessionTitle,
   pendingCompletionCount,
   peekCompletions,
   subscribeCompletions,
   subscribeExternalSteering,
+  type LocalSessionMessage,
+  type PeerSessionSender,
   type SteeringInput,
 } from '@kinqs/brainrouter-core/session';
 import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
+import {
+  captureReviewedExecutionRequest,
+  type ReviewedExecutionRequest,
+} from './host/reviewedExecution.js';
 
 /**
  * The slice of the CLI Agent the host needs — structural, so tests can fake
@@ -49,15 +63,39 @@ import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 export interface AgentLike {
   sessionKey: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[] }): Promise<string>;
+  runTurn(prompt: string, callbacks: any, opts?: {
+    hiddenPrompt?: boolean;
+    images?: AgentImage[];
+    preplanned?: boolean;
+    executionIntent?: ExecutionIntentHandle;
+  }): Promise<string>;
+  /** ADR-040 A40-2 — only trusted hosts may ask Core to mint this capability. */
+  issueExecutionIntent?(input: {
+    source: 'reviewed-ui';
+    toolName: 'run_workflow' | 'run_workflow_graph';
+    args: Record<string, unknown>;
+    requestId?: string;
+  }): Promise<ExecutionIntentHandle>;
+  /** Host-only revocation for pending or active reviewed execution authority. */
+  revokeReviewedExecutionAuthority?(): void;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
-  requestSteer?(text: string, options?: { id?: string; source?: SteeringInput['source'] }): SteeringInput;
+  requestSteer?(text: string, options?: {
+    id?: string;
+    source?: 'user' | 'extension';
+    createdAt?: number;
+  }): SteeringInput;
+  requestPeerSessionSteer?(
+    message: LocalSessionMessage,
+    senderOverrides?: Partial<Omit<PeerSessionSender, 'sessionKey' | 'deviceId' | 'sentAt'>>,
+  ): SteeringInput;
   consumePendingSteering?(): SteeringInput[];
   readonly pendingSteeringCount?: number;
   // DESK-3 — session lifecycle + model control (all present on the real Agent).
   clearHistory?(): void;
   resetSessionCounters?(): void;
+  /** ADR-032 D5 — the bounded session-end checkpoint. */
+  endSession?(): Promise<void> | void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadHistory?(entries: any[]): number;
   setModel?(model: string): void;
@@ -65,6 +103,8 @@ export interface AgentLike {
    *  endpoint/key), not just the model string. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setLLMConfig?(config: any): void;
+  /** ADR-032 D8 — host-authenticated learning identity applied only between turns. */
+  setLearningBinding?(tenant: { userId: string; orgId: string | null }, enabled: boolean): void;
   getModel?(): string;
   /** DESK-4 — cumulative session token usage (mirrors the CLI's /tokens). */
   sessionUsage?: { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number };
@@ -78,7 +118,7 @@ export type QueryHandler = (args: Record<string, unknown>) => Promise<unknown> |
  * its `<workspaceHash>:new-…` key has no transcript yet. Resuming such a key
  * must self-heal (create the empty session) rather than hard-error — whereas a
  * missing transcript for a SAVED key is a real error. `applyNew` mints keys as
- * `<hash>:new-<base36 ts>`, so the session-name segment (after the first ':')
+ * `<hash>:new-<uuid>`, so the session-name segment (after the first ':')
  * starting with `new-` is the unsaved-new marker.
  */
 export function isUnsavedNewSessionKey(key: string): boolean {
@@ -104,6 +144,11 @@ export function createBrokerPort(
       const r = await response;
       return r.type === 'confirm' ? r.approved : false;
     },
+    async confirmExplicit(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }) {
+      const { request, response } = broker.request({ type: 'confirm', ...req }, { timeoutMs });
+      emit({ kind: 'interaction-request', request });
+      return toExplicitConfirmDecision(await response);
+    },
     async choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null> {
       const { request, response } = broker.request({ type: 'choice', ...req }, { timeoutMs });
       emit({ kind: 'interaction-request', request });
@@ -116,6 +161,37 @@ export function createBrokerPort(
 export interface HostCore {
   /** Feed one decoded wire message in; invalid shapes are ignored (logged via status). */
   handle(message: unknown): Promise<void>;
+  /**
+   * ADR-040 A40-2 — trusted Electron-host entrypoint for a launch already
+   * reviewed by a host-owned UI. This is deliberately absent from AgentCommand
+   * and preload, so no renderer message can request or receive bearer proof.
+   */
+  startReviewedExecution(input: ReviewedExecutionRequest): Promise<void>;
+  /**
+   * Revoke reviewed authority before a host-side runtime policy mutation. The
+   * workspace scope covers background sessions whose execution reads the same
+   * workspace policy files.
+   */
+  revokeReviewedExecutionAuthority(scope: 'active-session' | 'workspace'): void;
+  /**
+   * ADR-032 D8 — replace every pooled Agent across an authenticated tenant
+   * boundary. The callback runs only after old turns and session checkpoints
+   * have drained; it must reconnect tenant-bound transports before returning
+   * the first Agent for the new tenant.
+   */
+  rebindTenant(createReplacement: (sessionKey: string) => Promise<AgentLike> | AgentLike): Promise<void>;
+  /** Apply a verified learning identity after all active turns settle, without
+   * interrupting them or replacing/clearing their conversation state. */
+  bindLearning(
+    tenant: { userId: string; orgId: string | null },
+    enabled: boolean,
+  ): Promise<void>;
+  /** Admit already-authorized peer content into the addressed Agent's typed
+   * safe-boundary steering queue. The peer text is never started as a user turn. */
+  deliverPeerMessage(
+    message: LocalSessionMessage,
+    sender?: PeerSessionSender,
+  ): { accepted: boolean; state: 'steered' | 'not_found' | 'queue_full' | 'unavailable'; reason?: string };
   /** Pending interaction count (exposed for tests + drain-on-shutdown). */
   readonly broker: InteractionBroker;
 }
@@ -147,6 +223,17 @@ export function createHostCore(input: {
   /** DESK-5v — notified whenever the viewed/active agent changes, so the host's
    * read-only queries can report the agent the user is actually looking at. */
   onActiveAgentChange?: (agent: AgentLike) => void;
+  /** Participant-discovery lifecycle. Hosts may advertise only the active
+   * Agent, but its activity must remain accurate while turns and approvals run. */
+  onSessionActivityChange?: (sessionKey: string, state: 'idle' | 'working' | 'waiting') => void;
+  /** A successfully persisted shared title is discovery metadata too. */
+  onSessionTitle?: (sessionKey: string, title: string, source: 'agent' | 'hook' | 'human' | 'derived') => void;
+  /** Receipt transition seam: peer persistence becomes `applied` only after
+   * Core has appended the observation at an actual model-safe boundary. */
+  onPeerSteerApplied?: (sessionKey: string, input: { id: string; source: 'peer-session' }) => void;
+  /** Core revalidates age at the safe boundary; expired content never applies
+   * and the host must publish the exact terminal sender receipt. */
+  onPeerSteerExpired?: (sessionKey: string, input: { id: string; source: 'peer-session' }) => void;
   send: (msg: AgentEventMessage) => void;
   /**
    * Verification scoping — observe EVERY event a main-session turn emits, tagged
@@ -187,8 +274,8 @@ export function createHostCore(input: {
   persistProviderModel?: (providerName: string, model: string) => void;
   /** DESK-3 — share the broker with the agent's InteractionPort adapter. */
   broker?: InteractionBroker;
-  /** Called on `shutdown` after pending interactions are dismissed. */
-  onShutdown?: () => void;
+  /** Called on `shutdown` after pooled sessions finish their bounded checkpoints. */
+  onShutdown?: () => Promise<void> | void;
   /** Fail-closed policy check immediately before a turn starts. Returning a
    * message blocks execution and surfaces that recovery prompt to the user. */
   validateTurn?: (sessionKey: string) => Promise<string | null> | string | null;
@@ -206,6 +293,81 @@ export function createHostCore(input: {
   const pool = new Map<string, Runtime>();
   pool.set(input.agent.sessionKey, { agent: input.agent, running: false, queue: new InputQueue() });
   let activeKey = input.agent.sessionKey;
+  let shuttingDown = false;
+  let tenantRebinding = false;
+  let sessionMutationTail: Promise<void> = Promise.resolve();
+  let queuedSessionMutations = 0;
+  // ADR-040 A40-2 — identity equality is insufficient after A→B→A or after
+  // another same-session turn. Every authority-changing reservation/request
+  // advances this process-local fence; reviewed launches must observe one
+  // uninterrupted generation from issuance through their own turn reservation.
+  let runtimeAuthorityGeneration = 0n;
+  const advanceRuntimeAuthorityGeneration = (): bigint => (
+    runtimeAuthorityGeneration += 1n
+  );
+
+  function runSessionMutation<T>(operation: () => Promise<T>): Promise<T> {
+    queuedSessionMutations += 1;
+    advanceRuntimeAuthorityGeneration();
+    const guarded = async (): Promise<T> => {
+      try {
+        return await operation();
+      } finally {
+        queuedSessionMutations -= 1;
+      }
+    };
+    const run = sessionMutationTail.then(guarded, guarded);
+    sessionMutationTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  // ADR-032 D5 — a session checkpoint belongs to the Agent + sessionKey pair
+  // that existed when the drain started. Retargeting the Agent before awaiting
+  // it would let the checkpoint read the next session's key/tenant. Background
+  // evictions are removed from the pool immediately, so their promises live in
+  // this independent registry and shutdown can still await them before MCP close.
+  const drainsByAgent = new WeakMap<AgentLike, Map<string, Promise<void>>>();
+  const pendingDrains = new Set<Promise<void>>();
+  const drainsBySession = new Map<string, Set<Promise<void>>>();
+
+  function trackSessionDrain(agent: AgentLike): Promise<void> {
+    const sessionKey = agent.sessionKey;
+    const bySession = drainsByAgent.get(agent) ?? new Map<string, Promise<void>>();
+    const existing = bySession.get(sessionKey);
+    if (existing) return existing;
+    let work: Promise<void>;
+    try {
+      work = Promise.resolve(agent.endSession?.()).then(() => undefined, () => undefined);
+    } catch {
+      work = Promise.resolve();
+    }
+    let tracked!: Promise<void>;
+    tracked = work.finally(() => {
+      pendingDrains.delete(tracked);
+      const agentDrains = drainsByAgent.get(agent);
+      if (agentDrains?.get(sessionKey) === tracked) agentDrains.delete(sessionKey);
+      if (agentDrains?.size === 0) drainsByAgent.delete(agent);
+      const sessionDrains = drainsBySession.get(sessionKey);
+      sessionDrains?.delete(tracked);
+      if (sessionDrains?.size === 0) drainsBySession.delete(sessionKey);
+    });
+    bySession.set(sessionKey, tracked);
+    drainsByAgent.set(agent, bySession);
+    pendingDrains.add(tracked);
+    const sessionDrains = drainsBySession.get(sessionKey) ?? new Set<Promise<void>>();
+    sessionDrains.add(tracked);
+    drainsBySession.set(sessionKey, sessionDrains);
+    return tracked;
+  }
+
+  async function awaitSessionDrains(sessionKey: string): Promise<void> {
+    const drains = [...(drainsBySession.get(sessionKey) ?? [])];
+    if (drains.length) await Promise.allSettled(drains);
+  }
+
+  async function awaitAllDrains(): Promise<void> {
+    while (pendingDrains.size) await Promise.allSettled([...pendingDrains]);
+  }
 
   // Control/status events (interrupt notices, model changes) belong to whatever
   // session the user is currently looking at.
@@ -219,18 +381,128 @@ export function createHostCore(input: {
 
   // DESK-5q (retained for the single-agent path) — a switch requested while the
   // ONLY agent is busy is queued here and applied once its turn unwinds.
-  let pendingSwitch: (() => void) | null = null;
+  let pendingSwitch: (() => Promise<void>) | null = null;
+
+  interface ReviewedExecutionLaunch {
+    agent: AgentLike;
+    handle: ExecutionIntentHandle;
+    authorityGeneration: bigint;
+  }
+
+  const reviewedExecutionIsCurrent = (
+    key: string,
+    launch: ReviewedExecutionLaunch,
+    expectedGeneration = launch.authorityGeneration,
+  ): boolean => (
+    !shuttingDown
+    && !tenantRebinding
+    && pendingSwitch === null
+    && runtimeAuthorityGeneration === expectedGeneration
+    && activeKey === key
+    && pool.get(key)?.agent === launch.agent
+    && launch.agent.sessionKey === key
+  );
+
+  const cancelReviewedExecution = (key: string): void => {
+    stamp(key, {
+      kind: 'turn-error',
+      message: 'Reviewed execution canceled because its session or runtime authority changed before launch.',
+    });
+  };
+
+  const revokeReviewedExecutionAuthority = (
+    scope: 'active-session' | 'workspace',
+  ): void => {
+    // Rotate the host-side pre-launch fence even when a test/older Agent does
+    // not expose Core's revocation seam. Core then retires pending handles and
+    // interrupts only reviewed turns that already consumed their launch.
+    advanceRuntimeAuthorityGeneration();
+    const agents = scope === 'workspace'
+      ? [...new Set([...pool.values()].map((runtime) => runtime.agent))]
+      : [pool.get(activeKey)?.agent].filter((agent): agent is AgentLike => !!agent);
+    for (const pooled of agents) pooled.revokeReviewedExecutionAuthority?.();
+  };
 
   let deliverySequence = 0;
   const nextDeliveryId = (): string => `delivery-${Date.now().toString(36)}-${++deliverySequence}`;
+  const peerWakeScheduled = new Set<string>();
+
+  async function abandonReservedReviewedExecution(key: string, runtime: Runtime): Promise<void> {
+    runtime.running = false;
+    cancelReviewedExecution(key);
+    const next = shuttingDown || tenantRebinding ? undefined : runtime.queue.dequeue();
+    const deferredSwitch = pendingSwitch;
+    pendingSwitch = null;
+    if (deferredSwitch && !shuttingDown) await deferredSwitch();
+    if (
+      !next
+      && key !== activeKey
+      && input.spawnAgent
+      && runtime.queue.list().length === 0
+      && (runtime.agent.pendingSteeringCount ?? 0) === 0
+      && !peerWakeScheduled.has(key)
+      && pool.get(key) === runtime
+    ) {
+      pool.delete(key);
+      void trackSessionDrain(runtime.agent);
+    }
+    if (next) {
+      setImmediate(() => {
+        void startTurnForKey(key, next.text, false, undefined, {
+          id: next.deliveryId ?? nextDeliveryId(),
+          mode: next.deliveryMode ?? 'queue',
+          source: next.deliverySource ?? 'user',
+          ...(next.deliverySender ? { sender: next.deliverySender } : {}),
+        });
+      });
+    }
+  }
+
+  function schedulePeerWake(key: string): void {
+    if (peerWakeScheduled.has(key) || shuttingDown || tenantRebinding) return;
+    peerWakeScheduled.add(key);
+    setImmediate(() => {
+      peerWakeScheduled.delete(key);
+      const runtime = pool.get(key);
+      if (!runtime || runtime.running || shuttingDown || tenantRebinding) return;
+      // This host-owned prompt is hidden and contains no peer text. The Agent
+      // consumes the typed peer observation at beginLoop's safe boundary.
+      void startTurnForKey(
+        key,
+        'Continue after admitting the pending peer-session observation.',
+        true,
+        undefined,
+        undefined,
+        false,
+      );
+    });
+  }
 
   async function startTurnForKey(
     key: string,
     prompt: string,
     hidden?: boolean,
     images?: AgentImage[],
-    delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source'] },
+    delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source']; sender?: PeerSessionSender },
+    suppressTurnStart = false,
+    reviewedExecution?: ReviewedExecutionLaunch,
   ): Promise<void> {
+    // Preserve the long-standing synchronous `running` reservation when there
+    // is no session mutation. Queue/Steer commands may arrive in the same tick
+    // as start-turn and must see the latch immediately.
+    if (queuedSessionMutations > 0) await sessionMutationTail;
+    if (shuttingDown) {
+      if (reviewedExecution) cancelReviewedExecution(key);
+      return;
+    }
+    if (tenantRebinding) {
+      stamp(key, { kind: 'turn-error', message: 'Wait for the organization switch to finish before sending.' });
+      return;
+    }
+    if (reviewedExecution && !reviewedExecutionIsCurrent(key, reviewedExecution)) {
+      cancelReviewedExecution(key);
+      return;
+    }
     const rt = pool.get(key);
     if (!rt) { stamp(key, { kind: 'turn-error', message: 'No active session to run in.' }); return; }
     if (rt.running) {
@@ -240,14 +512,34 @@ export function createHostCore(input: {
     // Reserve the session before an async policy refresh so a second send cannot
     // race through validation and start another turn.
     rt.running = true;
+    const reservationGeneration = advanceRuntimeAuthorityGeneration();
+    if (
+      reviewedExecution
+      && (
+        reservationGeneration !== reviewedExecution.authorityGeneration + 1n
+        || !reviewedExecutionIsCurrent(key, reviewedExecution, reservationGeneration)
+      )
+    ) {
+      await abandonReservedReviewedExecution(key, rt);
+      return;
+    }
+    let policyError: string | null;
     try {
-      const policyError = input.validateTurn ? await input.validateTurn(key) : null;
-      if (policyError) { rt.running = false; stamp(key, { kind: 'turn-error', message: policyError }); return; }
+      policyError = input.validateTurn ? await input.validateTurn(key) : null;
     } catch (error) {
+      if (reviewedExecution && !reviewedExecutionIsCurrent(key, reviewedExecution, reservationGeneration)) {
+        await abandonReservedReviewedExecution(key, rt);
+        return;
+      }
       rt.running = false;
       stamp(key, { kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
       return;
     }
+    if (reviewedExecution && !reviewedExecutionIsCurrent(key, reviewedExecution, reservationGeneration)) {
+      await abandonReservedReviewedExecution(key, rt);
+      return;
+    }
+    if (policyError) { rt.running = false; stamp(key, { kind: 'turn-error', message: policyError }); return; }
     // DESK-6t — LAZY HISTORY lands here: if this session was resumed for viewing
     // and never loaded into the agent, load its transcript NOW (before the turn)
     // so the model has the full conversation. Hidden behind LLM latency.
@@ -256,6 +548,7 @@ export function createHostCore(input: {
       if (entries.length) rt.agent.loadHistory?.(entries);
       rt.pendingHistoryKey = undefined;
     }
+    input.onSessionActivityChange?.(key, 'working');
     // Capture the session this turn belongs to: the user may switch away while
     // it runs, but every event it emits stays tagged with ITS key so the
     // renderer routes it to the right chat (and never the one now on screen).
@@ -265,25 +558,103 @@ export function createHostCore(input: {
       // with the turn's own sessionKey) to track build/test/lint as durable
       // tasks; never let an observer error break the turn.
       try { input.observeTurnEvent?.(sk, event); } catch { /* advisory */ }
+      if (event.kind === 'session-title') {
+        try { input.onSessionTitle?.(sk, event.title, event.source); } catch { /* advisory */ }
+      }
       stamp(sk, event);
     };
-    const turnCallbacks = createCallbackBridge(turnEmit) as unknown as Record<string, unknown>;
-    if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'running', text: prompt, source: delivery.source });
-    turnEmit({ kind: 'turn-start', prompt });
+    const turnCallbacks = createCallbackBridge(turnEmit);
+    const emitSteerApplied = turnCallbacks.onSteerApplied;
+    turnCallbacks.onSteerApplied = (steering, receipt) => {
+      emitSteerApplied(steering, receipt);
+      if (steering.source === 'peer-session') {
+        try {
+          input.onPeerSteerApplied?.(sk, { id: steering.id, source: 'peer-session' });
+        } catch { /* receipt persistence is advisory to the turn */ }
+      }
+    };
+    const emitSteerExpired = turnCallbacks.onSteerExpired;
+    turnCallbacks.onSteerExpired = (steering) => {
+      emitSteerExpired(steering);
+      try {
+        input.onPeerSteerExpired?.(sk, { id: steering.id, source: 'peer-session' });
+      } catch { /* receipt persistence is advisory to the turn */ }
+    };
+    if (delivery) turnEmit({
+      kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
+      state: 'running', text: prompt, source: delivery.source,
+      ...(delivery.sender ? { sender: delivery.sender } : {}),
+    });
+    if (!suppressTurnStart) turnEmit({ kind: 'turn-start', prompt });
     try {
-      const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden, images });
+      const answer = await rt.agent.runTurn(prompt, turnCallbacks, {
+        hiddenPrompt: hidden,
+        images,
+        ...(reviewedExecution ? { executionIntent: reviewedExecution.handle } : {}),
+      });
       turnEmit({ kind: 'turn-complete', answer });
-      if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'completed', text: prompt, source: delivery.source });
+      if (delivery) turnEmit({
+        kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
+        state: 'completed', text: prompt, source: delivery.source,
+        ...(delivery.sender ? { sender: delivery.sender } : {}),
+      });
       const u = rt.agent.sessionUsage;
       if (u) turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns, cachedTokens: u.cachedTokens });
     } catch (err) {
       turnEmit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
-      if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'canceled', text: prompt, source: delivery.source });
+      if (delivery) turnEmit({
+        kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
+        state: 'canceled', text: prompt, source: delivery.source,
+        ...(delivery.sender ? { sender: delivery.sender } : {}),
+      });
     } finally {
       rt.running = false;
+      input.onSessionActivityChange?.(key, 'idle');
       // A steer accepted during late turn-finalization missed the last model
       // boundary. Convert it into a normal queued follow-up instead of losing it.
       for (const pending of rt.agent.consumePendingSteering?.() ?? []) {
+        if (shuttingDown || tenantRebinding) {
+          turnEmit({
+            kind: 'input-delivery',
+            id: pending.id,
+            mode: 'steer',
+            state: 'canceled',
+            text: pending.text,
+            source: pending.source,
+            ...(pending.source === 'peer-session' ? { sender: pending.sender } : {}),
+          });
+          continue;
+        }
+        if (pending.source === 'peer-session') {
+          // It arrived after the turn's final safe seam. Put the same typed
+          // observation back and wake a hidden turn; never demote peer text to
+          // InputQueue, whose entries are ordinary user follow-ups.
+          if (!rt.agent.requestPeerSessionSteer || !pending.sender.deviceId) {
+            turnEmit({
+              kind: 'input-delivery', id: pending.id, mode: 'steer', state: 'canceled',
+              text: pending.text, source: pending.source, sender: pending.sender,
+            });
+            continue;
+          }
+          rt.agent.requestPeerSessionSteer({
+            id: pending.id,
+            senderSessionKey: pending.sender.sessionKey,
+            senderDeviceId: pending.sender.deviceId,
+            targetSessionKey: sk,
+            text: pending.text,
+            createdAt: pending.sender.sentAt ?? pending.createdAt,
+            receivedAt: pending.createdAt,
+            expiresAt: pending.expiresAt,
+            source: 'peer-session',
+            trust: 'untrusted-session',
+          }, peerSenderDetails(pending.sender));
+          turnEmit({
+            kind: 'input-delivery', id: pending.id, mode: 'steer', state: 'queued',
+            text: pending.text, source: pending.source, sender: pending.sender,
+          });
+          schedulePeerWake(sk);
+          continue;
+        }
         const queued = rt.queue.enqueue(pending.text, {
           deliveryId: pending.id,
           deliveryMode: 'steer',
@@ -299,14 +670,25 @@ export function createHostCore(input: {
           source: pending.source,
         });
       }
-      const next = rt.queue.dequeue();
+      const next = shuttingDown || tenantRebinding ? undefined : rt.queue.dequeue();
       // A finished BACKGROUND agent (not the one on screen) is disposable — its
       // result is persisted to the transcript and re-read on switch-back. Drop
       // it so the pool can't grow without bound. Only spawned agents are dropped;
       // the single shared agent of the no-factory path is never evicted.
-      if (sk !== activeKey && input.spawnAgent && !next) pool.delete(sk);
+      if (sk !== activeKey && input.spawnAgent && !next) {
+        // ADR-032 D5 — this session is over as far as this process is
+        // concerned: its agent is about to be discarded and only its transcript
+        // survives. The CLI fires the session-end checkpoint on `/exit`; the
+        // desktop had no equivalent, so on this surface D5 simply never ran.
+        // The checkpoint owns a bounded timeout. Do not hold this completed
+        // background runtime in the pool while it drains, and swallow rejection
+        // so learning can never interfere with session eviction.
+        pool.delete(sk);
+        void trackSessionDrain(rt.agent);
+      }
       // Single-agent path: a switch was deferred until this turn ended.
-      if (pendingSwitch) { const fn = pendingSwitch; pendingSwitch = null; fn(); }
+      if (pendingSwitch && !shuttingDown) { const fn = pendingSwitch; pendingSwitch = null; await fn(); }
+      else if (shuttingDown) pendingSwitch = null;
       // WS1 — a detached child/worker may have finished mid-turn; fold its result
       // in now (idle) instead of waiting for the user's next prompt.
       maybeScheduleResume();
@@ -316,6 +698,7 @@ export function createHostCore(input: {
             id: next.deliveryId ?? nextDeliveryId(),
             mode: next.deliveryMode ?? 'queue',
             source: next.deliverySource ?? 'user',
+            ...(next.deliverySender ? { sender: next.deliverySender } : {}),
           });
         });
       }
@@ -324,6 +707,80 @@ export function createHostCore(input: {
 
   async function startTurn(prompt: string, hidden?: boolean, images?: AgentImage[]): Promise<void> {
     await startTurnForKey(activeKey, prompt, hidden, images);
+  }
+
+  async function startReviewedExecution(request: ReviewedExecutionRequest): Promise<void> {
+    // Capture the complete origin and immutable reviewed payload before the
+    // first await. A mutation already in the serialized tail must invalidate
+    // this request; it must never silently inherit that mutation's active Agent.
+    const key = activeKey;
+    const runtime = pool.get(key);
+    const originAgent = runtime?.agent;
+    const authorityGeneration = runtimeAuthorityGeneration;
+    const mutationQueuedAtEntry = queuedSessionMutations > 0;
+    let reviewedRequest: ReturnType<typeof captureReviewedExecutionRequest>;
+    try {
+      reviewedRequest = captureReviewedExecutionRequest(request);
+    } catch (error) {
+      stamp(key, {
+        kind: 'turn-error',
+        message: `Reviewed execution request is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+    if (mutationQueuedAtEntry) {
+      await sessionMutationTail;
+      cancelReviewedExecution(key);
+      return;
+    }
+    if (shuttingDown) return;
+    if (tenantRebinding) {
+      stamp(key, { kind: 'turn-error', message: 'Wait for the organization switch to finish before sending.' });
+      return;
+    }
+    if (!runtime || !originAgent) {
+      stamp(key, { kind: 'turn-error', message: 'No active session to run in.' });
+      return;
+    }
+    if (runtime.running) {
+      stamp(key, { kind: 'turn-error', message: 'A turn is already running in this session.' });
+      return;
+    }
+    const issue = originAgent.issueExecutionIntent;
+    if (!issue) {
+      stamp(key, { kind: 'turn-error', message: 'Reviewed execution is unavailable in this Agent runtime.' });
+      return;
+    }
+    let handle: ExecutionIntentHandle;
+    try {
+      handle = await issue.call(originAgent, {
+        source: 'reviewed-ui',
+        toolName: reviewedRequest.toolName,
+        args: reviewedRequest.args,
+        ...(reviewedRequest.requestId !== undefined ? { requestId: reviewedRequest.requestId } : {}),
+      });
+      if (!handle || typeof handle !== 'object') {
+        throw new Error('The Agent runtime returned an invalid execution intent.');
+      }
+    } catch (error) {
+      const staleLaunch = shuttingDown
+        || tenantRebinding
+        || pendingSwitch !== null
+        || runtimeAuthorityGeneration !== authorityGeneration
+        || activeKey !== key
+        || pool.get(key)?.agent !== originAgent
+        || originAgent.sessionKey !== key;
+      if (staleLaunch) cancelReviewedExecution(key);
+      else stamp(key, { kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    const launch = { agent: originAgent, handle, authorityGeneration };
+    if (runtime.running || !reviewedExecutionIsCurrent(key, launch)) {
+      cancelReviewedExecution(key);
+      return;
+    }
+    await startTurnForKey(key, reviewedRequest.prompt, false, undefined, undefined, false, launch);
   }
 
   async function deliverInput(
@@ -364,6 +821,43 @@ export function createHostCore(input: {
     emit({ kind: 'turn-error', message: 'A turn is already running. Choose Queue or Steer.' });
   }
 
+  function deliverPeerMessage(
+    message: LocalSessionMessage,
+    sender?: PeerSessionSender,
+  ): { accepted: boolean; state: 'steered' | 'not_found' | 'queue_full' | 'unavailable'; reason?: string } {
+    if (shuttingDown || tenantRebinding) {
+      return { accepted: false, state: 'unavailable', reason: 'The recipient session is changing or shutting down.' };
+    }
+    const key = message.targetSessionKey;
+    const rt = pool.get(key);
+    if (!rt) return { accepted: false, state: 'not_found', reason: 'The addressed session is not active in this host.' };
+    if (!rt.agent.requestPeerSessionSteer) {
+      return { accepted: false, state: 'unavailable', reason: 'This Agent runtime does not support peer-session steering.' };
+    }
+    try {
+      const accepted = rt.agent.requestPeerSessionSteer(message, peerSenderDetails(sender));
+      if (accepted.source !== 'peer-session') {
+        throw new Error('The Agent runtime returned an invalid peer-session steering record.');
+      }
+      const provenance = sender ?? accepted.sender;
+      stamp(key, {
+        kind: 'input-delivery', id: message.id, mode: 'steer', state: 'steered',
+        text: message.text, source: 'peer-session', sender: provenance,
+      });
+      if (!rt.running) schedulePeerWake(key);
+      return { accepted: true, state: 'steered' };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const queueFull = (error as { code?: unknown })?.code === 'SESSION_INPUT_QUEUE_FULL';
+      stamp(key, {
+        kind: 'input-delivery', id: message.id, mode: 'steer', state: 'canceled',
+        text: message.text, source: 'peer-session',
+        sender: sender ?? { sessionKey: message.senderSessionKey, deviceId: message.senderDeviceId, sentAt: message.createdAt },
+      });
+      return { accepted: false, state: queueFull ? 'queue_full' : 'unavailable', reason };
+    }
+  }
+
   // WS1 — auto-resume the active session when detached background work (a
   // fire-and-forget delegate_agent child or a worker) finishes while the session
   // is IDLE, so the user no longer has to send a second prompt to fold the result
@@ -374,6 +868,7 @@ export function createHostCore(input: {
   let resumeTimer: ReturnType<typeof setTimeout> | null = null;
   function cancelResume(): void { if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; } }
   function maybeScheduleResume(): void {
+    if (shuttingDown || tenantRebinding) return;
     const rt = pool.get(activeKey);
     if (!rt || rt.running || resumeTimer) return;
     if (pendingCompletionCount(activeKey) === 0) return;
@@ -399,6 +894,19 @@ export function createHostCore(input: {
     if (!rt) return;
     const events = drainExternalSteering(key);
     if (!events.length) return;
+    if (shuttingDown || tenantRebinding) {
+      for (const event of events) {
+        stamp(key, {
+          kind: 'input-delivery',
+          id: event.id,
+          mode: 'steer',
+          state: 'canceled',
+          text: event.text,
+          source: 'extension',
+        });
+      }
+      return;
+    }
     if (rt.running && rt.agent.requestSteer) {
       for (const event of events) {
         rt.agent.requestSteer(event.text, { id: event.id, source: 'extension' });
@@ -451,16 +959,27 @@ export function createHostCore(input: {
    * null only when the viewed agent is busy AND there's no spawn factory — the
    * single-agent path, which the caller handles by deferring.
    */
-  function acquireRuntime(): Runtime | null {
+  async function acquireRuntime(targetKey: string): Promise<Runtime | null> {
     const cur = pool.get(activeKey);
-    if (cur && !cur.running) { pool.delete(activeKey); return cur; }
-    if (input.spawnAgent) return { agent: input.spawnAgent(activeKey), running: false, queue: new InputQueue() };
+    const pendingPeerBoundary = cur && (
+      (cur.agent.pendingSteeringCount ?? 0) > 0 || peerWakeScheduled.has(activeKey)
+    );
+    if (cur && !cur.running && !pendingPeerBoundary) {
+      pool.delete(activeKey);
+      await trackSessionDrain(cur.agent);
+      await awaitSessionDrains(targetKey);
+      return cur;
+    }
+    if (input.spawnAgent) {
+      await awaitSessionDrains(targetKey);
+      return { agent: input.spawnAgent(targetKey), running: false, queue: new InputQueue() };
+    }
     return null;
   }
 
   /** Switch the viewed session to `targetKey`, loading it via `init`. Never
    *  stops a running turn (it keeps going in the pool, in the background). */
-  function focusOrCreate(targetKey: string, init: (rt: Runtime) => number): void {
+  async function focusOrCreate(targetKey: string, init: (rt: Runtime) => number): Promise<void> {
     // Already pooled — i.e. running in the background, or the active one. Just
     // refocus; the renderer reloads the view from the (on-disk) transcript.
     const existing = pool.get(targetKey);
@@ -477,10 +996,10 @@ export function createHostCore(input: {
       deliverExternalSteeringForKey(targetKey);
       return;
     }
-    const rt = acquireRuntime();
+    const rt = await acquireRuntime(targetKey);
     if (!rt) {
       // Single-agent path, agent busy: preserve the safe interrupt-and-defer.
-      pendingSwitch = () => focusOrCreate(targetKey, init);
+      pendingSwitch = () => runSessionMutation(() => focusOrCreate(targetKey, init));
       pool.get(activeKey)?.agent.requestInterrupt?.();
       broker.dismissAll();
       emit({ kind: 'status', text: `Stopping the current turn to switch to ${targetKey}…` });
@@ -513,7 +1032,7 @@ export function createHostCore(input: {
     stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: loaded, model: rt.agent.getModel?.() ?? '', running: rt.running });
   }
 
-  function applyResume(sessionKey: string): void {
+  async function applyResume(sessionKey: string): Promise<void> {
     // An already-pooled (running) session refocuses without touching history.
     if (!pool.has(sessionKey)) {
       // OOM-safe: cheap existence check, NOT a full transcript read, just to
@@ -527,7 +1046,7 @@ export function createHostCore(input: {
         // self-heals: create the empty session here so a turn can then write it,
         // instead of the confusing `No transcript found for "<hash>:new-…"`.
         if (isUnsavedNewSessionKey(sessionKey)) {
-          focusOrCreate(sessionKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+          await focusOrCreate(sessionKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
           return;
         }
         emit({ kind: 'turn-error', message: `No transcript found for "${sessionKey}".` });
@@ -536,21 +1055,152 @@ export function createHostCore(input: {
       // DESK-6t — LAZY: do NOT loadHistory now (the expensive replay). Park the
       // key; the first turn loads it. Resume just renders the (bounded) transcript;
       // loadedMessages=1 is a sentinel — the real rows come from q-transcript.
-      focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return 1; });
+      await focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return 1; });
       return;
     }
-    focusOrCreate(sessionKey, () => 0);
+    await focusOrCreate(sessionKey, () => 0);
   }
 
-  function applyNew(label?: string): void {
-    const safe = (label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
-    const targetKey = `${activeKey.split(':')[0]}:${safe}`;
-    focusOrCreate(targetKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+  async function applyNew(label?: string): Promise<void> {
+    const prefix = activeKey.split(':')[0]!;
+    let targetKey: string | undefined;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `${prefix}:new-${randomUUID()}`;
+      if (!pool.has(candidate) && !input.transcriptExists?.(candidate)) {
+        targetKey = candidate;
+        break;
+      }
+    }
+    if (!targetKey) {
+      throw new Error('Could not mint a fresh session identity after 8 collision checks.');
+    }
+    await focusOrCreate(targetKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+    const title = normalizeExplicitSessionTitle(label);
+    if (title) {
+      try { input.onSessionTitle?.(targetKey, title, 'human'); } catch { /* advisory */ }
+    }
+  }
+
+  async function rebindTenant(
+    createReplacement: (sessionKey: string) => Promise<AgentLike> | AgentLike,
+  ): Promise<void> {
+    return runSessionMutation(async () => {
+      if (shuttingDown) throw new Error('The desktop host is shutting down.');
+      if (tenantRebinding) throw new Error('An organization switch is already in progress.');
+      tenantRebinding = true;
+      cancelResume();
+      pendingSwitch = null;
+      broker.dismissAll();
+      const oldActiveKey = activeKey;
+      try {
+        for (const [key, runtime] of pool) {
+          for (const queued of runtime.queue.list()) {
+            if (!queued.deliveryId || !queued.deliveryMode) continue;
+            stamp(key, {
+              kind: 'input-delivery',
+              id: queued.deliveryId,
+              mode: queued.deliveryMode,
+              state: 'canceled',
+              text: queued.text,
+              source: queued.deliverySource ?? 'user',
+            });
+          }
+          runtime.queue.clear();
+          runtime.agent.requestInterrupt?.();
+        }
+        const turnDeadline = Date.now() + 5_000;
+        while ([...pool.values()].some((runtime) => runtime.running) && Date.now() < turnDeadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        }
+        if ([...pool.values()].some((runtime) => runtime.running)) {
+          throw new Error('Could not switch organizations while an agent turn was still stopping. Try again once it has stopped.');
+        }
+
+        const agents = [...new Set([...pool.values()].map((runtime) => runtime.agent))];
+        await Promise.allSettled(agents.map((pooled) => trackSessionDrain(pooled)));
+        await awaitAllDrains();
+        pool.clear();
+
+        // The host callback owns config + transport rebinding. It returns only
+        // after the BrainRouter MCP connection carries the new org header, so no
+        // replacement Agent can observe the previous central tenant.
+        let replacement: AgentLike;
+        let replacementError: unknown;
+        try {
+          replacement = await createReplacement(oldActiveKey);
+        } catch (error) {
+          // A transport replacement can fail closed (for example, a config
+          // write can fail after the old pool has already drained), but it must
+          // not strand the host with no Agent. The normal host factory reads
+          // whichever config actually survived and creates an offline-capable
+          // Agent pinned to that tenant. Rethrow after installing it so the
+          // initiating query still reports that the switch failed.
+          replacementError = error;
+          const fallback = input.spawnAgent?.(oldActiveKey);
+          if (!fallback) throw error;
+          replacement = fallback;
+        }
+        replacement.sessionKey = oldActiveKey;
+        const hasTranscript = input.transcriptExists
+          ? input.transcriptExists(oldActiveKey)
+          : ((input.loadTranscript?.(oldActiveKey)?.length ?? 0) > 0);
+        const runtime: Runtime = {
+          agent: replacement,
+          running: false,
+          queue: new InputQueue(),
+          ...(hasTranscript ? { pendingHistoryKey: oldActiveKey } : {}),
+        };
+        pool.set(oldActiveKey, runtime);
+        setActive(oldActiveKey);
+        stamp(oldActiveKey, {
+          kind: 'session-changed',
+          sessionKey: oldActiveKey,
+          loadedMessages: hasTranscript ? 1 : 0,
+          model: replacement.getModel?.() ?? '',
+          running: false,
+        });
+        if (replacementError) throw replacementError;
+      } finally {
+        tenantRebinding = false;
+      }
+    });
+  }
+
+  async function bindLearning(
+    tenant: { userId: string; orgId: string | null },
+    enabled: boolean,
+  ): Promise<void> {
+    return runSessionMutation(async () => {
+      if (shuttingDown) return;
+      // Identity discovery is background work. Let an already-running turn and
+      // its finalization finish under the old disabled binding; queued/new turns
+      // wait on this mutation and therefore see the verified binding atomically.
+      while ([...pool.values()].some((runtime) => runtime.running)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+      const agents = [...new Set([...pool.values()].map((runtime) => runtime.agent))];
+      for (const pooled of agents) {
+        if (!pooled.setLearningBinding) {
+          throw new Error('The active Agent cannot accept a verified learning identity.');
+        }
+        pooled.setLearningBinding(tenant, enabled);
+      }
+      const active = pool.get(activeKey)?.agent;
+      if (active) input.onActiveAgentChange?.(active);
+    });
   }
 
   async function handle(message: unknown): Promise<void> {
     if (!isAgentCommand(message)) return; // tolerate noise on the wire
     const cmd = message as AgentCommand;
+    if (shuttingDown && cmd.kind !== 'interrupt' && cmd.kind !== 'shutdown') return;
+    // Organization/session replacement is a process-wide authority boundary.
+    // Commands that arrive after it starts wait for the replacement Agent and
+    // transport; otherwise a concurrent query could still issue a central
+    // learned-state mutation through the old org while the UI shows the new one.
+    if (queuedSessionMutations > 0 && cmd.kind !== 'interrupt' && cmd.kind !== 'shutdown') {
+      await sessionMutationTail;
+    }
     switch (cmd.kind) {
       case 'start-turn':
         cancelResume(); // a real user prompt preempts any queued auto-resume
@@ -558,6 +1208,10 @@ export function createHostCore(input: {
         return;
       case 'interrupt': {
         cancelResume(); // user stopped — never auto-resume on top of a stop
+        // Stop is also an authority boundary for a reviewed launch whose Agent
+        // issuer has not resolved yet. Advancing the fence makes that pending
+        // handle permanently stale even though no runTurn exists to interrupt.
+        advanceRuntimeAuthorityGeneration();
         // DESK-2 — cooperative stop of the VIEWED session's turn: flag its agent
         // (it unwinds at the next LLM/tool boundary) AND dismiss pending
         // approvals so a turn blocked on a dialog fails closed instead of hanging.
@@ -586,20 +1240,26 @@ export function createHostCore(input: {
         return;
       }
       case 'new-session': {
-        const label = (cmd.label ?? '').trim() || undefined;
-        applyNew(label);
+        const label = typeof cmd.label === 'string' ? cmd.label.trim() || undefined : undefined;
+        await runSessionMutation(() => applyNew(label));
         return;
       }
       case 'resume-session': {
-        applyResume(cmd.sessionKey);
+        await runSessionMutation(() => applyResume(cmd.sessionKey));
         return;
       }
       case 'set-model': {
-        const a = pool.get(activeKey)?.agent;
+        // A reviewed action is scoped to the runtime actor selected when the
+        // click entered the host. Fence the request before provider resolution
+        // or persistence awaits so an A→B (or Auto) model change cannot let a
+        // pending handle launch under a different provider/endpoint/model.
+        const targetKey = activeKey;
+        const targetAgent = pool.get(targetKey)?.agent;
+        revokeReviewedExecutionAuthority(cmd.persist ? 'workspace' : 'active-session');
         if (cmd.model === 'auto') {
-          try { input.clearSessionModel?.(activeKey); } catch { /* best effort */ }
-          emit({ kind: 'status', text: 'Model set to Auto (primary chain).' });
-          emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+          try { input.clearSessionModel?.(targetKey); } catch { /* best effort */ }
+          stamp(targetKey, { kind: 'status', text: 'Model set to Auto (primary chain).' });
+          stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
           return;
         }
         // Item 10 — persist:true → GLOBAL default (config.json, shared with the
@@ -609,40 +1269,89 @@ export function createHostCore(input: {
         // LLM (provider/model/endpoint/key) and write the full session override
         // (never the global default unless persist) — so it never syncs to others.
         const full = cmd.providerName ? await input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
-        if (cmd.providerName && !full) {
-          emit({ kind: 'turn-error', message: `The selected provider or model “${cmd.model}” is unavailable. Refresh Models and choose again.` });
+        if (
+          cmd.providerName
+          && (
+            activeKey !== targetKey
+            || pool.get(targetKey)?.agent !== targetAgent
+            || targetAgent?.sessionKey !== targetKey
+          )
+        ) {
+          stamp(targetKey, {
+            kind: 'turn-error',
+            message: 'Model selection canceled because the active session changed before provider resolution completed.',
+          });
           return;
         }
-        if (full) a?.setLLMConfig?.(full); else a?.setModel?.(cmd.model);
+        if (cmd.providerName && !full) {
+          stamp(targetKey, { kind: 'turn-error', message: `The selected provider or model “${cmd.model}” is unavailable. Refresh Models and choose again.` });
+          return;
+        }
+        if (full) targetAgent?.setLLMConfig?.(full); else targetAgent?.setModel?.(cmd.model);
         if (cmd.persist) {
           try {
             if (cmd.providerName) input.persistProviderModel?.(cmd.providerName, cmd.model);
             else input.persistModel?.(cmd.model);
           } catch (err) {
-            emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
-            emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+            stamp(targetKey, { kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
+            stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
             return;
           }
-          try { input.clearSessionModel?.(activeKey); } catch { /* global model still persisted */ }
+          try { input.clearSessionModel?.(targetKey); } catch { /* global model still persisted */ }
         } else if (cmd.providerName) {
           // Per-session cross-provider override (provider/model/endpoint, no secret).
-          try { input.setSessionLlm?.(activeKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
+          try { input.setSessionLlm?.(targetKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
         } else {
-          try { input.setSessionModel?.(activeKey, cmd.model); } catch { /* in-memory set already applied */ }
+          try { input.setSessionModel?.(targetKey, cmd.model); } catch { /* in-memory set already applied */ }
         }
-        emit({ kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` });
-        emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+        stamp(targetKey, { kind: 'status', text: `Model set to ${cmd.model}${cmd.persist ? ' (saved to config.json — shared with the CLI)' : ' (this chat only)'}.` });
+        stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
         return;
       }
       case 'shutdown':
+        if (shuttingDown) return;
+        shuttingDown = true;
+        pendingSwitch = null;
+        await sessionMutationTail;
         cancelResume();
         unsubscribeCompletions();
         unsubscribeExternalSteering();
         broker.dismissAll();
-        input.onShutdown?.();
+        // Stop every foreground/background turn, give cooperative cancellation a
+        // short bounded chance to unwind, then run exactly one session-end drain
+        // for every pooled Agent before the MCP transport disappears.
+        for (const runtime of pool.values()) runtime.agent.requestInterrupt?.();
+        const turnDeadline = Date.now() + 750;
+        while ([...pool.values()].some((runtime) => runtime.running) && Date.now() < turnDeadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        }
+        const agents = [...new Set([...pool.values()].map((runtime) => runtime.agent))];
+        await Promise.allSettled(agents.map((pooled) => trackSessionDrain(pooled)));
+        await awaitAllDrains();
+        await input.onShutdown?.();
         return;
     }
   }
 
-  return { handle, broker };
+  return {
+    handle,
+    startReviewedExecution,
+    revokeReviewedExecutionAuthority,
+    rebindTenant,
+    bindLearning,
+    deliverPeerMessage,
+    broker,
+  };
+}
+
+function peerSenderDetails(
+  sender: PeerSessionSender | undefined,
+): Partial<Omit<PeerSessionSender, 'sessionKey' | 'deviceId' | 'sentAt'>> | undefined {
+  if (!sender) return undefined;
+  return {
+    ...(sender.clientKind ? { clientKind: sender.clientKind } : {}),
+    ...(sender.workspaceRoot ? { workspaceRoot: sender.workspaceRoot } : {}),
+    ...(sender.title ? { title: sender.title } : {}),
+    ...(sender.transport ? { transport: sender.transport } : {}),
+  };
 }

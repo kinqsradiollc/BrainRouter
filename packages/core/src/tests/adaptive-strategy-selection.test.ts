@@ -14,6 +14,7 @@ import {
   resolveWorkspaceOrchestrationPlan,
   type WorkspaceOrchestrationResolutionInput,
 } from '../orchestration/profiles/orchestrationProfileResolver.js';
+import { resolveOrchestrationPlanIdentity } from '../workspace/orchestrationPlanIdentity.js';
 import { getWorkspaceProfile } from '../workspace/profiles.js';
 
 function input(
@@ -92,11 +93,10 @@ test('P23-7 managed selection is one forced-tool choice over eligible IDs only',
   assert.deepEqual(result.plan.stages[0]?.after, []);
   assert.deepEqual(
     result.plan.skippedStages.filter((stage) => stage.code === 'adaptive-stage-disabled'),
-    [{
-      code: 'adaptive-stage-disabled',
-      strategyId: 'delivery',
-      stageId: 'inspect',
-    }],
+    [
+      { code: 'adaptive-stage-disabled', strategyId: 'delivery', stageId: 'inspect' },
+      { code: 'adaptive-stage-disabled', strategyId: 'delivery', stageId: 'challenge' },
+    ],
   );
   assert.match(result.rationale ?? '', /bounded implementation/);
 });
@@ -121,6 +121,76 @@ test('P23-7 managed selection can choose among multiple signal-matched strategie
   assert.equal(result.plan.strategyId, 'review-only');
   assert.equal(result.plan.selectionSource, 'adaptive-model');
   assert.deepEqual(result.plan.matchedSignalIds, ['review']);
+});
+
+test('ADR-040 A40-1 trusted alias identity survives the full adaptive selection lifecycle', async () => {
+  const identity = resolveOrchestrationPlanIdentity('product-management');
+  const preset = getWorkspaceProfile('product-management');
+  assert.equal(identity.resolution, 'bundled-alias');
+  assert.ok(identity.definition);
+  assert.ok(preset);
+
+  const resolutionInput = input({
+    definition: identity.definition,
+    manifest: {
+      profile: 'product-management',
+      orchestration: structuredClone(preset.orchestration),
+    },
+    taskSignalIds: new Set(['investigation']),
+  });
+  const result = await resolveAdaptiveWorkspaceOrchestrationPlan({
+    resolutionInput,
+    taskSummary: 'Investigate the product question.',
+    complete: async (request) => {
+      assert.deepEqual(
+        (request.tool.parameters as {
+          properties: { strategyId: { enum: string[] } };
+        }).properties.strategyId.enum,
+        ['investigate'],
+      );
+      return selection('investigate', ['inspect', 'synthesize']);
+    },
+  });
+
+  assert.equal(result.modelAttempted, true);
+  assert.equal(result.fallbackReason, undefined);
+  assert.equal(result.plan.workspaceProfileId, 'product-management');
+  assert.equal(result.plan.planProfileId, 'engineering');
+  assert.equal(result.plan.orchestrationProfileId, 'engineering');
+  assert.equal(result.plan.strategyId, 'investigate');
+  assert.equal(result.plan.selectionSource, 'adaptive-model');
+});
+
+test('ADR-040 A40-1 a structurally identical alias clone cannot inherit adaptive authority', async () => {
+  const identity = resolveOrchestrationPlanIdentity('product-management');
+  const preset = getWorkspaceProfile('product-management');
+  assert.ok(identity.definition);
+  assert.ok(preset);
+  let modelCalled = false;
+
+  const result = await resolveAdaptiveWorkspaceOrchestrationPlan({
+    resolutionInput: input({
+      definition: structuredClone(identity.definition),
+      manifest: {
+        profile: 'product-management',
+        orchestration: structuredClone(preset.orchestration),
+      },
+      taskSignalIds: new Set(['investigation']),
+    }),
+    taskSummary: 'Investigate the product question.',
+    complete: async () => {
+      modelCalled = true;
+      return selection('investigate', ['inspect', 'synthesize']);
+    },
+  });
+
+  assert.equal(modelCalled, false);
+  assert.equal(result.modelAttempted, false);
+  assert.equal(result.fallbackReason, 'no-eligible-strategy');
+  assert.equal(result.plan.workspaceProfileId, 'product-management');
+  assert.equal(result.plan.planProfileId, null);
+  assert.equal(result.plan.strategyId, null);
+  assert.equal(result.plan.diagnostics[0]?.code, 'profile-plan-mismatch');
 });
 
 test('P23-7 malformed, over-broad, and unavailable choices use the validated fallback', async () => {

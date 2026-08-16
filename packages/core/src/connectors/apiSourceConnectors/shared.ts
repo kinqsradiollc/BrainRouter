@@ -1,5 +1,6 @@
 import type { ConnectorCheckpoint, ConnectorDocument, ConnectorRecord } from '@kinqs/brainrouter-types';
 import type { ApiConnectorRunResult, TokenClientOptions } from './types.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 export function apiResult(documents: ConnectorDocument[], failures: string[], now: string, checkpoint: ConnectorCheckpoint): ApiConnectorRunResult {
   return {
@@ -118,7 +119,7 @@ export function requireToken(token: string, label: string): string {
 export function stripTrailing(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error('Connector base URL is required.');
-  return trimmed.replace(/\/+$/, '');
+  return stripTrailingSlashes(trimmed);
 }
 
 export function record(value: unknown): Record<string, unknown> {

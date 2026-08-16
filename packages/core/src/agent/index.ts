@@ -9,3 +9,8 @@ export * from './support/prompter.js';
 export * from './fs/computerUse.js';
 export * from './fs/applyPatch.js';
 export * from './adapters/index.js';
+// ADR-032 D8 — a host that inspects or edits learned state has to resolve the
+// same tenant the runtime learns into. Exported from the agent surface rather
+// than from `learning/` because the mapping is agent-shaped: it is the identity
+// THIS agent carries, not a property of the store.
+export { learnedTenantForAgent } from './runtime/learningPhase.js';

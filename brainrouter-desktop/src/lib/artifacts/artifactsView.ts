@@ -62,6 +62,72 @@ export function isReactArtifact(a: Pick<ArtifactRecord, 'format' | 'language'>):
   return a.format === 'code' && !!a.language && REACT_LANGUAGES.has(a.language.toLowerCase());
 }
 
+/* ------------------------------------------------ ADR-028 B2 · session scope */
+
+/**
+ * The set of sessions the panel is showing.
+ *
+ * `null` means every session — chosen deliberately over an empty set, which
+ * reads as "no sessions" and would render an empty list. A selection you did
+ * not make should never look like a result.
+ */
+export type SessionScope = ReadonlySet<string> | null;
+
+/**
+ * The scope a freshly-opened panel starts with.
+ *
+ * Scoped to the current session, not to everything. Opening onto every artifact
+ * you have ever produced hands you a search problem you did not ask for; you
+ * start where you are and widen when you mean to.
+ */
+export function initialSessionScope(currentSessionKey: string | null | undefined): SessionScope {
+  return currentSessionKey ? new Set([currentSessionKey]) : null;
+}
+
+/** Artifacts belonging to the selected sessions. */
+export function filterBySession(
+  records: readonly ArtifactRecord[],
+  scope: SessionScope,
+): ArtifactRecord[] {
+  if (!scope) return [...records];
+  return records.filter((r) => (r.sessionKey ? scope.has(r.sessionKey) : false));
+}
+
+/**
+ * Must each row say which session produced it?
+ *
+ * Yes as soon as more than one is selected. An aggregated list without
+ * provenance reintroduces exactly the misattribution the stale-panel bug caused
+ * by accident — only now on purpose, which is worse.
+ */
+export function showsSessionProvenance(scope: SessionScope): boolean {
+  return scope === null || scope.size > 1;
+}
+
+/** Toggle one session in the scope, keeping "all" and "none" coherent. */
+export function toggleSession(
+  scope: SessionScope,
+  sessionKey: string,
+  allSessionKeys: readonly string[],
+): SessionScope {
+  const current = scope ? new Set(scope) : new Set(allSessionKeys);
+  if (current.has(sessionKey)) current.delete(sessionKey);
+  else current.add(sessionKey);
+  // Deselecting the last one means "all", not "nothing" — an empty list here is
+  // a dead end the user has no obvious way out of.
+  if (current.size === 0) return null;
+  return current.size === allSessionKeys.length ? null : current;
+}
+
+/** The distinct sessions represented in a set of artifacts, newest first. */
+export function sessionsIn(records: readonly ArtifactRecord[]): string[] {
+  const seen = new Set<string>();
+  for (const r of sortArtifacts([...records])) {
+    if (r.sessionKey) seen.add(r.sessionKey);
+  }
+  return [...seen];
+}
+
 export const ARTIFACT_KIND_OPTIONS: ArtifactKind[] = [
   'design-note', 'sketch', 'html-prototype', 'markdown-report', 'verification-summary', 'review-export', 'other',
 ];

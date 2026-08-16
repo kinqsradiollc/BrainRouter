@@ -666,6 +666,12 @@ tall ones. `/help <category>` drills in.
 | `/goal edit <field> <value>` | Unified update (text / status / budget / tokens). |
 | `/continue` | Resume after a loop-limit abort or paused continuation. |
 | `/plan` | Show the durable task plan. |
+| `/planner [list [all]]` | Show today's personal planner or list its active/all items. |
+| `/planner add <title>` | Capture an item in the user-scoped planner shared with Desktop and Dashboard. |
+| `/planner done <id>` | Complete a planner item by its displayed ID prefix. |
+| `/planner reopen <id>` | Reopen a locally owned planner item. |
+| `/planner due <id> <date-or-dash>` | Set or clear a locally owned item's due date. |
+| `/planner delete <id>` | Remove a locally owned item; source-owned items name the upstream action instead. |
 | `/skills` | List BrainRouter skills (workflow docs). |
 | `/skill <name>` | Load a skill and execute its instructions. |
 | `/tools` | List local + MCP tool inventory. |

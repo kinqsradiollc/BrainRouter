@@ -14,11 +14,12 @@ Match the workspace's existing runner:
 | `brainrouter/` (the brain) | **Vitest** for unit + `node:test` for PG integration (`"test": "vitest run && npm run test:integration"`) |
 | `brainrouter-cli`, `packages/core`, `packages/agent-protocol`, `brainrouter-benchmark` | compile with `tsc` then `node --test "dist/**/*.test.js"` |
 | `brainrouter-desktop` | `node --test "dist-electron/**/*.test.js"` (electron-main) + `tsx --test` over `src/**` (renderer) |
+| `brainrouter-dashboard` | `tsx --test` over `app/**`, `components/**`, and `lib/**` (`*.test.ts` and `*.test.tsx`) |
 
 `jest`/`ts-jest` sit in root devDependencies but **no workspace uses Jest — do not
-write Jest tests.** `brainrouter-dashboard`, `packages/hooks`, `packages/sdk`,
-`packages/types` have **no `test` script** and are silently skipped by the root
-`-ws --if-present` fan-out — adding a test script to one suddenly gates CI.
+write Jest tests.** `packages/hooks`, `packages/sdk`, and `packages/types` have
+**no `test` script** and are silently skipped by the root `-ws --if-present`
+fan-out — adding a test script to one suddenly gates CI.
 
 - **Why:** each runner matches the runtime of the code under test; a test for the
   wrong runner simply never executes.
@@ -29,6 +30,8 @@ write Jest tests.** `brainrouter-dashboard`, `packages/hooks`, `packages/sdk`,
 - Brain: `brainrouter/src/__tests__/` — `*.test.ts` (Vitest) and `*.node-test.ts`
   (integration).
 - CLI: `brainrouter-cli/src/tests/`. Core: `packages/core/src/tests/`.
+- Dashboard: colocated under `app/**`, `components/**`, or `lib/**`, using
+  `*.test.ts` or `*.test.tsx`.
 - Desktop: **colocated** next to source (`electron/foo.test.ts` beside `foo.ts`;
   `src/lib/**/bar.test.ts` beside `bar.ts`).
 - Shared fixtures live in a `_helpers.ts` in the same tests dir — the underscore
@@ -166,6 +169,41 @@ on port 0 / 127.0.0.1 and close when done.
 
 ---
 
+## Contract parity: what the in-memory store cannot catch
+
+The unit suites run against **in-memory stores with no constraints**. That is
+deliberate — they stay fast and need no database — but it means a whole class of
+defect is invisible to them: anything Postgres enforces and the fake does not.
+
+The live example is migration 056. `ASSURANCE_STAGE_NAMES` had eleven stages;
+the CHECK in migration 046 named ten. The missing `cleanup` stage runs at the end
+of **every** review, so every review died at its last stage — while
+`diffReviewAssurance.test.ts` asserted `stage: "cleanup", status: "succeeded"` in
+four places and passed. The wreckage did not look like a schema problem either:
+the PR bot went silent for four days, 3,629 trigger jobs cancelled, 36 runs
+stranded, and deep review failed with an unrelated-sounding
+`DEEP_REVIEW_PREFLIGHT_SOURCE_UNAVAILABLE`.
+
+**Rule:** when a SQL constraint mirrors a TypeScript value set, test the two
+against each other. The disagreement is a property of two files, so check it from
+the two files — no database required:
+
+- `brainrouter/src/memory/store/postgres/migrations.stageParity.test.ts` parses
+  the LAST `CHECK (... IN (...))` for a named constraint out of the migrations
+  (comments stripped, so a rollback comment's older list is not mistaken for the
+  live one) and compares it to the exported union.
+- Assert **both directions**. A value SQL admits that the code can no longer
+  produce is either dead or a half-finished rename, and both are worth seeing.
+- Mutation-check it: remove the migration and confirm the test fails.
+
+Copy that file for any other CHECK/union pair — statuses, kinds, programs, roles.
+
+The same reasoning applies beyond CHECK constraints: NOT NULL columns, unique
+indexes, and foreign keys are all enforced by Postgres and ignored by the fake.
+When a test asserts a write succeeds, ask whether the real database would agree.
+
+---
+
 ## Running suites & CI
 
 ### 11. Run suites from the root; Postgres required for the brain
@@ -210,3 +248,26 @@ hosted CI is the full merge gate. The root `verify` script remains available for
 cross-cutting/high-risk work, release/publish work, and CI-parity diagnosis.
 
 - **Evidence:** `.githooks/pre-commit`, `scripts/install-git-hooks.mjs`, `.githooks/README.md`
+
+### 14. ADR-038 Planner visual/usability CI is a blocking three-lane contract
+
+`.github/workflows/planner-visual.yml` runs on every pull request and exposes the
+stable `Planner Visual & Usability (required)` aggregate check. Its three lanes
+exercise the deterministic 20-item fixture in the actual supported hosts:
+
+- Dashboard Chromium on Linux at 1440×900, 768×900, and 390×844; the 1440×900
+  lane also covers light and forced-colours/reduced-motion presentation.
+- Native Electron on hosted macOS and Windows at 1280×840 and the 900×600
+  minimum; the minimum viewport also covers 200% zoom, light, and
+  forced-colours/reduced-motion presentation where the platform supports it.
+
+Every lane retains its JSON report and screenshots from
+`brainrouter-desktop/.planner-visual/` even when a gate fails. Automation blocks
+on density, overflow, contrast, keyboard focus, accessible names/states,
+currentness, core interactions, and unexplained console/network errors. Before a
+release, a human must inspect the retained viewport/theme screenshots and the
+accessibility gate results; unexplained visual drift or an accessibility failure
+blocks release even when unrelated suites are green.
+
+- **Evidence:** `.github/workflows/planner-visual.yml`,
+  `brainrouter-desktop/scripts/planner-visual-gate.mjs`

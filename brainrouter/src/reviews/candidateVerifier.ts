@@ -45,6 +45,8 @@ export interface BoundedCandidateVerifierOptions {
   contextFor(finding: AssuranceFinding): string | null;
   now?: () => string;
   timeoutMs?: number;
+  /** Atomically reserve one call from the parent review's aggregate budget. */
+  reserveModelCall?: () => { timeoutMs: number } | null;
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
@@ -176,6 +178,14 @@ export class BoundedCandidateVerifier implements AssuranceCandidateVerifierPort 
       "Call record_assurance_verification exactly once. If tools are unavailable,",
       "return only a fenced JSON object with state, rationale, and evidenceRefs.",
     ].join("\n");
+    const reserved = this.options.reserveModelCall?.();
+    if (this.options.reserveModelCall && !reserved) {
+      return insufficient(
+        finding,
+        "The aggregate review model-call or duration budget was exhausted before verification.",
+        decidedAt,
+      );
+    }
     try {
       const raw = await this.options.llmRunner.run({
         prompt,
@@ -186,7 +196,7 @@ export class BoundedCandidateVerifier implements AssuranceCandidateVerifierPort 
           "Use only the supplied exact-revision evidence.",
         ].join(" "),
         taskId: `assurance-verifier:${run.id}:${finding.id}`,
-        timeoutMs: this.timeoutMs,
+        timeoutMs: Math.max(1, Math.min(this.timeoutMs, reserved?.timeoutMs ?? this.timeoutMs)),
         tool: VERIFIER_TOOL,
       });
       return parseDisposition(raw, finding, decidedAt) ?? insufficient(

@@ -18,6 +18,23 @@ export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Remove a temp tree, tolerating the Windows post-Chromium race. When Electron
+ * exits, Windows may not have released its handles on the profile (Network/Trust
+ * Tokens, etc.) by the time teardown runs, so rimraf hits `EBUSY` — which
+ * `force: true` does NOT swallow (it only ignores ENOENT). Node's own
+ * maxRetries/retryDelay backoff is the intended remedy, and it kept flaking the
+ * required Electron (windows) gate on release PRs before this. A final swallow
+ * keeps a cleanup failure from failing an otherwise-green run.
+ */
+function removeTree(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 12, retryDelay: 150 });
+  } catch {
+    /* best-effort: a leftover temp dir is not a test failure */
+  }
+}
+
 export async function startFixtureServer() {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -140,6 +157,7 @@ export class CdpSession {
     this.nextId = 0;
     this.pending = new Map();
     this.waiters = new Set();
+    this.listeners = new Map();
     this.opened = new Promise((resolve, reject) => {
       this.socket = new WebSocket(webSocketDebuggerUrl);
       const timer = setTimeout(() => reject(new Error(`${label} DevTools connection timed out`)), 10_000);
@@ -174,6 +192,16 @@ export class CdpSession {
     });
   }
 
+  on(method, listener) {
+    const listeners = this.listeners.get(method) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(method, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.listeners.delete(method);
+    };
+  }
+
   async evaluate(expression, timeoutMs = COMMAND_TIMEOUT_MS) {
     const result = await this.request('Runtime.evaluate', {
       expression,
@@ -204,6 +232,9 @@ export class CdpSession {
       return;
     }
     if (!message.method) return;
+    for (const listener of this.listeners.get(message.method) ?? []) {
+      try { listener(message.params); } catch { /* observers must not break CDP */ }
+    }
     for (const waiter of [...this.waiters]) {
       if (waiter.method !== message.method || !waiter.predicate(message.params)) continue;
       this.waiters.delete(waiter);
@@ -223,15 +254,24 @@ export class CdpSession {
       waiter.reject(error);
     }
     this.waiters.clear();
+    this.listeners.clear();
   }
 }
 
-export async function launchElectron({ desktopRoot, electronApp = '' }) {
+export async function launchElectron({ desktopRoot, electronApp = '', prepareLayout }) {
   const launch = resolveElectronLaunch(desktopRoot, electronApp);
   const port = await reservePort();
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-browser-e2e-'));
   const layout = prepareElectronHarnessLayout(temporaryRoot);
   const { profile, workspace } = layout;
+  if (prepareLayout) {
+    try {
+      await prepareLayout(layout);
+    } catch (error) {
+      removeTree(temporaryRoot);
+      throw error;
+    }
+  }
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profile}`,
@@ -261,12 +301,12 @@ export async function launchElectron({ desktopRoot, electronApp = '' }) {
       async stop() {
         renderer.close();
         await processHandle.stop();
-        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        removeTree(temporaryRoot);
       },
     };
   } catch (error) {
     await processHandle.stop();
-    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    removeTree(temporaryRoot);
     throw error;
   }
 }
@@ -312,6 +352,9 @@ export async function launchComparisonBrowser({ browserPath = '', initialUrl }) 
     '--disable-default-apps',
     '--disable-sync',
     '--metrics-recording-only',
+    ...(process.env.BRAINROUTER_CHROMIUM_NO_SANDBOX === '1'
+      ? ['--no-sandbox', '--disable-dev-shm-usage']
+      : []),
     '--new-window',
     initialUrl,
   ];
@@ -339,12 +382,12 @@ export async function launchComparisonBrowser({ browserPath = '', initialUrl }) 
         pageSession.close();
         browserSession.close();
         await processHandle.stop();
-        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        removeTree(temporaryRoot);
       },
     };
   } catch (error) {
     await processHandle.stop();
-    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    removeTree(temporaryRoot);
     throw error;
   }
 }

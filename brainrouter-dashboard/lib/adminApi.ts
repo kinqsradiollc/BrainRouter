@@ -27,17 +27,20 @@ interface FetchOpts {
 
 const DASHBOARD_REQUEST_TIMEOUT_MS = 10_000;
 
-/** Shared authenticated request path for dashboard-only API surfaces that have
- * not landed in the public SDK yet. Keeping refresh/retry and org pinning here
- * prevents feature pages from growing subtly different auth behavior. */
-export async function authFetch<T = unknown>(path: string, opts: FetchOpts = {}): Promise<T> {
+/** A file is not a panel: an export builds its whole answer before it sends any
+ *  of it, so it gets longer than a panel's patience before we give up on it. */
+const DASHBOARD_DOWNLOAD_TIMEOUT_MS = 30_000;
+
+/** The one authenticated request path, so the two readers below cannot drift
+ *  apart on refresh/retry, org pinning, or the timeout policy. */
+async function sendAuthed(path: string, opts: FetchOpts, timeoutMs: number): Promise<Response> {
   const doFetch = (token: string): Promise<Response> =>
     fetch(`${BASE_URL}${path}`, {
       method: opts.method ?? "GET",
       // Never leave a dashboard panel (or the global auth bootstrap) spinning
       // on the browser's multi-minute socket timeout. Callers that own a
       // shorter cancellation policy can still provide their own signal.
-      signal: opts.signal ?? AbortSignal.timeout(DASHBOARD_REQUEST_TIMEOUT_MS),
+      signal: opts.signal ?? AbortSignal.timeout(timeoutMs),
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -46,20 +49,99 @@ export async function authFetch<T = unknown>(path: string, opts: FetchOpts = {})
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
 
-  let res = await doFetch(getJwt() || getApiKey() || "");
-  if (res.status === 401) {
-    const fresh = await refreshAccessToken();
-    if (fresh) res = await doFetch(fresh);
-  }
-  if (!res.ok) {
-    let msg = `Request failed (${res.status})`;
-    try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* keep default */ }
-    const error = new Error(msg) as Error & { status: number };
-    error.status = res.status;
-    throw error;
-  }
+  const res = await doFetch(getJwt() || getApiKey() || "");
+  if (res.status !== 401) return res;
+  const fresh = await refreshAccessToken();
+  return fresh ? doFetch(fresh) : res;
+}
+
+/** A failed authenticated Dashboard request, including the server's typed JSON
+ *  envelope when it supplied one. Feature adapters use `body` to preserve
+ *  policy failures (for example a fenced Notes mutation) without growing a
+ *  second authenticated fetch path. */
+export interface DashboardRequestError extends Error {
+  status: number;
+  body?: unknown;
+}
+
+async function requestFailure(res: Response): Promise<DashboardRequestError> {
+  let msg = `Request failed (${res.status})`;
+  let body: unknown;
+  try {
+    body = await res.json();
+    if (body && typeof body === "object") {
+      const record = body as Record<string, unknown>;
+      if (typeof record.error === "string") msg = record.error;
+      else if (record.error && typeof record.error === "object"
+        && typeof (record.error as Record<string, unknown>).detail === "string") {
+        msg = (record.error as Record<string, unknown>).detail as string;
+      } else if (typeof record.detail === "string") msg = record.detail;
+    }
+  } catch { /* keep the status-only default for non-JSON failures */ }
+  const error = new Error(msg) as DashboardRequestError;
+  error.status = res.status;
+  if (body !== undefined) error.body = body;
+  return error;
+}
+
+/** Shared authenticated request path for dashboard-only API surfaces that have
+ * not landed in the public SDK yet. Keeping refresh/retry and org pinning here
+ * prevents feature pages from growing subtly different auth behavior. */
+export async function authFetch<T = unknown>(path: string, opts: FetchOpts = {}): Promise<T> {
+  const res = await sendAuthed(path, opts, DASHBOARD_REQUEST_TIMEOUT_MS);
+  if (!res.ok) throw await requestFailure(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** A file the API sent as a download, with what it said about itself. */
+export interface DownloadedFile {
+  filename: string;
+  contentType: string;
+  content: string;
+  /** True when a bound stopped the export short — REPORTED by the server, never inferred. */
+  truncated: boolean;
+  /** Kinds of thing the file could not carry. A fixed enum, never free text. */
+  omissions: string[];
+}
+
+/**
+ * Read an endpoint that answers with a file rather than JSON.
+ *
+ * Separate from `authFetch` because the body is text and the interesting part is
+ * in the headers: `authFetch` would parse a Markdown export as JSON and throw on
+ * the first character. The headers it reads are the ones the API's CORS
+ * middleware exposes — without that list a browser drops them silently, and this
+ * would report every export as complete.
+ */
+export async function authDownload(path: string, opts: FetchOpts = {}): Promise<DownloadedFile> {
+  const res = await sendAuthed(path, opts, DASHBOARD_DOWNLOAD_TIMEOUT_MS);
+  if (!res.ok) throw await requestFailure(res);
+  return {
+    content: await res.text(),
+    contentType: res.headers.get("content-type") ?? "text/plain",
+    filename: filenameFromDisposition(res.headers.get("content-disposition")),
+    truncated: res.headers.get("x-brainrouter-export-truncated") === "1",
+    omissions: (res.headers.get("x-brainrouter-export-omissions") ?? "").split(",").filter(Boolean),
+  };
+}
+
+/**
+ * The filename out of a `Content-Disposition`, parsed without a pattern.
+ *
+ * `indexOf` rather than a regular expression, on a header this code did not
+ * write: a quantifier over an attacker-influenced string is how a parser becomes
+ * a denial of service, and there is nothing here a regex would do better. The
+ * result is character-classed anyway, because it becomes a download's name.
+ */
+function filenameFromDisposition(header: string | null): string {
+  const raw = (header ?? "").slice(0, 400);
+  const at = raw.indexOf('filename="');
+  if (at < 0) return "export.txt";
+  const rest = raw.slice(at + 'filename="'.length);
+  const end = rest.indexOf('"');
+  const name = (end < 0 ? rest : rest.slice(0, end)).replace(/[^A-Za-z0-9._-]+/g, "-");
+  return name || "export.txt";
 }
 
 export type ProviderKind = "llm" | "embedding" | "reranker";
@@ -202,6 +284,7 @@ export interface ReviewJob {
   blocking: number | null;
   findingsDetail?: {
     file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
+    codeExcerpt?: string; replacement?: string; diffHunk?: string;
     preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
     firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
   }[];

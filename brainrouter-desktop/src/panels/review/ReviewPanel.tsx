@@ -10,6 +10,8 @@ import React, { useState } from 'react';
 import { DiffView } from '../diff.js';
 import { Button } from '../../components/primitives/Button.js';
 import { findingRows } from '../../lib/review/reviewCode.js';
+import { codeFileUri, createAndCite } from '../../lib/workspace/crossMode.js';
+import { bridgeQuery } from '../../lib/bridgeQuery.js';
 import { GATE_LABEL, type ReviewFindingView, type ReviewGateView } from '../reviewShared.js';
 
 /** §2 — line-numbered code frame: red problem/removed, green suggested/added,
@@ -62,6 +64,25 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
 }): React.ReactElement {
   const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
   const findings = [...(review?.findings ?? [])].sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
+  /**
+   * ADR-029 C2 — Code → Notes.
+   *
+   * The reference goes to the FILE rather than to the finding, because only one
+   * review run is kept per workspace: a note pointing at the finding would
+   * dangle after the next run with nothing to tombstone. The file survives, and
+   * the finding's own words travel with the note.
+   */
+  const findingToNote = (f: ReviewFindingView): Promise<unknown> => createAndCite({
+    mode: 'notes', kind: 'block',
+    title: `${f.severity}: ${f.summary}`,
+    from: undefined,
+    fields: { kind: 'todo' },
+  }).then((created) => (created.ok
+    ? bridgeQuery('workspace-link', {
+        from: created.uri,
+        to: `${codeFileUri(f.file)}${f.line ? `#L${f.line}` : ''}`,
+      })
+    : created));
   const byFile = new Map<string, ReviewFindingView[]>();
   for (const f of findings) { const a = byFile.get(f.file) ?? []; a.push(f); byFile.set(f.file, a); }
   return (
@@ -107,6 +128,11 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
                     <Button onClick={() => onAnnotate(f)} title="Save this finding as a durable annotation">Annotate</Button>
                     <Button onClick={() => onOpenDiff(f)} title="Open this file's diff">Open diff</Button>
                     <Button onClick={() => onOpenFile(f)} title="Open the file">Open file</Button>
+                    {/* ADR-029 C2 — Code → Notes. Only one review run is kept
+                        per workspace, so a finding worth returning to has to
+                        leave the review to survive the next one; the note keeps
+                        the words and cites the file it was about. */}
+                    <Button onClick={() => void findingToNote(f)} title="Keep this finding as a note, citing the file">To notes</Button>
                     {!resolved ? <Button onClick={() => onResolve(f)}>Resolve</Button> : null}
                     {!resolved ? <Button onClick={() => onDismiss(f)}>Dismiss</Button> : null}
                     {/* 0.4.15 triage — clear the gate without claiming code changed. */}

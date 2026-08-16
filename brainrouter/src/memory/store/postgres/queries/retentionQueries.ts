@@ -20,6 +20,7 @@
  */
 
 import type { Executor } from "./executor.js";
+import { compactCompletedPlannerItems } from "./plannerQueries.js";
 
 /** Owner-approved default: keep full detail this long, then compact. */
 export const DEFAULT_RETENTION_DAYS = 90;
@@ -142,19 +143,52 @@ export async function compactJobProgress(exec: Executor, options?: RetentionOpti
   );
 }
 
+/**
+ * ADR-028 D8 — run the planner's own compaction as part of this pass.
+ *
+ * `compactCompletedPlannerItems` is scoped to one `(org_id, user_id)`, because a
+ * planner is personal and the user is part of the KEY rather than a column
+ * anybody could forget in a WHERE clause. That scoping is right, and it is why
+ * this wrapper exists: a retention pass is global, so it finds the tenants with
+ * expired completed items and sweeps each one, instead of a second global
+ * statement drifting from the per-user one the sync path already tests.
+ *
+ * Bounded the same way as its siblings — the tenant list is capped per pass, so
+ * a large install drains over several hours instead of holding one long lock.
+ * Returns how many item rows were minimised.
+ */
+export async function compactPlannerItems(exec: Executor, options?: RetentionOptions): Promise<number> {
+  const { days, batch } = resolve(options);
+  const tenants = await exec.rows<{ org_id: string; user_id: string }>(
+    `SELECT DISTINCT org_id, user_id
+       FROM planner_items
+      WHERE completed = true
+        AND updated_at < now() - make_interval(days => $1::int)
+      LIMIT $2::int`,
+    [days, batch],
+  );
+  let compacted = 0;
+  for (const tenant of tenants) {
+    compacted += await compactCompletedPlannerItems(exec, tenant.org_id, tenant.user_id, days);
+  }
+  return compacted;
+}
+
 export interface RetentionPassResult {
   usageEventsFolded: number;
   jobsCompacted: number;
+  plannerItemsCompacted: number;
 }
 
 /**
- * One bounded retention pass. Best-effort by construction: a failure in either
- * half is reported but never propagated, because retention must not be able to
+ * One bounded retention pass. Best-effort by construction: a failure in any
+ * part is reported but never propagated, because retention must not be able to
  * break the job drain it runs alongside.
  */
 export async function runRetentionPass(exec: Executor, options?: RetentionOptions): Promise<RetentionPassResult> {
   let usageEventsFolded = 0;
   let jobsCompacted = 0;
+  let plannerItemsCompacted = 0;
   try {
     usageEventsFolded = await rollUpModelUsage(exec, options);
   } catch (err: any) {
@@ -165,5 +199,10 @@ export async function runRetentionPass(exec: Executor, options?: RetentionOption
   } catch (err: any) {
     console.error("[BrainRouter] job-progress compaction failed:", err?.message ?? err);
   }
-  return { usageEventsFolded, jobsCompacted };
+  try {
+    plannerItemsCompacted = await compactPlannerItems(exec, options);
+  } catch (err: any) {
+    console.error("[BrainRouter] planner compaction failed:", err?.message ?? err);
+  }
+  return { usageEventsFolded, jobsCompacted, plannerItemsCompacted };
 }

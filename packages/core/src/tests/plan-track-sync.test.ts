@@ -158,6 +158,11 @@ test('plan/Track sync guard: one enabled turn creates and captures the cascade o
     const statuses: string[] = [];
     const captured: Array<Record<string, unknown>> = [];
     let llmCalls = 0;
+    // ADR-034 D1 also names a session on its first finalized turn: one bounded,
+    // toolless, fire-and-forget proposal that never re-enters the turn loop.
+    // It is routed through its own seam so `llmCalls` still counts ONLY turn
+    // steps — a cascade that re-prompts the model still fails the count below.
+    let titleCalls = 0;
     setCliKnobOverride({
       nextActionPlanner: 'off',
       automation: {
@@ -187,6 +192,10 @@ test('plan/Track sync guard: one enabled turn creates and captures the cascade o
     try {
       const agent = new Agent(mcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, sessionKey, silent: false,
+        sessionTitleModelCall: async () => {
+          titleCalls += 1;
+          return { content: 'Request tracing rollout' };
+        },
       });
       await agent.runTurn('inspect the workspace', {
         onStatusUpdate: (status) => statuses.push(status), onToolStart: () => {}, onToolEnd: () => {},
@@ -194,6 +203,7 @@ test('plan/Track sync guard: one enabled turn creates and captures the cascade o
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       assert.equal(llmCalls, 2, 'the deterministic guard must not re-prompt the model');
+      assert.equal(titleCalls, 1, 'first-turn naming is the only model call outside the turn loop');
       assert.equal(statuses.filter((status) => /Requirement .* Plan .* Track/i.test(status)).length, 1, 'guard budget is one pass per turn');
       assert.equal(listWorkItems(workspace).filter((item) => item.requirementId === requirement.id).length, 1);
       const automationEvents = captured

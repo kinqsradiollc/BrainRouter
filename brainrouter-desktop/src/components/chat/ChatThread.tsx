@@ -5,6 +5,7 @@
  * the composer (passed in as a node so its 25-prop wiring stays in App).
  * Extracted verbatim from App.tsx; the App owns all state, refs, and handlers.
  */
+import type { WorkspaceMode } from '../layout/ActivityBar.js';
 import React, { useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../../icons.js';
 import remarkGfm from 'remark-gfm';
@@ -26,7 +27,7 @@ type InteractionResponse = { type: 'confirm'; approved: boolean } | { type: 'cho
 
 export interface ChatThreadProps {
   homeMode: boolean;
-  onMode: (mode: 'chat' | 'track' | 'code' | 'meetings') => void;
+  onMode: (mode: WorkspaceMode) => void;
   onStartBuild: () => void;
   onOpenHomeView: (id: PanelId) => void;
   railOpen: boolean;

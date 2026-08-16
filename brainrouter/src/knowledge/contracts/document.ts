@@ -235,7 +235,15 @@ export interface KnowledgeDocumentRetryView {
 
 export type KnowledgeDocumentServiceFailure = {
   ok: false;
-  code: "not_found" | "forbidden" | "invalid";
+  /**
+   * ADR-030 Q3 — `busy` is refusal by ADMISSION, not by validation.
+   *
+   * Distinct from `invalid` because the two say opposite things to whoever
+   * uploaded the file: `invalid` means this document will never be accepted, and
+   * `busy` means this one will, shortly. Collapsing them would tell someone
+   * their contract was corrupt because the parse queue was full.
+   */
+  code: "not_found" | "forbidden" | "invalid" | "busy";
   field?:
     | "baseId"
     | "title"

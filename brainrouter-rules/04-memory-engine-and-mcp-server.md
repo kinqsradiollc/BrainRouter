@@ -259,6 +259,33 @@ originating client or process is gone.
 
 - **Evidence:** `brainrouter/src/memory/capture/memoryTags.ts`, `brainrouter/src/memory/capture/entry.ts`, `brainrouter/src/memory/capture/extraction.ts`, `brainrouter/src/memory/pipeline/cognitive/cognitive-extractor.ts`
 
+### 19. Learned BEHAVIOUR lives in `core/src/learning/`; the durable FACT still goes to the memory engine
+
+ADR-032's learned store is not an exception to golden rule 1. A learned item is
+written to the memory engine through `memory_record_lesson` like every other
+durable fact; what the learning store keeps is the lifecycle memory does not
+model — the provenance tier (`evidence` vs `instruction`), the falsifier, the
+predicted outcome, and the retrieval/confirmation/contradiction counters that
+retire it. If you find yourself adding recall, embedding, or search to
+`core/src/learning/`, you are building the parallel system rule 1 forbids: put
+it in the engine and keep the pointer.
+
+Three things about it that are easy to get wrong:
+
+- **the checkpoint is dispatched, never awaited** (`turnFinalizationPhase.ts`,
+  `session.impl.ts` `compactHistory`, `Agent.endSession`) and it is bounded per
+  session — reflection is an LLM call, and an unbounded one scales with how
+  badly a session is going;
+- **a learned skill must never be written under `skills/`** — that tree is
+  generated and gitignored per package (ADR-031), so it would vanish on the next
+  build or ship to every user. It goes in the user-scoped store, and its id
+  carries the `learned-` prefix so it can never shadow a shipped skill;
+- **the instruction tier is reachable only from `recordHumanCorrection`.** The
+  reflector hard-codes `origin: 'model-inferred'`, because a document that could
+  name its own origin is a persistent prompt injection (ADR-032 D7).
+
+- **Evidence:** `packages/core/src/learning/`, `packages/core/src/agent/runtime/learningPhase.ts`, `packages/core/src/agent/runtime/turnFinalizationPhase.ts:53`
+
 ---
 
 ## Cross-cutting notes for this package

@@ -41,7 +41,7 @@ first, then the topical file for the area you're touching.
 
 | File                                                                               | Read it when you are…                                                       |
 | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| [`00-golden-rules.md`](00-golden-rules.md)                                         | doing **anything** — the top ~20 non-negotiables                            |
+| [`00-golden-rules.md`](00-golden-rules.md)                                         | doing **anything** — the 30 non-negotiables                                 |
 | [`01-monorepo-packages-and-boundaries.md`](01-monorepo-packages-and-boundaries.md) | touching package deps, imports, build order, or the browser/Node boundary   |
 | [`02-code-style-and-conventions.md`](02-code-style-and-conventions.md)             | writing any `.ts`/`.tsx` — naming, quotes, imports, types, errors, comments |
 | [`03-refactoring-and-god-files.md`](03-refactoring-and-god-files.md)               | splitting a large file or restructuring a folder                            |

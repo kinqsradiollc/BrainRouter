@@ -1,7 +1,15 @@
+/**
+ * User-global workspace/session persistence.
+ *
+ * State paths stay inside the BrainRouter home, session buckets are exact and
+ * collision-resistant, and long opaque keys are recovered only from a private
+ * marker whose hash still matches the directory name.
+ */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { writeFileAtomic } from '../util/fs/atomicFile.js';
 
 export function isPathInside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
@@ -69,7 +77,20 @@ export function getStateDir(workspaceRoot: string): string {
 }
 
 let migrationAttempted = new Set<string>();
-const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json']);
+// `agents/` holds workspace-local orchestration ROLE definitions
+// (`agentRegistry.ts` writes them, `domainPersonas.ts` reads them). They are
+// project-local and committable in exactly the way `workflows/` and
+// `workspace.json` are — a team checks them in so everyone gets the same roles.
+// They were absent from this set, so the legacy-state migration deleted them
+// outright the first time a workspace ran with BRAINROUTER_HOME pointing
+// somewhere else. That is someone's reviewed role definitions gone, not stale
+// runtime state, and the rescue-copy above never covered them either.
+// `runs/` holds durable execution-map records (ADR-040 A40-6). `runStore.ts`
+// reads and writes them ONLY at the raw `<ws>/.brainrouter/runs` path — never at
+// the home state root — so relocating them here orphans every durable run the
+// moment a workspace first migrates. Like `workflows/` and `agents/`, they are
+// workspace-local by their store's design and must stay put.
+const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json', 'agents', 'runs']);
 const WORKSPACE_MANIFEST_CLAIM_PATTERN = /^\.workspace\.json\.[0-9]+\.[0-9a-f]{24}\.claim$/;
 
 function isWorkspaceLocalArtifact(entryName: string): boolean {
@@ -203,21 +224,43 @@ export function getStateFile(workspaceRoot: string, fileName: string): string {
   return filePath;
 }
 
+const SESSION_DIRECTORY_NAME_MAX = 180;
+// `~` is outside the base64url alphabet, so a legacy short-key encoding can
+// never be mistaken for a v2 hash bucket.
+const HASHED_SESSION_DIRECTORY_PREFIX = 'v2~';
+const SESSION_KEY_MARKER = '.session-key.json';
+const SESSION_KEY_MARKER_MAX_BYTES = 16 * 1024;
+
 /**
- * Encode a sessionKey to a safe directory name. Base64url keeps it short and
- * round-trippable so listSessions can recover the original key. The 180-char
- * cap matches the previous transcript filename limit.
+ * Encode a sessionKey to a safe directory name. Short keys retain the legacy
+ * round-trippable base64url path. Long keys use a full SHA-256 name rather than
+ * truncation; their exact value lives in a private marker inside that bucket.
  */
 export function encodeSessionKey(sessionKey: string): string {
-  return Buffer.from(sessionKey, 'utf8').toString('base64url').slice(0, 180);
+  const encoded = Buffer.from(sessionKey, 'utf8').toString('base64url');
+  if (encoded.length <= SESSION_DIRECTORY_NAME_MAX) return encoded;
+  return `${HASHED_SESSION_DIRECTORY_PREFIX}${crypto.createHash('sha256').update(sessionKey, 'utf8').digest('base64url')}`;
 }
 
 export function decodeSessionKey(encoded: string): string {
+  if (encoded.startsWith(HASHED_SESSION_DIRECTORY_PREFIX)) return encoded;
   try {
     return Buffer.from(encoded, 'base64url').toString('utf8');
   } catch {
     return encoded;
   }
+}
+
+/** Exactly-180 legacy names are ambiguous because old builds truncated there. */
+export function sessionEncodingRequiresExactMarker(encoded: string): boolean {
+  return encoded.startsWith(HASHED_SESSION_DIRECTORY_PREFIX) ||
+    encoded.length === SESSION_DIRECTORY_NAME_MAX;
+}
+
+/** Only shorter legacy transcript filenames remain unambiguously reversible. */
+export function isSafeLegacySessionEncoding(encoded: string): boolean {
+  return encoded.length < SESSION_DIRECTORY_NAME_MAX &&
+    !encoded.startsWith(HASHED_SESSION_DIRECTORY_PREFIX);
 }
 
 /**
@@ -228,13 +271,22 @@ export function decodeSessionKey(encoded: string): string {
  */
 export function getSessionStateDir(workspaceRoot: string, sessionKey: string): string {
   const stateDir = getStateDir(workspaceRoot);
+  assertPrivateDirectory(stateDir);
   const sessionsDir = path.join(stateDir, 'sessions');
-  fs.mkdirSync(sessionsDir, { recursive: true });
-  const sessionDir = path.join(sessionsDir, encodeSessionKey(sessionKey));
+  ensurePrivateChildDirectory(stateDir, sessionsDir);
+  const encoded = encodeSessionKey(sessionKey);
+  const sessionDir = path.join(sessionsDir, encoded);
   if (!isPathInside(sessionsDir, sessionDir)) {
     throw new Error('Session state directory escapes CLI state dir.');
   }
-  fs.mkdirSync(sessionDir, { recursive: true });
+  if (encoded.startsWith(HASHED_SESSION_DIRECTORY_PREFIX) &&
+      !fs.existsSync(path.join(sessionDir, SESSION_KEY_MARKER))) {
+    assertNoAmbiguousLegacyLongKeyState(stateDir, sessionsDir, sessionKey);
+  }
+  ensurePrivateChildDirectory(sessionsDir, sessionDir);
+  if (sessionEncodingRequiresExactMarker(encoded)) {
+    ensureHashedSessionKeyMarker(sessionDir, encoded, sessionKey);
+  }
   return sessionDir;
 }
 
@@ -262,6 +314,17 @@ export function listSessionDirs(workspaceRoot: string): Array<{ sessionKey: stri
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(sessionsDir, entry.name);
+    let sessionKey: string;
+    try {
+      assertPrivateChildDirectory(sessionsDir, dir);
+      sessionKey = sessionEncodingRequiresExactMarker(entry.name)
+        ? readHashedSessionKeyMarker(dir, entry.name)
+        : decodeSessionKey(entry.name);
+    } catch {
+      // Never guess a hashed identity when its exact marker is missing,
+      // corrupt, or mismatched. Other healthy sessions remain listable.
+      continue;
+    }
     let mtime = new Date(0);
     try {
       const stat = fs.statSync(dir);
@@ -273,12 +336,166 @@ export function listSessionDirs(workspaceRoot: string): Array<{ sessionKey: stri
       }
     } catch { /* unreadable */ }
     out.push({
-      sessionKey: decodeSessionKey(entry.name),
+      sessionKey,
       dir,
       modifiedAt: mtime.toISOString(),
     });
   }
   return out.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+}
+
+function ensureHashedSessionKeyMarker(
+  sessionDir: string,
+  encoded: string,
+  sessionKey: string,
+): void {
+  const marker = path.join(sessionDir, SESSION_KEY_MARKER);
+  const deadline = Date.now() + 1_000;
+  while (!fs.existsSync(marker)) {
+    const existingEntries = fs.readdirSync(sessionDir);
+    if (existingEntries.length > 0) {
+      const onlyConcurrentStages = existingEntries.every((entry) =>
+        /^\.\.session-key\.json\.[0-9]+\.[0-9a-f]{24}\.tmp$/.test(entry));
+      if (onlyConcurrentStages && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        continue;
+      }
+      throw new Error('Ambiguous session state directory is missing its exact-key marker.');
+    }
+    try {
+      writeFileAtomic(marker, `${JSON.stringify({ schemaVersion: 1, sessionKey })}\n`, {
+        mode: 0o600,
+        exclusive: true,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+  const stored = readHashedSessionKeyMarker(sessionDir, encoded);
+  if (stored !== sessionKey) {
+    throw new Error('Session state directory hash collision or identity mismatch.');
+  }
+}
+
+function readHashedSessionKeyMarker(sessionDir: string, encoded: string): string {
+  const marker = path.join(sessionDir, SESSION_KEY_MARKER);
+  let descriptor: number | undefined;
+  try {
+    const before = fs.lstatSync(marker);
+    if (before.isSymbolicLink() || !before.isFile() || before.size < 2 ||
+        before.size > SESSION_KEY_MARKER_MAX_BYTES) {
+      throw new Error('Invalid hashed session-key marker.');
+    }
+    const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+    descriptor = fs.openSync(marker, fs.constants.O_RDONLY | noFollow);
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
+      throw new Error('Hashed session-key marker changed during read.');
+    }
+    if (process.platform !== 'win32' && (opened.mode & 0o777) !== 0o600) {
+      fs.fchmodSync(descriptor, 0o600);
+    }
+    const expected = fs.fstatSync(descriptor);
+    const raw = fs.readFileSync(descriptor, 'utf8');
+    const after = fs.lstatSync(marker);
+    const afterRead = fs.fstatSync(descriptor);
+    if (after.isSymbolicLink() || !after.isFile() || after.dev !== expected.dev ||
+        after.ino !== expected.ino || after.size !== expected.size ||
+        after.mtimeMs !== expected.mtimeMs || after.ctimeMs !== expected.ctimeMs ||
+        afterRead.size !== expected.size || afterRead.mtimeMs !== expected.mtimeMs ||
+        afterRead.ctimeMs !== expected.ctimeMs) {
+      throw new Error('Hashed session-key marker changed during read.');
+    }
+    const parsed = JSON.parse(raw) as { schemaVersion?: unknown; sessionKey?: unknown };
+    if (parsed.schemaVersion !== 1 || typeof parsed.sessionKey !== 'string' ||
+        encodeSessionKey(parsed.sessionKey) !== encoded) {
+      throw new Error('Invalid hashed session-key marker.');
+    }
+    return parsed.sessionKey;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error('Missing hashed session-key marker.');
+    }
+    throw error;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* preserve the original failure */ }
+    }
+  }
+}
+
+function ensurePrivateChildDirectory(parent: string, directory: string): void {
+  try {
+    fs.mkdirSync(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  assertPrivateChildDirectory(parent, directory);
+}
+
+function assertNoAmbiguousLegacyLongKeyState(
+  stateDir: string,
+  sessionsDir: string,
+  sessionKey: string,
+): void {
+  const legacyName = Buffer.from(sessionKey, 'utf8').toString('base64url').slice(0, SESSION_DIRECTORY_NAME_MAX);
+  const legacyBucket = path.join(sessionsDir, legacyName);
+  const legacyMarker = path.join(legacyBucket, SESSION_KEY_MARKER);
+  let ambiguousBucket = false;
+  try {
+    const stat = fs.lstatSync(legacyBucket);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      ambiguousBucket = true;
+    } else if (fs.existsSync(legacyMarker)) {
+      // A marker proves this is a new exact-180 key, not an unattributed old
+      // long-key bucket. Its mismatch is intentional and safe.
+      readHashedSessionKeyMarker(legacyBucket, legacyName);
+    } else {
+      ambiguousBucket = fs.readdirSync(legacyBucket).length > 0;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ambiguousBucket = true;
+  }
+  const legacyTranscript = path.join(stateDir, 'transcripts', `${legacyName}.jsonl`);
+  let ambiguousTranscript = false;
+  try {
+    const stat = fs.lstatSync(legacyTranscript);
+    ambiguousTranscript = stat.isSymbolicLink() || !stat.isFile() || stat.size > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') ambiguousTranscript = true;
+  }
+  if (ambiguousBucket || ambiguousTranscript) {
+    throw new Error(
+      `Legacy long-key session state is ambiguous and requires manual recovery before this exact session can resume: ${legacyName}`,
+    );
+  }
+}
+
+function assertPrivateChildDirectory(parent: string, directory: string): void {
+  if (!isPathInside(parent, directory)) {
+    throw new Error(`Session state directory escapes its parent: ${directory}`);
+  }
+  assertPrivateDirectory(directory);
+  const realParent = fs.realpathSync(parent);
+  const realDirectory = fs.realpathSync(directory);
+  if (!isPathInside(realParent, realDirectory)) {
+    throw new Error(`Session state directory escapes through a symbolic link: ${directory}`);
+  }
+}
+
+function assertPrivateDirectory(directory: string): void {
+  const stat = fs.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Unsafe session state directory: ${directory}`);
+  }
+  try {
+    fs.chmodSync(directory, 0o700);
+  } catch (error) {
+    if (process.platform !== 'win32') throw error;
+  }
+  if (process.platform !== 'win32' && (fs.statSync(directory).mode & 0o777) !== 0o700) {
+    throw new Error(`Session state directory is not private: ${directory}`);
+  }
 }
 
 export function readJsonFile<T>(filePath: string, fallback: T): T {

@@ -57,33 +57,32 @@ export const memorySearchSchema = z.object({
   }).optional(),
 });
 
-export async function handleMemorySearch(args: unknown, options?: { defaultUserId?: string }) {
+export async function handleMemorySearch(args: unknown, options?: { defaultUserId?: string; defaultOrgId?: string }) {
   const params = memorySearchSchema.parse(args);
-  const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
+  // An authenticated transport owns the tenant address. Retain the explicit
+  // userId only for direct/legacy callers that do not provide that context.
+  const effectiveUserId = options?.defaultUserId ?? params.userId ?? "default";
 
   try {
     // Point-in-time search path
     if (params.asOf) {
-      const result = memoryEngine.searchAsOf(
+      const result = await memoryEngine.searchAsOf(
         effectiveUserId,
         params.query,
         params.asOf,
-        params.limit ?? 10
+        params.limit ?? 10,
+        options?.defaultOrgId,
       );
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     }
 
-    // ADR-010 P5b — scope recall to the caller's org so org-SHARED records
-    // (visibility='org') surface alongside their own. Best-effort: no tenancy →
-    // user-only recall (unchanged). For a single-user personal org this adds
-    // nothing (no shared records exist), so results are identical.
-    let filters = params.filters as (typeof params.filters & { orgId?: string }) | undefined;
-    try {
-      const orgId = await memoryEngine.tenancy.getDefaultOrgId(effectiveUserId);
-      if (orgId) filters = { ...(filters ?? {}), orgId };
-    } catch { /* no org context — user-scoped recall */ }
+    // Use the MCP session's pinned active org. Looking up the user's mutable
+    // default here could cross partitions after an active-org switch.
+    const filters = options?.defaultOrgId
+      ? { ...(params.filters ?? {}), orgId: options.defaultOrgId }
+      : params.filters;
 
     // Standard recall path
     const result = await memoryEngine.recall({

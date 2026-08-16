@@ -35,6 +35,26 @@ test("legacy progress events assemble into an ordered trace without sensitive me
   assert.deepEqual(trace.nodes.find((node) => node.label === "Pull request context")?.metrics, { bytes: 1200 });
 });
 
+test("the units the review planned and what the reflection dropped are visible", () => {
+  // ADR-033 — a reviewer that reports how it ran and then hides the numbers is
+  // the surface failure this project keeps having; these events are emitted, so
+  // they must reach the trace.
+  const trace = buildAgentTrace([review({ progress: [
+    { ts: "2026-07-15T00:00:00.000Z", kind: "queued", msg: "Security review started" },
+    { ts: "2026-07-15T00:00:01.000Z", kind: "diff-fetched", msg: "PR diff fetched", data: { bytes: 1200, files: 4 } },
+    { ts: "2026-07-15T00:00:02.000Z", kind: "review-units-planned", msg: "Review planned as 2 unit(s)", data: { parts: 2, graphEdges: 1, deferredFiles: ["src/skipped.ts"] } },
+    { ts: "2026-07-15T00:00:04.000Z", kind: "findings-parsed", msg: "Findings parsed", data: { total: 3, droppedByReflection: 2, reflected: true } },
+  ] })]);
+  const context = trace.nodes.find((node) => node.label === "Pull request context");
+  assert.equal(context?.metrics.parts, 2);
+  assert.equal(context?.metrics.graphEdges, 1);
+  // Path lists are not scalars and never reach the trace.
+  assert.equal(context?.metrics.deferredFiles, undefined);
+  const findings = trace.nodes.find((node) => node.label === "Finding analysis");
+  assert.equal(findings?.metrics.droppedByReflection, 2);
+  assert.equal(findings?.metrics.reflected, true);
+});
+
 test("running jobs mark only their last phase active", () => {
   const trace = buildAgentTrace([review({ status: "running", updatedAt: "2026-07-15T00:00:04.000Z", progress: [
     { ts: "2026-07-15T00:00:00.000Z", kind: "queued", msg: "Review started" },

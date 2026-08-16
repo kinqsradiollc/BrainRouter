@@ -2,6 +2,31 @@
 // installDevBridge(); each handler closes over the shared dev state (./state) via the
 // destructured helpers below and S.<scalar> for reassignable scalars. Behavior-identical.
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
+import type { LearnedItem, LearnedTenant, LearningLogEntry } from '@kinqs/brainrouter-core/learning';
+// The browser-safe half of core's notes model. The `notes` barrel reaches the
+// filesystem; `notes/editing` is pure by construction, which is what lets the
+// harness answer with the same sentences the host does instead of its own.
+import {
+  applyInputRule, describeTrashEntry, searchSlashCatalog, UNTITLED_PAGE,
+  // ADR-029 E3 — the database projection is CORE's, and it is pure, so the
+  // harness runs the same one the host does. A second filter/sort/group here
+  // would hide different rows for the same saved view, which is the drift the
+  // whole decision is organised against.
+  coercePropertyValue, defaultDatabaseSchema, defaultDatabaseViews, operatorsFor,
+  readDatabase, DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS,
+  TITLE_PROPERTY_ID,
+  // ADR-029 F2/F3 — the same catalogue the host serves, so the harness offers
+  // the same columns and the same functions rather than a shorter list of them.
+  FORMULA_FUNCTIONS, isDerivedPropertyType, NOTE_ROLLUP_AGGREGATES,
+  // F3 — the reference rewrite a copy performs, imported rather than
+  // reimplemented: a second copy of the rule is the one that keeps rewriting
+  // after the first stops, and the symptom is a page pointing at the template it
+  // came from.
+  remapNoteRefs,
+  type NoteBlock, type NoteBlockKind, type NoteDatabaseView, type NotePropertyDef,
+  type NotePropertyValue, type NoteViewKind,
+} from '@kinqs/brainrouter-core/notes/editing';
+import type { NoteCommentDto } from '@kinqs/brainrouter-ui/notes';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
 import type { DevState } from './state.js';
 import {
@@ -21,8 +46,64 @@ type DevAttachment = DevState['devAttachments'] extends Map<string, infer V> ? V
 
 export function createQueries(S: DevState): Record<string, (args: Record<string, unknown>) => unknown> {
   const {
-    DEMO_DIFF, prefs, sessionModes, effectivePrefs, resolvedModel, SESSIONS_BY_ROOT, devMeta, mergeMeta, devGroups, devSchedules, devWorktrees, devRequirements, devAnnotations, devAnnotMarkdown, devArtifacts, devPlanState, trackCat, mkItem, devTrack, devSprints, devModules, devViews, devFindItem, devAutomations, devPlanDecisions, DEV_DIFF_HASH, devRunReview, devGate, devRules, devProviders, devCliKnobs, devExtensions, devGithub, devConnectorCatalog, devSlimDocuments, devConnectorPermissionCounts, devConnectorRuns, devServers, devFiles, devWorkflows, devShortcuts, devFileRead, devAttachments, attachmentKind, attachmentMime, decodePreview, attachmentContext,
+    DEMO_DIFF, prefs, sessionModes, effectivePrefs, resolvedModel, SESSIONS_BY_ROOT, devMeta, mergeMeta, devGroups, devSchedules, devWorktrees, devRequirements, devAnnotations, devAnnotMarkdown, devArtifacts, devPlanState, devPlanner, trackCat, mkItem, devTrack, devSprints, devModules, devViews, devFindItem, devAutomations, devPlanDecisions, DEV_DIFF_HASH, devRunReview, devGate, devRules, devProviders, devCliKnobs, devExtensions, devGithub, devConnectorCatalog, devSlimDocuments, devConnectorPermissionCounts, devConnectorRuns, devServers, devFiles, devWorkflows, devShortcuts, devFileRead, devAttachments, attachmentKind, attachmentMime, decodePreview, attachmentContext,
   } = S;
+  const refreshDevPlannerSync = (): void => {
+    const count = devPlanner.sync.issues.length;
+    devPlanner.sync.pendingCount = count;
+    devPlanner.sync.label = count === 0
+      ? 'Everything is synced.'
+      : `${count} change${count === 1 ? '' : 's'} waiting to sync.`;
+  };
+  const queueDevPlannerChange = (
+    itemId: string,
+    itemTitle: string,
+    action: string,
+    entity: 'item' | 'block' = 'item',
+  ): void => {
+    devPlanner.sync.issues.push({
+      id: `dev-op-${S.devPlannerN++}`,
+      entity,
+      itemId,
+      itemTitle,
+      action,
+      createdAt: new Date().toISOString(),
+      ageLabel: 'now',
+      attempts: 0,
+      stuck: false,
+    });
+    refreshDevPlannerSync();
+  };
+  /**
+   * ADR-030 Q4 — the harness's stand-in for a parsed document.
+   *
+   * Only PDFs have one, which is what the host does too: an image attachment
+   * resolves to `null` and the panel says there is no parsed document rather
+   * than showing an empty one.
+   */
+  const devDocument = (id: string): {
+    attachmentId: string; name: string; classification: string; notice: string;
+    parts: Array<{ index: number; page: number; kind: string; text: string }>;
+  } | null => {
+    const rec = devAttachments.get(id);
+    if (!rec || rec.kind !== 'pdf') return null;
+    const body = (page: number): string => `# ${rec.name} — page ${page}\n\n`
+      + `This is the harness's stand-in for page ${page} of a parsed document. `
+      + 'The host answers this query from the artifact written when the file was attached.';
+    return {
+      attachmentId: rec.id,
+      name: rec.name,
+      classification: 'mixed',
+      notice: 'Page 3 of this 4-page document is a scan with no text layer; its contents '
+        + 'are NOT in the text below and were not read.',
+      parts: [
+        { index: 1, page: 1, kind: 'text', text: body(1) },
+        { index: 2, page: 2, kind: 'text', text: body(2) },
+        { index: 3, page: 3, kind: 'scanned', text: '' },
+        { index: 4, page: 4, kind: 'text', text: body(4) },
+      ],
+    };
+  };
   // MC-DESK Batch 2 — mutable dev fixtures for the runtime/automation monitor
   // cards (browser preview + Preview server). Real data comes from node-fs core
   // APIs host-side; here we mock enough to render + exercise the actions.
@@ -43,6 +124,299 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { role: 'explorer', provider: 'groq', model: null },
     { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
   ];
+  const devLearningTenant: LearnedTenant = { userId: 'dev-user', orgId: 'dev-org' };
+  const devLearnedItems: LearnedItem[] = [{
+    id: 'learn_dev_review',
+    tenant: devLearningTenant,
+    tier: 'evidence',
+    origin: 'model-inferred',
+    form: 'procedure',
+    statement: 'Run the focused review-position test after changing diff parsing.',
+    falsifier: 'The focused test does not exercise the changed positioning path.',
+    outcome: { expectation: 'Diff-position regressions are caught before handoff.', retrievals: 3, confirmations: 2, contradictions: 0 },
+    provenance: {
+      sessionKey: 'dev-session',
+      capturedAt: '2026-08-08T09:00:00.000Z',
+      checkpoint: 'session-end',
+      evidence: ['The same missed position recurred in two review changes.'],
+      corroboratedByTrustedAction: true,
+      corroboratingActionIds: ['tool-dev-test-1'],
+      sawUntrustedContent: false,
+      gateReasoning: 'Repeated local test outcome supported a falsifiable procedure.',
+    },
+    status: 'active',
+    statusReason: undefined as string | undefined,
+    createdAt: '2026-08-08T09:00:00.000Z',
+    updatedAt: '2026-08-08T09:00:00.000Z',
+    skillId: 'learned-review-position',
+    allowedTools: ['read_file', 'grep_search'],
+    memoryRecordId: 'mem_dev_review',
+    memoryLifecycle: { status: 'active', updatedAt: '2026-08-08T09:00:00.000Z', attempts: 1 },
+  }];
+  const devLearningLog: LearningLogEntry[] = [{
+    at: '2026-08-08T09:00:00.000Z',
+    op: 'admitted',
+    itemId: 'learn_dev_review',
+    detail: 'Admitted as evidence after the session-end checkpoint.',
+  }];
+  // ADR-029 — enough notes state for the browser harness to be interactive:
+  // one page, one locked block (B2's attribution), and one block that both
+  // references a planner item and carries a FENCED conflict, so the live-label
+  // path and the "kept beside the version it did not see" line both render
+  // without a server to produce them.
+  type DevNote = {
+    id: string; parentId: string | null; kind: string; text: string; checked: boolean;
+    level: number | null; refs: string[]; conflicts: Array<{
+      field: string;
+      reason: string;
+      oursAt: { physical: number; logical: number; deviceId: string };
+      theirsAt: { physical: number; logical: number; deviceId: string };
+    }>;
+    // E4's page metadata. The harness carries it because the sidebar tree, the
+    // icon picker and the favourites section read it — without these fields the
+    // shell renders here as an untitled, iconless list and looks broken in the
+    // one place a person checks it fastest.
+    icon: string | null; cover: string | null; favourite: boolean;
+    // F3 — a toggle's fold. Carried here because the harness is where a person
+    // checks the gesture fastest, and a twisty that never folds anything is the
+    // same non-working offer Part F exists to remove.
+    collapsed?: boolean;
+    // E3 — a row's cell values, and a database block's schema and views. Carried
+    // here because the projection reads them: without them the harness renders
+    // an empty table and the five views cannot be looked at at all.
+    props?: Record<string, NotePropertyValue>;
+    schema?: NotePropertyDef[];
+    views?: NoteDatabaseView[];
+    // F3 — comments and the template mark. Carried here because both are
+    // controls a person checks in the harness first, and a button that does
+    // nothing is the offer F1 exists to remove.
+    comments?: NoteCommentDto[];
+    template?: boolean;
+  };
+  /** The one block the harness pretends another device is holding (B2). */
+  const LEASED_DEMO_BLOCK = 'blk_2';
+  const devNotes: DevNote[] = [
+    { id: 'blk_1', parentId: null, kind: 'page', text: 'Release notes', checked: false, level: null, refs: [], conflicts: [], icon: '📝', cover: null, favourite: true },
+    { id: 'blk_2', parentId: 'blk_1', kind: 'paragraph', text: 'The parser is unbounded on hostile input.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflicts: [{
+      field: 'text', reason: 'fenced_stale_epoch',
+      oursAt: { physical: 1, logical: 0, deviceId: 'dev' },
+      theirsAt: { physical: 1, logical: 0, deviceId: 'other-device' },
+    }], icon: null, cover: null, favourite: false },
+    { id: 'blk_4', parentId: 'blk_1', kind: 'page', text: 'Parser rewrite', checked: false, level: null, refs: [], conflicts: [], icon: '🧪', cover: null, favourite: false },
+    // E3 — a database with every view kind stored, so the switcher, the board's
+    // no-value column and the calendar's unscheduled strip all render here.
+    {
+      id: 'blk_db', parentId: 'blk_1', kind: DATABASE_BLOCK_KIND, text: 'Reading list',
+      checked: false, level: null, refs: [], conflicts: [], icon: '📚', cover: null, favourite: false,
+      schema: [
+        { id: TITLE_PROPERTY_ID, name: 'Name', type: 'title' },
+        {
+          id: 'status', name: 'Status', type: 'select',
+          options: [{ id: 'to-read', label: 'To read' }, { id: 'reading', label: 'Reading' }, { id: 'done', label: 'Done' }],
+        },
+        { id: 'due', name: 'Due', type: 'date' },
+        { id: 'tags', name: 'Tags', type: 'multi-select', options: [{ id: 'parser', label: 'Parser' }, { id: 'sync', label: 'Sync' }] },
+        { id: 'starred', name: 'Starred', type: 'checkbox' },
+        { id: 'about', name: 'About', type: 'relation' },
+      ],
+      views: [
+        { id: 'table', name: 'Table', kind: 'table', visible: ['title', 'status', 'due', 'tags', 'starred', 'about'] },
+        { id: 'board', name: 'Board', kind: 'board', visible: ['title', 'due', 'tags'], groupBy: 'status' },
+        { id: 'list', name: 'List', kind: 'list', visible: ['title', 'status', 'due'] },
+        { id: 'calendar', name: 'Calendar', kind: 'calendar', visible: ['title', 'status'], groupBy: 'due' },
+        { id: 'gallery', name: 'Gallery', kind: 'gallery', visible: ['title', 'status', 'tags'] },
+      ],
+    },
+    {
+      id: 'blk_row1', parentId: 'blk_db', kind: 'page', text: 'Hybrid logical clocks',
+      checked: false, level: null, refs: [], conflicts: [], icon: '⏱', cover: null, favourite: false,
+      props: { status: 'reading', due: '2026-08-14', tags: ['sync'], starred: true, about: ['brainrouter://planner/item/itm_dev1'] },
+    },
+    {
+      id: 'blk_row2', parentId: 'blk_db', kind: 'page', text: 'Parsing without backtracking',
+      checked: false, level: null, refs: [], conflicts: [], icon: '🧩', cover: null, favourite: false,
+      props: { status: 'to-read', due: '2026-08-21', tags: ['parser'], starred: false },
+    },
+    // No status and no date, so the board's no-value column and the calendar's
+    // unscheduled strip are populated in the harness rather than empty — the two
+    // places a row would silently vanish if either stopped being rendered.
+    {
+      id: 'blk_row3', parentId: 'blk_db', kind: 'page', text: 'Untriaged: CRDT survey',
+      checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false,
+    },
+    { id: 'blk_row1_body', parentId: 'blk_row1', kind: 'paragraph', text: 'A row is a page, so this line lives on it.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    // ADR-029 Part F — one of every block the slash menu offers, so the harness
+    // shows what the menu promises. Five of these used to render as a plain line
+    // of text, and the browser preview is where that is quickest to see.
+    { id: 'blk_toggle', parentId: 'blk_1', kind: 'toggle', text: 'Why the parser is unbounded', checked: false, collapsed: true, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_toggle_a', parentId: 'blk_toggle', kind: 'paragraph', text: 'Nested quantifiers over the same class.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_toggle_b', parentId: 'blk_toggle', kind: 'paragraph', text: 'A fold is a display state — this line is still searchable.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_callout', parentId: 'blk_1', kind: 'callout', text: 'The lease epoch decides the merge. Do not remove it.', checked: false, level: null, refs: [], conflicts: [], icon: '🐛', cover: null, favourite: false },
+    { id: 'blk_bookmark', parentId: 'blk_1', kind: 'bookmark', text: 'https://example.com/parsing', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_image', parentId: 'blk_1', kind: 'image', text: '', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_embed', parentId: 'blk_1', kind: 'embed', text: 'brainrouter://planner/item/itm_dev1', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    // The header flag is the table block's own `checked` field.
+    { id: 'blk_table', parentId: 'blk_1', kind: 'table', text: '', checked: true, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_table_h', parentId: 'blk_table', kind: 'table-row', text: 'Area|Owner|State', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_table_1', parentId: 'blk_table', kind: 'table-row', text: 'Parser|Ana|In review', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_table_2', parentId: 'blk_table', kind: 'table-row', text: 'Sync|Bo', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+  ];
+  // C5 — a delete is a tombstone, so the harness keeps what it removed rather
+  // than dropping it: a trash that is always empty here cannot be looked at.
+  const devNotesTrash: DevNote[] = [];
+  /** Ancestry depth, so the shell's page-relative indent gets real inputs. */
+  const devDepth = (block: DevNote): number => {
+    let depth = 0;
+    const seen = new Set<string>([block.id]);
+    let cursor = block.parentId;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      depth += 1;
+      cursor = devNotes.find((b) => b.id === cursor)?.parentId ?? null;
+    }
+    return depth;
+  };
+  /** A block and everything under it, root first — what a delete takes. */
+  const devSubtree = (rootId: string): string[] => {
+    const out: string[] = [];
+    const walk = (id: string): void => {
+      if (out.includes(id)) return;
+      if (!devNotes.some((b) => b.id === id)) return;
+      out.push(id);
+      for (const child of devNotes.filter((b) => b.parentId === id)) walk(child.id);
+    };
+    walk(rootId);
+    return out;
+  };
+  /**
+   * ADR-029 F4 — the harness's page-level undo.
+   *
+   * A SNAPSHOT of the mock arrays rather than a stack of inverse operations, and
+   * the difference is worth stating: a snapshot is a correct inverse only
+   * because this array is the whole of the harness's world. In the real store
+   * another device can write underneath a recorded step, which is why core
+   * records inverses and guards them — the shortcut here would be a data-loss
+   * bug there.
+   */
+  interface DevUndoEntry { pageId: string | null; label: string; blocks: DevNote[]; trash: DevNote[] }
+  const devUndo: { past: DevUndoEntry[]; future: DevUndoEntry[] } = { past: [], future: [] };
+  /** Deep enough to try the gesture, bounded so a long harness session is flat. */
+  const DEV_UNDO_LIMIT = 40;
+
+  /** Which page's stack a change to this block belongs to — its container ancestor. */
+  const devPageOf = (blockId: string | null): string | null => {
+    const seen = new Set<string>();
+    let cursor = devNotes.find((b) => b.id === blockId)?.parentId ?? null;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      const parent = devNotes.find((b) => b.id === cursor);
+      if (!parent) return null;
+      if (parent.kind === 'page' || parent.kind === DATABASE_BLOCK_KIND) return parent.id;
+      cursor = parent.parentId;
+    }
+    return null;
+  };
+
+  const devSnapshot = (): { blocks: DevNote[]; trash: DevNote[] } => ({
+    blocks: devNotes.map((b) => ({ ...b, refs: [...b.refs], conflicts: [...b.conflicts], comments: [...(b.comments ?? [])] })),
+    trash: devNotesTrash.map((b) => ({ ...b })),
+  });
+
+  const devRestore = (snapshot: { blocks: DevNote[]; trash: DevNote[] }): void => {
+    devNotes.splice(0, devNotes.length, ...snapshot.blocks);
+    devNotesTrash.splice(0, devNotesTrash.length, ...snapshot.trash);
+  };
+
+  /** Record the state BEFORE a change, on the stack of the page it belongs to. */
+  const devRemember = (blockId: string | null, label: string): void => {
+    const snapshot = devSnapshot();
+    devUndo.past.push({ pageId: devPageOf(blockId), label, ...snapshot });
+    if (devUndo.past.length > DEV_UNDO_LIMIT) devUndo.past.shift();
+    // A fresh change abandons the redo branch, like the real one.
+    devUndo.future.length = 0;
+  };
+
+  const devStepHistory = (pageId: string | null, direction: 'undo' | 'redo'): Record<string, unknown> => {
+    const stack = direction === 'undo' ? devUndo.past : devUndo.future;
+    const index = [...stack].reverse().findIndex((entry) => entry.pageId === pageId);
+    if (index < 0) {
+      return { ok: false, reason: direction === 'undo' ? 'nothing_to_undo' : 'nothing_to_redo' };
+    }
+    const at = stack.length - 1 - index;
+    const entry = stack[at]!;
+    stack.splice(at, 1);
+    const current = devSnapshot();
+    (direction === 'undo' ? devUndo.future : devUndo.past).push({ ...entry, ...current });
+    devRestore({ blocks: entry.blocks, trash: entry.trash });
+    return {
+      ok: true,
+      direction,
+      label: entry.label,
+      focusId: devNotes.find((b) => devPageOf(b.id) === pageId)?.id ?? null,
+      changedIds: [] as string[],
+    };
+  };
+
+  /** E1's move up/down, over siblings only — core stops at the ends too. */
+  const devMoveBy = (id: string, direction: -1 | 1): Record<string, unknown> => {
+    devRemember(id, 'moving the block');
+    const index = devNotes.findIndex((b) => b.id === id);
+    const block = devNotes[index];
+    if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+    const siblings = devNotes.filter((b) => b.parentId === block.parentId);
+    const at = siblings.indexOf(block);
+    const target = siblings[at + direction];
+    if (!target) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+    const targetIndex = devNotes.indexOf(target);
+    devNotes.splice(index, 1);
+    devNotes.splice(targetIndex, 0, block);
+    return { ok: true, action: 'move', focusId: id, caret: 0 };
+  };
+
+  /**
+   * ADR-029 E3 — a harness note as the `NoteBlock` core's projection reads.
+   *
+   * The stamps are constant and the ranks come from list order: the harness has
+   * no clock and no outbox, and nothing in `projectDatabase` reads a stamp for
+   * anything but liveness. What matters is that the SHAPE is real, so the
+   * filtering, sorting and grouping the browser shows are the ones the desktop
+   * shows rather than a second implementation written to look similar.
+   */
+  const DEV_HLC = { physical: 0, logical: 0, deviceId: 'dev' };
+  const devAsNoteBlock = (block: DevNote, index: number): NoteBlock => ({
+    id: block.id,
+    parentId: { value: block.parentId, at: DEV_HLC },
+    rank: { value: String(index).padStart(6, '0'), at: DEV_HLC },
+    kind: { value: block.kind as NoteBlockKind, at: DEV_HLC },
+    text: { value: block.text, at: DEV_HLC },
+    ...(block.icon ? { icon: { value: block.icon, at: DEV_HLC } } : {}),
+    ...(block.cover ? { cover: { value: block.cover, at: DEV_HLC } } : {}),
+    ...(block.props
+      ? {
+        props: Object.fromEntries(Object.entries(block.props).map(
+          ([key, value]) => [key, { value, at: DEV_HLC }] as const,
+        )),
+      }
+      : {}),
+    ...(block.schema ? { schema: { value: block.schema, at: DEV_HLC } } : {}),
+    ...(block.views ? { views: { value: block.views, at: DEV_HLC } } : {}),
+  });
+  const devNoteBlocks = (): NoteBlock[] => devNotes.map(devAsNoteBlock);
+  const devDatabase = (id: string): DevNote | undefined =>
+    devNotes.find((block) => block.id === id && block.kind === DATABASE_BLOCK_KIND);
+  /** The schema a database actually has, repaired the way `readDatabase` does. */
+  const devSchemaOf = (block: DevNote): NotePropertyDef[] =>
+    readDatabase(devAsNoteBlock(block, 0)).schema;
+
+  const devWorkspaceLabels = new Map<string, string>([
+    ['brainrouter://planner/item/itm_dev1', 'Ship the parser fix'],
+  ]);
+  const devWorkspaceLabel = (uri: string): string =>
+    devWorkspaceLabels.get(uri) ?? (uri.startsWith('brainrouter://code/file/')
+      ? uri.replace('brainrouter://code/file/', '')
+      : 'a reference (not available in this app)');
+
   const devFanoutRuns: Array<Record<string, unknown>> = [];
   const devSshHosts: Array<Record<string, unknown>> = [];
   const devAutomationRules = [
@@ -128,12 +502,45 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       },
     };
   };
+  const devPeerReceipts: Array<Record<string, unknown>> = [];
+  const devHeldPeerMessages: Array<Record<string, unknown>> = [{
+    id: 'inbox_dev_held', senderSessionKey: 'cli:release-check', senderDeviceId: 'dev-cli-device',
+    targetSessionKey: 'dev:desktop', text: 'The release branch has one unresolved check.',
+    status: 'held', holdReason: 'Recipient can mutate without a guaranteed human confirmation on: workspaceFiles.',
+    createdAt: Date.now() - 30_000, expiresAt: Date.now() + 86_370_000,
+  }];
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'workspace-onboarding-propose': (args) => proposeDevWorkspaceOnboarding(S.wsCurrent, args),
     'workspace-onboarding-preview': (args) => previewDevWorkspaceOnboarding(S.wsCurrent, args),
     'workspace-onboarding-preview-instruction': (args) =>
       previewDevWorkspaceInstruction(S.onboarding, S.wsCurrent, args),
     'list-sessions': () => mergeMeta(S.wsCurrent),
+    'peers-list': () => ({
+      ownSessionKey: 'dev:desktop', brainOnline: true,
+      routes: [
+        { sessionKey: 'cli:release-check', deviceId: 'dev-cli-device', clientKind: 'cli', state: 'working', transport: 'local', lastSeenAt: Date.now(), title: 'Check release readiness', workspaceRoot: S.wsCurrent, instanceCount: 1 },
+        { sessionKey: 'desktop:review-1302', deviceId: 'dev-remote-device', clientKind: 'desktop', state: 'idle', transport: 'remote', lastSeenAt: Date.now(), title: 'Review PR 1302', instanceCount: 1 },
+      ],
+    }),
+    'peers-send': (a) => {
+      const remote = String(a.to ?? '').startsWith('desktop:');
+      const receipt = {
+        ok: true, messageId: `dev-peer-${Date.now()}`, targetSessionKey: String(a.to ?? ''),
+        transport: remote ? 'remote' : 'local', status: remote ? 'pending' : 'queued',
+        wording: remote ? 'Persisted for the recipient; not yet applied.' : 'Queued in the recipient’s local inbox; not yet applied.',
+        updatedAt: new Date().toISOString(),
+      };
+      devPeerReceipts.unshift(receipt);
+      return receipt;
+    },
+    'peers-held': () => ({ messages: devHeldPeerMessages }),
+    'peers-held-decide': (a) => {
+      const row = devHeldPeerMessages.find((message) => message.id === a.id);
+      if (row) row.status = a.approved === true ? 'approved' : 'rejected';
+      return row ?? { error: 'Unknown held message.' };
+    },
+    'peers-receipts': () => ({ receipts: devPeerReceipts }),
+    'peers-receipts-ack': (a) => ({ acknowledged: Array.isArray(a.ids) ? a.ids.length : 0 }),
     'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
     'runtime-runner-status': (a) => ({ runtimeId: String(a.runtimeId ?? ''), status: 'unknown', live: false }),
     'runtime-previews-list': () => ({
@@ -532,6 +939,58 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'attachment-context': (a) => {
       const rec = devAttachments.get(String(a.id ?? ''));
       return rec ? { id: rec.id, name: rec.name, markdown: attachmentContext(rec) } : null;
+    },
+    // ADR-030 Q4 — registered here as well as in the electron host, because an
+    // unknown query is rejected by NAME: a handler that exists in one map only
+    // renders "unknown query" on the other surface, and the panel that reads it
+    // is the same component in both.
+    //
+    // The harness has no document parser (Q2 — it is 4.6 MB of WebAssembly in
+    // the main process), so it answers from a fixture. The fixture is
+    // deliberately MIXED: a scanned page among text pages is the case D3 exists
+    // for and the one whose rendering is worth being able to look at without a
+    // host.
+    'attachment-document': (a) => {
+      const doc = devDocument(String(a.id ?? ''));
+      if (!doc) return null;
+      return {
+        attachmentId: doc.attachmentId,
+        name: doc.name,
+        classification: doc.classification,
+        pageCount: doc.parts.length,
+        partCount: doc.parts.length,
+        notice: doc.notice,
+        parts: doc.parts.map((part) => ({
+          uri: `brainrouter://document/part/${doc.attachmentId}/${part.index}`,
+          index: part.index,
+          page: part.page,
+          kind: part.kind,
+          chars: part.text.length,
+          preview: part.text.split('\n')[0] ?? '',
+        })),
+      };
+    },
+    'attachment-document-part': (a) => {
+      const doc = devDocument(String(a.id ?? ''));
+      const part = doc?.parts.find((candidate) => candidate.index === Number(a.part));
+      return part && doc ? { attachmentId: doc.attachmentId, partCount: doc.parts.length, ...part } : null;
+    },
+    // ADR-030 D5 — the import, in the harness. The COUNT is computed from the
+    // same fixture the outline renders, so the sentence the browser shows is
+    // arithmetic on real parts rather than a number typed into a mock. The page
+    // itself is core's job and does not exist here; an unknown query name would
+    // render "unknown query" beside a button that works in the app, which is the
+    // parity trap this bridge exists to close.
+    'notes-import-document': (a) => {
+      const doc = devDocument(String(a.id ?? ''));
+      if (!doc) return { ok: false, reason: 'this attachment has no parsed document to import' };
+      const blocks = 1 + 1 + doc.parts.reduce(
+        (total, part) => total + (part.page === undefined ? 0 : 1)
+          + part.text.split(/\n[ \t]*\n/).filter((chunk) => chunk.trim().length >= 2).length,
+        0,
+      );
+      return { ok: true, pageId: `blk_dev_${doc.attachmentId}`, blocks, omitted: 0,
+        summary: `New page from the document — ${blocks} blocks.` };
     },
     // DESK-6w — a workflow run's phase/agent breakdown for the /workflows card.
     'workflow-detail': (a) => {
@@ -1171,7 +1630,66 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       runtimePreviewsLive: devPreviewsLive.map((p) => ({ ...p })),
       automationRules: devAutomationRules.map((r) => ({ ...r })),
       triggerServe: { ...devTriggerServe, providers: [...devTriggerServe.providers], recentEvents: [...devTriggerServe.recentEvents] },
+      learning: {
+        tenant: { ...devLearningTenant },
+        correctionAllowed: true,
+        items: devLearnedItems.map((item) => ({
+          ...item,
+          tenant: { ...item.tenant },
+          outcome: { ...item.outcome },
+          provenance: { ...item.provenance, evidence: [...item.provenance.evidence], corroboratingActionIds: [...(item.provenance.corroboratingActionIds ?? [])] },
+          allowedTools: [...(item.allowedTools ?? [])],
+          memoryLifecycle: item.memoryLifecycle ? { ...item.memoryLifecycle } : undefined,
+        })),
+        log: devLearningLog.map((entry) => ({ ...entry })),
+      },
     }),
+    'action:learning-correct': (a) => {
+      const statement = typeof a.statement === 'string' ? a.statement.trim() : '';
+      const falsifier = typeof a.falsifier === 'string' ? a.falsifier.trim() : '';
+      const expectation = typeof a.expectation === 'string' ? a.expectation.trim() : '';
+      if (!statement || !falsifier || !expectation) {
+        return { admitted: false, rule: 'malformed', reason: 'all three correction fields are required' };
+      }
+      const at = new Date().toISOString();
+      const item: LearnedItem = {
+        id: `learn_dev_human_${Date.now().toString(36)}`,
+        tenant: { ...devLearningTenant },
+        tier: 'instruction',
+        origin: 'human-correction',
+        form: 'lesson',
+        statement,
+        falsifier,
+        outcome: { expectation, retrievals: 0, confirmations: 0, contradictions: 0 },
+        provenance: {
+          sessionKey: 'dev-session',
+          capturedAt: at,
+          checkpoint: 'session-end',
+          evidence: ['corrected in session dev-session'],
+          corroboratedByTrustedAction: true,
+          sawUntrustedContent: false,
+          gateReasoning: 'Explicit human correction from the browser preview.',
+        },
+        status: 'active',
+        createdAt: at,
+        updatedAt: at,
+      };
+      devLearnedItems.unshift(item);
+      devLearningLog.unshift({ at, op: 'admitted', itemId: item.id, detail: 'Explicit human correction admitted as instruction.' });
+      return { admitted: true, item };
+    },
+    'action:learning-revert': (a) => {
+      const item = devLearnedItems.find((entry) => entry.id === a.id);
+      const reason = String(a.reason ?? '').trim();
+      if (!item || reason.length < 3) return { ok: false, complete: false };
+      const at = new Date().toISOString();
+      item.status = 'reverted';
+      item.statusReason = reason;
+      item.updatedAt = at;
+      item.memoryLifecycle = { status: 'archived', updatedAt: at, attempts: (item.memoryLifecycle?.attempts ?? 0) + 1 };
+      devLearningLog.unshift({ at, op: 'reverted', itemId: item.id, detail: reason });
+      return { ok: true, complete: true, localStatus: 'reverted', memoryStatus: 'archived' };
+    },
     'action:triggers-serve-start': () => {
       const trig = devCliKnobs.triggers as { enabled?: boolean; host?: string; port?: number } | undefined;
       if (trig?.enabled !== true) { devTriggerServe.lastError = 'Trigger ingress is disabled — turn on "Enable trigger ingress" first (cli.triggers.enabled).'; return { ok: false, error: devTriggerServe.lastError }; }
@@ -1666,6 +2184,816 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'servers:stop': () => ({ ok: true }),
     'servers:add': () => ({ ok: true }),
     'servers:logs': () => ({ lines: [] as string[] }),
+
+    // ADR-029 — Notes and the workspace reference verbs.
+    //
+    // The dev bridge is a SECOND handler map, not a superset of the host's: a
+    // name registered only in `electron/host/queries.ts` compiles, passes tests
+    // and leaves this surface rendering nothing, because an unknown query is
+    // rejected by name. The planner learned that the hard way — it has no
+    // handlers here and its mode is blank in the browser harness — so Notes
+    // gets a working mock rather than the same gap.
+    'notes-read': () => ({
+      blocks: devNotes.map((b, i) => ({
+        ...b,
+        // E4 — the ordinal is a function of tree position, and the harness
+        // computes it for the same reason the host does: a renderer that
+        // counted rows would number a filtered page differently from the
+        // document.
+        ordinal: b.kind === 'numbered'
+          ? devNotes.filter((o) => o.parentId === b.parentId && o.kind === 'numbered')
+            .indexOf(b) + 1
+          : null,
+        // Depth by ancestry rather than "has a parent": a sub-page's blocks are
+        // two down, and a flat 0/1 would put the shell's relative-indent maths
+        // on inputs the real host never produces.
+        depth: devDepth(b),
+        hasChildren: devNotes.some((c) => c.parentId === b.id),
+        // F3 — the fold is a stamped field on the block, so the harness carries
+        // it rather than keeping a set of its own.
+        collapsed: b.collapsed === true,
+        // F3 — the thread and the template mark, flat, exactly as the host sends
+        // them. A field the harness omitted would render as "no comments" on a
+        // block that has them.
+        comments: b.comments ?? [],
+        template: b.template === true,
+        title: b.kind === 'page' ? (b.text.trim() || UNTITLED_PAGE) : null,
+        // B2's attribution, pinned to an ID rather than to a POSITION. Keyed by
+        // index it followed whatever happened to be second in the array, so a
+        // block you had just created came back read-only and attributed to
+        // another device — the harness inventing the one state the lease exists
+        // to make legible. A demo that lies about a lock is worse than no demo.
+        lockedBy: b.id === LEASED_DEMO_BLOCK ? 'Being edited on another device' : null,
+      })),
+      repairs: [] as Array<Record<string, unknown>>,
+      pending: 0,
+      syncState: 'Everything is synced.',
+      conflictCount: devNotes.filter((b) => b.conflicts.length > 0).length,
+    }),
+    'notes-create': (a) => {
+      const block: DevNote = { id: `blk_${S.devNotesN++}`, parentId: typeof a.parentId === 'string' ? a.parentId : null, kind: String(a.kind ?? 'paragraph'), text: String(a.text ?? ''), checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      if (after >= 0) block.parentId = devNotes[after]?.parentId ?? null;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, block);
+      return block;
+    },
+    'notes-create-page': (a) => {
+      const block: DevNote = { id: `blk_${S.devNotesN++}`, parentId: typeof a.parentId === 'string' ? a.parentId : null, kind: 'page', text: String(a.title ?? ''), checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false };
+      devNotes.push(block);
+      return block;
+    },
+    'notes-update': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (!block) return { ok: false, reason: 'not_found' };
+      devRemember(block.id, 'the edit');
+      if (typeof a.text === 'string') block.text = a.text;
+      if (typeof a.kind === 'string') block.kind = a.kind;
+      if (typeof a.checked === 'boolean') block.checked = a.checked;
+      if (typeof a.collapsed === 'boolean') block.collapsed = a.collapsed;
+      if (typeof a.icon === 'string') block.icon = a.icon || null;
+      if (typeof a.cover === 'string') block.cover = a.cover || null;
+      if (typeof a.favourite === 'boolean') block.favourite = a.favourite;
+      if (typeof a.template === 'boolean') block.template = a.template;
+      return { ok: true, block, path: 'leased', conflicted: false };
+    },
+    'notes-delete': (a) => {
+      // The subtree goes with it, exactly as `deleteBlock` does: a child left
+      // behind under a deleted page is present in the data and absent from
+      // every page, which is the state C5 exists to prevent.
+      devRemember(String(a.id ?? ''), 'the delete');
+      const ids = devSubtree(String(a.id ?? ''));
+      for (const id of ids) {
+        const index = devNotes.findIndex((b) => b.id === id);
+        if (index >= 0) devNotesTrash.unshift(...devNotes.splice(index, 1));
+      }
+      return { deleted: ids };
+    },
+    'notes-restore': (a) => {
+      const id = String(a.id ?? '');
+      const restored: string[] = [];
+      for (const block of [...devNotesTrash]) {
+        if (block.id !== id && block.parentId !== id) continue;
+        devNotesTrash.splice(devNotesTrash.indexOf(block), 1);
+        devNotes.push(block);
+        restored.push(block.id);
+      }
+      return { restored };
+    },
+    'notes-trash': () => ({
+      entries: devNotesTrash
+        // An entry is the ROOT of a deletion, matching core's projection: a
+        // listing that showed every tombstone would offer to restore a
+        // paragraph into a page that is still deleted.
+        .filter((b) => !devNotesTrash.some((other) => other.id === b.parentId))
+        .map((b) => {
+          const descendants = devNotesTrash.filter((other) => other.parentId === b.id).length;
+          const title = b.text.trim() || UNTITLED_PAGE;
+          // Core's sentence, not a second one: the harness is where a
+          // divergence would be least visible and most misleading.
+          return { id: b.id, kind: b.kind, title, descendants, line: describeTrashEntry({ descendants }, title) };
+        }),
+    }),
+    'notes-favourites': () => ({
+      blocks: devNotes.filter((b) => b.favourite).map((b) => ({
+        id: b.id, kind: b.kind, title: b.text.trim() || UNTITLED_PAGE, icon: b.icon,
+      })),
+    }),
+    'notes-move': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.parentId = typeof a.parentId === 'string' ? a.parentId : null;
+      return { ok: true };
+    },
+    // ADR-029 E1 — the gestures. The RULES come from core even here
+    // (`applyInputRule`, `searchSlashCatalog` are pure), because the harness is
+    // where a divergence would be least visible and most misleading: a `# ` that
+    // behaved differently in the browser would be debugged as a renderer bug.
+    // Only the structural half is a mock, and it is deliberately the simplest
+    // thing that keeps the caret answers shaped like core's.
+    'notes-input-rule': (a) => ({
+      transform: applyInputRule({
+        kind: (typeof a.kind === 'string' ? a.kind : 'paragraph') as NoteBlockKind,
+        text: String(a.text ?? ''),
+        caret: Number(a.caret ?? 0),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+      }),
+    }),
+    'notes-slash-menu': (a) => ({
+      commands: searchSlashCatalog(String(a.query ?? ''), Number(a.limit ?? 12)),
+    }),
+    'notes-split': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      devRemember(id, 'splitting the block');
+      const caret = Math.min(Math.max(Number(a.caret ?? 0), 0), block.text.length);
+      const tail = block.text.slice(caret);
+      block.text = block.text.slice(0, caret);
+      const created: DevNote = {
+        id: `blk_${S.devNotesN++}`, parentId: block.parentId,
+        kind: ['bullet', 'numbered', 'todo', 'quote'].includes(block.kind) ? block.kind : 'paragraph',
+        text: tail, checked: false, level: null, refs: [], conflicts: [],
+        icon: null, cover: null, favourite: false,
+      };
+      devNotes.splice(index + 1, 0, created);
+      return { ok: true, action: 'split', focusId: created.id, caret: 0, createdId: created.id };
+    },
+    // Flat and always-merging, unlike core's `mergeIntoPrevious`, which unstyles,
+    // outdents or removes depending on where the block sits. That difference once
+    // MASKED a real defect: core's Backspace outdented every block on a page
+    // instead of merging, and this harness merged anyway, so the browser dev
+    // surface looked correct while the shipping one was not. Judge the gesture in
+    // `packages/core/src/notes/blockOps.ts`, never here.
+    'notes-merge-back': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      const previous = index > 0 ? devNotes[index - 1] : undefined;
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      if (!previous) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      devRemember(id, 'joining the blocks');
+      const joinAt = previous.text.length;
+      previous.text += block.text;
+      devNotes.splice(index, 1);
+      return { ok: true, action: 'merge', focusId: previous.id, caret: joinAt, removedIds: [id] };
+    },
+    'notes-duplicate': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      const copy: DevNote = { ...block, id: `blk_${S.devNotesN++}`, refs: [...block.refs], conflicts: [], favourite: false };
+      devNotes.splice(index + 1, 0, copy);
+      return { ok: true, action: 'duplicate', focusId: copy.id, caret: 0, createdId: copy.id };
+    },
+    'notes-move-up': (a) => devMoveBy(String(a.id ?? ''), -1),
+    'notes-move-down': (a) => devMoveBy(String(a.id ?? ''), 1),
+    'notes-indent': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      const previous = [...devNotes.slice(0, index)].reverse().find((b) => b.parentId === block.parentId);
+      if (!previous) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      devRemember(id, 'nesting the block');
+      block.parentId = previous.id;
+      return { ok: true, action: 'indent', focusId: id, caret: 0 };
+    },
+    'notes-outdent': (a) => {
+      const id = String(a.id ?? '');
+      const block = devNotes.find((b) => b.id === id);
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      if (block.parentId === null) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      devRemember(id, 'un-nesting the block');
+      block.parentId = devNotes.find((b) => b.id === block.parentId)?.parentId ?? null;
+      return { ok: true, action: 'outdent', focusId: id, caret: 0 };
+    },
+    'notes-begin-edit': (a) => ({ ok: true, lease: { blockId: String(a.id ?? ''), deviceId: 'dev', epoch: 1, expiresAt: Date.now() + 30_000 } }),
+    'notes-keep-edit': (a) => ({ ok: true, lease: { blockId: String(a.id ?? ''), deviceId: 'dev', epoch: Number(a.epoch ?? 1), expiresAt: Date.now() + 30_000 } }),
+    'notes-end-edit': () => ({ ok: true }),
+    'notes-resolve': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      const expected = a.expected as {
+        oursAt?: { physical?: unknown; logical?: unknown; deviceId?: unknown };
+        theirsAt?: { physical?: unknown; logical?: unknown; deviceId?: unknown };
+      } | undefined;
+      const conflict = block?.conflicts.find((candidate) => candidate.field === a.field);
+      const sameClock = (
+        left: { physical: number; logical: number; deviceId: string },
+        right: { physical?: unknown; logical?: unknown; deviceId?: unknown } | undefined,
+      ): boolean => !!right && left.physical === right.physical
+        && left.logical === right.logical && left.deviceId === right.deviceId;
+      if (block && conflict && sameClock(conflict.oursAt, expected?.oursAt)
+        && sameClock(conflict.theirsAt, expected?.theirsAt)) {
+        block.conflicts = block.conflicts.filter((c) => c.field !== a.field);
+      }
+      return block ?? null;
+    },
+    'notes-search': (a) => {
+      const needle = String(a.query ?? '').toLowerCase();
+      return { hits: devNotes.filter((b) => b.text.toLowerCase().includes(needle) || b.refs.some((r) => r.toLowerCase().includes(needle))).map((b) => ({ blockId: b.id, kind: b.kind, matched: ['text'], snippet: b.text, matchedRefs: [], score: 100 })) };
+    },
+    'notes-backlinks': (a) => ({ blockIds: devNotes.filter((b) => b.refs.some((r) => r.split('#')[0] === String(a.uri ?? '').split('#')[0])).map((b) => b.id) }),
+    'notes-sync': () => ({ pending: 0, pulled: 0, pushed: 0, offline: false, conflicted: [] as string[], syncState: 'Everything is synced.' }),
+
+    /* ------------------------------------- ADR-029 F4/F3: undo, comments, templates */
+
+    // Registered here as well as in the electron host, because an unknown query
+    // is rejected by NAME: without these, ⌘Z, the comment button and the
+    // template picker are three controls that do nothing in the harness — which
+    // is the same defect F1 is about, moved into the surface people check first.
+    //
+    // The harness has no store, so its undo is a SNAPSHOT of the mock array
+    // rather than a stack of inverses. That is honest here and would not be in
+    // core: a snapshot is a correct inverse only because this array is the whole
+    // of the harness's world, which is exactly what is not true of a synced
+    // store where another device can write underneath.
+    'notes-undo': (a) => devStepHistory(typeof a.pageId === 'string' ? a.pageId : null, 'undo'),
+    'notes-redo': (a) => devStepHistory(typeof a.pageId === 'string' ? a.pageId : null, 'redo'),
+    'notes-undo-state': (a) => {
+      const pageId = typeof a.pageId === 'string' ? a.pageId : null;
+      return {
+        undo: devUndo.past.filter((entry) => entry.pageId === pageId).slice(-1)[0]?.label ?? null,
+        redo: devUndo.future.filter((entry) => entry.pageId === pageId).slice(-1)[0]?.label ?? null,
+      };
+    },
+
+    'notes-comment-add': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (!block) return { ok: false, reason: 'not_found' };
+      devRemember(block.parentId ?? block.id, 'the comment');
+      block.comments = [...(block.comments ?? []), {
+        id: `cmt_${S.devNotesN++}`,
+        body: String(a.body ?? ''),
+        author: 'You',
+        resolved: false,
+        createdAtMs: Date.now(),
+      }];
+      return { ok: true };
+    },
+    'notes-comment-edit': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      const comment = block?.comments?.find((c) => c.id === a.commentId);
+      if (comment) comment.body = String(a.body ?? '');
+      return { ok: !!comment };
+    },
+    'notes-comment-resolve': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      const comment = block?.comments?.find((c) => c.id === a.commentId);
+      if (comment) comment.resolved = a.resolved === true;
+      return { ok: !!comment };
+    },
+    'notes-comment-remove': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.comments = (block.comments ?? []).filter((c) => c.id !== a.commentId);
+      return { ok: !!block };
+    },
+    // C5 — the harness deletes by removing from the array, so there is nothing
+    // to orphan. Answering an empty list is the truthful shape rather than a
+    // pretend one: the panel stays absent instead of inventing a thread.
+    'notes-comments-orphaned': () => ({ threads: [] as unknown[] }),
+
+    'notes-templates': () => ({
+      templates: devNotes.filter((b) => b.template === true).map((b) => ({
+        id: b.id,
+        title: b.text || UNTITLED_PAGE,
+        icon: b.icon,
+        blocks: devSubtree(b.id).length,
+      })),
+    }),
+    'notes-template-instantiate': (a) => {
+      const templateId = String(a.id ?? '');
+      const template = devNotes.find((b) => b.id === templateId && b.template === true);
+      if (!template) return { ok: false, pageId: null, blocks: 0, rewritten: 0, line: 'That template is no longer here.' };
+
+      const ids = devSubtree(templateId);
+      const idMap = new Map<string, string>();
+      for (const id of ids) idMap.set(id, `blk_${S.devNotesN++}`);
+
+      let rewritten = 0;
+      for (const id of ids) {
+        const original = devNotes.find((b) => b.id === id)!;
+        // The SAME rewrite core performs, imported rather than reimplemented —
+        // a reference pointing inside the copy follows the copy, one pointing
+        // outside is left alone (A3).
+        const text = remapNoteRefs(original.text, idMap);
+        if (text !== original.text) rewritten += 1;
+        devNotes.push({
+          ...original,
+          id: idMap.get(id)!,
+          text,
+          parentId: id === templateId
+            ? (typeof a.parentId === 'string' ? a.parentId : null)
+            : idMap.get(original.parentId ?? '') ?? null,
+          comments: [],
+          // A page made FROM a template is a page. Keeping the mark would turn
+          // every filled-in copy into another entry in the picker.
+          template: false,
+          favourite: false,
+        });
+      }
+      const blocks = ids.length;
+      const line = rewritten === 0
+        ? `New page from the template — ${blocks} block${blocks === 1 ? '' : 's'}.`
+        : `New page from the template — ${blocks} blocks, and ${rewritten} link${rewritten === 1 ? '' : 's'} `
+          + 'inside it now point at this copy rather than at the template.';
+      return { ok: true, pageId: idMap.get(templateId)!, blocks, rewritten, line };
+    },
+
+    // ADR-029 E3 — databases. Registered HERE as well as in the electron host
+    // because an unknown query is rejected by name: without these the five
+    // views render "unknown query" in the browser harness, which is the gap the
+    // planner shipped and this comment block already warns about.
+    //
+    // The projection is core's `projectDatabase`, unchanged. Only the WRITES
+    // are faked, and each one does what the corresponding core op does to a
+    // block — a row is created as a page under the database, a cell is written
+    // through the same coercion, and a delete is a tombstone in the trash.
+    'notes-database-list': () => ({
+      databases: devNotes.filter((block) => block.kind === DATABASE_BLOCK_KIND).map((block) => ({
+        id: block.id,
+        title: block.text || UNTITLED_PAGE,
+        icon: block.icon,
+        properties: devSchemaOf(block).length,
+        views: (block.views ?? []).map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+      })),
+    }),
+    /**
+     * The projection is imported WHEN IT IS ASKED FOR, not when this module
+     * loads.
+     *
+     * ADR-029 F2 gave a projection a formula engine and a rollup, and this
+     * harness is reachable from the app's entry module — so a static import put
+     * about twenty kilobytes of expression parser into the RELEASE bundle, for
+     * a browser stand-in that never runs in the shipped app. The desktop's
+     * initial-JavaScript budget caught it (`scripts/verify-visual-release.mjs`),
+     * which is the budget doing exactly what its comment says: catching a static
+     * import nobody meant to add.
+     *
+     * The dispatcher already awaits async handlers — `list-models-probe` does a
+     * real fetch — so this is the same shape, not a new one.
+     */
+    /**
+     * F3 — the same resolution the host does, so the stand-in cannot make a
+     * mirror look like a feature that works here and not there.
+     *
+     * Dynamically imported for the reason `notes-database-read` is, one comment
+     * up: this module is reachable from the app's entry, and a static import
+     * would put the writers into the initial bundle for a harness the shipped
+     * app never runs.
+     */
+    'notes-synced-read': async (a) => {
+      const { readSyncedBlock, describeSyncedState, walkSubtree } =
+        await import('@kinqs/brainrouter-core/notes/editing');
+      const all = devNoteBlocks();
+      const mirror = all.find((block) => block.id === String(a.id ?? ''));
+      if (!mirror) return { status: 'gone', uri: '', note: 'This block is not on this device.', rows: [] };
+      const state = readSyncedBlock(all, mirror);
+      const note = describeSyncedState(state);
+      const uri = 'uri' in state ? state.uri : '';
+      if (state.status !== 'ready') return { status: state.status, uri, note, rows: [] };
+      const walked = walkSubtree(all, state.source.id, state.blockIds.length);
+      return {
+        status: 'ready',
+        uri,
+        note,
+        sourceId: state.source.id,
+        omittedLabel: state.omittedLabel ?? null,
+        rows: walked.rows.map((row) => ({
+          id: row.block.id,
+          depth: row.depth,
+          kind: row.block.kind.value,
+          text: row.block.text.value,
+          level: row.block.level?.value ?? null,
+          checked: row.block.checked?.value === true,
+          icon: row.block.icon?.value ?? null,
+          ordinal: null,
+          lockedBy: null,
+        })),
+      };
+    },
+
+    'notes-export': async (a) => {
+      const { exportNote, exportFormatsFor } = await import('@kinqs/brainrouter-core/notes/editing');
+      const all = devNoteBlocks();
+      const id = String(a.id ?? '');
+      const format = a.format === 'csv' ? 'csv' : 'markdown';
+      const offered = exportFormatsFor(all.find((block) => block.id === id));
+      if (!offered.includes(format)) {
+        return {
+          ok: false,
+          error: format === 'csv'
+            ? 'Only a database can be written as a spreadsheet. A page goes out as Markdown.'
+            : 'That page is not on this device.',
+        };
+      }
+      const written = exportNote(all, id, format, { nowMs: Date.now(), deviceId: 'dev' });
+      return written ? { ok: true, ...written } : { ok: false, error: 'That page could not be written out.' };
+    },
+
+    'notes-database-read': async (a) => {
+      const { projectDatabase } = await import('@kinqs/brainrouter-core/notes/editing');
+      const projection = projectDatabase(
+        devNoteBlocks(), String(a.id ?? ''), typeof a.viewId === 'string' ? a.viewId : undefined,
+      );
+      if (!projection) return { found: false };
+      const database = readDatabase(projection.database);
+      return {
+        found: true,
+        id: projection.database.id,
+        title: projection.title,
+        views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+        view: projection.view,
+        kind: projection.kind,
+        properties: database.schema.map((def) => ({
+          ...def,
+          unsupported: database.unsupported.includes(def.id),
+          operators: operatorsFor(def),
+        })),
+        columns: projection.columns.map((def) => def.id),
+        rows: projection.rows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          icon: row.icon,
+          cover: row.cover,
+          cells: row.cells.map((cell) => ({
+            property: cell.property.id, value: cell.value, display: cell.display,
+            unsupported: cell.unsupported, computed: cell.computed,
+            ...(cell.error ? { error: cell.error } : {}),
+          })),
+        })),
+        groups: projection.groups.map((group) => ({
+          key: group.key, label: group.label, empty: group.empty, rowIds: group.rows.map((row) => row.id),
+        })),
+        total: projection.total,
+        filteredOut: projection.filteredOut,
+        skipped: projection.skipped,
+        notices: projection.notices,
+      };
+    },
+    'notes-database-create': (a) => {
+      const schema = defaultDatabaseSchema();
+      const block: DevNote = {
+        id: `blk_${S.devNotesN++}`,
+        parentId: typeof a.parentId === 'string' ? a.parentId : null,
+        kind: DATABASE_BLOCK_KIND, text: String(a.title ?? ''), checked: false, level: null,
+        refs: [], conflicts: [], icon: null, cover: null, favourite: false,
+        schema, views: defaultDatabaseViews(schema),
+      };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      if (after >= 0) block.parentId = devNotes[after]?.parentId ?? null;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, block);
+      return { id: block.id };
+    },
+    'notes-database-add-property': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const schema = devSchemaOf(database);
+      const name = String(a.name ?? 'Property');
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'property';
+      let id = base;
+      for (let n = 2; schema.some((def) => def.id === id); n += 1) id = `${base}-${n}`;
+      const def: NotePropertyDef = {
+        id, name, type: String(a.type ?? 'text'),
+        ...(Array.isArray(a.options) ? { options: a.options as NotePropertyDef['options'] } : {}),
+      };
+      database.schema = [...schema, def];
+      // New columns are visible, for the same reason core makes them visible: a
+      // column added and then not shown is a column the person concludes was
+      // not added.
+      database.views = (database.views ?? []).map((view) => ({ ...view, visible: [...view.visible, id] }));
+      return { ok: true, value: def };
+    },
+    'notes-database-update-property': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      database.schema = devSchemaOf(database).map((def) => (def.id === a.propertyId ? {
+        ...def,
+        ...(typeof a.name === 'string' && a.name.trim() ? { name: a.name.trim() } : {}),
+        ...(Array.isArray(a.options) ? { options: a.options as NotePropertyDef['options'] } : {}),
+      } : def));
+      return { ok: true };
+    },
+    'notes-database-remove-property': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const schema = devSchemaOf(database);
+      const target = schema.find((def) => def.id === a.propertyId);
+      if (target?.type === 'title') {
+        return { ok: false, reason: 'refused', detail: 'The title column is the row’s own title.' };
+      }
+      // The VALUES stay on the rows, exactly as core leaves them: re-adding the
+      // column with the same id brings the data straight back.
+      database.schema = schema.filter((def) => def.id !== a.propertyId);
+      database.views = (database.views ?? []).map((view) => ({
+        ...view,
+        visible: view.visible.filter((id) => id !== a.propertyId),
+        ...(view.groupBy === a.propertyId ? { groupBy: undefined } : {}),
+      }));
+      return { ok: true };
+    },
+    'notes-database-reorder-properties': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const schema = devSchemaOf(database);
+      const order = Array.isArray(a.order) ? (a.order as string[]) : [];
+      const moved = order.map((id) => schema.find((def) => def.id === id)).filter((def): def is NotePropertyDef => !!def);
+      database.schema = [...moved, ...schema.filter((def) => !moved.includes(def))];
+      return { ok: true };
+    },
+    'notes-database-add-row': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      // E3 — a row IS a page, so this creates one under the database.
+      const row: DevNote = {
+        id: `blk_${S.devNotesN++}`, parentId: database.id, kind: 'page',
+        text: String(a.title ?? ''), checked: false, level: null,
+        refs: [], conflicts: [], icon: null, cover: null, favourite: false,
+      };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, row);
+      return { ok: true, id: row.id };
+    },
+    'notes-database-set-value': (a) => {
+      const row = devNotes.find((block) => block.id === a.rowId);
+      const database = row ? devDatabase(row.parentId ?? '') : undefined;
+      if (!row || !database) return { ok: false, reason: 'not_found', detail: 'That row is gone.' };
+      const def = devSchemaOf(database).find((candidate) => candidate.id === a.propertyId);
+      if (!def) return { ok: false, reason: 'refused', detail: 'No such property.' };
+      // Through core's coercion, not the harness's: a number typed as text and a
+      // half-URI in a relation have to become what they become in one place.
+      const value = coercePropertyValue(def, a.value);
+      if (def.type === 'title') row.text = typeof value === 'string' ? value : '';
+      else row.props = { ...(row.props ?? {}), [def.id]: value };
+      return { ok: true, id: row.id };
+    },
+    'notes-database-remove-row': (a) => {
+      const ids = devSubtree(String(a.rowId ?? ''));
+      for (const id of ids) {
+        const index = devNotes.findIndex((b) => b.id === id);
+        if (index >= 0) devNotesTrash.push(...devNotes.splice(index, 1));
+      }
+      return { ok: true, removed: ids };
+    },
+    'notes-database-save-view': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const views = database.views ?? defaultDatabaseViews(devSchemaOf(database));
+      const existing = typeof a.viewId === 'string' ? views.find((view) => view.id === a.viewId) : undefined;
+      const kind = (typeof a.kind === 'string' ? a.kind : existing?.kind ?? 'table') as NoteViewKind;
+      const known = new Set(devSchemaOf(database).map((def) => def.id));
+      const view: NoteDatabaseView = {
+        id: existing?.id ?? `view-${S.devNotesN++}`,
+        name: (typeof a.name === 'string' && a.name.trim()) || existing?.name || kind,
+        kind,
+        visible: (Array.isArray(a.visible) ? (a.visible as string[]) : existing?.visible ?? [...known])
+          .filter((id) => known.has(id)),
+        ...(a.filter === undefined
+          ? (existing?.filter ? { filter: existing.filter } : {})
+          : (a.filter === null ? {} : { filter: a.filter as NoteDatabaseView['filter'] })),
+        ...(a.sort === undefined
+          ? (existing?.sort ? { sort: existing.sort } : {})
+          : { sort: a.sort as NoteDatabaseView['sort'] }),
+        ...(a.groupBy === undefined
+          ? (existing?.groupBy ? { groupBy: existing.groupBy } : {})
+          : (typeof a.groupBy === 'string' && known.has(a.groupBy) ? { groupBy: a.groupBy } : {})),
+      };
+      database.views = existing
+        ? views.map((candidate) => (candidate.id === view.id ? view : candidate))
+        : [...views, view];
+      return { ok: true, value: view };
+    },
+    'notes-database-remove-view': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const views = database.views ?? [];
+      // Core keeps the last one, because a database with no views renders
+      // nothing and looks like a database with no data.
+      if (views.length <= 1) return { ok: false, reason: 'refused', detail: 'A database keeps at least one view.' };
+      database.views = views.filter((view) => view.id !== a.viewId);
+      return { ok: true, value: database.views };
+    },
+    'notes-property-catalog': () => ({
+      types: NOTE_PROPERTY_TYPES.map((type) => ({
+        type, operators: operatorsFor({ id: type, name: type, type }),
+        derived: isDerivedPropertyType(type),
+      })),
+      viewKinds: NOTE_VIEW_KINDS,
+      functions: FORMULA_FUNCTIONS,
+      aggregates: NOTE_ROLLUP_AGGREGATES,
+    }),
+    // F2 — the harness's databases are flat fixtures with no relations pointing
+    // anywhere, so there is nothing to summarise and it says so rather than
+    // offering columns that do not exist.
+    'notes-rollup-targets': () => ({ ok: true, properties: [], databases: [] }),
+
+    'planner-read': () => ({
+      today: devPlanner.today,
+      items: devPlanner.items.map((item) => ({
+        ...item,
+        conflictFields: [...item.conflictFields],
+        ...(item.provenance ? { provenance: { ...item.provenance } } : {}),
+        ...(item.sourceFreshness ? { sourceFreshness: { ...item.sourceFreshness } } : {}),
+      })),
+      blocks: devPlanner.blocks.map((block) => ({ ...block })),
+      sync: {
+        ...devPlanner.sync,
+        issues: devPlanner.sync.issues.map((issue) => ({ ...issue })),
+      },
+      staleSources: [...devPlanner.staleSources],
+      driftNote: devPlanner.driftNote,
+    }),
+    'planner-add': (a) => {
+      const title = String(a.title ?? '').trim();
+      if (!title) return { error: 'A title is required.' };
+      const item = {
+        id: `itm_dev_${S.devPlannerN++}`,
+        title,
+        completed: false,
+        origin: 'owned' as const,
+        conflictFields: [] as string[],
+      };
+      devPlanner.items.unshift(item);
+      queueDevPlannerChange(item.id, item.title, 'create');
+      return item;
+    },
+    'planner-update': (a) => {
+      const item = devPlanner.items.find((candidate) => candidate.id === String(a.id ?? ''));
+      if (!item) return { error: 'That item is gone.' };
+      if (typeof a.title === 'string') item.title = a.title;
+      if (typeof a.notes === 'string') item.notes = a.notes;
+      if (typeof a.priority === 'number') item.priority = a.priority;
+      if (typeof a.completed === 'boolean') item.completed = a.completed;
+      if (typeof a.dueDate === 'string') item.dueDate = a.dueDate;
+      else if (a.dueDate === null) delete item.dueDate;
+      queueDevPlannerChange(item.id, item.title, 'update');
+      return item;
+    },
+    'planner-delete': (a) => {
+      const id = String(a.id ?? '');
+      const index = devPlanner.items.findIndex((item) => item.id === id);
+      if (index < 0) return false;
+      const [item] = devPlanner.items.splice(index, 1);
+      devPlanner.blocks.splice(0, devPlanner.blocks.length, ...devPlanner.blocks.filter((block) => block.itemId !== id));
+      queueDevPlannerChange(id, item?.title ?? id, 'delete');
+      return true;
+    },
+    'planner-schedule': (a) => {
+      const itemId = String(a.itemId ?? '');
+      const item = devPlanner.items.find((candidate) => candidate.id === itemId);
+      const estimateMinutes = Number(a.estimateMinutes ?? 0);
+      if (!item || !Number.isFinite(estimateMinutes) || estimateMinutes <= 0) {
+        return { error: 'A block needs an item and a positive estimate.' };
+      }
+      const block = {
+        id: `blk_dev_${S.devPlannerN++}`,
+        itemId,
+        estimateMinutes,
+        carriedOver: 0,
+        ...(typeof a.scheduledFor === 'string' ? { scheduledFor: a.scheduledFor } : {}),
+      };
+      devPlanner.blocks.push(block);
+      queueDevPlannerChange(item.id, item.title, 'create', 'block');
+      return block;
+    },
+    'planner-schedule-at': (a) => {
+      const item = {
+        id: `itm_dev_${S.devPlannerN++}`,
+        title: 'Focus block',
+        completed: false,
+        origin: 'owned' as const,
+        conflictFields: [] as string[],
+      };
+      devPlanner.items.unshift(item);
+      const block = {
+        id: `blk_dev_${S.devPlannerN++}`,
+        itemId: item.id,
+        scheduledFor: String(a.scheduledFor ?? ''),
+        estimateMinutes: Number(a.estimateMinutes) || 60,
+        carriedOver: 0,
+      };
+      devPlanner.blocks.push(block);
+      queueDevPlannerChange(item.id, item.title, 'create');
+      queueDevPlannerChange(item.id, item.title, 'create', 'block');
+      return block;
+    },
+    'planner-reschedule-block': (a) => {
+      const block = devPlanner.blocks.find((candidate) => candidate.id === String(a.blockId ?? ''));
+      const scheduledFor = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
+      if (!block || !scheduledFor || !Number.isFinite(Date.parse(scheduledFor))) {
+        return { error: 'A block and a valid time are required.' };
+      }
+      block.scheduledFor = scheduledFor;
+      const item = devPlanner.items.find((candidate) => candidate.id === block.itemId);
+      queueDevPlannerChange(block.itemId, item?.title ?? block.itemId, 'update', 'block');
+      return block;
+    },
+    'planner-record-actual': (a) => {
+      const block = devPlanner.blocks.find((candidate) => candidate.id === String(a.blockId ?? ''));
+      const actualMinutes = Number(a.actualMinutes);
+      if (!block || !Number.isFinite(actualMinutes) || actualMinutes < 0) {
+        return { error: 'A block and non-negative actual minutes are required.' };
+      }
+      block.actualMinutes = actualMinutes;
+      block.completedAt = new Date().toISOString();
+      const item = devPlanner.items.find((candidate) => candidate.id === block.itemId);
+      queueDevPlannerChange(block.itemId, item?.title ?? block.itemId, 'update', 'block');
+      return block;
+    },
+    'planner-resolve': (a) => {
+      const item = devPlanner.items.find((candidate) => candidate.id === String(a.id ?? ''));
+      if (!item) return { error: 'That item is gone.' };
+      item.conflictFields = item.conflictFields.filter((field) => field !== String(a.field ?? ''));
+      return item;
+    },
+    // The browser harness has no server. Background sync leaves the four-item
+    // acceptance state intact; explicit retry controls below mutate it.
+    'planner-sync': () => ({ pending: devPlanner.sync.issues.length, localOnly: true }),
+    'planner-retry-operation': (a) => {
+      const id = String(a.idempotencyKey ?? '');
+      const before = devPlanner.sync.issues.length;
+      devPlanner.sync.issues = devPlanner.sync.issues.filter((issue) => issue.id !== id);
+      refreshDevPlannerSync();
+      return { retried: before !== devPlanner.sync.issues.length };
+    },
+    'planner-retry-all': () => {
+      const requested = devPlanner.sync.issues.length;
+      devPlanner.sync.issues = [];
+      refreshDevPlannerSync();
+      return { requested };
+    },
+
+    'workspace-modes': () => ({ modes: ['chat', 'code', 'notes', 'planner', 'track'], creatable: ['notes', 'planner', 'track'] }),
+    // ADR-029 C2 row 6 — the browser harness has no checkout, so it answers
+    // with a plausible declaration list rather than nothing: a picker that is
+    // always empty here would look like the feature being broken.
+    'code-symbols': (a) => ({
+      path: String(a.path ?? ''),
+      symbols: [
+        { name: 'parseHeader', line: 12, kind: 'function' },
+        { name: 'Reader', line: 40, kind: 'class' },
+      ],
+    }),
+    // ADR-029 Part F — the two blocks that reach the network. The harness has no
+    // network and must not pretend otherwise, so both answer with the FAILURE
+    // shape the real handlers use. That is the honest demo: the bookmark still
+    // draws its link and the image still says why there is no picture, which is
+    // exactly the behaviour these blocks were rebuilt for.
+    'notes-bookmark-preview': (a) => {
+      const url = String(a.url ?? '');
+      let host = '';
+      try { host = new URL(url).host; } catch { host = ''; }
+      return {
+        ok: false,
+        failure: { url, host, reason: 'unreachable', detail: 'The browser harness has no network.' },
+      };
+    },
+    'notes-image-attach': () => ({ ok: false, error: 'Pictures are stored by the desktop app, not by the browser harness.' }),
+    'notes-file-attach': () => ({ ok: false, error: 'Files are stored by the desktop app, not by the browser harness.' }),
+    'notes-file-describe': (a) => ({
+      files: (Array.isArray(a.ids) ? a.ids : []).map((id) => ({
+        id: String(id), name: String(id), byteSize: 0, mimeType: '', missing: true,
+      })),
+    }),
+    'notes-image-fetch': () => ({ ok: false, error: 'Pictures are stored by the desktop app, not by the browser harness.' }),
+    'notes-image-read': (a) => ({
+      id: String(a.id ?? ''), name: '',
+      error: 'the browser harness has no attachment store.',
+    }),
+    'workspace-describe': (a) => ({ line: devWorkspaceLabel(String(a.uri ?? '')) }),
+    'workspace-resolve': (a) => ({ resolution: { status: 'found', ref: null, target: { label: devWorkspaceLabel(String(a.uri ?? '')) } }, line: devWorkspaceLabel(String(a.uri ?? '')) }),
+    'workspace-create': (a) => {
+      const uri = `brainrouter://${String(a.mode ?? 'planner')}/${String(a.kind ?? 'item')}/dev_${S.devNotesN++}`;
+      devWorkspaceLabels.set(uri, String(a.title ?? 'Untitled'));
+      return { status: 'created', uri };
+    },
+    'workspace-link': (a) => {
+      const from = String(a.from ?? '').replace('brainrouter://notes/block/', '');
+      const block = devNotes.find((b) => b.id === from);
+      const to = String(a.to ?? '');
+      if (block && !block.refs.includes(to)) block.refs.push(to);
+      return { linked: true, alreadyLinked: false, to };
+    },
   };
   return queries;
 }

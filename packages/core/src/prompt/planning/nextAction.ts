@@ -6,8 +6,9 @@
  * tasks ("who has the best cli?", "pros and cons against those") and never
  * actually decides a strategy. This planner replaces that guess with a genuine
  * reasoning step: a focused pre-flight LLM call classifies the task and returns
- * a concrete plan, which the runtime turns into a DECISIVE directive (and arms
- * the fan-out follow-through guard) instead of a soft hint.
+ * a concrete recommendation. Direct investigation and fan-out remain actionable
+ * directives; durable workflow/build execution is only recommended for an
+ * explicit user launch.
  *
  * This module is the pure core — message builder, tolerant parser, and the
  * directive renderer. The actual LLM call + injection lives in the agent loop
@@ -15,6 +16,7 @@
  */
 
 import { normalizePhasePlan, type PhasePlan } from '../../orchestration/workflow/phasePlan.js';
+import { adversarialLens } from '../../orchestration/lenses.js';
 
 export type NextActionStrategy = 'answer-direct' | 'investigate' | 'fan-out' | 'workflow' | 'build';
 
@@ -29,12 +31,12 @@ export interface NextActionPlan {
   strategy: NextActionStrategy;
   /** One-line rationale the planner gives for the chosen strategy. */
   reasoning: string;
-  /** For fan-out/workflow: the concrete parallel subtasks (one child each). For
-   *  "build": a single refined task statement in subtasks[0] (the loop's input). */
+  /** For fan-out: concrete parallel child tasks. For workflow: ordered phase
+   *  descriptions. For build: one refined task statement in subtasks[0]. */
   subtasks: string[];
-  /** WF-PLANNER (0.4.8) — when strategy='workflow' and the planner produced a
-   *  VALID PhasePlan, the prepared plan the runtime tells the model to hand to
-   *  `run_workflow` (one call). Absent when the planner gave no usable plan. */
+  /** Legacy compatibility: older planner replies may contain a validated
+   *  PhasePlan. It is retained as non-authoritative recommendation metadata and
+   *  is never rendered into an executable launch directive. */
   phasePlan?: PhasePlan;
 }
 
@@ -81,14 +83,14 @@ export function buildNextActionMessages(
     );
   }
   lines.push(
-    'For fan-out/workflow, list the concrete subtasks (one per independent unit of work / phase) — these become child-agent prompts. Discover targets from the workspace; never ask the user for paths you can find.',
+    'For "fan-out", list the concrete independent subtasks — these become child-agent prompts. Discover targets from the workspace; never ask the user for paths you can find.',
+    'For "workflow", list concise ordered phase descriptions for a user-facing recommendation only. Never emit a tool call, command arguments, or an executable phase-plan payload.',
   );
   if (buildLoop !== 'off') {
-    lines.push('For "build", put ONE refined task statement in subtasks (a single element restating exactly what to implement) — no phasePlan; the loop builds its own phases.');
+    lines.push('For "build", put ONE refined task statement in subtasks (a single element restating exactly what to implement). This is a recommendation, not an executable plan.');
   }
   lines.push(
-    'For "workflow" ONLY, ALSO emit a `phasePlan` the runtime can execute directly. Shape: {"title":"...","phases":[{"id":"...","title":"...","fanOut":{"over":["t1","t2"],"agent":{"role":"reviewer","prompt":"... {{target}} ..."}},"synthesize":"role-rollup"},{"id":"synth","agents":[{"role":"architect","prompt":"... {{input}} ..."}],"inputFrom":["<earlier phase id>"],"dependsOn":["<earlier phase id>"]}]}. Each phase has EITHER fanOut (one child per target, {{target}} substituted) OR agents; a later phase reads an earlier one via inputFrom ({{input}} substituted). Omit phasePlan if you are not confident.',
-    'Respond with ONLY minified JSON: {"strategy":"...","reasoning":"<=20 words","subtasks":["...",...],"phasePlan":{...}}. subtasks=[] and no phasePlan for answer-direct/investigate.',
+    'Respond with ONLY minified JSON: {"strategy":"...","reasoning":"<=20 words","subtasks":["...",...]}. subtasks=[] for answer-direct/investigate.',
   );
   const system = lines.join('\n');
   const user = contextSummary
@@ -135,9 +137,9 @@ export function parseNextActionPlan(
     reasoning: String(raw?.reasoning ?? '').trim().slice(0, 240),
     subtasks,
   };
-  // WF-PLANNER — when the planner proposed a workflow plan, validate it and
-  // attach only if it passes normalizePhasePlan; otherwise fall back to the
-  // subtasks directive (the planner's plan was unusable).
+  // Backward compatibility: validate a PhasePlan found in an older planner
+  // reply, but keep it non-authoritative. New planner prompts do not request
+  // this field and nextActionDirective never renders it as launch input.
   if (plan.strategy === 'workflow' && raw?.phasePlan && typeof raw.phasePlan === 'object') {
     const { plan: phasePlan } = normalizePhasePlan(raw.phasePlan);
     if (phasePlan) plan.phasePlan = phasePlan;
@@ -146,18 +148,21 @@ export function parseNextActionPlan(
 }
 
 /**
- * Whether a plan implies parallel child agents (arms the fan-out follow-through
- * guard so the model can't accept a single-thread answer).
+ * Whether a plan authorizes parallel child agents (arms the fan-out
+ * follow-through guard so the model can't accept a single-thread answer).
+ * Durable workflow/build recommendations require explicit user launch and must
+ * never arm automatic follow-through.
  */
 export function planWantsFanOut(plan: NextActionPlan): boolean {
-  return (plan.strategy === 'fan-out' || plan.strategy === 'workflow') && plan.subtasks.length >= 2;
+  return plan.strategy === 'fan-out' && plan.subtasks.length >= 2;
 }
 
 /**
- * Render the decisive directive injected into the turn for a plan. Unlike the
- * old soft "fan-out hint", this states the decided strategy and (for fan-out)
- * the concrete child prompts the model must spawn now. Returns '' for
- * answer-direct (no injection). Pure.
+ * Render the directive injected into the turn for a plan. Investigation and
+ * fan-out remain decisive, while durable workflow/build strategies produce a
+ * non-executable recommendation that points to the explicit CLI launch surface
+ * and states the current Desktop limitation. Returns '' for answer-direct (no
+ * injection). Pure.
  */
 export function nextActionDirective(plan: NextActionPlan): string {
   if (plan.strategy === 'answer-direct') return '';
@@ -168,52 +173,46 @@ export function nextActionDirective(plan: NextActionPlan): string {
       'Your FIRST action MUST be tool calls — read the relevant workspace files now (parallel `read_file`/`list_dir`/`glob_files`). Do NOT answer from memory and do NOT ask the user for paths you can discover yourself.',
     ].join('\n');
   }
-  // BUILD-LOOP P3 — a code-writing task the planner escalated into the build
-  // loop. Tell the model to fire it in ONE `run_workflow` call with the `build`
-  // template; the runtime plans → implements on an isolated worktree → verifies
-  // → reviews the diff (the verify-green/review-approve merge GATE lands with P2).
+  // Durable execution is authority-bearing. The planner can recommend the
+  // build loop, but only an explicit CLI command or reviewed Desktop action may
+  // launch it.
   if (plan.strategy === 'build') {
     const task = plan.subtasks[0]?.trim();
-    const argsJson = JSON.stringify({ template: 'build', templateArgs: { task: task || '<the user request above, restated as one concrete implementation task>' } });
     return [
-      '## Next-action plan (decided): build',
+      '## Next-action plan (recommended): build',
       `Rationale: ${plan.reasoning}`,
-      'This is a code-implementation task. Your FIRST action MUST be a SINGLE `run_workflow` call that runs the BUILD LOOP (plan → implement → verify → review, on isolated worktrees) — do NOT hand-edit files directly and do NOT answer single-threaded:',
-      '',
-      '```json',
-      argsJson,
-      '```',
-      '',
+      'A durable build loop is appropriate, but it requires an explicit user launch.',
+      'CLI: `/build <task>`',
+      'Desktop production launch is unavailable until its reviewed host action is enabled; Test run is preview-only.',
       task
-        ? 'The runtime plans the change, implements it on an isolated worktree, verifies (build + tests), and reviews the full diff. After it returns, summarize what changed and the verify/review outcome.'
-        : 'Replace the `task` placeholder with one concrete sentence describing exactly what to implement (from the user request). The runtime then plans → implements on an isolated worktree → verifies → reviews. After it returns, summarize what changed and the verify/review outcome.',
+        ? `Suggested task: ${task}`
+        : 'Use the current user request as the task after the user reviews it.',
     ].join('\n');
   }
-  // WF-PLANNER — the planner prepared a validated PhasePlan: tell the model to
-  // fire it in ONE run_workflow call (the runtime fans out / waits / synthesizes
-  // / feeds forward), rather than hand-orchestrating spawn/wait/synthesize.
-  if (plan.strategy === 'workflow' && plan.phasePlan) {
-    return [
-      '## Next-action plan (decided): workflow',
+  // A workflow recommendation follows the same authority boundary. Legacy
+  // phasePlan metadata is deliberately not serialized into the directive.
+  if (plan.strategy === 'workflow') {
+    const lines = [
+      '## Next-action plan (recommended): workflow',
       `Rationale: ${plan.reasoning}`,
-      'A multi-phase workflow plan has been PREPARED. Your FIRST action MUST be a SINGLE `run_workflow` call with this exact plan — do not spawn agents manually, do not answer single-threaded:',
-      '',
-      '```json',
-      JSON.stringify({ plan: plan.phasePlan }),
-      '```',
-      '',
-      'The runtime executes every phase (fan-out → wait → synthesize → feed forward). After it returns, deliver the merged result.',
-    ].join('\n');
+      'A durable multi-phase workflow is appropriate, but it requires an explicit user launch.',
+      'CLI: `/workflow run <template> [jsonArgs]`',
+      'Desktop production launch is unavailable until its reviewed host action is enabled; Test run is preview-only.',
+    ];
+    if (plan.subtasks.length) {
+      lines.push('', 'Suggested phases:', ...plan.subtasks.map((s, i) => `${i + 1}. ${s}`));
+    }
+    return lines.join('\n');
   }
-  const verb = plan.strategy === 'workflow' ? 'a multi-phase workflow' : 'a parallel fan-out';
   const lines = [
     `## Next-action plan (decided): ${plan.strategy}`,
     `Rationale: ${plan.reasoning}`,
-    `This task is ${verb}. Spawn one child agent per unit below — emit a SINGLE assistant message with parallel \`spawn_agents\`/\`task_agent\` calls, then \`wait_agents\`, then synthesize. Discover any paths yourself (list_dir/glob); do not ask the user.`,
+    'This task is a parallel fan-out. Spawn one child agent per unit below — emit a SINGLE assistant message with parallel `spawn_agents`/`task_agent` calls, then `wait_agents`, then synthesize. Discover any paths yourself (list_dir/glob); do not ask the user.',
     '',
     'Subtasks (one child each):',
     ...plan.subtasks.map((s, i) => `${i + 1}. ${s}`),
     '',
+    `Give each child a \`label\` naming its distinct angle and tell it to ignore findings outside that angle, then add one more child briefed to ${adversarialLens()}. Your synthesis must say what that child failed to break.`,
     'Do NOT answer single-threaded and do NOT merely offer to "go deeper if you want" — execute the fan-out and deliver the merged result this turn.',
   ];
   return lines.join('\n');

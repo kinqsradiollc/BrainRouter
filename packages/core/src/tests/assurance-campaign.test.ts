@@ -356,3 +356,90 @@ test('A25-8c candidate verification requires matching current-revision evidence'
   assert.deepEqual(verified.verifier?.evidenceRefs, ['evidence-1']);
   assert.equal(verified.revisionSha, running.revision.headSha);
 });
+
+/**
+ * A stage interrupted mid-flight must stay retryable.
+ *
+ * This is the shape that took PR review down for four days. A process that dies
+ * inside a stage leaves its receipt `running`; `terminalStage()` in
+ * `diffReviewAssurance` reads `running` as "unfinished — retry it", so the retry
+ * arrives with the SAME attempt number. `runStage` used to mint a fresh receipt
+ * id every call, and the store refuses that outright:
+ *
+ *     A stage attempt cannot change its receipt id.
+ *
+ * The run could then never make progress again. Not a rare race — ANY crash,
+ * restart or OOM mid-stage produced it, and the wedge is permanent.
+ *
+ * So the attempt keeps ONE receipt id for its whole life: a retry RESUMES it.
+ */
+test('an interrupted stage resumes its receipt instead of minting a second id', async () => {
+  const { runs, service } = harness();
+  const running = await start(service);
+
+  // The process dies inside the stage: a `running` receipt, never completed.
+  await runs.saveStage(running.id, {
+    id: 'stage-interrupted',
+    stage: 'index',
+    status: 'running',
+    attempt: 1,
+    startedAt: T0,
+    inputRefs: [],
+    outputRefs: [],
+    limitationIds: [],
+  } as AssuranceStageReceipt);
+
+  const before = (await runs.get(running.id))!.stages.filter((r) => r.stage === 'index');
+  assert.equal(before.length, 1);
+  assert.equal(before[0]!.status, 'running');
+
+  // The retry: same stage, same attempt — exactly what terminalStage() drives.
+  const after = await service.runStage(running.id, 'index', 1, async (run) => ({
+    status: 'succeeded',
+    source: readySource(run),
+    coverage: completeCoverage(),
+    outputRefs: [],
+    limitationIds: [],
+  }));
+
+  const receipts = after.stages.filter((r) => r.stage === 'index' && r.attempt === 1);
+  assert.equal(receipts.length, 1, 'the retry must not create a second receipt for one attempt');
+  assert.equal(receipts[0]!.id, 'stage-interrupted',
+    'the retry must RESUME the interrupted receipt id, not mint a new one');
+  assert.equal(receipts[0]!.status, 'succeeded', 'the retry must be able to finish the stage');
+});
+
+test('a stage that already finished is not redone by a repeat call', async () => {
+  const { runs, service } = harness();
+  const running = await start(service);
+
+  await service.runStage(running.id, 'index', 1, async (run) => ({
+    status: 'succeeded',
+    source: readySource(run),
+    coverage: completeCoverage(),
+    outputRefs: ['first-result'],
+    limitationIds: [],
+  }));
+
+  // A terminal receipt is the record of work that HAPPENED. Re-running it would
+  // overwrite a real outcome with a second opinion, and the handler below would
+  // report a different result — so it must not run at all.
+  let handlerRan = false;
+  const after = await service.runStage(running.id, 'index', 1, async (run) => {
+    handlerRan = true;
+    return {
+      status: 'partial',
+      source: readySource(run),
+      coverage: completeCoverage(),
+      outputRefs: ['second-result'],
+      limitationIds: [],
+    };
+  });
+
+  assert.equal(handlerRan, false, 'a terminal stage must not be executed twice');
+  const receipts = after.stages.filter((r) => r.stage === 'index' && r.attempt === 1);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]!.status, 'succeeded');
+  assert.deepEqual(receipts[0]!.outputRefs, ['first-result'], 'the first outcome must survive');
+  void runs;
+});

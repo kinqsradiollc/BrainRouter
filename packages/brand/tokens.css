@@ -22,4 +22,27 @@
   --br-color-status-danger: #ef4444;
   --br-dashboard-control-size: 32px;
   --br-desktop-control-size: 30px;
+
+  /* ADR-038 — shared interaction rhythm for cross-host product surfaces. */
+  --br-space-1: 4px;
+  --br-space-2: 8px;
+  --br-space-3: 12px;
+  --br-space-4: 16px;
+  --br-space-5: 20px;
+  --br-space-6: 24px;
+  --br-space-8: 32px;
+  --br-type-label: 10px;
+  --br-type-meta: 11px;
+  --br-type-body-small: 12px;
+  --br-type-body: 13px;
+  --br-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --br-font-mono: "Geist Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --br-radius-chip: 5px;
+  --br-radius-control: 7px;
+  --br-radius-card: 10px;
+  --br-radius-panel: 12px;
+  --br-focus-width: 2px;
+  --br-focus-offset: 2px;
+  --br-elevation-overlay: 0 18px 50px rgba(0, 0, 0, 0.36);
+  --br-planner-row-height: 36px;
 }

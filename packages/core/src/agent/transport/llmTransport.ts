@@ -16,6 +16,7 @@ import { computePrefixFingerprint } from '../../context/contextRegions.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { acquireLLMSlot } from '../../util/concurrency/llmSemaphore.js';
 import { parseRetryAfterMs } from '../../mcp/reconnect/reconnect.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 import {
   buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
   buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,
@@ -338,6 +339,12 @@ export interface BuildPayloadOptions {
   maxResponseBytes?: number;
   /** Disable compatibility retries when the caller's contract permits one request only. */
   allowCompatibilityRetry?: boolean;
+  /**
+   * Invoked immediately before each physical provider request, including
+   * compatibility retries. A caller may throw here to enforce an aggregate
+   * request ceiling without changing transport behavior for other callers.
+   */
+  beforeProviderRequest?: () => void;
   /**
    * Router gateway — verbatim OpenAI request params to forward to the upstream
    * (temperature, top_p, max_tokens/max_completion_tokens, stop,
@@ -904,6 +911,7 @@ async function callNativeProvider(
   const release = await acquireLLMSlot();
   let res: Response;
   try {
+    options.beforeProviderRequest?.();
     res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: fetchSignal });
   } catch (err: any) {
     if (err?.name === 'AbortError') {
@@ -949,7 +957,7 @@ export async function callOpenAI(
   // defensively so both shapes (full URL or base URL) work.
   const initialDef = activeProviderDef(config);
   const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
-  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
   const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
@@ -1019,6 +1027,7 @@ export async function callOpenAI(
     // backend instance.
     const release = await acquireLLMSlot();
     try {
+      options.beforeProviderRequest?.();
       return await fetch(requestUrl, {
         method: 'POST',
         headers,
@@ -1176,7 +1185,7 @@ export async function callOpenAIStream(
 ) {
   const initialDef = activeProviderDef(config);
   const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
-  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
   const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
@@ -1247,6 +1256,7 @@ export async function callOpenAIStream(
 
     const release = await acquireLLMSlot();
     try {
+      options.beforeProviderRequest?.();
       const res = await fetch(requestUrl, {
         method: 'POST',
         headers,

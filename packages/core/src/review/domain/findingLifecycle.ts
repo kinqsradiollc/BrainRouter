@@ -19,6 +19,13 @@ export interface LifecycleFindingInput {
   cwe?: string;
   preExisting?: boolean;
   suggestable?: boolean;
+  /** ADR-036 — a few verbatim lines of the reviewed source this finding is about
+   *  (already redacted). NOT part of the fingerprint, so refreshing it never
+   *  forks the finding. */
+  codeExcerpt?: string;
+  /** ADR-036 — the proposed replacement for the flagged lines, when the bot
+   *  suggests one (already redacted). */
+  replacement?: string;
 }
 
 export interface LifecycleCurrentFinding {
@@ -128,6 +135,11 @@ function normalizeFinding(
     ...(cwe ? { cwe } : {}),
     ...(finding.preExisting ? { preExisting: true } : {}),
     ...(finding.suggestable ? { suggestable: true } : {}),
+    // ADR-036 — carry the code forward; these are NOT part of the fingerprint
+    // (findingFingerprint reads only lens/file/cwe/title), so a refreshed excerpt
+    // never forks the finding.
+    ...(finding.codeExcerpt ? { codeExcerpt: finding.codeExcerpt } : {}),
+    ...(finding.replacement ? { replacement: finding.replacement } : {}),
   };
   return { ...normalized, fingerprint: findingFingerprint(lens, normalized) };
 }

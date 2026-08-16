@@ -159,7 +159,7 @@ export default function WorkingMemoryPage() {
         </FilterBar>
 
         {!context ? (
-          <EmptyState title="No Working Context Loaded" description="Configure or load a session to inspect short-term working memory state." />
+          <EmptyState title="No session loaded" description="Pick a session to see the steps, references, and notes it is working from right now." />
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: "18px" }}>
             <section className="table-container" style={{ padding: "18px" }}>
@@ -188,8 +188,8 @@ export default function WorkingMemoryPage() {
             <h2 className="serif-display" style={{ margin: "24px 0 8px 0", fontSize: "22px" }}>Memory Nodes ({context.steps.length})</h2>
             {context.steps.length === 0 ? (
               <EmptyState
-                title="Working memory is clear"
-                description="This session's working memory currently contains no offloaded context, references, or steps."
+                title="Nothing in progress"
+                description="This session is not holding any steps, references, or notes at the moment."
               />
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))", gap: "20px" }}>

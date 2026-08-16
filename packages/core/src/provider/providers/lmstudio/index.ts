@@ -1,5 +1,6 @@
 import type { ProviderDefinition } from '../definition.js';
 import { registerModelReasoningCapabilities } from '../../models/reasoning.js';
+import { stripTrailingSlashes } from '../../../util/trimEdges.js';
 
 /** Best-effort tracing, LAZILY imported so the provider layer keeps NO static
  *  dependency on the telemetry/config layer. That matters because `tracing`
@@ -145,7 +146,7 @@ export function isLmStudioEndpoint(endpoint: string | undefined | null): boolean
  */
 export function deriveLmStudioModelsUrl(endpoint: string): string {
   // Drop any trailing slash, then `/chat/completions`, then a trailing `/v1`.
-  let base = endpoint.replace(/\/+$/, '');
+  let base = stripTrailingSlashes(endpoint);
   if (base.endsWith('/chat/completions')) base = base.slice(0, -'/chat/completions'.length);
   if (base.endsWith('/v1')) base = base.slice(0, -'/v1'.length);
   return `${base}/api/v1/models`;

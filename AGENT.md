@@ -8,7 +8,7 @@
 
 ## 📖 Read order for any task
 
-1. [`brainrouter-rules/00-golden-rules.md`](brainrouter-rules/00-golden-rules.md) — the top ~20 non-negotiables (`⛔` = has caused a real regression or security bug).
+1. [`brainrouter-rules/00-golden-rules.md`](brainrouter-rules/00-golden-rules.md) — the 30 non-negotiables (`⛔` = has caused a real regression or security bug).
 2. The topical rules file for the area you're touching — see the table in [`brainrouter-rules/README.md`](brainrouter-rules/README.md) (boundaries, code style, refactoring, memory engine, CLI/agent runtime, desktop/dashboard, testing, git/release, docs/skills).
 3. The matching **skill** for your scenario (table below) — read its `SKILL.md` and follow the steps.
 4. For architecture intent: [`brainrouter-docs/architecture-folder-structure-rules.md`](brainrouter-docs/architecture-folder-structure-rules.md). The rules handbook describes what the code does today; the architecture doc is the boundary law.
@@ -25,8 +25,8 @@ When a rule is wrong or stale, **fix it in the same PR**. When you establish a n
 | `brainrouter-cli/`                                | Node/TypeScript CLI + TUI: agent runtime front-end, sessions, skills, `/review`.                                                                                                                                      |
 | `brainrouter-dashboard/`                          | Next.js dashboard (workspace name `dashboard`): auth'd chat, orgs/teams, connections, reviews, operations, memory inspection.                                                                                         |
 | `brainrouter-desktop/`                            | Electron + React workbench: Chat · Track · Code modes, in-app multi-tab browser (`electron/browser/`), terminal, tools, reviews. Renderer (`src/**`) is browser code — see boundary rule below.                       |
-| `packages/`                                       | Shared libraries: `types`, `agent-protocol`, `core` (agent loop, config, extensions), `sdk`, `hooks`.                                                                                                                 |
-| `skills/`                                         | Universal skill workflows (`agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`).                                                                                                        |
+| `packages/`                                       | Shared libraries: `types`, `agent-protocol`, `core` (agent loop, config, extensions), `sdk`, `hooks`, and private browser-safe `ui`.                                                                                  |
+| `skills/`                                         | Universal skill workflows (`agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`). The **only** editable copy — packages generate theirs at build/pack time (`scripts/bundle-content.mjs`). |
 | `brainrouter-rules/`                              | The evidence-backed engineering-conventions handbook. Read before coding an area.                                                                                                                                     |
 | `brainrouter-docs/`                               | Product docs, `specs/`, `decisions/` (ADRs), setup guides.                                                                                                                                                            |
 | `brainrouter-changelog/` · `brainrouter-roadmap/` | Per-version changelog fragments and roadmap files (mirrored to root `CHANGELOG.md`).                                                                                                                                  |
@@ -54,7 +54,7 @@ The full list with evidence lives in [`brainrouter-rules/00-golden-rules.md`](br
 
 ```bash
 npm install                 # workspace root
-npm run build               # packages (types → agent-protocol → core → sdk → hooks) then apps
+npm run build               # packages (types → agent-protocol → core → sdk → hooks → ui) then apps
 npm run verify              # build + typecheck + lint + all workspace tests
 npm run test -ws --if-present   # or per workspace:
 npm test -w @kinqs/brainrouter-core        # node --test over dist

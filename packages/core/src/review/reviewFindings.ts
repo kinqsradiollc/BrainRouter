@@ -7,6 +7,7 @@
  * this extracts + validates it, tolerating prose around it and a missing/malformed
  * block (→ []). Pure + unit-tested; the host maps these onto the stored ReviewFinding.
  */
+import { UNVERIFIED_CLAIM } from './reviewGrounding.js';
 
 /** Everything the reviewer can give us about one finding (pre-store: no id/status). */
 export interface ParsedReviewFinding {
@@ -41,6 +42,22 @@ export interface ParsedReviewFinding {
 
 // Accept both the v2 scale and the older free-form words (the host normalizes).
 const SEVERITIES = new Set(['critical', 'high', 'medium', 'low', 'info', 'bug', 'security', 'perf', 'style', 'nit', 'warn']);
+const PUBLICATION_SEVERITIES = new Set(['critical', 'high', 'medium', 'low', 'info']);
+const PUBLICATION_FINDING_FIELDS = new Set([
+  'file',
+  'line',
+  'endLine',
+  'severity',
+  'preExisting',
+  'confidence',
+  'summary',
+  'details',
+  'suggestion',
+  'replacement',
+  'codeExcerpt',
+  'diffHunk',
+  'patch',
+]);
 
 /** Extract the LAST fenced ```json block from a markdown string, or null. */
 export function lastJsonBlock(text: string): string | null {
@@ -81,6 +98,78 @@ function coerce(raw: unknown): ParsedReviewFinding | null {
   };
 }
 
+/**
+ * Validate the model-facing publication schema without legacy coercions.
+ *
+ * The permissive reader above is retained for historical stored reviews. New
+ * PR/local/benchmark output must not silently turn a missing or misspelled
+ * blocking severity into `info`, manufacture a confidence score, or accept a
+ * line encoded with the wrong JSON type.
+ */
+function validatePublicationFinding(raw: unknown): ParsedReviewFinding | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const finding = raw as Record<string, unknown>;
+  if (Object.keys(finding).some((field) => !PUBLICATION_FINDING_FIELDS.has(field))) return null;
+
+  const file = str(finding.file)?.trim();
+  const summary = str(finding.summary)?.trim();
+  const severity = typeof finding.severity === 'string'
+    ? finding.severity.trim().toLowerCase()
+    : '';
+  const confidence = finding.confidence;
+  if (
+    !file
+    || !summary
+    || !PUBLICATION_SEVERITIES.has(severity)
+    || typeof confidence !== 'number'
+    || !Number.isFinite(confidence)
+    || confidence < 0
+    || confidence > 100
+  ) return null;
+
+  const invalidLine = Symbol('invalid-review-line');
+  const optionalLine = (value: unknown): number | undefined | typeof invalidLine => {
+    if (value === undefined || value === null) return undefined;
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+      ? value
+      : invalidLine;
+  };
+  const line = optionalLine(finding.line);
+  const endLine = optionalLine(finding.endLine);
+  if (line === invalidLine || endLine === invalidLine) return null;
+  if (line !== undefined && endLine !== undefined && endLine < line) return null;
+
+  const optionalString = (field: string): string | undefined | null => {
+    const value = finding[field];
+    if (value === undefined) return undefined;
+    return typeof value === 'string' && value.trim() ? value : null;
+  };
+  const details = optionalString('details');
+  const suggestion = optionalString('suggestion');
+  const replacement = optionalString('replacement');
+  const codeExcerpt = optionalString('codeExcerpt');
+  const diffHunk = optionalString('diffHunk');
+  const patch = optionalString('patch');
+  if ([details, suggestion, replacement, codeExcerpt, diffHunk, patch].includes(null)) return null;
+  if (finding.preExisting !== undefined && typeof finding.preExisting !== 'boolean') return null;
+
+  return {
+    file,
+    ...(line !== undefined ? { line } : {}),
+    ...(endLine !== undefined ? { endLine } : {}),
+    severity,
+    confidence,
+    summary,
+    ...(details ? { details } : {}),
+    ...(suggestion ? { suggestion } : {}),
+    ...(replacement ? { replacement } : {}),
+    ...(codeExcerpt ? { codeExcerpt } : {}),
+    ...(diffHunk ? { diffHunk } : {}),
+    ...(patch ? { patch } : {}),
+    ...(finding.preExisting === true ? { preExisting: true } : {}),
+  };
+}
+
 export function parseReviewFindings(text: string): ParsedReviewFinding[] {
   const block = lastJsonBlock(text);
   if (!block) return [];
@@ -91,6 +180,69 @@ export function parseReviewFindings(text: string): ParsedReviewFinding[] {
     : (parsed && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
         ? (parsed as { findings: unknown[] }).findings : []);
   return arr.map(coerce).filter((f): f is ParsedReviewFinding => f !== null);
+}
+
+export type ReviewFindingsEnvelopeResult =
+  | { ok: true; findings: ParsedReviewFinding[] }
+  | { ok: false; error: string };
+
+/**
+ * Parse the required findings envelope without letting dropped entries become
+ * a false clean review. This is the publication parser used by every current
+ * review front door; the permissive parser above remains for legacy readers.
+ */
+export function parseReviewFindingsEnvelope(text: string): ReviewFindingsEnvelopeResult {
+  const raw = String(text ?? '');
+  const fence = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  let last: RegExpExecArray | null = null;
+  while ((match = fence.exec(raw)) !== null) last = match;
+  if (!last) return { ok: false, error: 'reviewer returned no fenced JSON findings envelope' };
+  if (raw.slice(last.index + last[0].length).trim()) {
+    return { ok: false, error: 'reviewer did not end with the fenced JSON findings envelope' };
+  }
+  const block = last[1].trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(block);
+  } catch {
+    return { ok: false, error: 'reviewer returned malformed JSON findings' };
+  }
+  const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null;
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : record && Object.keys(record).length === 1 && Array.isArray(record.findings)
+      ? record.findings
+      : null;
+  if (!entries) return { ok: false, error: 'reviewer JSON did not contain only a findings array' };
+  const findings = entries.map(validatePublicationFinding);
+  if (findings.some((entry) => entry === null)) {
+    return { ok: false, error: 'reviewer returned one or more invalid findings' };
+  }
+  return { ok: true, findings: findings as ParsedReviewFinding[] };
+}
+
+/**
+ * Merge findings gathered across review units, dropping duplicates. Two
+ * findings are "the same" when they name the same file, line, and summary — so
+ * a finding on a file that straddled a bundle boundary is reported once.
+ *
+ * ADR-033 D2 moved this next to the parser it feeds: with bundles running
+ * concurrently, every surface that collects findings from more than one unit
+ * needs it, and two copies of "the same finding" would drift apart.
+ */
+export function dedupeReviewFindings(findings: readonly ParsedReviewFinding[]): ParsedReviewFinding[] {
+  const seen = new Set<string>();
+  const out: ParsedReviewFinding[] = [];
+  for (const finding of findings) {
+    const key = `${finding.file}\n${finding.line ?? ''}\n${finding.summary.trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(finding);
+  }
+  return out;
 }
 
 /**
@@ -169,12 +321,11 @@ export const REVIEW_OUTPUT_CONTRACT =
   'Tools you SHOULD call while reviewing (all read-only, safe to use freely):\n' +
   '  - `read_file` — open each changed file AND its neighbors/callers for the surrounding context the diff hunk omits.\n' +
   '  - `grep_search` / `glob_files` / `list_dir` — find the callers, the definition, the tests, and other uses of anything the diff changes (a renamed/edited export, a changed signature, a new invariant).\n' +
-  '  - `memory_search` — prior reviews on these files; never re-flag something a past review already accepted. `memory_file_history` — known regressions / past fixes on each changed file.\n' +
-  'The Atlas "Change impact" block above already gives you the free, deterministic blast radius — use it to decide WHICH callers to open with `read_file`.\n' +
-  'VERIFICATION BAR: every behavior claim ("this races", "returns undefined", "breaks callers") must be backed by a concrete `file:line` you ACTUALLY READ, not inferred from a name. If you could not verify it, do not flag it — false positives waste the author\'s time.\n' +
+  'If a "Change impact" block appears above, it is a deterministic blast-radius hint — use it to decide WHICH callers to open with `read_file`.\n' +
+  'VERIFICATION BAR: every behavior claim ("this races", "returns undefined", "breaks callers") must be backed by a concrete `file:line` you ACTUALLY READ, not inferred from a name. ' + UNVERIFIED_CLAIM + '\n' +
   '\n' +
   'FIRST, write a short UNDERSTANDING section in plain markdown (NO code fences anywhere in it) so a human can build the mental model:\n' +
-  '  "## What changed" — 2-4 sentences: what this change does, why, and what it touches (use the Change impact above + what you read).\n' +
+  '  "## What changed" — 2-4 sentences: what this change does, why, and what it touches (use any Change impact block plus what you read).\n' +
   '  "## Check your understanding" — exactly 3 short questions that verify a reader actually grasped the change; put each answer inside a `<details><summary>Answer</summary> … </details>` so it stays hidden until revealed.\n' +
   '  "## Findings summary" — ONE line tallying the findings by severity, e.g. `2 important · 3 nit · 1 pre-existing`, or `No blocking issues` when nothing important was found.\n' +
   '\n' +

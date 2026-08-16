@@ -1,5 +1,7 @@
 /* Account Meetings, Meeting Track, and Teams use the desktop theme contract. */
-.mv-shell{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-family:var(--font)}
+/* flex:1 — see .planner-mode. `.workrow` is a flex row, so without this the
+   meetings shell sized to content and left most of the window empty. */
+.mv-shell{height:100%;min-height:0;flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-family:var(--font)}
 .mv-shell *{box-sizing:border-box}.mv-shell button,.mv-shell input,.mv-shell textarea,.mv-shell select{font:inherit}.mv-shell button{color:inherit}.mv-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .mv-tabs{display:flex;align-items:center;gap:3px;flex:0 0 auto;padding:8px 15px 0;background:var(--sidebar);border-bottom:1px solid var(--border)}
 .mv-tab{padding:8px 13px 10px;border:0;border-bottom:2px solid transparent;color:var(--text-faint);font-size:12.5px;font-weight:600;cursor:pointer;margin-bottom:-1px}
@@ -54,6 +56,59 @@
 /* Capture composer */
 .mv-compose{min-height:0;overflow:auto;padding:24px;max-width:980px;width:100%;margin:0 auto}.mv-compose-head{display:flex;justify-content:space-between;gap:20px;margin-bottom:17px}.mv-compose h3{margin:0 0 5px;font-size:20px}.mv-compose p{margin:0;color:var(--text-faint);font-size:11.5px;line-height:1.5}.mv-recovered{align-self:flex-start;padding:4px 8px;border:1px solid color-mix(in srgb,var(--ok) 35%,var(--border));border-radius:999px;background:color-mix(in srgb,var(--ok) 10%,transparent);color:color-mix(in srgb,var(--ok) 65%,var(--text));font-size:9.5px;font-weight:650}
 .mv-capture-bar{display:flex;align-items:center;gap:7px;margin-bottom:17px;padding:11px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}.mv-capture-bar>span:last-child{margin-left:auto;color:var(--text-faint);font-size:9.5px}.mv-recording{height:33px;display:flex;align-items:center;gap:7px;padding:0 11px;border:1px solid color-mix(in srgb,var(--brand) 50%,var(--border));border-radius:8px;background:var(--brand-soft);color:color-mix(in srgb,var(--brand) 70%,var(--text))!important;cursor:pointer}.mv-recording span{width:8px;height:8px;border-radius:50%;background:var(--brand);animation:mv-pulse 1.1s infinite}.mv-file-btn{cursor:pointer}.mv-file-btn input{display:none}
+/* ADR-035 D2 — the recovery offer for captures a crash interrupted. */
+.mv-recovery{margin-bottom:13px;padding:12px 13px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:10px;background:var(--accent-soft)}.mv-recovery strong{display:block;font-size:11.5px}.mv-recovery p{margin:3px 0 9px;color:var(--text-faint);font-size:10px}.mv-recovery-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--border)}.mv-recovery-row>span{display:flex;min-width:0;flex-direction:column;flex:1;font-size:11px}.mv-recovery-row small{color:var(--text-faint);font:9px var(--mono)}
+.mv-recovery-cta{display:flex;flex-direction:column;gap:2px;width:100%;margin:0 0 8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:9px;background:var(--accent-soft);text-align:left;cursor:pointer}.mv-recovery-cta strong{font-size:11px}.mv-recovery-cta small{color:var(--text-faint);font-size:9.5px}
+/* §6 — the recovered audio, played back. Full width under its row rather than
+   inside it, because a native audio control squashes a flex row to nothing. */
+.mv-recovery-audio{display:block;width:100%;height:30px;margin:2px 0 7px}
+/* §6 — what is missing from what just started playing. One unreadable segment
+   no longer refuses the whole recording, so the player has to say it is short. */
+.mv-recovery-missing{display:block;margin:0 0 7px;color:color-mix(in srgb,var(--err) 60%,var(--text));font-size:9.5px;line-height:1.45}
+/* ADR-035 D6 — the retention window, beside the recordings it governs. Quiet
+   rather than alarming: it is a standing policy, not an event, so it does not
+   wear the accent border the recovery offer does. */
+.mv-retention{display:flex;flex-direction:column;gap:4px;margin-bottom:11px;padding:9px 11px;border:1px solid var(--border);border-radius:9px}
+.mv-retention-set{display:flex;align-items:center;gap:8px;font-size:11px}
+.mv-retention-set select{padding:3px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11px}
+.mv-retention p{margin:0;color:var(--text-faint);font-size:10px;line-height:1.45}
+.mv-retention small{color:var(--text-faint);font-size:9.5px;line-height:1.45}
+/* ADR-035 A1 — the recording follows the user out of the compose form. Rendered
+   above the tab switch, so it is still there on Track and Teams. */
+.mv-recbar{display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 15px;border-bottom:1px solid color-mix(in srgb,var(--brand) 38%,var(--border));background:var(--brand-soft);color:color-mix(in srgb,var(--brand) 70%,var(--text));font-size:11px}
+.mv-recbar-dot{width:8px;height:8px;flex:0 0 auto;border-radius:50%;background:var(--brand);animation:mv-pulse 1.1s infinite}
+.mv-recbar button{margin-left:auto;border:0;color:inherit;font-size:11px;font-weight:650;text-decoration:underline;cursor:pointer}
+/* ADR-035 F4 — the same fact, one level up: the mode rail takes the whole
+   meetings view off screen, so this one belongs to the app shell. Fixed rather
+   than in flow because it appears over Chat, Code, Notes, Planner and Track,
+   and a bar that reflowed five unrelated layouts would be a fifth way to break
+   them. */
+.meeting-appbar{position:fixed;z-index:60;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:9px;max-width:min(560px,92vw);padding:8px 15px;border:1px solid color-mix(in srgb,var(--brand) 38%,var(--border));border-radius:999px;background:var(--brand-soft);color:color-mix(in srgb,var(--brand) 70%,var(--text));font-size:11px;box-shadow:var(--shadow-sm)}
+.meeting-appbar button{border:0;background:none;color:inherit;font-size:11px;font-weight:650;text-decoration:underline;cursor:pointer}
+/* ADR-035 D4/D5 — segment states while a capture transcribes. The text itself
+   lands in the transcript box; this says which segments are settled, in flight,
+   or a stated gap with a retry. */
+.mv-live{margin-bottom:15px;padding:12px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}.mv-live .mv-card-lab{margin-bottom:8px}.mv-live-empty{margin:0;color:var(--text-faint);font-size:10px}.mv-live-rows{display:flex;flex-direction:column;gap:2px;max-height:186px;overflow:auto}
+.mv-live-row{display:flex;align-items:center;gap:9px;padding:4px 2px;border-top:1px solid var(--border)}.mv-live-row:first-child{border-top:0}.mv-live-at{color:var(--text-faint);font:9px var(--mono);white-space:nowrap}.mv-live-state{color:var(--text-faint);font-size:10px}.mv-live-settled .mv-live-state{color:color-mix(in srgb,var(--ok) 62%,var(--text))}.mv-live-provisional .mv-live-state{color:var(--accent)}
+.mv-live-gap{display:flex;min-width:0;flex-direction:column;flex:1;color:color-mix(in srgb,var(--err) 62%,var(--text));font-size:10px}.mv-live-gap small{color:var(--text-faint);font-size:9px}
+/* ADR-035 D10 — words still being spoken. They are PROVISIONAL and they are not
+   in the compose box, so they are drawn as speech rather than as transcript: the
+   partial one is dimmed and italic because it is still being rewritten, and one
+   waiting to be committed is plain but still labelled as unsaved. When a
+   coverage proof lands, the words leave this block and reappear below as a
+   settled segment — which is the moment they are on disk. */
+.mv-live-speech{display:flex;flex-direction:column;gap:5px;max-height:120px;margin-bottom:9px;overflow:auto}
+.mv-live-utterance{display:flex;align-items:baseline;gap:8px;margin:0}.mv-live-words{min-width:0;flex:1;font-size:11.5px;line-height:1.5}.mv-live-utterance small{color:var(--text-faint);font-size:9px;white-space:nowrap}
+.mv-live-utterance-partial .mv-live-words{color:var(--text-faint);font-style:italic}.mv-live-utterance-final .mv-live-words{color:var(--text)}
+/* D10/golden rule 23 — which strategy is running, said rather than implied. */
+.mv-live-mode{margin-left:7px;padding:1px 6px;border-radius:999px;font:9px var(--mono);font-style:normal;letter-spacing:.06em;text-transform:uppercase}
+.mv-live-mode-streaming{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}
+.mv-live-mode-segmented{background:color-mix(in srgb,var(--text-faint) 18%,transparent);color:var(--text-faint)}
+/* D7 — the drain phase in words. The rows cannot say it: an outage leaves every
+   segment `pending`, which looks exactly like a queue that is working. */
+.mv-live-note{margin:8px 0 0;color:var(--text-faint);font-size:9.5px;line-height:1.5}
+.mv-live-degraded{color:color-mix(in srgb,var(--warn,var(--err)) 58%,var(--text))}
+.mv-unresolved{align-self:center;color:var(--text-faint);font-size:10px;line-height:1.4}
 .mv-compose-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.mv-field{display:flex;flex-direction:column;gap:6px}.mv-field-wide{grid-column:1/-1}.mv-field>span{color:var(--text-faint);font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.mv-field input,.mv-field select,.mv-field textarea,.tmv input,.tmv select,.mtk input{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);outline:0}.mv-field input:focus,.mv-field select:focus,.mv-field textarea:focus,.tmv input:focus,.tmv select:focus,.mtk input:focus{border-color:var(--accent)}.mv-field textarea{min-height:280px;resize:vertical;font:11.5px/1.6 var(--mono)}.mv-compose-actions{display:flex;gap:8px;margin-top:15px}
 
 /* Three-column Meeting Track */
@@ -67,4 +122,4 @@
 .tmv-kind button:disabled{cursor:not-allowed;opacity:.4}
 
 @media(max-width:1050px){.mv-dbody{grid-template-columns:1fr}.mv-tpanel{align-self:stretch}.mtk-board{grid-template-columns:repeat(3,minmax(220px,1fr))}.mtk-filters{align-items:flex-start;flex-direction:column}.mtk-filters .mv-search{width:100%;max-width:none}.tmv-create-space{grid-template-columns:1fr 1fr}.tmv-add{grid-template-columns:minmax(0,1fr) 115px}.tmv-add .mv-primary{grid-column:1/-1;justify-self:start}}
-@media(max-width:760px){.mv-tabs{flex-wrap:wrap}.mv-orgctx{width:100%;justify-content:space-between;margin:2px 0 6px}.mv-orgctx select{flex:1;min-width:0}.mv-root{grid-template-columns:1fr}.mv-col-has-selection{display:none}.mv-col:not(.mv-col-has-selection)+.mv-detail{display:none}.mv-mobile-back{display:block;align-self:flex-start;margin:9px 12px 0;padding:5px 7px;border:0;color:var(--text-faint);font-size:10.5px;cursor:pointer}.mv-dhead-row,.mv-compose-head,.mtk-head,.tmv-head{flex-direction:column}.mv-hactions{width:100%;flex-wrap:wrap}.mv-dbody{padding:12px}.mv-compose{padding:15px}.mv-capture-bar{align-items:flex-start;flex-wrap:wrap}.mv-capture-bar>span:last-child{width:100%;margin:3px 0 0}.mv-compose-grid{grid-template-columns:1fr}.mv-field-wide{grid-column:1}.mtk-head,.tmv-head{padding:14px}.mtk-toolbar{padding:10px}.mtk-board{padding:10px}.tmv-context{width:100%;justify-content:space-between}.tmv-create{width:100%}.tmv-create-space{grid-template-columns:1fr;padding:10px 14px}.tmv-layout{grid-template-columns:1fr}.tmv-list:has(.tmv-team-on){display:none}.tmv-detail{padding:14px}.tmv-add{grid-template-columns:1fr}.tmv-members-head{display:none}.tmv-member{grid-template-columns:28px minmax(0,1fr) auto}.tmv-member>button{grid-column:2}.tmv-role{grid-column:3;grid-row:1}.mv-pop{position:fixed;right:12px;top:92px}}
+@media(max-width:760px){.mv-tabs{flex-wrap:wrap}.mv-orgctx{width:100%;justify-content:space-between;margin:2px 0 6px}.mv-orgctx select{flex:1;min-width:0}.mv-root{grid-template-columns:1fr}.mv-col-has-selection{display:none}.mv-col:not(.mv-col-has-selection)~.mv-detail{display:none}.mv-mobile-back{display:block;align-self:flex-start;margin:9px 12px 0;padding:5px 7px;border:0;color:var(--text-faint);font-size:10.5px;cursor:pointer}.mv-dhead-row,.mv-compose-head,.mtk-head,.tmv-head{flex-direction:column}.mv-hactions{width:100%;flex-wrap:wrap}.mv-dbody{padding:12px}.mv-compose{padding:15px}.mv-capture-bar{align-items:flex-start;flex-wrap:wrap}.mv-capture-bar>span:last-child{width:100%;margin:3px 0 0}.mv-compose-grid{grid-template-columns:1fr}.mv-field-wide{grid-column:1}.mtk-head,.tmv-head{padding:14px}.mtk-toolbar{padding:10px}.mtk-board{padding:10px}.tmv-context{width:100%;justify-content:space-between}.tmv-create{width:100%}.tmv-create-space{grid-template-columns:1fr;padding:10px 14px}.tmv-layout{grid-template-columns:1fr}.tmv-list:has(.tmv-team-on){display:none}.tmv-detail{padding:14px}.tmv-add{grid-template-columns:1fr}.tmv-members-head{display:none}.tmv-member{grid-template-columns:28px minmax(0,1fr) auto}.tmv-member>button{grid-column:2}.tmv-role{grid-column:3;grid-row:1}.mv-pop{position:fixed;right:12px;top:92px}}

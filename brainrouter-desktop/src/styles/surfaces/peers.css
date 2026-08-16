@@ -1,0 +1,41 @@
+/*
+ * ADR-034 Peers surface layout. Styling must keep the exact key and receipt
+ * wording visible; colour/layout never encode a stronger delivery state.
+ */
+.peers-panel { display: flex; flex-direction: column; gap: 8px; padding-bottom: 18px; }
+.peers-head { justify-content: space-between; }
+.peers-presence { display: flex; flex-direction: column; gap: 5px; padding: 0 10px 8px; color: var(--text-dim); }
+.peers-presence code { overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
+.peer-state { width: fit-content; border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px; font-size: 10px; }
+.peer-state.online { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 38%, var(--border)); }
+.peer-state.offline { color: var(--text-faint); }
+.peers-routes { display: flex; flex-direction: column; gap: 4px; padding: 0 8px; }
+.peer-route { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; padding: 8px; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 8px; text-align: left; cursor: pointer; }
+.peer-route:hover, .peer-route.selected { border-color: var(--accent); background: var(--accent-soft); }
+.peer-route.ambiguous { opacity: .62; cursor: not-allowed; }
+.peer-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.peer-dot.working { background: var(--accent); }
+.peer-dot.waiting { background: var(--warn); }
+.peer-dot.idle { background: var(--ok); }
+.peer-route-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.peer-route-copy strong, .peer-route-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-route-copy small, .peer-route-meta { color: var(--text-faint); font: 10px var(--mono); }
+.peers-compose { display: flex; flex-direction: column; gap: 8px; padding: 0 8px; }
+.peers-compose label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 10px; }
+.peers-compose textarea { width: 100%; min-height: 78px; resize: vertical; line-height: 1.45; }
+.peers-compose-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-faint); font-size: 10px; }
+.peers-compose-actions span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peers-notice { margin: 0 8px; padding: 7px 9px; color: var(--text-dim); background: var(--ov-04); border-left: 2px solid var(--accent); border-radius: 4px; font-size: 11px; }
+.peer-held { display: flex; flex-direction: column; gap: 7px; margin: 0 8px; padding: 9px; background: var(--raised); border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border)); border-radius: 8px; }
+.peer-held header, .peer-held-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.peer-held header span, .peer-held small { color: var(--text-faint); font-size: 10px; }
+.peer-held p { margin: 0; color: var(--text-dim); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.peer-receipt { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 0 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); }
+.peer-receipt-status { align-self: start; padding: 2px 5px; border-radius: 999px; color: var(--text-dim); background: var(--ov-06); font: 9px var(--mono); text-transform: uppercase; }
+.peer-receipt-status.applied { color: var(--ok); }
+.peer-receipt-status.held { color: var(--warn); }
+.peer-receipt-status.rejected, .peer-receipt-status.declined, .peer-receipt-status.expired, .peer-receipt-status.queue_full { color: var(--err); }
+.peer-receipt-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.peer-receipt-copy strong, .peer-receipt-copy small { overflow: hidden; text-overflow: ellipsis; }
+.peer-receipt-copy small, .peer-receipt time { color: var(--text-faint); font-size: 10px; }
+.peer-receipt time { grid-column: 2; }

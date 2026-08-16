@@ -1,6 +1,7 @@
 import type { LLMConfig } from '../../config/config.js';
 import { getCliKnobs } from '../../config/config.js';
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../../provider/providers/index.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 /**
  * Conversation compaction for long sessions.
@@ -114,7 +115,7 @@ export async function runCompaction(llm: LLMConfig, input: CompactionInput): Pro
   };
 
   const rawEndpoint = llm.endpoint || 'https://api.openai.com/v1';
-  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
   const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase());
   // Config-driven key (not env): env is imported into config at load time, so the
   // compaction call reads the same config knob as the main chat path.

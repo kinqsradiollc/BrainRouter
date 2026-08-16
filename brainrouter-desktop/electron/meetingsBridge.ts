@@ -7,7 +7,16 @@
  */
 import { ipcMain } from 'electron';
 import { loadConfig } from '@kinqs/brainrouter-core/config';
+import { MeetingEndpointUnavailableError } from '@kinqs/brainrouter-core/meetings';
 import { brainRouterAccountHeaders, resolveBrainRouterAccountApi, resolveBrainRouterAccountContext, type BrainRouterAccountContext } from './accountIntegration.js';
+import { connectMeetingStream, type MeetingStreamConnection } from './meetingStreamConnection.js';
+import {
+  meetingStreamUrl,
+  MeetingStreamUnavailableError,
+  MEETING_TRANSCRIPTION_CAPABILITIES_PATH,
+} from './meetingStreamProtocol.js';
+import type { MeetingStreamPortOpenInput, MeetingTranscriptionStreamPort } from './meetingStreamSession.js';
+import { createMeetingStreamSocket } from './meetingStreamSocket.js';
 import {
   meetingRequests,
   teamRequests,
@@ -81,6 +90,124 @@ async function requestJson<T>(request: AccountRequest, fallback: string): Promis
   if (!response.ok) throw new Error(apiError(payload) ?? `${fallback} (${response.status}).`);
   return payload as T;
 }
+
+/**
+ * ADR-035 D3/D7 — one captured segment against the STT endpoint, for the
+ * host-owned transcription queue.
+ *
+ * It shares `accountFetch` with the IPC handlers deliberately: the bearer, the
+ * https-or-loopback rule and the org context are one implementation, and a
+ * second HTTP path for meeting audio would be a second place to get any of them
+ * wrong.
+ *
+ * The failure it throws is SHAPED for the shared classifier, because D7 turns on
+ * telling two things apart. A status the endpoint declined to serve with travels
+ * on `.status`, so 429/503 read as an outage and cost the segment no attempt. A
+ * signed-out desktop is also an outage rather than a verdict on the audio: those
+ * bytes are fine and will transcribe once someone signs in, and burning four
+ * attempts on being logged out would turn a good meeting into permanent gaps.
+ */
+export async function transcribeCaptureSegment(
+  input: { bytes: Uint8Array; contentType: string; language?: string },
+): Promise<string> {
+  const response = await accountFetch(meetingRequests.transcribe(input));
+  if (!response) throw new MeetingEndpointUnavailableError('Sign in to BrainRouter to transcribe this recording.');
+  let payload: unknown;
+  try { payload = await response.json(); } catch { payload = null; }
+  if (!response.ok) {
+    const failure = new Error(apiError(payload) ?? `Could not transcribe this segment (${response.status}).`);
+    (failure as Error & { status?: number }).status = response.status;
+    throw failure;
+  }
+  const text = (payload as { text?: unknown } | null)?.text;
+  // A segment of silence legitimately transcribes to an empty string, so only a
+  // missing/!string field is an error — treating "" as one would turn a quiet
+  // twenty seconds into a stated gap.
+  if (typeof text !== 'string') throw new Error('The transcription endpoint returned no text for this segment.');
+  return text;
+}
+
+/**
+ * ADR-035 D10 — the endpoint's own answer about which transcription strategy
+ * this deployment has.
+ *
+ * It is a GET on the SAME base and the same bearer as the batch POST, so a host
+ * cannot end up asking one endpoint what another one offers. The answer is
+ * returned unnormalized: Core's `describeTranscriptionEndpoint` is the single
+ * strict reader of that document, and a second, friendlier reader here is how a
+ * partial advertisement would get promoted into a live promise nobody can keep.
+ *
+ * `null` for every failure — signed out, unreachable, 404 on a gateway that
+ * predates the route, not JSON. All of them mean the same thing to the caller,
+ * which selects the segmented path and says so.
+ */
+export async function fetchMeetingTranscriptionCapabilities(): Promise<unknown> {
+  const response = await accountFetch({ path: MEETING_TRANSCRIPTION_CAPABILITIES_PATH, method: 'GET' })
+    .catch(() => null);
+  if (!response?.ok) return null;
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ADR-035 D10 — open the persistent transcription connection.
+ *
+ * This lives beside `accountFetch` for the reason `transcribeCaptureSegment`
+ * does: the bearer, the https-or-loopback rule and the org context are ONE
+ * implementation. The account key never leaves this module by any other door —
+ * the supervisor is handed this function, not the credential.
+ *
+ * The three refusals below are permanent for the capture that asked, so each
+ * carries the sentence the surface will show rather than a generic failure the
+ * caller would retry four times before saying anything (golden rule 23).
+ */
+export async function openMeetingTranscriptionStream(
+  input: MeetingStreamPortOpenInput,
+): Promise<MeetingStreamConnection> {
+  const config = loadConfig();
+  const api = resolveBrainRouterAccountApi(config);
+  if (!api?.baseUrl || !api.apiKey) {
+    throw new MeetingStreamUnavailableError(
+      'Live transcription needs a signed-in BrainRouter account, so this meeting is being transcribed in segments. The audio is saved on this device either way.',
+    );
+  }
+  const url = meetingStreamUrl(api.baseUrl);
+  if (!url) {
+    throw new MeetingStreamUnavailableError(
+      'Live transcription needs an https BrainRouter endpoint, so this meeting is being transcribed in segments. The audio is saved on this device either way.',
+    );
+  }
+  const context = await defaultAccountContext(config).catch(() => null);
+  if (!context?.orgId) {
+    throw new MeetingStreamUnavailableError(
+      'Live transcription needs an active BrainRouter organization, so this meeting is being transcribed in segments. The audio is saved on this device either way.',
+    );
+  }
+  return await connectMeetingStream({
+    url,
+    attach: {
+      bearer: api.apiKey,
+      requestedOrgId: context.orgId,
+      sessionId: input.sessionId,
+      mimeType: input.mimeType,
+      language: input.language,
+      latencyMode: input.latencyMode,
+      resumeFromSequence: input.resumeFromSequence,
+    },
+    initializationSegmentFor: input.initializationSegmentFor,
+    socket: createMeetingStreamSocket,
+    handlers: input.handlers,
+  });
+}
+
+/** The seam the capture supervisor is handed, so nothing downstream of it holds a credential. */
+export const meetingTranscriptionStreamPort: MeetingTranscriptionStreamPort = {
+  capabilities: fetchMeetingTranscriptionCapabilities,
+  open: openMeetingTranscriptionStream,
+};
 
 function arrayField(payload: unknown, field: string): unknown[] {
   if (!payload || typeof payload !== 'object') return [];

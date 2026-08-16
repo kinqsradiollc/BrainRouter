@@ -7,6 +7,7 @@ import {
   buildDelegatedTaskPacket,
   renderDelegatedTaskPacket,
 } from '../orchestration/delegation/taskPacket.js';
+import { normalizeDelegatedTaskPacket } from '../orchestration/delegation/taskPacketNormalization.js';
 import {
   buildCrossHostDelegationPacket,
   normalizeStoredDelegationPacket,
@@ -63,8 +64,61 @@ test('delegated packet is bounded, versioned, and carries recomputed capability 
   assert.deepEqual(result.toolPolicyCeiling.localTools, ['read_file', 'grep_search']);
 });
 
+test('delegated packet normalization preserves dual identity and canonicalizes the plan alias', () => {
+  const source = packet();
+  const normalized = normalizeDelegatedTaskPacket({
+    ...source,
+    orchestration: {
+      ...source.orchestration,
+      workspaceProfileId: 'legal',
+      planProfileId: 'research',
+      profileId: 'engineering',
+      strategyId: 'citation-review',
+    },
+  });
+  assert.deepEqual(normalized.orchestration, {
+    roleId: 'reviewer',
+    workspaceProfileId: 'legal',
+    planProfileId: 'research',
+    profileId: 'research',
+    strategyId: 'citation-review',
+  });
+
+  const legacy = normalizeDelegatedTaskPacket({
+    ...source,
+    orchestration: {
+      ...source.orchestration,
+      profileId: 'study',
+    },
+  });
+  assert.equal(legacy.orchestration.workspaceProfileId, undefined);
+  assert.equal(legacy.orchestration.planProfileId, 'study');
+  assert.equal(legacy.orchestration.profileId, 'study');
+
+  const malformedNewIdentity = normalizeDelegatedTaskPacket({
+    ...source,
+    orchestration: {
+      ...source.orchestration,
+      planProfileId: '../research',
+      profileId: 'engineering',
+    },
+  });
+  assert.equal(malformedNewIdentity.orchestration.planProfileId, undefined);
+  assert.equal(malformedNewIdentity.orchestration.profileId, undefined);
+});
+
 test('cross-host transport preserves task scope but removes untrusted authority', () => {
-  const local = packet();
+  const base = packet();
+  const local = {
+    ...base,
+    orchestration: {
+      ...base.orchestration,
+      workspaceProfileId: 'legal',
+      planProfileId: 'research',
+      profileId: 'research',
+      strategyId: 'citation-review',
+    },
+  };
   const crossHost = buildCrossHostDelegationPacket(
     'sender-session',
     {

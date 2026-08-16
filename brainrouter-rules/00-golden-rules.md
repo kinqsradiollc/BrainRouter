@@ -102,3 +102,95 @@ else, remember these. Each links to the topical file with the full context.
     `npm run verify` (typecheck + lint + test) for cross-cutting/high-risk
     changes, release/publish work, or CI-parity diagnosis; the brain's
     integration tests need reachable pgvector Postgres. → [`07`](07-testing.md)
+
+22. **⛔ Never store a credential where page script can read it.** No token,
+    refresh token, API key, or password goes in `localStorage`, `sessionStorage`,
+    IndexedDB, or a non-`httpOnly` cookie — any XSS reads all of them, and a
+    refresh token or API key sitting there survives both a password change and a
+    "sign out". Browser sessions use `httpOnly; Secure; SameSite` cookies with
+    CSRF protection; local processes use OS-protected storage (Electron
+    `safeStorage`) or a `0600` file, never plaintext `config.json`. → [`06`](06-desktop-and-dashboard.md)
+
+23. **⛔ A fallback must be visible, or it is a silent outage.** Degrading to a
+    lesser path is fine; degrading *quietly* is not. When a capability is
+    unavailable, the result must say which path ran and why the better one did
+    not — surfaced to the caller, not buried in a receipt. PR review fell back
+    to diff-only for days while deep review was dead, and the reviewer reported
+    success the whole time: a degradation nobody can see is indistinguishable
+    from working. → [`04`](04-memory-engine-and-mcp-server.md)
+
+24. **⛔ Assert runtime binaries at boot, never at first use.** Anything the
+    product shells out to — `git`, `docker`, a parser CLI — must be checked when
+    the service starts and fail loudly there. `node:*-slim` images ship without
+    `git`, and a missing binary discovered mid-request surfaces as a domain
+    error (`EXACT_SOURCE_UNAVAILABLE`) that blames the feature instead of the
+    image. → [`04`](04-memory-engine-and-mcp-server.md)
+
+25. **⛔ A SQL `CHECK (... IN (...))` that mirrors a TypeScript union needs a
+    parity test.** The in-memory test store has no constraints, so a migration
+    can drift from its union and every unit test still passes while production
+    rejects the row. Migration 056 exists because `cleanup` was missing from the
+    assurance stage CHECK and killed every review at its last stage. Copy
+    `migrations.stageParity.test.ts` for any new CHECK/union pair. → [`07`](07-testing.md)
+
+26. **An interrupted unit of work must stay retryable.** A record left mid-flight
+    by a crash is the normal case, not the exotic one. Identity belongs to the
+    attempt, so a retry RESUMES the existing row rather than minting a new id for
+    the same attempt — and a terminal record is never re-run. Getting this
+    backwards made one crash wedge a review run permanently. → [`04`](04-memory-engine-and-mcp-server.md)
+
+27. **⛔ Bound every regex that runs over attacker-controlled text.** Webhook
+    bodies, PR comments, fetched pages, connector documents and model output are
+    all attacker-influenced. Unbounded `\S*`/`.*` with a literal after it is
+    quadratic: `@\S*brainrouter\S*\s+review` cost ~23s of the shared,
+    single-threaded brain for one 64 KB PR comment. Use a bounded quantifier and
+    a character class that cannot cross the repeated delimiter, and cap input
+    length before matching. → [`02`](02-code-style-and-conventions.md)
+
+28. **When you delete a mechanism, grep for its NAME in prose, not only in code.**
+    A comment that describes behaviour the code no longer has is the same defect
+    as a spinner that says "Transcribing…" over a segment that failed twenty
+    minutes ago (rule 23), except it misleads the next engineer instead of the
+    user — and it survives every test, every typecheck and every lint. Removing
+    a capture lease left six such claims behind, three of them describing the
+    lease itself and two written by the very change that reversed them; one was
+    a banner blaming "older Safari and Firefox" for a condition any browser
+    meets on an insecure origin. Deleting an identifier is not done until every
+    hit in comments, docstrings, module headers, and user-facing strings has
+    been dispositioned: remove stale present-tense claims; retain only explicit
+    migration, history, and negative assertions. → [`02`](02-code-style-and-conventions.md)
+
+29. **⛔ A test that still passes when you delete the line it protects is not a
+    test.** Asserting that a call is PRESENT — a source-text grep, an ordering
+    check, a spy that fires — pins the shape and not the property. Deleting one
+    line, `transcript = settled.text;`, restored a data loss verbatim while all
+    ten tests written to prevent it stayed green, and the same mutation later
+    survived on the other host. Before you claim a guard is covered, delete or
+    invert the line it guards and watch the suite FAIL. Assert the value that
+    reaches the network, the disk, or the screen. → [`07`](07-testing.md)
+
+30. **Ask what already knows the answer before you build something to compute
+    it.** A mechanism that needs a tuned constant — a staleness threshold, a
+    debounce, a retry window — is a guess wearing a number, and every value is
+    wrong in one direction. Liveness was built as a heartbeat with a 30s
+    expiry; it made a killed meeting invisible AND stranded a reloaded window's
+    recording, at once. Both hosts already held the exact answer: a per-process
+    writer map, and `navigator.locks`, which the browser releases when the tab
+    dies. Reach for the authoritative source first; a timer is what you use when
+    there genuinely is not one. → [`02`](02-code-style-and-conventions.md)
+
+31. **A re-export barrel is not a safe import source for anything you call at
+    module load.** `toolSpecs.ts` built its tool specs at import time from
+    factories it pulled through `orchestration/tools.js`, which only re-exports
+    them. ADR-040 A40-2 gave that barrel new imports and closed a cycle back to
+    `toolSpecs`; from then on every binding it took through the barrel was
+    undefined when the factories ran. The symptom is not a failing assertion —
+    it is `X is not a function` during import, and fourteen brain test FILES
+    reported zero tests instead of one failure. Plain Node tolerated the cycle;
+    vitest did not, so it read as an environment artifact for three rounds
+    (byte-identical dist, live symlink, cleared caches, clean rebuild — all
+    dead ends). What identified it was hoisting ONE symbol out of the barrel
+    and watching the error move to the NEXT symbol in the same import block.
+    Import from the module that DEFINES a value when you invoke it at load
+    time, and treat "the whole file collected zero tests" as an import-time
+    failure rather than a flaky suite. → [`03`](03-core-runtime.md)

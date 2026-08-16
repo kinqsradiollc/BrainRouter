@@ -4,9 +4,12 @@
  * The TypeScript profile rows remain a compatibility source for one release,
  * but new drafts prefer the same validated package data the resolver uses.
  */
-import { findBundledOrchestrationProfile } from '../orchestration/profiles/orchestrationProfileCatalog.js';
 import type { OrchestrationProfileDefinition } from '../orchestration/profiles/orchestrationProfileDefinitionFile.js';
 import { recordWorkspaceCompatibilityDiagnostics } from './compatibilityDiagnostics.js';
+import {
+  ORCHESTRATION_PLAN_ALIASES,
+  resolveOrchestrationPlanIdentity,
+} from './orchestrationPlanIdentity.js';
 import {
   WORKSPACE_PROFILES,
   getWorkspaceProfile,
@@ -15,11 +18,14 @@ import {
 } from './profiles.js';
 
 export interface WorkspaceProfileOrchestrationDefaults {
+  workspaceProfileId: WorkspaceProfileId;
+  planProfileId: string | null;
   mode: 'off' | 'explicit' | 'adaptive';
   availableRoles: string[];
   disabledRoles: string[];
   maxParallel: number;
   source: 'orchestration-profile' | 'typescript-compatibility';
+  /** @deprecated Compatibility alias for planProfileId. */
   planId: string | null;
 }
 
@@ -42,39 +48,27 @@ export interface ResolveWorkspaceProfileOrchestrationDefaultsOptions {
  * A domain that genuinely needs a different shape gets its own plan file, and
  * that is the signal to add one — not the mere existence of a new profile.
  */
-export const ORCHESTRATION_PLAN_ALIASES: Readonly<Partial<Record<WorkspaceProfileId, WorkspaceProfileId>>> = {
-  'product-management': 'engineering',
-  design: 'engineering',
-  operations: 'engineering',
-  consulting: 'research',
-  legal: 'research',
-  healthcare: 'research',
-  finance: 'data-science',
-  education: 'study',
-  marketing: 'writing',
-  sales: 'writing',
-  people: 'writing',
-};
+export { ORCHESTRATION_PLAN_ALIASES } from './orchestrationPlanIdentity.js';
 
 export function resolveWorkspaceProfileOrchestrationDefaults(
   profileId: WorkspaceProfileId,
   options: ResolveWorkspaceProfileOrchestrationDefaultsOptions = {},
 ): WorkspaceProfileOrchestrationDefaults {
   try {
-    const find = options.findPlan ?? findBundledOrchestrationProfile;
-    // Resolve the profile's own plan first; an alias is only a fallback, so a
-    // domain that later gains a bespoke plan starts using it automatically.
-    const plan = find(profileId) ?? (
-      ORCHESTRATION_PLAN_ALIASES[profileId] ? find(ORCHESTRATION_PLAN_ALIASES[profileId]!) : undefined
-    );
+    const identity = resolveOrchestrationPlanIdentity(profileId, {
+      ...(options.findPlan ? { findBundledPlan: options.findPlan } : {}),
+    });
+    const plan = identity.definition;
     if (plan) {
       return {
+        workspaceProfileId: identity.workspaceProfileId,
+        planProfileId: identity.planProfileId,
         mode: plan.defaultMode,
         availableRoles: [...plan.rolePolicy.availableRoles],
         disabledRoles: [...plan.rolePolicy.disabledRoles],
         maxParallel: plan.limits.maxParallel,
         source: 'orchestration-profile',
-        planId: plan.id,
+        planId: identity.planProfileId,
       };
     }
   } catch {
@@ -90,6 +84,8 @@ export function resolveWorkspaceProfileOrchestrationDefaults(
   }]);
   const preset = getWorkspaceProfile(profileId) ?? getWorkspaceProfile('custom')!;
   return {
+    workspaceProfileId: profileId,
+    planProfileId: null,
     mode: preset.orchestration.mode,
     availableRoles: [...preset.orchestration.availableRoles],
     disabledRoles: [...preset.orchestration.disabledRoles],

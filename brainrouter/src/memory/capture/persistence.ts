@@ -41,7 +41,7 @@ export class CapturePersistence extends CaptureBase {
     userId: string,
     sessionKey: string,
     messages: { role: string; content: string; timestamp: number }[],
-    scope: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null } = {},
+    scope: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null; projectTag?: string | null } = {},
   ): Promise<void> {
     const sourceStore = this.asSourceStore();
     if (!sourceStore) return;
@@ -56,6 +56,7 @@ export class CapturePersistence extends CaptureBase {
             orgId: scope.orgId ?? null,
             projectId: scope.projectId ?? null,
             workspaceTag: scope.workspaceTag ?? null,
+            projectTag: scope.projectTag ?? null,
             kind: "transcript",
             uri: null,
             hash: contentHash(text),
@@ -104,7 +105,7 @@ export class CapturePersistence extends CaptureBase {
     userId: string,
     windowSensory: SensoryRecord[],
     records: { id: string; content: string }[],
-    scope: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null } = {},
+    scope: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null; projectTag?: string | null } = {},
   ): Promise<void> {
     const store = this.asProvenanceStore();
     if (!store || records.length === 0) return;

@@ -44,3 +44,21 @@ test("MEM-32 lessons are scoped per user (no cross-tenant reinforcement)", async
     assert.notEqual(u1.recordId, u2.recordId);
   } finally { await cleanup(); }
 });
+
+test("ADR-032 lessons are scoped by organization for the same user", async () => {
+  const { engine, cleanup } = await createTestEngine();
+  try {
+    const orgA = await engine.recordLesson("u1", "Use the tenant deployment checklist.", {
+      orgId: "org-a",
+    });
+    const orgB = await engine.recordLesson("u1", "Use the tenant deployment checklist.", {
+      orgId: "org-b",
+    });
+    const personal = await engine.recordLesson("u1", "Use the tenant deployment checklist.", {
+      orgId: null,
+    });
+    assert.equal(orgB.reinforced, false);
+    assert.equal(personal.reinforced, false);
+    assert.equal(new Set([orgA.recordId, orgB.recordId, personal.recordId]).size, 3);
+  } finally { await cleanup(); }
+});

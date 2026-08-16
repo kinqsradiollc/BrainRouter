@@ -13,6 +13,7 @@ import { MemoryCard } from "../../components/MemoryCard";
 import { FilterBar } from "../../components/FilterBar";
 import { FilterSelect } from "../../components/FilterSelect";
 import { useAuth } from "../../components/AuthProvider";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 
 // All cognitive memory types. Mirrors `COGNITIVE_MEMORY_TYPES` in
 // @kinqs/brainrouter-types — defined locally (not imported) because that
@@ -39,6 +40,7 @@ void _typesAreExhaustive;
 export default function MemoriesPage() {
   const client = useMemo(() => getClient(), []);
   const { user } = useAuth();
+  const { activeOrg, activeOrgId } = useActiveOrg();
   const [memories, setMemories] = useState<MemoryListItem[]>([]);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -52,6 +54,10 @@ export default function MemoriesPage() {
   const [editContent, setEditContent] = useState("");
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // ADR-017 D4 — Personal | Team scope. Team shows the org's shared pool
+  // (visibility='org'); `myShared` marks the rows the caller owns (can unshare).
+  const [scope, setScope] = useState<"personal" | "team">("personal");
+  const [myShared, setMyShared] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -60,32 +66,46 @@ export default function MemoriesPage() {
   }, [query]);
 
   const load = useCallback(async (mode: "replace" | "append" = "replace") => {
-    if (mode === "append" && !nextCursor) return;
+    if (mode === "append" && (!nextCursor || scope === "team")) return;
     mode === "append" ? setIsLoadingMore(true) : setIsLoading(true);
     setError("");
     try {
-      const page = await client.getMemories({
-        limit: 20,
-        cursor: mode === "append" ? nextCursor ?? undefined : undefined,
-        query: debouncedQuery || undefined,
-        type: typeFilter || undefined,
-        archived: statusFilter === "archived",
-      });
-      setMemories((current) => mode === "append" ? [...current, ...page.memories] : page.memories);
-      setNextCursor(page.nextCursor);
-      setHasMore(page.hasMore);
-      if (mode === "replace") setSelected(new Set());
+      if (scope === "team" && activeOrgId) {
+        const res = await client.getOrgSharedMemories(activeOrgId, 200);
+        const mine = new Set<string>();
+        const items = res.shared.map((m) => {
+          if (m.userId === user?.userId) mine.add(m.recordId);
+          return { recordId: m.recordId, content: m.content, type: m.type as MemoryType, priority: m.priority, sceneName: "", skillTag: m.skillTag, createdTime: m.createdTime, citationCount: 0, neverCitedCount: 0, archived: false } as MemoryListItem;
+        });
+        setMyShared(mine);
+        setMemories(items);
+        setNextCursor(null);
+        setHasMore(false);
+        setSelected(new Set());
+      } else {
+        const page = await client.getMemories({
+          limit: 20,
+          cursor: mode === "append" ? nextCursor ?? undefined : undefined,
+          query: debouncedQuery || undefined,
+          type: typeFilter || undefined,
+          archived: statusFilter === "archived",
+        });
+        setMemories((current) => mode === "append" ? [...current, ...page.memories] : page.memories);
+        setNextCursor(page.nextCursor);
+        setHasMore(page.hasMore);
+        if (mode === "replace") setSelected(new Set());
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load memories");
     } finally {
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [client, debouncedQuery, nextCursor, statusFilter, typeFilter]);
+  }, [client, debouncedQuery, nextCursor, statusFilter, typeFilter, scope, activeOrgId, user?.userId]);
 
   useEffect(() => {
     void load("replace");
-  }, [debouncedQuery, typeFilter, statusFilter]);
+  }, [debouncedQuery, typeFilter, statusFilter, scope]);
 
   async function saveEdit() {
     if (!editTarget) return;
@@ -120,6 +140,19 @@ export default function MemoriesPage() {
     await load("replace");
   }
 
+  const canShareToTeam = Boolean(activeOrg && !activeOrg.isPersonal && activeOrg.plan !== "single");
+
+  async function shareToTeam(id: string) {
+    if (!activeOrgId) return;
+    try { await client.shareMemory(id, activeOrgId); await load("replace"); }
+    catch (e) { setError(e instanceof Error ? e.message : "Failed to share memory"); }
+  }
+  async function makePrivate(id: string) {
+    if (!activeOrgId) return;
+    try { await client.unshareMemory(id, activeOrgId); await load("replace"); }
+    catch (e) { setError(e instanceof Error ? e.message : "Failed to make memory private"); }
+  }
+
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
@@ -136,6 +169,12 @@ export default function MemoriesPage() {
         <FilterBar>
           <FilterBar.Row align="between">
             <FilterBar.Row>
+              {canShareToTeam && (
+                <>
+                  <PremiumButton size="small" variant={scope === "personal" ? "primary" : "ghost"} onClick={() => setScope("personal")}>Personal</PremiumButton>
+                  <PremiumButton size="small" variant={scope === "team" ? "primary" : "ghost"} onClick={() => setScope("team")}>{activeOrg?.name ?? "Team"}</PremiumButton>
+                </>
+              )}
               <FilterSelect
                 ariaLabel="Filter by memory type"
                 value={typeFilter}
@@ -166,26 +205,28 @@ export default function MemoriesPage() {
               key={memory.recordId}
               memory={memory}
               selected={selected.has(memory.recordId)}
-              onSelect={user?.isAdmin ? (id, checked) => {
+              onSelect={scope === "personal" && user?.isAdmin ? (id, checked) => {
                 setSelected((current) => {
                   const next = new Set(current);
                   checked ? next.add(id) : next.delete(id);
                   return next;
                 });
               } : undefined}
-              onEdit={(target) => {
+              onEdit={scope === "personal" ? (target) => {
                 setEditTarget(target);
                 setEditContent(target.content);
-              }}
-              onDelete={setDeleteTargetId}
+              } : undefined}
+              onDelete={scope === "personal" ? setDeleteTargetId : undefined}
+              onShare={scope === "personal" && canShareToTeam ? shareToTeam : undefined}
+              onUnshare={scope === "team" && myShared.has(memory.recordId) ? makePrivate : undefined}
             />
           ))}
         </div>
 
         {!isLoading && memories.length === 0 && (
           <EmptyState
-            title={debouncedQuery ? "No memories match your search" : "No Semantic Memories"}
-            description={debouncedQuery ? "Try a different query or filter combination." : "Active agent sessions will populate this index once memory capture runs."}
+            title={debouncedQuery ? "No memories match your search" : "Nothing saved here yet"}
+            description={debouncedQuery ? "Try a different query or filter combination." : "Decisions, preferences, and lessons from meetings, notes, and work in progress are saved here as you go — each one keeping the source it came from."}
           />
         )}
         <InfiniteScrollSentinel hasMore={hasMore} isFetchingMore={isLoadingMore} onLoadMore={() => void load("append")} />

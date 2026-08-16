@@ -4,7 +4,7 @@
  * Deployed via deploy/stack (the `gateway` service reuses the brain image).
  */
 import { GatewayProviderService } from "./providerPool.js";
-import { createGatewayApp } from "./server.js";
+import { createGatewayServer } from "./server.js";
 
 function main(): void {
   const url = process.env.BRAINROUTER_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -19,12 +19,18 @@ function main(): void {
   }
   const port = parseInt(process.env.GATEWAY_PORT ?? "3748", 10);
   const svc = new GatewayProviderService(url, jwtSecret);
-  const app = createGatewayApp(svc);
-  const server = app.listen(port, () => console.error(`[provider-gateway] listening on :${port}`));
+  const { server, audioStreaming } = createGatewayServer(svc);
+  server.listen(port, () => console.error(`[provider-gateway] listening on :${port}`));
 
+  let shutdownPromise: Promise<void> | null = null;
   const shutdown = () => {
-    server.close();
-    void svc.close();
+    shutdownPromise ??= (async () => {
+      await audioStreaming.close().catch(() => undefined);
+      const httpClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+      try { server.closeAllConnections?.(); } catch { /* older Node */ }
+      await httpClosed;
+      await svc.close().catch(() => undefined);
+    })();
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

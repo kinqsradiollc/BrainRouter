@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { adminApi } from "../lib/adminApi";
+import { BrainRouterLogo } from "./BrainRouterLogo";
 import { useAuth } from "./AuthProvider";
 import { useActiveOrg } from "./OrgWorkspaceProvider";
 import { isNavItemActive, isRouteActive, PRODUCT_NAV_GROUPS, SETTINGS_NAV_GROUPS } from "./dashboardNavigation";
@@ -116,7 +117,7 @@ function WorkspaceSwitcher() {
         aria-expanded={open}
         aria-label="Switch workspace"
       >
-        <Initials value={activeOrg?.name || "BrainRouter"} />
+        <BrainRouterLogo size={24} showWordmark={false} />
         <span className="sidebar-orgswitch-name">{label}</span>
         <svg aria-hidden className="sidebar-orgswitch-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
       </button>

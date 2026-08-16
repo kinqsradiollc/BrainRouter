@@ -5,10 +5,35 @@
  * verbatim; every value flows through props so the rendered layout, DOM order
  * (load-bearing for Electron drag regions), and behavior are unchanged.
  */
-import React from 'react';
+import type { WorkspaceMode } from '../../components/layout/ActivityBar.js';
+import React, { Suspense, lazy } from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
-import { MeetingsView } from '../../components/meetings/MeetingsView.js';
+/**
+ * Notes is lazy for the reason the panels above it are (see renderPanelBody):
+ * a block editor, five database views and their controls are ~60KB of initial
+ * JavaScript that most sessions never execute, because Notes is one mode of six
+ * and the app does not open in it.
+ *
+ * The release budget caught this rather than a reviewer, which is the point of
+ * having one — the bundle went 60KB over on the commit that added the editor,
+ * and the honest fix is to stop shipping it to people who have not asked for
+ * it rather than to raise the number the guard checks against.
+ */
+const NotesModeContainer = lazy(() =>
+  import('../../notes/NotesModeContainer.js').then((m) => ({ default: m.NotesModeContainer })));
+// The shared Planner now carries its interaction and calendar model. Keep that
+// mode-sized code out of Chat's initial entry just as we do for Notes.
+const PlannerModeContainer = lazy(() =>
+  import('../../planner/PlannerModeContainer.js').then((m) => ({ default: m.PlannerModeContainer })));
+import { parseWorkspaceRef } from '@kinqs/brainrouter-core/workspace/references';
+/**
+ * Meetings owns the capture, recovery, queue and transcript surfaces. Keep that
+ * feature out of the entry bundle for sessions that never open it, while the
+ * render condition below still keeps the resolved view mounted during capture.
+ */
+const MeetingsView = lazy(() =>
+  import('../../components/meetings/MeetingsView.js').then((m) => ({ default: m.MeetingsView })));
 import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
 import { ChatThread } from '../../components/chat/ChatThread.js';
 import { Composer } from '../../components/chat/Composer.js';
@@ -29,8 +54,8 @@ type TR = React.ComponentProps<typeof TopbarRight>;
 type TV = React.ComponentProps<typeof TrackView>;
 
 export interface MainContentProps {
-  mode: 'chat' | 'track' | 'code' | 'meetings';
-  setMode: (m: 'chat' | 'track' | 'code' | 'meetings') => void;
+  mode: WorkspaceMode;
+  setMode: (m: WorkspaceMode) => void;
   workrowRef: React.RefObject<HTMLDivElement>;
   // Track view
   track: { project: TV['project']; items: TV['items']; sprints: TV['sprints']; modules: TV['modules']; views: TV['views']; automations: TV['automations']; members: TV['members']; sync: TV['sync']; git: TV['git']; pr: TV['pr'] };
@@ -54,6 +79,8 @@ export interface MainContentProps {
   tabTitle: (id: PanelId) => string;
   renderPanelBody: VR['renderPanelBody'];
   openSideView: VR['openSideView'];
+  restoreLastSessionPanels: VR['restoreLastSessionPanels'];
+  lastSessionPanels: VR['lastSessionPanels'];
   lastPlan: VR['lastPlan'];
   changedFiles: CT['changedFiles'];
   backgroundTasks: FleetRow[];
@@ -178,7 +205,8 @@ export function MainContent(p: MainContentProps): React.ReactElement {
   const {
     mode, setMode, workrowRef, track, trackOps, railOpen, setRailOpen, sidePanelOpen, sidePinned, sideFullScreen,
     setSidePanelOpen, setSidePinned, sideAnim, sideWidth, setSideWidth, activeSideTab, sideTabs, setActiveSideTab,
-    closeSideTab, reorderSideTab, tabTitle, renderPanelBody, openSideView, lastPlan, changedFiles, backgroundTasks,
+    closeSideTab, reorderSideTab, tabTitle, renderPanelBody, openSideView, restoreLastSessionPanels, lastSessionPanels,
+    lastPlan, changedFiles, backgroundTasks,
     fleet, toolLog, schedules, worktrees, review, requirements, annotations, artifacts, ci, envRoom, envDrawer, homeMode,
     gitInfo, info, sessionTitle, taskView, setTaskView, chatRef, atBottomRef, setAtBottom, workflowView,
     setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange, snapshot, sessions,
@@ -204,12 +232,83 @@ export function MainContent(p: MainContentProps): React.ReactElement {
   }, [ensurePanel, setMode]);
   // Meetings mode (ADR-018) — data flows through the injected ops bridge.
   const meetingsOps = React.useMemo(() => createMeetingsOps(), []);
+  /**
+   * ADR-035 A1/F4 — the fifth click, and the only one above the meetings view.
+   *
+   * A1 stopped four ordinary clicks from ending a live meeting by keeping the
+   * compose form mounted INSIDE that view. The activity-bar mode rail still did
+   * it, because this shell renders `<MeetingsView/>` only while its mode is
+   * selected: switching to Code stopped the recorder, released the microphone
+   * and stopped the session, with nothing anywhere on screen saying so. The
+   * audio already written was safe; the rest of the meeting was not.
+   *
+   * Same decision as A1's, one level up: the view stays mounted while a capture
+   * is open and is merely hidden, and an indicator says where the recording went
+   * and leads back to it. Closing the capture on a mode switch was the other
+   * available answer; ending it in silence was not.
+   */
+  const [meetingCapture, setMeetingCapture] = React.useState(false);
+  const meetingsVisible = mode === 'meetings';
+
+  /**
+   * ADR-029 A1 — following a reference goes to the mode that owns the target.
+   *
+   * The shell does this rather than the mode, because a reference is the one
+   * thing that crosses modes and a surface that could switch away from itself
+   * would need to know about every other one. `chat` and `code` land on their
+   * mode; a note stays where it is, which is where it already was.
+   */
+  const openWorkspaceRef = React.useCallback((uri: string): void => {
+    const parsed = parseWorkspaceRef(uri);
+    if (!parsed.ok) return;
+    const target = parsed.ref.mode;
+    if (target === 'planner' || target === 'track' || target === 'meetings' || target === 'chat') {
+      setMode(target === 'chat' ? 'chat' : target);
+      return;
+    }
+    if (target === 'code') setMode('code');
+  }, [setMode]);
 
   return (
     <div className="main">
-      {mode === 'meetings' ? (
+      {/* F4 — mounted while the meetings mode is selected OR while a capture is
+          open, and only HIDDEN in between. The `workrow` ref goes to whichever
+          workrow is the visible one; a hidden node has no rect, so the drag
+          regions built in DOM order below are unaffected. */}
+      {meetingsVisible || meetingCapture ? (
+        <div className="workrow" ref={meetingsVisible ? workrowRef : null} {...(meetingsVisible ? {} : { style: { display: 'none' } })}>
+          <Suspense fallback={null}>
+            <MeetingsView ops={meetingsOps} onCaptureChange={setMeetingCapture} />
+          </Suspense>
+        </div>
+      ) : null}
+      {/* ADR-028 — and something says so from wherever the person went, because
+          the recording did not stop when the screen did. */}
+      {meetingCapture && !meetingsVisible ? (
+        <div className="meeting-appbar" role="status">
+          <span className="mv-recbar-dot" aria-hidden="true" />
+          <span>A meeting is being recorded. Its audio is being saved to this device.</span>
+          <button type="button" onClick={() => setMode('meetings')}>Back to the recording</button>
+        </div>
+      ) : null}
+      {meetingsVisible ? null : mode === 'notes' ? (
+        // ADR-029 — Notes is user-scoped and cross-project (D1), so like the
+        // planner it renders WITHOUT the workspace-bound side panel rail.
         <div className="workrow" ref={workrowRef}>
-          <MeetingsView ops={meetingsOps} />
+          {/* The fallback says nothing rather than "Loading…": the chunk
+              resolves in a frame off local disk, and a spinner that flashes
+              once per mode switch reads as the app stuttering. */}
+          <Suspense fallback={<div className="notes-mode" />}>
+            <NotesModeContainer onOpenRef={openWorkspaceRef} />
+          </Suspense>
+        </div>
+      ) : mode === 'planner' ? (
+        // ADR-028 G6 — cross-workspace, so it renders WITHOUT the side panel
+        // rail: a personal planner has no per-workspace tabs to carry.
+        <div className="workrow" ref={workrowRef}>
+          <Suspense fallback={<div className="br-planner" />}>
+            <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
+          </Suspense>
         </div>
       ) : mode === 'track' ? (
         <div className="workrow track-workrow" ref={workrowRef}>
@@ -221,7 +320,9 @@ export function MainContent(p: MainContentProps): React.ReactElement {
             setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
             activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
             tabTitle={tabTitle}
-            renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
+            renderPanelBody={renderPanelBody} openSideView={openSideView}
+            restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels}
+            lastPlan={lastPlan} changedFiles={changedFiles}
             backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
             worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
             envRoom={false} />
@@ -303,7 +404,9 @@ export function MainContent(p: MainContentProps): React.ReactElement {
           setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
           activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
           tabTitle={tabTitle}
-          renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
+          renderPanelBody={renderPanelBody} openSideView={openSideView}
+            restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels}
+            lastPlan={lastPlan} changedFiles={changedFiles}
           backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
           worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
           envRoom={envRoom} />

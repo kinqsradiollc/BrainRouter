@@ -19,6 +19,14 @@ type ArchiveRow = { id: string; branch: string; baseCommit: string; bytes: numbe
 type PreviewRow = { runtimeId: string; name: string; url: string; port: number };
 
 const BACKENDS = ['process', 'worktree', 'container', 'hosted'];
+/*
+ * ADR-028 C1 — the "Execution engine" group that stood here was RETIRED
+ * 2026-08-12 with the graph executor it offered. The dropdown had two options
+ * and one outcome: `graph` never reached parity, so every turn ran on the loop
+ * and the group's own copy had to explain that. A control whose second choice
+ * cannot happen is the surface this ADR exists to remove, and describing the
+ * gap underneath it was documentation of the defect rather than a fix.
+ */
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -44,6 +52,7 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
   const previewPorts = (runtime.previewPorts ?? {}) as Record<string, number>;
 
   const backend = String(runtime.backend ?? 'process');
+  const comprehension = (knobs.comprehension ?? {}) as Dict;
   const serveOn = runtime.serve === true;
   const jitOn = runtime.jitSecrets === true;
 
@@ -55,6 +64,26 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
         self-review. Everything here is <b>off / in-process by default</b>; shared with the
         CLI (<code>cli.runtime</code> / <code>cli.budget</code> / <code>cli.critic</code>).
       </div>
+
+      <SetGroup title="Comprehension review">
+        <Row
+          title="Offer comprehension reviews"
+          desc={<>
+            The Understand panel asks about consequences and rejected decisions — the parts a diff
+            cannot show — and you can disagree with its answers. It runs as a <b>subagent</b>: writing
+            good questions needs a model reasoning over what it just built, and a heuristic would
+            produce trivia. Never fires unprompted. (cli.comprehension.enabled)
+          </>}
+        >
+          <Toggle on={comprehension.enabled !== false} onChange={(v) => setPath('comprehension.enabled', v)} />
+        </Row>
+        <Row title="Model" desc="Which model writes and judges the questions. Blank uses the session model. (cli.comprehension.model)">
+          <KnobText value={comprehension.model} placeholder="session model" onSave={(v) => setPath('comprehension.model', v)} />
+        </Row>
+        <Row title="Questions" desc="How many per review. Fewer than three is not worth invoking; more than seven is homework. (cli.comprehension.questions)">
+          <KnobNumber value={comprehension.questions} placeholder="5" onSave={(v) => setPath('comprehension.questions', v)} />
+        </Row>
+      </SetGroup>
 
       <SetGroup title="Backend">
         <Row title="Backend" desc={<>Where agent conversations run. <b>process</b> = in-process (today's behavior); <b>worktree</b> = git-isolated; <b>container</b> = Docker (needs an image); <b>hosted</b> = a declared external CLI. (cli.runtime.backend)</>}>

@@ -22,7 +22,11 @@ interface ContributionState {
 const emptyState = (): ContributionState => ({ tools: [], providers: [], hooks: [], panels: [] });
 let active = emptyState();
 let staging: ContributionState | null = null;
+let activeGeneration = 0;
 const target = () => staging ?? active;
+const markActiveMutation = (state: ContributionState): void => {
+  if (state === active) activeGeneration += 1;
+};
 
 export function beginExtensionReload(): void {
   if (staging) throw new Error('An extension reload is already in progress.');
@@ -32,6 +36,7 @@ export function commitExtensionReload(): void {
   if (!staging) throw new Error('No extension reload is in progress.');
   active = staging;
   staging = null;
+  activeGeneration += 1;
 }
 export function abortExtensionReload(): void { staging = null; }
 
@@ -43,13 +48,16 @@ export function registerExtensionTool(entry: LocalToolEntry, executor: LocalTool
   if (existing?.required && !required) throw new Error(`Tool "${entry.name}" is owned by required core extension "${existing.from}" and cannot be shadowed by "${from}".`);
   if (idx >= 0) state.tools.splice(idx, 1);
   state.tools.push({ entry, executor, from, required });
+  markActiveMutation(state);
 }
 export function registerExtensionProvider(def: ProviderDefinition, from: string): void {
-  const state = target(); const idx = state.providers.findIndex((item) => item.def.id === def.id); if (idx >= 0) state.providers.splice(idx, 1); state.providers.push({ def, from });
+  const state = target(); const idx = state.providers.findIndex((item) => item.def.id === def.id); if (idx >= 0) state.providers.splice(idx, 1); state.providers.push({ def, from }); markActiveMutation(state);
 }
-export function registerExtensionHook(handler: ExtensionHookHandler, from: string): void { target().hooks.push({ handler, from }); }
+export function registerExtensionHook(handler: ExtensionHookHandler, from: string): void {
+  const state = target(); state.hooks.push({ handler, from }); markActiveMutation(state);
+}
 export function registerExtensionPanel(panel: PanelContribution, from: string): void {
-  const state = target(); const idx = state.panels.findIndex((item) => item.panel.id === panel.id); if (idx >= 0) state.panels.splice(idx, 1); state.panels.push({ panel, from });
+  const state = target(); const idx = state.panels.findIndex((item) => item.panel.id === panel.id); if (idx >= 0) state.panels.splice(idx, 1); state.panels.push({ panel, from }); markActiveMutation(state);
 }
 
 export function extensionToolEntries(): LocalToolEntry[] { return active.tools.map((tool) => tool.entry); }
@@ -66,4 +74,10 @@ export function extensionPanel(id: string): PanelContribution | undefined { retu
 export function extensionContributionSummary(): { tools: string[]; providers: string[]; hooks: number; panels: string[] } {
   return { tools: active.tools.map((tool) => `${tool.entry.name} (${tool.from}${tool.required ? ', required' : ''})`), providers: active.providers.map((provider) => `${provider.def.id} (${provider.from})`), hooks: active.hooks.length, panels: active.panels.map((panel) => `${panel.panel.id} (${panel.from})`) };
 }
-export function resetExtensionContributions(): void { active = emptyState(); staging = null; }
+/** Monotonic process-local fence; returning to an old contribution shape does not revive authority. */
+export function extensionContributionGeneration(): number { return activeGeneration; }
+export function resetExtensionContributions(): void {
+  active = emptyState();
+  staging = null;
+  activeGeneration += 1;
+}

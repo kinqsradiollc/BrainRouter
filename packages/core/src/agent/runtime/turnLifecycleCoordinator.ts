@@ -1,3 +1,11 @@
+/**
+ * Per-turn coordinator for loop boundaries and terminal-output guards.
+ *
+ * Centralizing the bounded guard counters prevents retry loops from diverging
+ * across execution paths. Pending steering is reconciled only at model-safe
+ * boundaries, before the next loop can consume it.
+ */
+
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -12,7 +20,11 @@ import {
   buildDeliverableCorrection,
   classifyDeferral,
 } from '../guards/deliverableCheck.js';
-import { shouldRunFanOutFollowThroughGuard } from '../guards/fanOutFollowThroughGuard.js';
+import {
+  shouldRunFanOutDifferentiationGuard,
+  shouldRunFanOutFollowThroughGuard,
+} from '../guards/fanOutFollowThroughGuard.js';
+import { getSession } from '../../orchestration/session/orchestrator.js';
 import {
   looksLikeDeferredToolPromise,
   looksLikeStalledPreamble,
@@ -37,6 +49,7 @@ import {
   childSynthesisGuardMessage,
   emptyAnswerGuardMessage,
   fanOutGuardMessage,
+  undifferentiatedFanOutGuardMessage,
   planSyncGuardMessage,
   promisedToolsGuardMessage,
   stalledPreambleGuardMessage,
@@ -74,6 +87,7 @@ export class TurnLifecycleCoordinator {
   private budgetCheckpointsFired = 0;
   private preambleGuardFired = 0;
   private fanOutGuardFired = 0;
+  private fanOutDifferentiationGuardFired = 0;
   private deliverableGuardFired = 0;
   private verificationNudged = false;
   private planSyncGuardFired = 0;
@@ -114,6 +128,9 @@ export class TurnLifecycleCoordinator {
       return '⏹ Turn interrupted by user.';
     }
 
+    // Peer messages use this same seam but never raise interruptRequested or
+    // abort turnAbort: delivery redirects the next model step, not the work in
+    // progress between safe boundaries.
     applyPendingSteeringAtBoundary(this.agent, this.callbacks);
     if (
       isBudgetCheckpoint(
@@ -228,6 +245,27 @@ export class TurnLifecycleCoordinator {
       this.continueWithGuard(
         fanOutGuardMessage(),
         `Recovery: fan-out-hinted-but-no-spawn (${this.fanOutGuardFired}/1) — forcing follow-through`,
+      );
+      return { action: 'continue' };
+    }
+
+    // Children were spawned, but if they all carry one angle the fan-out was
+    // arithmetic rather than thinking. Labels come from the session records the
+    // spawn path already writes, so this needs no spawn-time bookkeeping.
+    const childLabels = [...input.spawnedChildIds]
+      .map((id) => getSession(this.agent.workspaceRoot, id)?.label);
+    if (shouldRunFanOutDifferentiationGuard({
+      fanOutHinted: this.fanOutHinted,
+      guardFired: this.fanOutDifferentiationGuardFired,
+      maxGuardFires: 1,
+      childLabels,
+      interactiveTopLevel: !this.agent.silent && this.agent.agentDepth === 0,
+      internalSession: isInternalSessionKey(this.agent.sessionKey),
+    })) {
+      this.fanOutDifferentiationGuardFired += 1;
+      this.continueWithGuard(
+        undifferentiatedFanOutGuardMessage(childLabels.map((label) => label ?? '')),
+        `Recovery: fan-out-children-share-one-lens (${this.fanOutDifferentiationGuardFired}/1) — forcing distinct angles`,
       );
       return { action: 'continue' };
     }

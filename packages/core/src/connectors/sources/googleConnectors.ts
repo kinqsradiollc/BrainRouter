@@ -1,4 +1,5 @@
 import type { ConnectorCheckpoint, ConnectorDocument, ConnectorRecord } from '@kinqs/brainrouter-types';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 export interface GoogleDriveFile {
   id: string;
@@ -154,7 +155,7 @@ function gmailMessageDocument(connector: ConnectorRecord, message: GmailMessage)
 
 function googleClient(root: string, token: string, options?: GoogleTokenClientOptions) {
   const fetcher = options?.fetchImpl ?? fetch;
-  const apiRoot = root.replace(/\/+$/, '');
+  const apiRoot = stripTrailingSlashes(root);
   const timeoutMs = Math.max(1, options?.timeoutMs ?? 30_000);
   const headers = { Authorization: `Bearer ${requireToken(token, 'Google access token')}`, Accept: 'application/json' };
   const get = async (path: string, query?: Record<string, string>): Promise<unknown> => {

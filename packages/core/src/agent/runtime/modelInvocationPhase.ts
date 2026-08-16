@@ -30,6 +30,7 @@ import {
   isInterrupt,
 } from '../transport/llmTransport.js';
 import { recoverAgentProviderRoute } from './providerRecovery.js';
+import { ReviewProviderRequestBudgetExceededError } from './modelRequestBudget.js';
 
 export interface ModelPhaseResponse {
   content: string;
@@ -64,10 +65,12 @@ export async function invokeModelPhase(
   callbacks: RunTurnCallbacks,
   allTools: any[],
 ): Promise<ModelInvocationResult> {
+  const reviewedExecution = agent.executionIntentTurnToolName() !== null
+    || agent.inheritedExecutionAuthorityGuard() !== undefined;
   const invokeLlm = async (): Promise<ModelPhaseResponse> => {
     const contextWindowTokens = contextWindowForBudget(agent.llmConfig.model);
     const contextEnvelope = buildRootContextEnvelope(agent.chatHistory, {
-      executionId: agent.sessionKey,
+      executionId: agent.turnExecutionId ?? agent.sessionKey,
       budget: {
         maxChars: contextWindowTokens * 4,
         maxTokens: contextWindowTokens,
@@ -76,7 +79,8 @@ export async function invokeModelPhase(
     const requestMessages = sanitizeToolCallPairing(
       materializeContextEnvelope(contextEnvelope) as any[],
     );
-    const activeMode = resolveActiveMode(agent.workspaceRoot, agent.sessionKey);
+    const activeMode = agent.reviewedExecutionPolicySnapshot()?.activeMode
+      ?? resolveActiveMode(agent.workspaceRoot, agent.sessionKey);
     const selectedEffort = effortForTurnSelection(
       activeMode,
       agent.llmConfig.model,
@@ -90,6 +94,9 @@ export async function invokeModelPhase(
     const streamRequested = Boolean(
       callbacks.onAssistantDelta || callbacks.onReasoningDelta,
     ) && getCliKnobs().disableStream !== true;
+    const requestBudget = agent.reviewSourceSafety
+      ? { beforeProviderRequest: () => agent.reserveModelProviderRequest() }
+      : {};
     if (streamRequested) {
       let started = false;
       try {
@@ -97,7 +104,7 @@ export async function invokeModelPhase(
           agent.llmConfig,
           requestMessages,
           allTools,
-          { effort, signal: agent.turnAbort?.signal },
+          { effort, signal: agent.turnAbort?.signal, ...requestBudget },
           {
             onTextDelta: (text) => {
               if (!started) {
@@ -118,6 +125,7 @@ export async function invokeModelPhase(
         };
       } catch (streamError: any) {
         if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
+        if (streamError instanceof ReviewProviderRequestBudgetExceededError) throw streamError;
         if (started) {
           streamError.brainrouterStreamStarted = true;
           callbacks.onAssistantTurnEnd?.('');
@@ -132,11 +140,14 @@ export async function invokeModelPhase(
       agent.llmConfig,
       requestMessages,
       allTools,
-      { effort, signal: agent.turnAbort?.signal },
+      { effort, signal: agent.turnAbort?.signal, ...requestBudget },
     );
   };
 
-  const maxReconnects = Math.max(1, getCliKnobs().llmMaxReconnects);
+  const maxReconnects = Math.max(
+    0,
+    agent.maxLlmReconnectsPerCall ?? getCliKnobs().llmMaxReconnects,
+  );
   const offlineMaxWaits = 120;
   const llmEndpoint = agent.llmConfig?.endpoint ?? '';
   const invokeLlmResilient = async (): Promise<ModelPhaseResponse> => {
@@ -199,7 +210,7 @@ export async function invokeModelPhase(
 
     const message = String(error?.message ?? error);
     const routerKnobs = getCliKnobs().router;
-    if (routerKnobs.enabled) {
+    if (routerKnobs.enabled && !reviewedExecution) {
       const failure = classifyRouterFailure(error);
       if (failure.retryable) {
         const config = loadOrInitConfig();
@@ -271,7 +282,7 @@ export async function invokeModelPhase(
               });
             },
             execute: async (route) => {
-              agent.llmConfig = { ...route.llm };
+              agent.setLLMConfig(route.llm);
               return invokeLlmResilient();
             },
           });
@@ -308,7 +319,8 @@ export async function invokeModelPhase(
           );
         }
       } else if (
-        isModelNotFoundError(message)
+        !reviewedExecution
+        && isModelNotFoundError(message)
         && (() => {
           agent.triedModels.add((agent.llmConfig.model ?? '').trim());
           return nextFallbackModel(

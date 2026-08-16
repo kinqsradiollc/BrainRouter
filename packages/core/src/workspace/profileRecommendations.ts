@@ -14,7 +14,7 @@ import type {
   AvailableWorkspaceProfilePlugin,
   WorkspaceProfilePluginCatalog,
 } from './profilePlugins.js';
-import { BUNDLED_WORKSPACE_SKILL_PACK_IDS } from './skillSelection.js';
+import { BUNDLED_WORKSPACE_SKILL_PACKS } from './skillSelection.js';
 
 export interface WorkspaceProfileServingAvailability {
   profilePlugins: WorkspaceProfilePluginCatalog;
@@ -93,10 +93,14 @@ export function recommendWorkspaceProfileServing(
   const availablePersonas = new Set(availability.personaIds);
   const availableSkills = new Set(availability.skillIds);
   const unavailable: UnavailableWorkspaceProfileRecommendationItem[] = [];
+  const bundledPacks = new Map(
+    BUNDLED_WORKSPACE_SKILL_PACKS.map((pack) => [pack.id, pack]),
+  );
 
   const skillPacks = unique(preset.skills.packs).flatMap((id): RecommendedWorkspaceSkillPack[] => {
-    if (BUNDLED_WORKSPACE_SKILL_PACK_IDS.has(id)) {
-      return [{ id, source: 'bundled', skillIds: [] }];
+    const bundled = bundledPacks.get(id);
+    if (bundled) {
+      return [{ id, source: 'bundled', skillIds: [...bundled.skillIds] }];
     }
     const plugin = availablePlugins.get(id);
     if (plugin?.kind === 'profile') {

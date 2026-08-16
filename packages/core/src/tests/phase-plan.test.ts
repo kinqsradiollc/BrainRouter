@@ -51,6 +51,9 @@ test('normalizePhasePlan defaults title to id and access to read', () => {
   assert.ok(plan);
   assert.equal(plan!.phases[0].title, 'p1');
   assert.equal(plan!.phases[0].agents![0].access, 'read');
+  assert.equal('fanOut' in plan!.phases[0], false);
+  assert.equal('inputFrom' in plan!.phases[0], false);
+  assert.equal('dependsOn' in plan!.phases[0], false);
 });
 
 test('normalizePhasePlan rejects non-object / empty phases', () => {

@@ -13,6 +13,9 @@
  * functions into its HostContext (and clears the scheduler timers on shutdown).
  */
 import { execFile } from 'node:child_process';
+import { routePullRequest, resolveStackingMode, probeStackCapability, changeRequestArgv, changeRequestTimeoutMs } from '@kinqs/brainrouter-core/review';
+import { checkWorkspaceIdentity } from './workspaceIdentity.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import { loadConfig } from '@kinqs/brainrouter-core/config';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
@@ -607,7 +610,35 @@ export function buildGithubTrackServices(deps: GithubTrackDeps) {
       issue?.number ? `Fixes #${issue.number}` : undefined,
       `Branch: ${branch}`,
     ].filter(Boolean).join('\n\n');
-    const created = await ghText(['pr', 'create', '--draft', '--title', `${item.key}: ${item.title}`, '--body', body], { timeout: 20_000, maxBuffer: 500_000 });
+    // ADR-028 I3 — an operation that can DISCLOSE checks the account first.
+    // Pushing a work branch from a personal account is silent, attributed to
+    // the person, and found by someone else.
+    const identity = await checkWorkspaceIdentity(workspaceRoot, 'create_pr', ghText);
+    if (identity.kind === 'mismatch' || identity.kind === 'signed_out') {
+      return {
+        ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key,
+        error: identity.message,
+      };
+    }
+
+    // ADR-028 H1/H2 — the Track path was the last `gh pr create` that bypassed
+    // the router, which is why stacked pull requests never reached this button.
+    // A single Track item is almost always one pull request, so `auto` will
+    // usually route here anyway — the point is that the DECISION is made in the
+    // one place that has both options, not that this path stacks more often.
+    const capability = probeStackCapability(workspaceRoot);
+    const route = routePullRequest({
+      mode: resolveStackingMode(getCliKnobs().stackingMode),
+      capability,
+    });
+    // H2 — the argv comes from core, not from here. The route was already
+    // decided once; the COMMAND was still being assembled per call site, and the
+    // argv is what drifts: `gh stack link` shipped because an unknown subcommand
+    // exits 1 exactly like a real command that failed.
+    const created = await ghText(
+      changeRequestArgv(route, { title: `${item.key}: ${item.title}`, body }),
+      { timeout: changeRequestTimeoutMs(route), maxBuffer: 500_000 },
+    );
     if (!created.ok) return { ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key, error: created.error ?? 'GitHub CLI could not create the PR.' };
     const url = created.stdout.split(/\s+/).find((part) => /^https?:\/\//.test(part)) ?? created.stdout.trim();
     if (url) linkWorkItem(workspaceRoot, item.id, { codeLinks: [{ kind: 'pull-request', ref: url, label: 'GitHub PR' }] });

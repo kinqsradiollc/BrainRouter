@@ -10,6 +10,7 @@ import type { ReplContext } from '../commands/_context.js';
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
 // in order; first match wins, no match falls through to the legacy switch.
 import { tryHandleMemoryCommand } from '../commands/memory/index.js';
+import { tryHandleLearningCommand } from '../commands/learning/index.js';
 import { tryHandleUiCommand } from '../commands/ui/index.js';
 import { tryHandleWorkflowCommand } from '../commands/workflow/index.js';
 import { tryHandleObsCommand } from '../commands/obs/index.js';
@@ -28,6 +29,9 @@ import { tryHandleRequirementCommand } from '../commands/requirement/index.js';
 import { tryHandleTrackCommand } from '../commands/track/index.js';
 import { tryHandleAnnotationCommand } from '../commands/annotation/index.js';
 import { tryHandleArtifactCommand } from '../commands/artifact/index.js';
+// ADR-038 D5 — the personal planner is USER-scoped, so /planner takes no workspace.
+import { tryHandlePlannerCommand } from '../commands/planner/index.js';
+import { tryHandleRunsCommand } from '../commands/runs/index.js';
 import { tryHandleAtlasCommand } from '../commands/atlas/index.js';
 import { tryHandleAttachmentCommand } from '../commands/attachment/index.js';
 import { tryHandleReviewsCommand } from '../commands/reviews/index.js';
@@ -135,12 +139,15 @@ export async function handleSlashCommand(
   if (await tryHandleConfigCommand(cmdCtx)) return;
   if (await tryHandleLoginCommand(cmdCtx)) return;
   if (await tryHandleMemoryCommand(cmdCtx)) return;
+  if (await tryHandleLearningCommand(cmdCtx)) return;
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;
   if (await tryHandleRequirementCommand(cmdCtx)) return;
   if (await tryHandleTrackCommand(cmdCtx)) return;
   if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleArtifactCommand(cmdCtx)) return;
+  if (await tryHandlePlannerCommand(cmdCtx)) return;
+  if (await tryHandleRunsCommand(cmdCtx)) return;
   if (await tryHandleAtlasCommand(cmdCtx)) return;
   if (await tryHandleAttachmentCommand(cmdCtx)) return;
   if (await tryHandleReviewsCommand(cmdCtx)) return;

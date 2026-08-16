@@ -15,6 +15,7 @@ import { isSecretBoxConfigured } from "../../../security/secretBox.js";
 import { probeModels, deriveProviderId, probeEmbeddingDim } from "../../../providers/modelProbe.js";
 import { isSystemProviderOrg, systemProviderOrgId } from "../../../providers/runtime.js";
 import { BUILTIN_PROVIDERS, providerServesKind } from "@kinqs/brainrouter-core/provider";
+import { upstreamProbePolicy } from "../../../providers/upstreamProbePolicy.js";
 
 export const providersRouter = Router();
 providersRouter.use(requireAnyAuth, requirePermission("providers:manage"));
@@ -107,7 +108,7 @@ providersRouter.post("/probe-models", async (req: AuthedRequest, res) => {
   const kind = String(req.body?.kind ?? "llm").trim();
   if (!baseUrl) { sendError(res, 400, "baseUrl is required"); return; }
   try {
-    const models = await probeModels(baseUrl, apiKey, kind);
+    const models = await probeModels(baseUrl, apiKey, kind, 8000, upstreamProbePolicy());
     res.json({ ok: true, models });
   } catch (error) {
     // 200 with ok:false — a probe failure is a normal, recoverable UI state.
@@ -125,7 +126,7 @@ providersRouter.post("/probe-embedding-dim", async (req: AuthedRequest, res) => 
   const apiKey = String(req.body?.apiKey ?? "").trim();
   const model = String(req.body?.model ?? "").trim();
   if (!baseUrl || !model) { sendError(res, 400, "baseUrl and model are required"); return; }
-  const dimensions = await probeEmbeddingDim(baseUrl, apiKey, model);
+  const dimensions = await probeEmbeddingDim(baseUrl, apiKey, model, 8000, upstreamProbePolicy());
   res.json({ ok: dimensions != null, dimensions, currentDimensions: memoryEngine.getEmbeddingDimensions() });
 });
 

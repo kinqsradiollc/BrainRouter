@@ -50,6 +50,10 @@ deep dives.
   current package/host owners, public entrypoints, mixed-responsibility module
   triage, migration order, and boundary-guard backlog for the accepted
   whole-platform modernization.
+- **[Notes editing host contract](guides/notes-editing-host-contract.md)** — the
+  authenticated mutation envelope, exact idempotent replay, lease-gated
+  editing, conflict clocks, reconciliation rules, and honest remote capability
+  limits used by Dashboard and Desktop Notes.
 
 ### Specs & decisions
 
@@ -71,7 +75,91 @@ deep dives.
   [ADR-026 Desktop native visual system and platform-adaptive shell](decisions/ADR-026-desktop-native-visual-system.md) —
   proposed semantic styling layers, native window boundaries, system appearance, state-preserving surface contracts, and a small-PR migration gated by live macOS and Windows review;
   [ADR-027 compounding debt, graph execution, and workbench modernization](decisions/ADR-027-compounding-debt-graph-execution-and-workbench-modernization.md) —
-  proposed knowledge/technical/cognitive debt program grounded in the human-oversight evidence, graph execution replacing the turn loop, offline skill resolution, attachment storage with agent access and profile-aware document understanding, one visual system, an agent-callable control layer, session execution roots, two review gates, citable research artifacts, a database growth ladder, and distributed-systems correctness fixes.
+  proposed knowledge/technical/cognitive debt program grounded in the human-oversight evidence,
+  offline skill resolution, attachment storage with agent access and profile-aware document
+  understanding, one visual system, an agent-callable control layer, session execution roots, two
+  review gates, citable research artifacts, a database growth ladder, and distributed-systems
+  correctness fixes; its second turn-engine decision was withdrawn and deleted after failing
+  runtime parity;
+  [ADR-028 surfaces that tell the truth](decisions/ADR-028-surfaces-that-tell-the-truth.md) —
+  accepted rule that a surface never claims a state it has not established, offline-first planner sync (hybrid clocks, an ordered idempotent outbox, field-level merge that keeps both versions), the comprehension review whose wrong answer may be the agent's, and the reachability sweep that catches a module nothing calls;
+  [ADR-029 one workspace, many surfaces](decisions/ADR-029-one-workspace-many-surfaces.md) —
+  accepted URI address space every mode resolves, backlinks computed rather than stored, a block-based Notes mode on the planner's sync stack with lease-with-fencing-epoch locking, databases whose rows ARE pages, and Part F's rule that an offer the product cannot honour is worse than an absence;
+  [ADR-030 documents the agent can actually read](decisions/ADR-030-documents-the-agent-can-actually-read.md) —
+  accepted PDF understanding: dependency-free inflation as the floor, a WebAssembly parser chosen over a native binding because our desktop ships an architecture it has no build for, per-page classification so a scan says it is a scan, and extracted text fenced as the untrusted input it is;
+  [ADR-031 a design skill, and the capability it belongs to](decisions/ADR-031-a-design-skill-and-the-capability-it-belongs-to.md) —
+  accepted single skill library with generated per-package copies and generated third-party notices, all skills carried everywhere, and a vendored design skill attached to the `frontend` capability rather than a profile;
+  [ADR-032 an agent that gets better, and cannot get worse](decisions/ADR-032-an-agent-that-gets-better-and-cannot-get-worse.md) —
+  accepted rule that a behavioural change must be reversible, attributable and falsifiable: a gate whose price of admission is naming what would show the lesson wrong, two provenance tiers (model-inferred evidence, human-corrected instruction) neither of which touches the base prompt, learned procedures promoted to a user-scoped skill store outside the generated library, automatic bounded checkpoints at turn end / compaction / session end, and retirement that demotes what never pays off back down the ladder it climbed;
+  [ADR-033 review that finds things, and says where](decisions/ADR-033-review-that-finds-things-and-says-where.md) —
+  accepted split of deterministic engineering from model judgement in code review: review units are bundles of related files decided by path and import relationships and run concurrently, the non-interactive bot may ask once for a file from the checkout it already has, a finding's line is computed from the evidence it quoted rather than remembered, a reflection pass reads the findings as a set and may publish fewer than it received, precision is the target and recall is the trade, a benchmark built from our own merged pull requests keeps that claim checkable, and a review that cannot complete says so instead of holding the merge gate.;
+  [ADR-034 messages that arrive](decisions/ADR-034-messages-that-arrive.md) —
+  accepted exact-key session messaging with authenticated Brain-offline loopback delivery, a
+  tenant-pinned durable Postgres inbox plus ID-only MCP wake/poll recovery, safe-boundary untrusted
+  peer steering, recipient-owned conservative approval, and loud fixed bounds; Core, Brain, CLI,
+  Desktop, the shared approval presentation, and the reproducible production-host/two-identity
+  acceptance command are implemented;
+  [ADR-035 a meeting you cannot lose](decisions/ADR-035-a-meeting-you-cannot-lose.md) —
+  accepted durability-then-liveness rework of meeting capture: a session is created at Record,
+  roughly three-second durability chunks are written independently from transcription units, and
+  corrupt or interrupted captures preserve their audio for bounded recovery on both hosts. D9 is
+  implemented with automated coverage. D10 is implemented end to end and OFF by default: the
+  bundled sidecar streams, the gateway adapter is injected only when `BRAINROUTER_STT_STREAM_URL`
+  is set, and both hosts discover the capability and consume it — unset, which is every shipped
+  compose, the batch path is unchanged. Destructive host acceptance, a shipped configuration that
+  turns streaming on and the acceptance run behind it, D11 browser server-of-record durability, and
+  D6 accepted-summary retention/deletion remain pending;
+  [ADR-036 the finding carries its code](decisions/ADR-036-the-finding-carries-its-code.md) —
+  proposed review-console change that renders each bot finding's own hunk in the dashboard: the
+  excerpt persisted with the finding at the reviewed revision rather than fetched from the forge, so
+  it survives a deleted branch and needs no credentials; before/after when a fix is proposed; the
+  finding's hunk rather than the whole diff, with "Open pull request" kept as the honest boundary;
+  and repository source treated as untrusted data that may never become markup.;
+  [ADR-037 credentials the page cannot read](decisions/ADR-037-credentials-the-page-cannot-read.md) —
+  proposed move of the dashboard session out of `localStorage`: the refresh token to an httpOnly
+  cookie, the access token to memory only, and the never-expiring API key out of the browser
+  entirely. Because the dashboard is CROSS-ORIGIN with the API, `SameSite` gives no CSRF protection,
+  so an origin check plus a double-submit token ship WITH the cookie rather than after it — and a
+  `*` CORS origin combined with credentials must refuse to boot.;
+  [ADR-038 a planner worth opening](decisions/ADR-038-a-planner-worth-opening.md) —
+  accepted rework of planner and notes across dashboard, desktop and CLI: a private shared UI
+  package instead of one implementation per host, semantic tokens shared by both applications, a
+  20-item Today view designed for a working day, inspectable/retriable sync, canonical `/planner`
+  terminal operations, and a blocking two-host visual/usability gate;
+  [ADR-039 the half of security a model cannot see](decisions/ADR-039-the-half-of-security-a-model-cannot-see.md) —
+  proposed addition of static data-flow analysis as a review INPUT rather than a parallel bot: the
+  engine enumerates candidates deterministically, the model adversarially verifies which are
+  reachable, and only survivors publish — argued from this release, where the two approaches found
+  almost disjoint sets and raw scanner output was 300+ alerts of which 11 were real. Grounded in how
+  this class of engine actually works: database-first rather than per-diff (so it is its own stage
+  with its own budget, never blocking the review), precision already encoded as query metadata and
+  selected by suite rather than by a filter of ours, taint models extended as DATA so our own
+  chokepoints can be declared as barriers — without which it re-reports code we already fixed — and
+  a separate engine licence that decides, before any engineering, whether this can run against
+  customer code at all;
+  [ADR-040 one runtime, graphs of bounded loops](decisions/ADR-040-one-runtime-graphs-of-bounded-loops.md) —
+  accepted runtime contract that preserves one bounded turn engine while Core chooses the smallest
+  eligible topology on every eligible top-level conversation turn, with or without a goal: direct
+  or a validated per-profile stage graph, while durable phase plans and saved graphs remain
+  explicit. It repairs shared-plan identity
+  across all 17 profiles, activates only bounded validated strategy selection, fails graph authority
+  and approvals closed, treats optimization as a grounded verifier/counter-metric/rollback graph,
+  and defines one safe execution map rendered as Desktop Runs and a CLI timeline/JSON view.
+  [ADR-041 plug-and-play runtime](decisions/ADR-041-plug-and-play-runtime.md) —
+  proposed decision to make providers, capability ports, phase hooks, and product-wide dispatch
+  tables runtime-swappable through the existing `ExtensionHost`. Replaces the frozen
+  `PROVIDER_REGISTRY` with a live `ProviderRegistry`, extracts `FilesystemPort` / `ShellPort` /
+  `SubprocessPort` from the 1,600-line tool runtime monolith, adds `IAgent` and phase hooks to the
+  agent loop, replaces four hard-coded dispatch structures with typed registries (MCP, CLI, desktop,
+  API), formalises `IMemoryStoreComposite` to eliminate 73 `as unknown as *Store` casts, and
+  introduces a provider-neutral `StreamChunk` streaming protocol.
+
+  [ADR-042 worktrees the agent can enter](decisions/ADR-042-worktrees-the-agent-can-enter.md) —
+  proposed decision for multi-root workspaces: worktree-aware tools, entering sibling worktrees, and a
+  sandbox profile that still lets git operate.
+  [ADR-043 egress at the user's edge](decisions/ADR-043-egress-at-the-users-edge.md) —
+  proposed decision to route each user's provider traffic from their own edge IP without the credential
+  ever leaving the server (a remote-capable seam per ADR-041 D12).
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 

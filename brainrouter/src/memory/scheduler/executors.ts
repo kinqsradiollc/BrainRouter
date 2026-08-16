@@ -29,6 +29,12 @@ import { runDomainPentest } from "../../integrations/domainPentest.js";
 import { runVulnerabilitySync, type VulnerabilitySyncStore } from "../../services/vulnerabilitySync/executor.js";
 import { runVulnerabilityScan, type VulnerabilityScanStore } from "../../services/vulnerabilitySync/scan.js";
 import { KNOWLEDGE_PARSE_JOB_KIND } from "../../knowledge/contracts/document.js";
+import { HOSTED_LEARNING_CHECKPOINT_JOB_KIND } from "../store/postgres/queries/hostedLearningQueries.js";
+import {
+  runHostedLearningCheckpoint,
+  type HostedLearningExecutorEngine,
+  type HostedLearningExecutorStore,
+} from "../learning/hosted-learning-executor.js";
 import {
   processKnowledgeParseJob,
   type KnowledgeEmbeddingProvider,
@@ -57,6 +63,8 @@ export interface JobEngineOps {
   findGitlabAccountAuthorization?(userId: string, orgId: string): Promise<{ token: string; apiBase: string; config: Record<string, unknown> } | null>;
   reviewRunner?(lens: "security" | "code" | "pentest", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
   scheduledModelRunner?(userId: string, role?: string): Promise<LLMRunner>;
+  modelRunner?(role: string, orgId: string): Promise<LLMRunner>;
+  recordLesson?: HostedLearningExecutorEngine["recordLesson"];
   reviewAssignment?(lens: "security" | "code" | "pentest", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
   pentestAgentConfig?(orgId: string): Promise<LLMConfig | null>;
   /** Ingest completed pentest findings into the org's cognitive memory (redacted, org-scoped). */
@@ -193,6 +201,11 @@ const EXECUTORS: Record<string, JobExecutor> = {
 };
 
 const INTERNAL_EXECUTORS: Record<string, JobExecutor> = {
+  [HOSTED_LEARNING_CHECKPOINT_JOB_KIND]: async (input, ctx) => runHostedLearningCheckpoint(input, {
+    store: ctx.store as unknown as HostedLearningExecutorStore,
+    engine: requireEngine(ctx) as JobEngineOps & HostedLearningExecutorEngine,
+    jobId: ctx.jobId ?? "",
+  }),
   [KNOWLEDGE_PARSE_JOB_KIND]: async (input, ctx) => {
     const leaseStore = ctx.store as IMemoryStore & {
       heartbeatMemoryJob?(jobId: string): Promise<boolean>;

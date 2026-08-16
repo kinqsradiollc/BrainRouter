@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AssembleAssuranceImpactPacketsInput } from '@kinqs/brainrouter-types/review';
 import { validateAssuranceImpactPacketAssembly } from '@kinqs/brainrouter-core/review';
 import type { CheckoutIndexHandle, CheckoutIndexResolver } from '../index/graphTypes.js';
@@ -36,6 +36,7 @@ async function fixtureCheckout(): Promise<FixtureCheckout> {
       "import { writeOutput } from './sink.js';",
       "import { schema } from './schema.js';",
       "const privateKey = 'SECRET';",
+      "const providerToken = 'sk-abcdefghijklmnop';",
       'export function route(value: string) {',
       '  schema;',
       '  return writeOutput(transform(value + privateKey));',
@@ -47,6 +48,7 @@ async function fixtureCheckout(): Promise<FixtureCheckout> {
     'tests/route.test.ts': ["import { route } from '../src/route.js';", "test('route', () => route(' value '));"].join(
       '\n',
     ),
+    'secrets/credentials.json': '{"token":"sk-abcdefghijklmnop"}',
   };
   for (const [path, source] of Object.entries(files)) {
     await mkdir(dirname(join(sourceRoot, path)), { recursive: true });
@@ -173,13 +175,54 @@ describe('DeterministicImpactPacketAssembler', () => {
     expect(packet.sourceToSinkPaths[0].evidenceRefs.every((ref) => evidenceIds.has(ref))).toBe(true);
     const routeArtifact = packet.artifactRefs
       .map((ref) => assembler.resolveArtifact(ref))
-      .find((artifact) => artifact?.path === 'src/route.ts');
+      .find((artifact) => artifact?.sourceLocation.path === 'src/route.ts');
+    expect(routeArtifact).toMatchObject({
+      revisionSha,
+      anchorLocations: [{ path: 'src/route.ts', line: 4, symbol: 'route' }],
+      sourceLocation: { path: 'src/route.ts', line: 1, endLine: 9 },
+      roles: ['changed', 'dependency', 'source_to_sink'],
+    });
     expect(routeArtifact?.content).toContain('[REDACTED]');
     expect(routeArtifact?.content).not.toContain('SECRET');
+    expect(routeArtifact?.content).not.toContain('sk-abcdefghijklmnop');
+    const relatedArtifacts = packet.artifactRefs
+      .map((ref) => assembler.resolveArtifact(ref))
+      .filter((artifact) => artifact?.sourceLocation.path !== 'src/route.ts');
+    expect(relatedArtifacts.every((artifact) => artifact?.roles.length && artifact.anchorLocations.length === 1))
+      .toBe(true);
     assembler.releaseArtifacts(packet.artifactRefs);
     expect(
       packet.artifactRefs.every((ref) => assembler.resolveArtifact(ref) === null),
     ).toBe(true);
+  });
+
+  it('uses the shared sensitive-path policy before reading packet artifacts', async () => {
+    const fixture = await fixtureCheckout();
+    const checkouts = checkoutResolver(fixture);
+    const readSourceFile = vi.fn(checkouts.readEligibleTextFile);
+    const indexes = new TypeScriptAssuranceIndexAdapter({ checkouts });
+    const index = await indexes.update(indexInput());
+    const assembler = new DeterministicImpactPacketAssembler({
+      indexes,
+      checkouts: { ...checkouts, readEligibleTextFile: readSourceFile },
+      redact: ({ content }) => content,
+    });
+    const input = packetInput(index.receipt.indexRef);
+    input.changed = [{ path: 'secrets/credentials.json', line: 1 }];
+
+    const assembly = await assembler.assemble(input);
+    expect(assembly.packets[0]?.artifactRefs).toEqual([]);
+    expect(assembly.limitations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reasonCode: 'IMPACT_SENSITIVE_SOURCE_PATH',
+        affectedPaths: ['secrets/credentials.json'],
+      }),
+    ]));
+    expect(readSourceFile).not.toHaveBeenCalledWith(
+      fixture.checkoutRef,
+      'secrets/credentials.json',
+      expect.any(Number),
+    );
   });
 
   it('is stable across retries and records file/byte limits instead of overfilling', async () => {
@@ -206,6 +249,14 @@ describe('DeterministicImpactPacketAssembler', () => {
     expect(second).toEqual(first);
     expect(first.packets[0].truncated).toBe(true);
     expect(first.packets[0].byteCount).toBeLessThanOrEqual(80);
+    const retained = assembler.resolveArtifact(first.packets[0].artifactRefs[0]);
+    const retainedLines = [...(retained?.content ?? '').matchAll(/^\s*(\d+)\s+\|/gm)]
+      .map((match) => Number(match[1]));
+    expect(retained?.sourceLocation).toEqual({
+      path: retained?.sourceLocation.path,
+      line: retainedLines[0],
+      endLine: retainedLines.at(-1),
+    });
     expect(first.limitations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ reasonCode: 'IMPACT_PACKET_FILE_LIMIT' }),

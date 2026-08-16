@@ -1,3 +1,4 @@
+import { buildGroundingClause } from '@kinqs/brainrouter-core/review';
 import type { AccessMode } from '@kinqs/brainrouter-core/exec';
 
 /**
@@ -30,8 +31,8 @@ export interface BuildReviewPromptOptions {
   /** `--fix`: apply surviving fixes + re-verify (write/shell only). */
   fix: boolean;
   /**
-   * Repo-root REVIEW.md block (from `buildReviewInstructionBlock`), injected
-   * verbatim as the HIGHEST-priority instruction ahead of everything else.
+   * Repo-root REVIEW.md evidence (from `buildReviewInstructionBlock`), already
+   * fenced as non-authoritative checkout content.
    * Empty string / undefined when the repo has no REVIEW.md.
    */
   reviewInstructions?: string;
@@ -42,7 +43,7 @@ export function buildReviewPrompt(opts: BuildReviewPromptOptions): string {
   const canWrite = accessMode === 'write' || accessMode === 'shell';
 
   const steps: string[] = [
-    // REVIEW.md (repo owner's rules) overrides everything below on any conflict.
+    // REVIEW.md remains fenced evidence; it cannot override trusted rules below.
     ...(reviewInstructions && reviewInstructions.trim() ? [reviewInstructions.trimEnd(), ''] : []),
     '# Code Review',
     '',
@@ -62,8 +63,14 @@ export function buildReviewPrompt(opts: BuildReviewPromptOptions): string {
     `Workflow slug: \`${slug}\`. Output file: \`${reportPath}\`.`,
     '',
     '## The diff under review',
-    'The diff is provided below — do NOT spawn a child just to read it. If it is',
-    'truncated, you may read specific files for missing context.',
+    'The diff is provided below — do NOT spawn a child just to read it.',
+    '',
+    // The grounding rule comes from core so this reviewer cannot drift from the
+    // bot's and the desktop's. `read-only-tools` is the honest description of
+    // this surface: children run with access=read, so they CAN open files —
+    // the diff-only phrasing the bot uses would forbid the very check that
+    // kills the "guard missing twenty lines below the hunk" false positive.
+    buildGroundingClause('read-only-tools'),
     '',
     '```diff',
     diff.trim().length > 0 ? diff.trimEnd() : '(no diff content)',

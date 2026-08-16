@@ -1,4 +1,10 @@
+/**
+ * Browser chat-session persistence and display-title policy. Stored exact keys
+ * remain routing identity; titles are bounded display metadata and follow the
+ * shared source-precedence rules without reopening another conversation.
+ */
 import type { ModelReasoningEffort } from "@kinqs/brainrouter-types";
+import { deriveSessionTitle } from "@kinqs/brainrouter-types/session-title";
 
 const CHAT_REASONING_EFFORTS = new Set<string>([
   "none", "minimal", "low", "medium", "high", "xhigh", "max",
@@ -145,8 +151,7 @@ export function upsertChatSession(
 
 export function sessionTitle(messages: readonly StoredChatMessage[]): string {
   const first = messages.find((item) => item.role === "user")?.content ?? "";
-  const normalized = first.replace(/\s+/g, " ").trim();
-  return normalized ? `${normalized.slice(0, 52)}${normalized.length > 52 ? "…" : ""}` : "Untitled task";
+  return deriveSessionTitle(first);
 }
 
 export function sameChatScope(left: StoredChatScope, right: StoredChatScope): boolean {

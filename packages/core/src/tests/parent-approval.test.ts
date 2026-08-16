@@ -1,3 +1,10 @@
+/**
+ * Approval-inheritance tests for silent child execution and MCP tool calls.
+ *
+ * Model responses are stubbed and only the cases that execute shell commands
+ * opt out of unattended sandbox enforcement immediately before Agent creation.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,6 +13,18 @@ import { Agent } from '../agent/agent.js';
 import { assessMcpToolApproval } from '../agent/guards/mcpApproval.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { setCliKnobOverride } from '../config/config.js';
+import { listBackgroundShells } from '../exec/runtime/backgroundShell.js';
+import {
+  createWorker,
+  listWorkers,
+  readWorkerMeta,
+  updateWorkerMeta,
+  writeWorkerSummary,
+} from '../worker/workerStore.js';
+import {
+  registerExtensionHook,
+  resetExtensionContributions,
+} from '../extension/registry.js';
 
 // These tests exercise the silent-child EXEC + approval-inheritance semantics,
 // not the sandbox. Under the 0.4.15 unattended default (sandboxEnforceWhenSilent)
@@ -41,6 +60,31 @@ function stubLlmTool(toolName: string, args: Record<string, unknown>): () => voi
   return () => { globalThis.fetch = originalFetch; };
 }
 
+function stubLlmToolBatch(
+  calls: Array<{ name: string; args: Record<string, unknown> }>,
+): () => void {
+  const originalFetch = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = (async () => {
+    const message = call === 0
+      ? {
+          content: '',
+          tool_calls: calls.map((tool, index) => ({
+            id: `call_worker_${index}`,
+            type: 'function',
+            function: { name: tool.name, arguments: JSON.stringify(tool.args) },
+          })),
+        }
+      : { content: 'done.' };
+    call++;
+    return new Response(JSON.stringify({
+      choices: [{ message }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+  return () => { globalThis.fetch = originalFetch; };
+}
+
 function makeStubMcp(): any {
   return {
     listTools: async () => ({ tools: [] }),
@@ -49,7 +93,7 @@ function makeStubMcp(): any {
   };
 }
 
-test('CODEX-MCP-APPROVAL classifier honors MCP safety annotations', () => {
+test('MCP approval classifier honors explicit safety annotations', () => {
   assert.deepEqual(
     assessMcpToolApproval('mcp_github_create_issue', {
       annotations: { destructiveHint: true },
@@ -70,9 +114,18 @@ test('CODEX-MCP-APPROVAL classifier honors MCP safety annotations', () => {
     assessMcpToolApproval('mcp_slack_send_message').requiresApproval,
     true,
   );
+  assert.deepEqual(
+    assessMcpToolApproval('mcp_inventory_lookup_without_annotations'),
+    {
+      requiresApproval: true,
+      dangerous: false,
+      reason: 'MCP tool did not provide an explicit trusted read-only annotation',
+    },
+    'an unannotated remote tool must fail closed even when its name sounds harmless',
+  );
 });
 
-test('CODEX-MCP-APPROVAL network/egress + open-world tools require approval', () => {
+test('MCP approval network/egress + open-world tools require approval', () => {
   // Open-world annotation, not read-only → gated (the openWorldHint path).
   assert.equal(
     assessMcpToolApproval('mcp_web_search', { annotations: { openWorldHint: true } }).requiresApproval,
@@ -84,7 +137,7 @@ test('CODEX-MCP-APPROVAL network/egress + open-world tools require approval', ()
   }
 });
 
-test('CODEX-MCP-APPROVAL a readOnly hint cannot whitelist a destructive/egress NAME (bypass closed)', () => {
+test('MCP approval readOnly hint cannot whitelist a destructive/egress name', () => {
   // The exact rogue/mis-marked case: tool claims read-only but is named to
   // delete or to exfiltrate. The name wins — approval is still required.
   const del = assessMcpToolApproval('mcp_repo_delete_branch', { annotations: { readOnlyHint: true } });
@@ -101,7 +154,7 @@ test('CODEX-MCP-APPROVAL a readOnly hint cannot whitelist a destructive/egress N
   );
 });
 
-test('CODEX-PARENT-APPROVAL silent child forwards shell approval and runs when parent approves', async () => {
+test('parent approval forwards shell approval and runs when parent approves', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const marker = path.join(workspace, 'approved.txt');
     const restore = stubLlmTool('run_command', { command: 'printf approved > approved.txt' });
@@ -132,6 +185,464 @@ test('CODEX-PARENT-APPROVAL silent child forwards shell approval and runs when p
       assert.equal(fs.readFileSync(marker, 'utf8'), 'approved');
     } finally {
       restore();
+    }
+  });
+});
+
+test('ADR-040 reviewed children cannot detach or control process-global background shells', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    setCliKnobOverride({ sandboxEnforceWhenSilent: false, sandbox: 'off' });
+    const command = 'printf forbidden > reviewed-background.txt';
+    const agent = new Agent(makeStubMcp(), {
+      provider: 'openai', apiKey: 'k', model: 'test-model',
+    }, {
+      workspaceRoot: workspace,
+      launchCwd: workspace,
+      accessMode: 'shell',
+      silent: true,
+      executionAuthorityGuard: () => {},
+      parentExecutionMode: 'planning',
+      parentReviewPolicy: 'request',
+      confirmToolApproval: async () => true,
+    });
+
+    const denied = await agent.executeLocalTool('run_command', {
+      command,
+      background: true,
+    });
+    assert.match(denied, /background run_command is unavailable inside reviewed execution/i);
+    assert.equal(listBackgroundShells().some((run) => run.command === command), false);
+    assert.equal(fs.existsSync(path.join(workspace, 'reviewed-background.txt')), false);
+    await assert.rejects(
+      agent.executeLocalTool('task_output', { id: 'unrelated' }),
+      /background process ids are not execution-owned/i,
+    );
+    await assert.rejects(
+      agent.executeLocalTool('kill_command', { id: 'unrelated' }),
+      /background process ids are not execution-owned/i,
+    );
+  });
+});
+
+test('ADR-040 reviewed children cannot guess detached worker lifecycle tools', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const workerId = 'unrelated-worker';
+    const secretSummary = 'summary owned by an unrelated root session';
+    createWorker(workspace, {
+      id: workerId,
+      role: 'worker',
+      goal: 'unrelated work',
+      parentSessionKey: 'session:unrelated',
+      pid: null,
+    });
+    updateWorkerMeta(workspace, workerId, { status: 'completed' });
+    writeWorkerSummary(workspace, workerId, secretSummary);
+
+    const workerTools = [
+      { name: 'spawn_worker_thread', args: { goal: 'unreviewed detached work' } },
+      { name: 'wait_worker', args: { id: workerId, timeoutMs: 0 } },
+      { name: 'read_worker_summary', args: { id: workerId } },
+      { name: 'close_worker', args: { id: workerId } },
+    ];
+    const restoreReviewed = stubLlmToolBatch(workerTools);
+    const reviewedResults: Array<{ name: string; success: boolean; preview?: string }> = [];
+    try {
+      const reviewedChild = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+        agentDepth: 1,
+        executionAuthorityGuard: () => {},
+      });
+      await reviewedChild.runTurn('guess hidden worker lifecycle tools', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => reviewedResults.push({
+          name,
+          success: result.success,
+          preview: result.preview,
+        }),
+      });
+      assert.deepEqual(reviewedResults.map((result) => result.name), workerTools.map((tool) => tool.name));
+      assert.ok(reviewedResults.every((result) => !result.success));
+      assert.match(
+        reviewedResults.map((result) => result.preview ?? '').join('\n'),
+        /detached worker lifecycle tools are unavailable inside inherited reviewed execution|outside the active .*ceiling/i,
+      );
+      assert.doesNotMatch(JSON.stringify(reviewedChild.chatHistory), new RegExp(secretSummary));
+      assert.equal(readWorkerMeta(workspace, workerId)?.status, 'completed');
+      assert.equal(listWorkers(workspace).length, 1, 'guessed spawn must not create detached state');
+    } finally {
+      restoreReviewed();
+    }
+
+    const restoreLegacy = stubLlmToolBatch(workerTools.slice(1));
+    const legacyResults: Array<{ name: string; success: boolean }> = [];
+    try {
+      const legacyRoot = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      await legacyRoot.runTurn('use the existing worker lifecycle tools', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => legacyResults.push({ name, success: result.success }),
+      });
+      assert.deepEqual(legacyResults, workerTools.slice(1).map((tool) => ({
+        name: tool.name,
+        success: true,
+      })));
+      assert.match(JSON.stringify(legacyRoot.chatHistory), new RegExp(secretSummary));
+      assert.equal(readWorkerMeta(workspace, workerId)?.status, 'closed');
+    } finally {
+      restoreLegacy();
+    }
+  });
+});
+
+test('ADR-040 delegated hard ceilings deny guessed tools before approval or dispatch', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const marker = path.join(workspace, 'ceiling-escape.txt');
+    const restore = stubLlmTool('run_command', {
+      command: 'printf escaped > ceiling-escape.txt',
+    });
+    let approvals = 0;
+    const results: Array<{ success: boolean; preview?: string }> = [];
+    try {
+      setCliKnobOverride({ sandboxEnforceWhenSilent: false, sandbox: 'off' });
+      const reviewedChild = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        accessMode: 'shell',
+        silent: true,
+        agentDepth: 1,
+        executionAuthorityGuard: () => {},
+        authorityToolCeiling: { local: ['read_file'], mcp: [] },
+        confirmToolApproval: async () => { approvals += 1; return true; },
+      });
+      await reviewedChild.runTurn('guess a tool outside the delegated ceiling', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (_name, result) => results.push({
+          success: result.success,
+          preview: result.preview,
+        }),
+      });
+      assert.equal(approvals, 0, 'a guessed out-of-ceiling tool never reaches approval');
+      assert.equal(fs.existsSync(marker), false, 'a guessed out-of-ceiling tool never dispatches');
+      assert.equal(results[0]?.success, false);
+      assert.match(results[0]?.preview ?? '', /outside the active .*ceiling/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('ADR-040 a mid-turn skill disallow removes a previously advertised tool before dispatch', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const marker = path.join(workspace, 'dynamic-disallow.txt');
+    const restore = stubLlmTool('run_command', {
+      command: 'printf escaped > dynamic-disallow.txt',
+    });
+    let approvals = 0;
+    let reviewedChild!: Agent;
+    resetExtensionContributions();
+    try {
+      setCliKnobOverride({
+        hooks: { enabled: true, enforceWhenSilent: true },
+        sandboxEnforceWhenSilent: false,
+        sandbox: 'off',
+      });
+      registerExtensionHook({
+        event: 'pre-tool',
+        match: 'run_command',
+        handle: () => {
+          reviewedChild.activeSkillDisallowedTools = ['run_command'];
+        },
+      }, 'dynamic-skill-policy');
+      reviewedChild = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        accessMode: 'shell',
+        silent: true,
+        agentDepth: 1,
+        executionAuthorityGuard: () => {},
+        confirmToolApproval: async () => { approvals += 1; return true; },
+      });
+      const results: Array<{ success: boolean; preview?: string }> = [];
+      await reviewedChild.runTurn('attempt a now-disallowed shell tool', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (_name, result) => results.push({
+          success: result.success,
+          preview: result.preview,
+        }),
+      });
+      assert.equal(approvals, 0);
+      assert.equal(fs.existsSync(marker), false);
+      assert.equal(results[0]?.success, false);
+      assert.match(results[0]?.preview ?? '', /outside the active .*ceiling/i);
+    } finally {
+      restore();
+      resetExtensionContributions();
+    }
+  });
+});
+
+test('ADR-040 model dispatch canonicalizes a unique raw MCP alias before permission checks', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const rawName = 'memory_capture_turn';
+    const thirdPartyName = 'mcp_third_memory_capture_turn';
+    const mcpTools = [
+      {
+        name: 'mcp_brain_memory_capture_turn',
+        __rawName: rawName,
+        __serverId: 'brain',
+        inputSchema: { type: 'object' },
+      },
+      {
+        name: thirdPartyName,
+        __rawName: rawName,
+        __serverId: 'third',
+        inputSchema: { type: 'object' },
+      },
+    ];
+    const calls: string[] = [];
+    const mcp = {
+      listTools: async () => ({ tools: mcpTools }),
+      callTool: async (name: string) => {
+        calls.push(name);
+        return { content: [{ text: '{}' }] };
+      },
+      getServerIds: () => ['brain', 'third'],
+      getStatus: (id: string) => ({
+        identity: id === 'brain' ? 'brainrouter' : 'third-party',
+      }),
+      close: async () => {},
+    };
+    const restore = stubLlmTool(rawName, {});
+    const results: Array<{ success: boolean; preview?: string }> = [];
+    try {
+      setCliKnobOverride({
+        permissions: { allow: [], deny: [thirdPartyName] },
+      });
+      const agent = new Agent(mcp as any, {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+        confirmToolApproval: async () => true,
+      });
+      await agent.runTurn('guess the raw MCP alias', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (_name, result) => results.push({
+          success: result.success,
+          preview: result.preview,
+        }),
+      });
+      assert.deepEqual(calls, []);
+      assert.equal(results[0]?.success, false);
+      assert.match(
+        results[0]?.preview ?? '',
+        /mcp_third_memory_capture_turn.*matched a cli\.permissions deny rule/i,
+      );
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('ADR-040 reviewed children cannot switch the reviewed model or provider', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    setCliKnobOverride({
+      llmProfiles: {
+        current: { model: 'test-model' },
+        alternate: { model: 'other-model', endpoint: 'https://other.example/v1' },
+      },
+    });
+    const reviewedChild = new Agent(makeStubMcp(), {
+      provider: 'openai', apiKey: 'k', model: 'test-model',
+    }, {
+      workspaceRoot: workspace,
+      launchCwd: workspace,
+      silent: true,
+      agentDepth: 1,
+      executionAuthorityGuard: () => {},
+    });
+    await assert.rejects(
+      reviewedChild.executeLocalTool('switch_model', { profile: 'alternate' }),
+      /switch_model is unavailable inside reviewed execution/i,
+    );
+    assert.equal(reviewedChild.getModel(), 'test-model');
+  });
+});
+
+test('same-turn result handoff dynamically enables extract_result', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    setCliKnobOverride({ maxToolResultChars: 1_000 });
+    const originalFetch = globalThis.fetch;
+    const largeOutput = `begin-${'x'.repeat(10_000)}-end`;
+    const advertised: string[][] = [];
+    let mainCall = 0;
+    let remoteCalls = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        tools?: Array<{ function?: { name?: string }; name?: string }>;
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const names = (body.tools ?? []).map((tool) => (
+        tool.function?.name ?? tool.name ?? ''
+      ));
+      if (names.length === 0) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"strategy":"answer-direct","reasoning":"direct","subtasks":[]}' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 3 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      advertised.push(names);
+      let message: Record<string, unknown>;
+      if (mainCall === 0) {
+        message = {
+          content: '',
+          tool_calls: [{
+            id: 'call_large',
+            type: 'function',
+            function: { name: 'large_read', arguments: '{}' },
+          }],
+        };
+      } else if (mainCall === 1) {
+        const toolContent = [...(body.messages ?? [])]
+          .reverse()
+          .find((entry) => entry.role === 'tool')?.content ?? '';
+        const resultRef = /resultRef=([^\s\]·]+)/.exec(toolContent)?.[1];
+        assert.ok(resultRef, 'the large result advertises a resultRef');
+        message = {
+          content: '',
+          tool_calls: [{
+            id: 'call_extract',
+            type: 'function',
+            function: {
+              name: 'extract_result',
+              arguments: JSON.stringify({ resultRef }),
+            },
+          }],
+        };
+      } else {
+        message = { content: 'done.' };
+      }
+      mainCall += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      const agent = new Agent({
+        listTools: async () => ({
+          tools: [{
+            name: 'large_read',
+            annotations: { readOnlyHint: true },
+            inputSchema: { type: 'object' },
+          }],
+        }),
+        callTool: async () => {
+          remoteCalls += 1;
+          return { content: [{ text: largeOutput }] };
+        },
+        close: async () => {},
+      } as any, {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      const results: Array<{ name: string; success: boolean }> = [];
+      await agent.runTurn('read and expand the large result', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => results.push({ name, success: result.success }),
+      });
+      assert.equal(remoteCalls, 1);
+      assert.deepEqual(results, [
+        { name: 'large_read', success: true },
+        { name: 'extract_result', success: true },
+      ]);
+      assert.equal(advertised[0]?.includes('extract_result'), false);
+      assert.equal(advertised[1]?.includes('extract_result'), true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('ADR-040 nested mcp_call target rechecks reviewed authority after parent approval', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    setCliKnobOverride({ mcpProgressiveDiscovery: true });
+    const target = {
+      name: 'mcp_remote_delete_record',
+      __rawName: 'delete_record',
+      __serverId: 'remote',
+      annotations: { destructiveHint: true },
+      inputSchema: { type: 'object' },
+    };
+    let remoteCalls = 0;
+    let revoked = false;
+    const mcp = {
+      listTools: async () => ({ tools: [target] }),
+      callTool: async () => { remoteCalls += 1; return { content: [{ text: '{}' }] }; },
+      getServerIds: () => ['remote'],
+      getStatus: () => ({ identity: 'third-party' }),
+      close: async () => {},
+    };
+    const restore = stubLlmTool('mcp_call', {
+      name: target.name,
+      args: { id: 'record-1' },
+    });
+    try {
+      const reviewedChild = new Agent(mcp as any, {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        accessMode: 'shell',
+        silent: true,
+        agentDepth: 1,
+        executionAuthorityGuard: () => {
+          if (revoked) throw new Error('reviewed execution authority was revoked');
+        },
+        authorityToolCeiling: {
+          local: ['mcp_call'],
+          mcp: [target.name],
+        },
+        confirmToolApproval: async () => {
+          revoked = true;
+          return true;
+        },
+      });
+      await assert.rejects(
+        reviewedChild.runTurn('call the reviewed MCP target', {
+          onStatusUpdate: () => {},
+          onToolStart: () => {},
+          onToolEnd: () => {},
+        }),
+        /reviewed execution authority was revoked/i,
+      );
+      assert.equal(remoteCalls, 0, 'revocation during target approval prevents remote dispatch');
+    } finally {
+      restore();
+      setCliKnobOverride({ mcpProgressiveDiscovery: false });
     }
   });
 });
@@ -193,6 +704,7 @@ test('WF-NO-NEST a silent child cannot launch run_workflow (blocked outright, no
   await withTempWorkspaceAsync(async (workspace) => {
     const restore = stubLlmTool('run_workflow', { template: 'build', templateArgs: {} });
     const approvals: Array<{ tool: string; reason: string }> = [];
+    const results: Array<{ success: boolean; preview?: string }> = [];
     try {
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace,
@@ -206,18 +718,27 @@ test('WF-NO-NEST a silent child cannot launch run_workflow (blocked outright, no
         parentReviewPolicy: 'proceed',
         confirmToolApproval: async (info) => { approvals.push(info as any); return false; },
       });
-      await agent.runTurn('launch a workflow', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
+      await agent.runTurn('launch a workflow', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (_name, result) => results.push({
+          success: result.success,
+          preview: result.preview,
+        }),
+      });
       assert.equal(approvals.length, 0, 'run_workflow is blocked for a silent child — never even prompts');
-      const toolMsgs = (agent as any).chatHistory.filter((m: any) => m.role === 'tool');
-      const blocked = toolMsgs.some((m: any) => typeof m.content === 'string' && /nested workflows are blocked/.test(m.content));
-      assert.ok(blocked, 'the run_workflow tool result must say nested workflows are blocked');
+      assert.equal(results[0]?.success, false);
+      assert.match(
+        results[0]?.preview ?? '',
+        /nested workflows are blocked|outside the active .*ceiling|requires an explicit \/workflow or \/build command/i,
+      );
     } finally {
       restore();
     }
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child does not run shell when parent rejects', async () => {
+test('parent approval does not run shell when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const marker = path.join(workspace, 'rejected.txt');
     const restore = stubLlmTool('run_command', { command: 'printf rejected > rejected.txt' });
@@ -241,7 +762,7 @@ test('CODEX-PARENT-APPROVAL silent child does not run shell when parent rejects'
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child forwards write_file approval before mutating', async () => {
+test('parent approval forwards write_file approval before mutating', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const target = path.join(workspace, 'approved-write.txt');
     const restore = stubLlmTool('write_file', { path: 'approved-write.txt', content: 'approved write' });
@@ -321,7 +842,7 @@ test('DESK-5n non-Auto parent (fast + request) STILL forwards the silent child w
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child does not write_file when parent rejects', async () => {
+test('parent approval does not write_file when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const target = path.join(workspace, 'rejected-write.txt');
     const restore = stubLlmTool('write_file', { path: 'rejected-write.txt', content: 'rejected write' });
@@ -345,7 +866,7 @@ test('CODEX-PARENT-APPROVAL silent child does not write_file when parent rejects
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child forwards apply_patch approval before mutating', async () => {
+test('parent approval forwards apply_patch approval before mutating', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     fs.writeFileSync(path.join(workspace, 'patch.txt'), 'before\n', 'utf8');
     const patch = [
@@ -384,7 +905,7 @@ test('CODEX-PARENT-APPROVAL silent child forwards apply_patch approval before mu
   });
 });
 
-test('CODEX-MCP-APPROVAL silent child forwards mutating MCP approval before dispatch', async () => {
+test('MCP approval forwards a mutating silent-child call before dispatch', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const restore = stubLlmTool('mcp_github_create_issue', { title: 'Bug', body: 'Details' });
     const approvals: Array<{ tool: string; arguments?: Record<string, unknown>; dangerous?: boolean }> = [];
@@ -430,7 +951,7 @@ test('CODEX-MCP-APPROVAL silent child forwards mutating MCP approval before disp
   });
 });
 
-test('CODEX-MCP-APPROVAL silent child does not dispatch mutating MCP when parent rejects', async () => {
+test('MCP approval does not dispatch a mutating silent-child call when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const restore = stubLlmTool('mcp_slack_send_message', { channel: 'alerts', text: 'hi' });
     let calls = 0;

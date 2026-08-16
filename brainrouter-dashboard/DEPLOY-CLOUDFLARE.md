@@ -7,23 +7,31 @@ Secrets, triggers, Logpush, or Tail Workers.
 
 ## Cloudflare project settings
 
-The dashboard is part of an npm workspace. Its shared deps
-(`@kinqs/brainrouter-types` / `-sdk` / `-hooks`) live in `packages/*`, so the
-Cloudflare build must build those packages before OpenNext packages the
+The dashboard is part of an npm workspace. Its shared deps live in `packages/*`,
+so the Cloudflare build must build those packages before OpenNext packages the
 dashboard.
+
+> **The Root directory must be the REPOSITORY ROOT, not `brainrouter-dashboard`.**
+> `@kinqs/brainrouter-ui` is `"private": true` and is never published, so an
+> install rooted at `brainrouter-dashboard/` cannot resolve it and fails with
+> `E404` before any build runs. Every other shared dep is published, which is why
+> a dashboard-rooted install worked until the shared planner/notes surfaces
+> landed — the failure arrived with a dependency, not with a settings change.
 
 Use these settings for a Git-connected Worker:
 
 | Setting | Value |
 | --- | --- |
-| **Root directory** | `brainrouter-dashboard` |
-| **Build command** | `npm run build:cf` |
-| **Deploy command** | `npx wrangler deploy` |
+| **Root directory** | *(repository root — leave blank)* |
+| **Build command** | `npm run cf:build` |
+| **Deploy command** | `npx wrangler deploy --cwd brainrouter-dashboard` |
 | **Runtime variables/secrets** | Configure in the Worker runtime panel after this deploy creates `.open-next/worker.js`. |
 | **Build variables/secrets** | Use only for values needed during `next build`, such as `NEXT_PUBLIC_*`. |
 
-`build:cf` runs `npm --prefix .. run build:packages` first, then
-`opennextjs-cloudflare build`. The OpenNext build writes:
+`cf:build` is the root's `npm run build:cf -w dashboard`, which runs
+`build:packages:dashboard` (types, agent-protocol, core, sdk, hooks, ui) and then
+`opennextjs-cloudflare build`. The OpenNext build writes, relative to
+`brainrouter-dashboard/`:
 
 - `.open-next/worker.js` — the Worker entrypoint.
 - `.open-next/assets` — static assets served through the `ASSETS` binding.

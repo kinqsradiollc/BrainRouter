@@ -1,3 +1,10 @@
+/**
+ * Contract tests for the process-local external-steering channel.
+ *
+ * They pin exact session scoping, FIFO one-shot delivery, capacity refusal,
+ * reconciliation authority, and listener cleanup between tests.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -37,18 +44,22 @@ test('external steering is session-scoped, observable, bounded, and drained once
   assert.deepEqual(notified, ['session-a', 'session-b']);
 });
 
-test('external steering validates content and retains only the newest 100 events', () => {
+test('external steering validates content and loudly refuses event 101', () => {
   assert.throws(() => publishExternalSteering('', 'event'), /session key/i);
   assert.throws(() => publishExternalSteering('session', '  '), /cannot be empty/i);
   assert.throws(() => publishExternalSteering('session', 'x'.repeat(20_001)), /exceeds 20000/i);
 
-  for (let index = 0; index < 105; index++) {
+  for (let index = 0; index < 100; index++) {
     publishExternalSteering('session', `event-${index}`, { id: `event-${index}` });
   }
+  assert.throws(
+    () => publishExternalSteering('session', 'event-100', { id: 'event-100' }),
+    /queue is full.*maximum 100/i,
+  );
   const retained = drainExternalSteering('session');
   assert.equal(retained.length, 100);
-  assert.equal(retained[0]?.id, 'event-5');
-  assert.equal(retained.at(-1)?.id, 'event-104');
+  assert.equal(retained[0]?.id, 'event-0');
+  assert.equal(retained.at(-1)?.id, 'event-99');
 });
 
 test('steering reconciliation updates plans without silently replacing goals', () => {

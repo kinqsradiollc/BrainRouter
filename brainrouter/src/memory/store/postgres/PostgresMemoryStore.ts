@@ -35,10 +35,20 @@ import { fileURLToPath } from "node:url";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import type {
   ActiveSessionFilters,
+  ActiveSessionClaim,
   ActiveSessionRecord,
   ActiveSessionUsage,
+  LegacySessionMessageSendInput,
+  LegacySessionMessageSendOptions,
   SessionInboxFilters,
   SessionInboxRecord,
+  SessionMessageReceiptAckInput,
+  SessionMessageReceiptFilters,
+  SessionMessageRouteOptions,
+  SessionMessageSendInput,
+  SessionMessageSendResult,
+  SessionMessageTransitionInput,
+  SessionMessageStoreNotification,
   PendingDelegationRecord,
   PendingDelegationEnqueueInput,
   PendingDelegationFilters,
@@ -92,6 +102,10 @@ import type {
 } from "@kinqs/brainrouter-types";
 import type { AssessmentEvidenceCleanupResult } from "@kinqs/brainrouter-types/review";
 import { createPgPool } from "./connection.js";
+import {
+  startSessionMessageNotificationFeed,
+  type SessionMessageNotificationFeed,
+} from "./sessionMessageNotificationFeed.js";
 import { loadMigrations, applyMigrations, withSchemaLock } from "./migrate.js";
 import {
   asNumber,
@@ -131,13 +145,18 @@ import {
   type CcrContext,
 } from "./queries/compressionQueries.js";
 import * as sensory from "./queries/sensoryQueries.js";
+import * as meetingEscrow from "./queries/meetingEscrowQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as track from "./queries/trackQueries.js";
+import * as planner from "./queries/plannerQueries.js";
+import * as notes from "./queries/notesQueries.js";
 import * as teams from "./queries/teamsQueries.js";
 import * as chatThreads from "./queries/chatThreadsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
 import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
+import * as learnedBehavior from "./queries/learnedBehaviorQueries.js";
+import * as hostedLearning from "./queries/hostedLearningQueries.js";
 import * as operations from "./queries/operationsQueries.js";
 import * as search from "./queries/searchQueries.js";
 import * as contradiction from "./queries/contradictionQueries.js";
@@ -241,6 +260,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   private readonly ownsPool: boolean;
   private vecReady = false;
   private vecDimensions = 0;
+  private readonly sessionMessageNotificationFeeds = new Set<SessionMessageNotificationFeed>();
 
   // CCR config
   private readonly ccrTtlSeconds: number;
@@ -472,7 +492,27 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   /** Close the pool (only if this store created it). For test/teardown use. */
   public async close(): Promise<void> {
+    await Promise.all([...this.sessionMessageNotificationFeeds].map((feed) => feed.close()));
+    this.sessionMessageNotificationFeeds.clear();
     if (this.ownsPool) await this.pool.end();
+  }
+
+  /**
+   * Subscribe this brain process to transaction-committed message wake hints.
+   * Every process holds its own LISTEN connection; durable polling remains the
+   * correctness path if this feed is temporarily unavailable.
+   */
+  public subscribeSessionMessageNotifications(
+    listener: (notification: SessionMessageStoreNotification) => void | Promise<void>,
+  ): SessionMessageNotificationFeed {
+    const feed = startSessionMessageNotificationFeed(this.pool, listener);
+    this.sessionMessageNotificationFeeds.add(feed);
+    const close = feed.close.bind(feed);
+    feed.close = async () => {
+      await close();
+      this.sessionMessageNotificationFeeds.delete(feed);
+    };
+    return feed;
   }
 
   /** Liveness probe for the status gateway — a trivial round-trip to Postgres. */
@@ -511,6 +551,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listAccessibleProjects(orgId: string, userId: string, isOrgAdmin: boolean): Promise<projects.ProjectRecord[]> { return projects.listAccessibleProjects(this.exec, orgId, userId, isOrgAdmin); }
   public addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void> { return projects.addProjectMember(this.exec, projectId, userId, role, now); }
   public removeProjectMember(projectId: string, userId: string): Promise<void> { return projects.removeProjectMember(this.exec, projectId, userId); }
+  public listInaccessibleRestrictedProjectNames(orgId: string, userId: string): Promise<string[]> { return projects.listInaccessibleRestrictedProjectNames(this.exec, orgId, userId); }
   // ── project knowledge bases (ADR-021) ─────────────────────────────────────
   public createKnowledgeBase(record: KnowledgeBaseRecord): Promise<void> { return knowledgeBases.createKnowledgeBase(this.exec, record); }
   public getKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<KnowledgeBaseRecord | null> { return knowledgeBases.getKnowledgeBase(this.exec, baseId, orgId, projectId); }
@@ -554,9 +595,89 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
   public deleteMeeting(id: string, orgId: string, userId: string): Promise<meetings.DeletedMeetingRefs | null> { return meetings.deleteMeeting(this.exec, id, orgId, userId); }
 
+  // ADR-035 D11 — capture escrow (migration 062). A browser's capture store can be
+  // evicted mid-recording, so the transcript is held here while the recording is made.
+  // Personal, like the meeting it becomes: every statement is keyed by (org, USER).
+  public upsertMeetingEscrow(orgId: string, userId: string, input: meetingEscrow.UpsertMeetingEscrowInput): Promise<void> { return meetingEscrow.upsertMeetingEscrow(this.exec, orgId, userId, input); }
+  public listMeetingEscrow(orgId: string, userId: string, limit: number): Promise<meetingEscrow.MeetingEscrowRow[]> { return meetingEscrow.listMeetingEscrow(this.exec, orgId, userId, limit); }
+  public countMeetingEscrow(orgId: string, userId: string): Promise<number> { return meetingEscrow.countMeetingEscrow(this.exec, orgId, userId); }
+  public meetingEscrowExists(orgId: string, userId: string, sessionId: string): Promise<boolean> { return meetingEscrow.meetingEscrowExists(this.exec, orgId, userId, sessionId); }
+  public deleteMeetingEscrow(orgId: string, userId: string, sessionId: string): Promise<boolean> { return meetingEscrow.deleteMeetingEscrow(this.exec, orgId, userId, sessionId); }
+  public deleteExpiredMeetingEscrow(orgId: string, userId: string): Promise<string[]> { return meetingEscrow.deleteExpiredMeetingEscrow(this.exec, orgId, userId); }
+
   // ── Track (migration 034) — org-scoped, collaborative work items ──
   public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }
   public listTrackItems(orgId: string, opts?: { includeArchived?: boolean; limit?: number }): Promise<track.TrackItemRow[]> { return track.listTrackItems(this.exec, orgId, opts); }
+
+  // ADR-028 Part D — planner (migration 051). Keyed by (org, USER): a planner is
+  // personal, so the user is part of the key rather than an author column.
+  public withPlannerMutation<T>(
+    orgId: string,
+    userId: string,
+    fn: (queries: planner.PlannerMutationQueries) => Promise<T>,
+  ): Promise<T> { return planner.withPlannerMutation(this.exec, orgId, userId, fn); }
+  public listPlannerItemsSince(orgId: string, userId: string, since?: string): Promise<planner.PlannerItemRow[]> { return planner.listPlannerItemsSince(this.exec, orgId, userId, since); }
+  public getPlannerItem(orgId: string, userId: string, id: string): Promise<planner.PlannerItemRow | null> { return planner.getPlannerItem(this.exec, orgId, userId, id); }
+  public upsertPlannerItem(orgId: string, userId: string, item: Parameters<typeof planner.upsertPlannerItem>[3]): Promise<planner.PlannerItemRow> { return planner.upsertPlannerItem(this.exec, orgId, userId, item); }
+  public latestPlannerRevision(orgId: string, userId: string): Promise<string> { return planner.latestPlannerRevision(this.exec, orgId, userId); }
+  public getOperationReceipt(orgId: string, userId: string, key: string): Promise<planner.PlannerOperationReceipt | null> { return planner.getOperationReceipt(this.exec, orgId, userId, key); }
+  public recordOperationApplied(orgId: string, userId: string, key: string, itemId: string, entity: "item" | "block", operationKind: string, fingerprint: string): Promise<void> { return planner.recordOperationApplied(this.exec, orgId, userId, key, itemId, entity, operationKind, fingerprint); }
+  public listPlannerBlocks(orgId: string, userId: string): Promise<planner.PlannerBlockRow[]> { return planner.listPlannerBlocks(this.exec, orgId, userId); }
+  public listPlannerBlocksSince(orgId: string, userId: string, since?: string): Promise<planner.PlannerBlockRow[]> { return planner.listPlannerBlocksSince(this.exec, orgId, userId, since); }
+  public getPlannerBlock(orgId: string, userId: string, id: string): Promise<planner.PlannerBlockRow | null> { return planner.getPlannerBlock(this.exec, orgId, userId, id); }
+  public upsertPlannerBlock(orgId: string, userId: string, block: planner.PlannerBlockRow): Promise<planner.PlannerBlockRow> { return planner.upsertPlannerBlock(this.exec, orgId, userId, block); }
+  public tombstonePlannerBlocksForItem(orgId: string, userId: string, itemId: string, deletedAt: planner.PlannerBlockRow["updatedAt"]): Promise<number> { return planner.tombstonePlannerBlocksForItem(this.exec, orgId, userId, itemId, deletedAt); }
+  public compactCompletedPlannerItems(orgId: string, userId: string, retentionDays: number): Promise<number> { return planner.compactCompletedPlannerItems(this.exec, orgId, userId, retentionDays); }
+
+  // ADR-029 Part D — notes (migration 052). Same (org, USER, id) partition as
+  // the planner (D1). `notes_refs`/`notes_index` are derived from block content
+  // alone (A2), which is why the only writers here take a block id and a text.
+  public withNoteMutation<T>(
+    orgId: string,
+    userId: string,
+    fn: (queries: notes.NoteMutationQueries) => Promise<T>,
+  ): Promise<T> { return notes.withNoteMutation(this.exec, orgId, userId, fn); }
+  public databaseNowMs(): Promise<number> { return notes.databaseNowMs(this.exec); }
+  public listNoteBlocksSince(orgId: string, userId: string, since?: string): Promise<notes.NoteBlockRow[]> { return notes.listNoteBlocksSince(this.exec, orgId, userId, since); }
+  public listAllNoteBlocks(orgId: string, userId: string): Promise<notes.NoteBlockRow[]> { return notes.listAllNoteBlocks(this.exec, orgId, userId); }
+  public getNoteBlock(orgId: string, userId: string, id: string): Promise<notes.NoteBlockRow | null> { return notes.getNoteBlock(this.exec, orgId, userId, id); }
+  public findNoteBlockInOrg(orgId: string, id: string): Promise<notes.NoteBlockOwnerRow | null> { return notes.findNoteBlockInOrg(this.exec, orgId, id); }
+  public upsertNoteBlock(orgId: string, userId: string, block: Parameters<typeof notes.upsertNoteBlock>[3]): Promise<notes.NoteBlockRow> { return notes.upsertNoteBlock(this.exec, orgId, userId, block); }
+  public listNoteChildBlocks(orgId: string, userId: string, parentId: string, limit?: number): Promise<notes.NoteBlockRow[]> { return notes.listNoteChildBlocks(this.exec, orgId, userId, parentId, limit); }
+  public setNoteBlockVisibility(orgId: string, userId: string, id: string, visibility: string): Promise<number> { return notes.setNoteBlockVisibility(this.exec, orgId, userId, id, visibility); }
+  public latestNoteRevision(orgId: string, userId: string): Promise<string> { return notes.latestNoteRevision(this.exec, orgId, userId); }
+  public getNoteOperationReceipt(orgId: string, userId: string, key: string): Promise<notes.NoteOperationReceipt | null> { return notes.getNoteOperationReceipt(this.exec, orgId, userId, key); }
+  public wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> { return notes.wasNoteOperationApplied(this.exec, orgId, userId, key); }
+  public recordNoteOperationApplied(orgId: string, userId: string, key: string, blockId: string, fingerprint?: string, response?: Record<string, unknown>): Promise<void> { return notes.recordNoteOperationApplied(this.exec, orgId, userId, key, blockId, fingerprint, response); }
+  public replaceNoteRefs(orgId: string, userId: string, blockId: string, refs: Parameters<typeof notes.replaceNoteRefs>[4]): Promise<void> { return notes.replaceNoteRefs(this.exec, orgId, userId, blockId, refs); }
+  public listNoteRefsFrom(orgId: string, userId: string, blockId: string): Promise<notes.NoteRefRow[]> { return notes.listNoteRefsFrom(this.exec, orgId, userId, blockId); }
+  public listNoteBacklinks(orgId: string, viewerUserId: string, targetKey: string, limit?: number): Promise<notes.NoteBacklinkRow[]> { return notes.listNoteBacklinks(this.exec, orgId, viewerUserId, targetKey, limit); }
+  public upsertNoteIndex(orgId: string, userId: string, blockId: string, entry: Parameters<typeof notes.upsertNoteIndex>[4]): Promise<void> { return notes.upsertNoteIndex(this.exec, orgId, userId, blockId, entry); }
+  public deleteNoteIndexEntry(orgId: string, userId: string, blockId: string): Promise<void> { return notes.deleteNoteIndexEntry(this.exec, orgId, userId, blockId); }
+  public clearNoteDerived(orgId: string, userId: string): Promise<void> { return notes.clearNoteDerived(this.exec, orgId, userId); }
+  // ADR-029 Part E (migration 053) — the two projections that make a page list
+  // and a database view queries rather than a read of the whole corpus. Derived,
+  // exactly like `notes_refs`/`notes_index`: written only by the re-derive path.
+  public upsertNotePageMeta(orgId: string, userId: string, meta: notes.NotePageMetaRow): Promise<void> { return notes.upsertNotePageMeta(this.exec, orgId, userId, meta); }
+  public deleteNotePageMeta(orgId: string, userId: string, blockId: string): Promise<void> { return notes.deleteNotePageMeta(this.exec, orgId, userId, blockId); }
+  public listNotePageMeta(orgId: string, userId: string, opts?: Parameters<typeof notes.listNotePageMeta>[3]): Promise<notes.NotePageMetaRow[]> { return notes.listNotePageMeta(this.exec, orgId, userId, opts); }
+  public getNotePageMeta(orgId: string, userId: string, blockId: string): Promise<notes.NotePageMetaRow | null> { return notes.getNotePageMeta(this.exec, orgId, userId, blockId); }
+  public replaceNoteRowValues(orgId: string, userId: string, blockId: string, parentId: string | null, values: readonly notes.NoteRowValueInput[]): Promise<void> { return notes.replaceNoteRowValues(this.exec, orgId, userId, blockId, parentId, values); }
+  public listNoteDatabaseRows(orgId: string, userId: string, databaseId: string, opts?: Parameters<typeof notes.listNoteDatabaseRows>[4]): Promise<notes.NoteBlockRow[]> { return notes.listNoteDatabaseRows(this.exec, orgId, userId, databaseId, opts); }
+  public countNoteDatabaseRows(orgId: string, userId: string, databaseId: string): Promise<number> { return notes.countNoteDatabaseRows(this.exec, orgId, userId, databaseId); }
+  public listNoteIndexEntries(orgId: string, userId: string): ReturnType<typeof notes.listNoteIndexEntries> { return notes.listNoteIndexEntries(this.exec, orgId, userId); }
+  public searchNoteIndex(orgId: string, userId: string, query: string, limit?: number): Promise<notes.NoteSearchRow[]> { return notes.searchNoteIndex(this.exec, orgId, userId, query, limit); }
+  public readNoteBlockLease(orgId: string, userId: string, blockId: string): ReturnType<typeof notes.readNoteBlockLease> { return notes.readNoteBlockLease(this.exec, orgId, userId, blockId); }
+  public upsertNoteBlockLease(orgId: string, userId: string, lease: notes.NoteBlockLeaseRow): Promise<void> { return notes.upsertNoteBlockLease(this.exec, orgId, userId, lease); }
+  public sweepNoteBlockLeases(orgId: string, maxAgeMs: number): Promise<number> { return notes.sweepNoteBlockLeases(this.exec, orgId, maxAgeMs); }
+  public observeNoteHostClock(orgId: string, userId: string, remote: Parameters<typeof notes.observeNoteHostClock>[3]): Promise<void> { return notes.observeNoteHostClock(this.exec, orgId, userId, remote); }
+  public nextNoteHostClock(orgId: string, userId: string, deviceId: string, wallClockMs: number, reserve: number): ReturnType<typeof notes.nextNoteHostClock> { return notes.nextNoteHostClock(this.exec, orgId, userId, deviceId, wallClockMs, reserve); }
+  public registerNoteAttachment(orgId: string, object: Parameters<typeof notes.registerNoteAttachment>[2]): Promise<notes.NoteAttachmentRow> { return notes.registerNoteAttachment(this.exec, orgId, object); }
+  public linkNoteAttachment(orgId: string, userId: string, link: Parameters<typeof notes.linkNoteAttachment>[3]): Promise<void> { return notes.linkNoteAttachment(this.exec, orgId, userId, link); }
+  public unlinkNoteAttachment(orgId: string, userId: string, blockId: string, contentHash: string): Promise<number> { return notes.unlinkNoteAttachment(this.exec, orgId, userId, blockId, contentHash); }
+  public listNoteAttachments(orgId: string, userId: string, blockId: string): Promise<notes.NoteAttachmentUseRow[]> { return notes.listNoteAttachments(this.exec, orgId, userId, blockId); }
+  public countNoteAttachmentUses(orgId: string, contentHash: string): Promise<number> { return notes.countNoteAttachmentUses(this.exec, orgId, contentHash); }
+  public listUnreferencedNoteAttachments(orgId: string, olderThanMs: number, limit?: number): Promise<notes.NoteAttachmentRow[]> { return notes.listUnreferencedNoteAttachments(this.exec, orgId, olderThanMs, limit); }
   public getTrackItem(orgId: string, id: string): Promise<track.TrackItemRow | null> { return track.getTrackItem(this.exec, orgId, id); }
   public getTrackItemBySourceRef(orgId: string, sourceRef: string): Promise<track.TrackItemRow | null> { return track.getTrackItemBySourceRef(this.exec, orgId, sourceRef); }
   public transitionTrackItem(orgId: string, id: string, status: string, statusCategory: track.TrackStatusCategory): Promise<track.TrackItemRow | null> { return track.transitionTrackItem(this.exec, orgId, id, status, statusCategory); }
@@ -866,8 +987,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return cognitive.getMemoriesByFilePath(this.exec, userId, filePath, limit);
   }
 
-  public findLessonByFingerprint(userId: string, fingerprint: string): Promise<CognitiveRecord | null> {
-    return cognitive.findLessonByFingerprint(this.exec, userId, fingerprint);
+  public findLessonByFingerprint(
+    userId: string,
+    fingerprint: string,
+    orgId: string | null = null,
+  ): Promise<CognitiveRecord | null> {
+    return cognitive.findLessonByFingerprint(this.exec, userId, fingerprint, orgId);
   }
 
   public findLessonsByConflictKey(userId: string, conflictKey: string): Promise<CognitiveRecord[]> {
@@ -876,6 +1001,117 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public listLessonsForHygiene(userId: string, limit: number): Promise<CognitiveRecord[]> {
     return cognitive.listLessonsForHygiene(this.exec, userId, limit);
+  }
+
+  /** ADR-032 Q4 — central, tenant-scoped records for hosted inspection. */
+  public listHostedLearnedRecords(userId: string, orgId: string, limit?: number): Promise<CognitiveRecord[]> {
+    return learnedBehavior.listHostedLearnedRecords(this.exec, userId, orgId, limit);
+  }
+
+  /** ADR-032 D6 — persistent fair partition for bounded retirement work. */
+  public takeHostedLearnedRetirementBatch(
+    userId: string,
+    orgId: string,
+    limit?: number,
+    now?: Date,
+  ): Promise<CognitiveRecord[]> {
+    return learnedBehavior.takeHostedLearnedRetirementBatch(this.exec, userId, orgId, limit, now);
+  }
+
+  public getHostedLearnedRecordByItemId(
+    userId: string,
+    orgId: string,
+    itemId: string,
+  ): Promise<CognitiveRecord | null> {
+    return learnedBehavior.getHostedLearnedRecordByItemId(this.exec, userId, orgId, itemId);
+  }
+
+  public retrieveHostedLearnedRecords(
+    userId: string,
+    orgId: string,
+    limit?: number,
+    now?: Date,
+  ): Promise<CognitiveRecord[]> {
+    return learnedBehavior.retrieveHostedLearnedRecords(this.exec, userId, orgId, limit, now);
+  }
+
+  public noteHostedLearningOutcomes(
+    userId: string,
+    orgId: string,
+    sessionIdentity: string,
+    jobId: string,
+    outcomes: readonly learnedBehavior.HostedLearningOutcomeInput[],
+    now?: Date,
+    expectedRecordId?: string,
+  ): Promise<CognitiveRecord[]> {
+    return learnedBehavior.noteHostedLearningOutcomes(
+      this.exec,
+      userId,
+      orgId,
+      sessionIdentity,
+      jobId,
+      outcomes,
+      now,
+      expectedRecordId,
+    );
+  }
+
+  /** ADR-032 D4 — atomic central archive + explicit human-revert marker. */
+  public revertHostedLearnedRecord(
+    userId: string,
+    orgId: string,
+    itemId: string,
+    reason: string,
+    now?: Date,
+  ): Promise<CognitiveRecord | null> {
+    return learnedBehavior.revertHostedLearnedRecord(this.exec, userId, orgId, itemId, reason, now);
+  }
+
+  /** ADR-032 D4/D8 — inspect one learned lifecycle through both tenant keys. */
+  public getHostedLearnedLifecycle(
+    userId: string,
+    orgId: string,
+    recordId: string,
+    itemId: string,
+  ): Promise<learnedBehavior.HostedLearnedLifecycleResult | null> {
+    return learnedBehavior.getHostedLearnedLifecycle(this.exec, userId, orgId, recordId, itemId);
+  }
+
+  /** ADR-032 D4/D6 — authenticated learned-only archive/restore transition. */
+  public transitionHostedLearnedLifecycle(
+    userId: string,
+    orgId: string,
+    recordId: string,
+    itemId: string,
+    operation: "archive" | "restore",
+    reason: string,
+    now?: Date,
+  ): Promise<learnedBehavior.HostedLearnedLifecycleResult | null> {
+    return learnedBehavior.transitionHostedLearnedLifecycle(
+      this.exec, userId, orgId, recordId, itemId, operation, reason, now,
+    );
+  }
+
+  /** ADR-032 D6/Q4 — mirror bounded outcomes without overriding human revert. */
+  public syncHostedLearnedRecord(
+    userId: string,
+    orgId: string,
+    recordId: string,
+    itemId: string,
+    learned: Record<string, unknown>,
+    now?: Date,
+  ): Promise<learnedBehavior.HostedLearnedSyncResult | null> {
+    return learnedBehavior.syncHostedLearnedRecord(
+      this.exec, userId, orgId, recordId, itemId, learned, now,
+    );
+  }
+
+  /** ADR-032 D5/Q1 — atomic durable cost admission plus queue insertion. */
+  public enqueueHostedLearningCheckpointJob(
+    input: Parameters<typeof hostedLearning.enqueueHostedLearningCheckpointJob>[1],
+    options?: Parameters<typeof hostedLearning.enqueueHostedLearningCheckpointJob>[2],
+  ): ReturnType<typeof hostedLearning.enqueueHostedLearningCheckpointJob> {
+    return hostedLearning.enqueueHostedLearningCheckpointJob(this.exec, input, options);
   }
 
   public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): Promise<void> {
@@ -930,8 +1166,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return search.searchCognitiveFts(this.exec, userId, query, limit, orgId);
   }
 
-  public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]> {
-    return search.searchCognitiveFtsAsOf(this.exec, userId, query, limit, asOf);
+  public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string, orgId?: string): Promise<CognitiveFtsResult[]> {
+    return search.searchCognitiveFtsAsOf(this.exec, userId, query, limit, asOf, orgId);
   }
 
   // ── vector (pgvector) ────────────────────────────────────────────────
@@ -1048,20 +1284,28 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ── active sessions (federation) ─────────────────────────────────────────
 
-  public registerActiveSession(record: ActiveSessionRecord): Promise<ActiveSessionRecord> {
-    return session.registerActiveSession(this.exec, record);
+  public registerActiveSession(record: ActiveSessionRecord, claim?: ActiveSessionClaim): Promise<ActiveSessionRecord> {
+    return session.registerActiveSession(this.exec, record, claim);
   }
 
-  public heartbeatActiveSession(userId: string, sessionKey: string, at: string, usage?: ActiveSessionUsage | null): Promise<boolean> {
-    return session.heartbeatActiveSession(this.exec, userId, sessionKey, at, usage);
+  public heartbeatActiveSession(userId: string, sessionKey: string, at: string, usage?: ActiveSessionUsage | null, orgId?: string | null, claim?: ActiveSessionClaim): Promise<boolean> {
+    return session.heartbeatActiveSession(this.exec, userId, sessionKey, at, usage, orgId, claim);
+  }
+
+  public ownsActiveSessionClaim(orgId: string | null, userId: string, sessionKey: string, claimToken: string): Promise<boolean> {
+    return session.ownsActiveSessionClaim(this.exec, orgId, userId, sessionKey, claimToken);
   }
 
   public listActiveSessions(filters: ActiveSessionFilters): Promise<ActiveSessionRecord[]> {
     return session.listActiveSessions(this.exec, filters);
   }
 
-  public unregisterActiveSession(userId: string, sessionKey: string): Promise<boolean> {
-    return session.unregisterActiveSession(this.exec, userId, sessionKey);
+  public unregisterActiveSession(userId: string, sessionKey: string, orgId?: string | null, claimToken?: string): Promise<boolean> {
+    return session.unregisterActiveSession(this.exec, userId, sessionKey, orgId, claimToken);
+  }
+
+  public releaseActiveSessionClaims(claimToken: string): Promise<number> {
+    return session.releaseActiveSessionClaims(this.exec, claimToken);
   }
 
   public sweepActiveSessions(olderThanMs: number): Promise<number> {
@@ -1070,9 +1314,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ── session inbox (federation) ───────────────────────────────────────────
 
+  public routeSessionMessage(
+    input: SessionMessageSendInput,
+    options?: SessionMessageRouteOptions,
+  ): Promise<SessionMessageSendResult> {
+    return session.routeSessionMessage(this.exec, input, options);
+  }
+
   public sendSessionMessage(
-    record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">,
-    options?: { idGenerator?: () => string; now?: string },
+    record: LegacySessionMessageSendInput,
+    options?: LegacySessionMessageSendOptions,
   ): Promise<SessionInboxRecord[]> {
     return session.sendSessionMessage(this.exec, record, options);
   }
@@ -1081,8 +1332,24 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return session.readSessionInbox(this.exec, filters);
   }
 
-  public ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): Promise<number> {
-    return session.ackSessionInbox(this.exec, userId, toSessionKey, ids, at);
+  public ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string, orgId?: string | null, claimToken?: string): Promise<number> {
+    return session.ackSessionInbox(this.exec, userId, toSessionKey, ids, at, orgId, claimToken);
+  }
+
+  public transitionSessionMessages(input: SessionMessageTransitionInput): Promise<SessionInboxRecord[]> {
+    return session.transitionSessionMessages(this.exec, input);
+  }
+
+  public readSessionMessageReceipts(filters: SessionMessageReceiptFilters): Promise<SessionInboxRecord[]> {
+    return session.readSessionMessageReceipts(this.exec, filters);
+  }
+
+  public ackSessionMessageReceipts(input: SessionMessageReceiptAckInput): Promise<number> {
+    return session.ackSessionMessageReceipts(this.exec, input);
+  }
+
+  public expireSessionMessages(at?: string): Promise<number> {
+    return session.expireSessionMessages(this.exec, at);
   }
 
   public sweepSessionInbox(olderThanMs: number): Promise<number> {
@@ -1185,7 +1452,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   /**
    * ADR-027 D11 / P1-6 — one bounded retention pass: fold expired usage events
-   * into their daily rollup and compact old job-progress timelines.
+   * into their daily rollup, compact old job-progress timelines, and minimise
+   * completed planner items past the window (ADR-028 D8).
    */
   public runRetentionPass(
     options?: retention.RetentionOptions,

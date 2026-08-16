@@ -1,6 +1,6 @@
 # ADR-008 — Full service decomposition: every capability a bounded, deploy-optional service-module
 
-**Status:** proposed (0.4.16) · **Refines:** [ADR-006](ADR-006-service-decomposition-map.md) · **Builds on:** [ADR-003](ADR-003-core-package-extraction.md), [ADR-004](ADR-004-backend-modularization.md), [ADR-005](ADR-005-service-capable-runtime.md)
+**Status:** Closed — partially implemented, remainder superseded (verified 2026-08-16: deployment axis done via ADR-011 and the Atlas service-port view shipped; ~half of the named modules never received a typed port — notably tool, mcp, session, workflow, and most brain subsystems. The blanket "every module a port" ambition is retired: ADR-041 supersedes it with seams-where-they-matter — capability ports, execution worlds, and D12 remote-capable bindings — so new port work follows ADR-041, not this list) · **Refines:** [ADR-006](ADR-006-service-decomposition-map.md) · **Builds on:** [ADR-003](ADR-003-core-package-extraction.md), [ADR-004](ADR-004-backend-modularization.md), [ADR-005](ADR-005-service-capable-runtime.md)
 
 > Decompose **all** of `packages/core` and `brainrouter/` into bounded
 > **service-modules** — every capability gets its own module + typed port,

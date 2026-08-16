@@ -53,6 +53,7 @@ import {
   normalizeReviewCandidates,
 } from "./reviewCandidateNormalization.js";
 import { createBoundedCandidateVerifier } from "./candidateVerifier.js";
+import { createReviewFileAccess, type ReviewFileAccess } from "./reviewFileAccess.js";
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
@@ -95,12 +96,30 @@ export interface RecordDiffReviewAssuranceInput extends StartDiffReviewAssurance
 export interface DiffReviewAssuranceSession {
   readonly runId: string;
   prepareContext(changed: AssuranceSourceLocation[]): Promise<RepositoryContextPrompt | null>;
+  /** Exact-revision packet context projected onto one semantic review bundle. */
+  contextForPaths(changedPaths: readonly string[]): RepositoryContextPrompt | null;
+  /**
+   * ADR-033 D3 — the read-only window over the retained checkout, or null when
+   * this run has no checkout to read from (the diff-only fallback).
+   */
+  fileAccess(): ReviewFileAccess | null;
+  /**
+   * ADR-033 D2 — related-file edges among the changed paths, from the
+   * exact-revision code graph. Empty until `prepareContext` has built the
+   * index, and empty for a run that never got a checkout.
+   */
+  relatedChangedPaths(changedPaths: readonly string[]): Array<[string, string]>;
   recordCandidates(
     headSha: string,
     findings: PrReviewCandidateDetail[],
     coverage: PrReviewCoverage,
     changedFiles: number,
     currentHeadSha?: string,
+    execution?: {
+      remainingModelCalls: number;
+      remainingDurationMs: number;
+      deadlineAt: number;
+    },
   ): Promise<PrReviewPublicationGate>;
   complete(
     result: PrReviewResult,
@@ -394,12 +413,20 @@ export async function startDiffReviewAssurance(
     organizationId,
     runId: started.id,
   });
+  let verifierBudget: { remainingCalls: number; deadlineMs: number } | null = null;
   const verifier = input.llmRunner && repositoryContext
     ? createBoundedCandidateVerifier({
         llmRunner: input.llmRunner,
         contextFor: () => repositoryContext.verificationContext,
         now,
         timeoutMs: input.timeoutMs,
+        reserveModelCall: () => {
+          if (!verifierBudget || verifierBudget.remainingCalls <= 0) return null;
+          const timeoutMs = verifierBudget.deadlineMs - Date.now();
+          if (timeoutMs <= 0) return null;
+          verifierBudget.remainingCalls -= 1;
+          return { timeoutMs };
+        },
       })
     : null;
   const verificationCampaign = verifier
@@ -467,6 +494,11 @@ export async function startDiffReviewAssurance(
     coverage: PrReviewCoverage,
     changedFiles: number,
     currentHeadSha?: string,
+    execution?: {
+      remainingModelCalls: number;
+      remainingDurationMs: number;
+      deadlineAt: number;
+    },
   ): Promise<PrReviewPublicationGate> => {
     if (candidateHeadSha !== headSha) {
       throw new Error("Review candidates must match the assurance run exact revision.");
@@ -558,36 +590,42 @@ export async function startDiffReviewAssurance(
       }));
     }
     if (verificationCampaign && !terminalStage(run, "candidate_verification")) {
-      const remainingModelCalls = Math.max(
-        0,
-        run.policySnapshot.budgets.maxModelCalls - coverage.totalParts,
-      );
+      const remainingModelCalls = Math.max(0, Math.trunc(execution?.remainingModelCalls ?? 0));
+      const deadlineAt = Math.max(0, Math.trunc(execution?.deadlineAt ?? 0));
+      verifierBudget = {
+        remainingCalls: remainingModelCalls,
+        deadlineMs: deadlineAt,
+      };
       const eligible = persisted.filter((finding) => finding.evidence.length > 0);
       const selected = eligible.slice(0, remainingModelCalls);
-      run = await verificationCampaign.runStage(
-        run.id,
-        "candidate_verification",
-        1,
-        async () => {
-          const dispositions = [];
-          for (const finding of selected) {
-            dispositions.push(
-              await verificationCampaign.verifyCandidate(run.id, finding.id),
-            );
-          }
-          const unresolved = persisted.length - dispositions.filter((finding) =>
-            finding.state === "verified"
-            || finding.state === "validated"
-            || finding.state === "disputed",
-          ).length;
-          return {
-            status: unresolved === 0 ? "succeeded" : "partial",
-            inputRefs: candidateIds,
-            outputRefs: dispositions.map((finding) => finding.id),
-            ...(unresolved > 0 ? { errorCode: "CANDIDATES_UNRESOLVED" } : {}),
-          };
-        },
-      );
+      try {
+        run = await verificationCampaign.runStage(
+          run.id,
+          "candidate_verification",
+          1,
+          async () => {
+            const dispositions = [];
+            for (const finding of selected) {
+              dispositions.push(
+                await verificationCampaign.verifyCandidate(run.id, finding.id),
+              );
+            }
+            const unresolved = persisted.length - dispositions.filter((finding) =>
+              finding.state === "verified"
+              || finding.state === "validated"
+              || finding.state === "disputed",
+            ).length;
+            return {
+              status: unresolved === 0 ? "succeeded" : "partial",
+              inputRefs: candidateIds,
+              outputRefs: dispositions.map((finding) => finding.id),
+              ...(unresolved > 0 ? { errorCode: "CANDIDATES_UNRESOLVED" } : {}),
+            };
+          },
+        );
+      } finally {
+        verifierBudget = null;
+      }
     }
     run = (await port.get(run.id)) ?? run;
     if (!active(run)) return calculatePublicationGate(run, currentHeadSha);
@@ -738,8 +776,23 @@ export async function startDiffReviewAssurance(
     }
   };
 
+  // One access window per run, so its concurrency-safe budget is shared while
+  // repeat tracking remains isolated by bundle (ADR-033 D3/D9).
+  let fileAccess: ReviewFileAccess | null = null;
+
   return {
     runId: started.id,
+    fileAccess: () => {
+      if (!repositoryContext?.canReadSource) return null;
+      fileAccess ??= createReviewFileAccess({
+        readSourceFile: (path, maxBytes) => repositoryContext.readSourceFile(path, maxBytes),
+      });
+      return fileAccess;
+    },
+    relatedChangedPaths: (changedPaths) =>
+      repositoryContext?.relatedChangedPaths(changedPaths) ?? [],
+    contextForPaths: (changedPaths) =>
+      repositoryContext?.contextForChangedPaths(changedPaths) ?? null,
     prepareContext: (changed) =>
       deepReviewPolicy
         ? repositoryContext?.prepareDeepPrompt(deepReviewPolicy.packetLimits.maxPackets)

@@ -1,0 +1,224 @@
+/**
+ * A backend that keeps chunks in a Map, for the capture-store tests.
+ *
+ * This is a fixture, not a shipped fallback: `openCaptureStore.ts` deliberately
+ * refuses to hand a recording to a memory-backed store, because that is the
+ * exact defect ADR-035 §1 describes. It lives here so tests can drive the real
+ * `MeetingCaptureStore` — the module that holds every decision — in a runner
+ * that has neither OPFS nor IndexedDB.
+ *
+ * It records `calls` and can be told to fail a specific write, so a test can
+ * assert the ORDER the store does things in and what it does when a write does
+ * not land. Those are the properties D1b actually promises; a fixture that only
+ * ever succeeds would let all of them regress unnoticed.
+ *
+ * The underscore prefix keeps it out of the `*.test.ts` glob.
+ */
+import type {
+  CaptureChunkRef,
+  CaptureManifest,
+  CaptureManifestRead,
+  CaptureStorageBackend,
+  CaptureStorageKind,
+} from "./captureStorage";
+
+export interface FakeCaptureBackendOptions {
+  readonly kind?: CaptureStorageKind;
+  /** Return the order chunks should be listed in; defaults to insertion order. */
+  readonly shuffleListing?: boolean;
+  /**
+   * Microtask ticks a `writeChunk` takes before the bytes land.
+   *
+   * Zero would make every write faster than every read, which is the one shape
+   * that hides the defect this fixture is here to catch: OPFS needs
+   * `getDirectoryHandle` → `getFileHandle` → `createWritable` → `write` →
+   * `close` to store a chunk, and only `getDirectoryHandle` → `getFileHandle` →
+   * `getFile` to read one. A read started after a write can therefore finish
+   * first, and a store that does not queue them together loses the last chunk.
+   */
+  readonly writeTicks?: number;
+  /**
+   * Ticks a `writeManifest` takes before the record lands.
+   *
+   * The manifest is where the read-modify-write races live: `setPayload` reads a
+   * manifest, builds the next one and writes it back, and `begin` checks for one
+   * before creating it. With an instant write those pairs look atomic here and
+   * are not atomic in a browser, which is exactly how a `delete` slipping
+   * between the halves stayed invisible.
+   */
+  readonly manifestTicks?: number;
+  /**
+   * Ticks a `deleteSession` takes.
+   *
+   * `removeEntry(id, { recursive: true })` walks a directory; it is the slowest
+   * thing OPFS does, not the fastest. Zero would order every delete before any
+   * concurrent write by accident and hide whether the store orders them on
+   * purpose.
+   */
+  readonly deleteTicks?: number;
+}
+
+export class FakeCaptureBackend implements CaptureStorageBackend {
+  readonly kind: CaptureStorageKind;
+
+  /** Every call, in order, as `"method:sessionId[:sequence]"`. */
+  readonly calls: string[] = [];
+
+  /** Sequences whose next write must fail, keyed `"sessionId:sequence"`. */
+  readonly failWrites = new Set<string>();
+
+  /**
+   * Sequences that list but do not read, keyed `"sessionId:sequence"` — a torn
+   * store, where the entry survived and its bytes did not.
+   */
+  readonly unreadable = new Set<string>();
+
+  /**
+   * Sequences whose read THROWS, keyed `"sessionId:sequence"`.
+   *
+   * A separate set from `unreadable` because the two are separate code paths and
+   * only one of them used to be survivable: both real backends reject rather
+   * than resolve `undefined` when the bytes cannot be produced (IndexedDB's
+   * `onerror`/`onabort`, OPFS's `getFile()` on a missing or locked entry), so a
+   * fixture that could only answer `undefined` was testing the easier half.
+   */
+  readonly failReads = new Set<string>();
+
+  readonly chunks = new Map<string, Blob>();
+  readonly manifests = new Map<string, CaptureManifest>();
+
+  /**
+   * Session ids whose top-level record physically exists but cannot be decoded.
+   * This models malformed OPFS JSON and malformed or unreadable IndexedDB rows;
+   * it is intentionally independent from `manifests`, just as corrupt bytes are
+   * independent from a valid in-memory `CaptureManifest` value.
+   */
+  readonly corruptManifests = new Set<string>();
+
+  readonly #shuffleListing: boolean;
+
+  readonly #writeTicks: number;
+
+  readonly #manifestTicks: number;
+
+  readonly #deleteTicks: number;
+
+  constructor(options: FakeCaptureBackendOptions = {}) {
+    this.kind = options.kind ?? "opfs";
+    this.#shuffleListing = options.shuffleListing === true;
+    this.#writeTicks = Math.max(0, options.writeTicks ?? 0);
+    this.#manifestTicks = Math.max(0, options.manifestTicks ?? 0);
+    this.#deleteTicks = Math.max(0, options.deleteTicks ?? 0);
+  }
+
+  async writeChunk(sessionId: string, sequence: number, bytes: Blob): Promise<void> {
+    const key = `${sessionId}:${sequence}`;
+    this.calls.push(`writeChunk:${key}`);
+    // The ticks are spent BEFORE the failure and before the bytes land, so a
+    // slow backend is slow on both paths, as a real one is.
+    await spend(this.#writeTicks);
+    if (this.failWrites.delete(key)) throw new Error(`refused ${key}`);
+    this.chunks.set(key, bytes);
+    this.calls.push(`wrote:${key}`);
+  }
+
+  async readChunk(sessionId: string, sequence: number): Promise<Blob | undefined> {
+    const key = `${sessionId}:${sequence}`;
+    this.calls.push(`readChunk:${key}`);
+    if (this.failReads.has(key)) throw new Error(`NotAllowedError: cannot read ${key}`);
+    return this.unreadable.has(key) ? undefined : this.chunks.get(key);
+  }
+
+  async listChunks(sessionId: string): Promise<readonly CaptureChunkRef[]> {
+    this.calls.push(`listChunks:${sessionId}`);
+    const refs: CaptureChunkRef[] = [];
+    for (const [key, blob] of this.chunks) {
+      const [id, sequence] = splitKey(key);
+      if (id === sessionId) refs.push({ sequence, byteLength: blob.size });
+    }
+    return this.#shuffleListing ? refs.reverse() : refs;
+  }
+
+  /**
+   * When set, the NEXT `writeManifest` refuses and clears the flag — a `begin`
+   * that cannot claim its session.
+   *
+   * Not keyed by id, unlike the sets around it, because the one caller that
+   * needs it cannot know the id: `record()` mints a fresh one and the failure
+   * being driven happens before anything hands it back. What it reaches is the
+   * window between "the lock over this capture is taken" and "the capture
+   * exists" — the one stretch where a refusal leaves a lock over a session that
+   * will never be on the device.
+   */
+  refuseNextManifest = false;
+
+  async writeManifest(sessionId: string, manifest: CaptureManifest): Promise<void> {
+    this.calls.push(`writeManifest:${sessionId}`);
+    await spend(this.#manifestTicks);
+    if (this.refuseNextManifest) {
+      this.refuseNextManifest = false;
+      throw new Error(`this origin refused the manifest for ${sessionId}`);
+    }
+    this.manifests.set(sessionId, manifest);
+    this.corruptManifests.delete(sessionId);
+    this.calls.push(`wroteManifest:${sessionId}`);
+  }
+
+  /**
+   * Sessions whose NEXT manifest read refuses — consumed like `failWrites`, so a
+   * test can fail exactly one reading. A permanent failure would mask what it
+   * was aimed at: every later write reads the manifest first, so a store that
+   * refuses for ever also refuses the write that a wrong decision would make.
+   */
+  readonly failManifestReads = new Set<string>();
+
+  async readManifest(sessionId: string): Promise<CaptureManifestRead> {
+    this.calls.push(`readManifest:${sessionId}`);
+    if (this.failManifestReads.delete(sessionId)) throw new Error(`cannot read ${sessionId}`);
+    if (this.corruptManifests.has(sessionId)) return { state: "corrupt" };
+    const manifest = this.manifests.get(sessionId);
+    return manifest ? { state: "present", manifest } : { state: "absent" };
+  }
+
+  /**
+   * Run before the listing is taken — the seam that reproduces the reap's one
+   * genuine race: another TAB beginning a session after the caller took its own
+   * listing and before the reap took this one. Nothing else can produce that
+   * interleaving deterministically, and it is exactly the window the reap's
+   * "is this abandoned?" question exists to survive.
+   */
+  beforeListSessionIds?: () => Promise<void>;
+
+  async listSessionIds(): Promise<readonly string[]> {
+    await this.beforeListSessionIds?.();
+    this.calls.push("listSessionIds");
+    const ids = new Set<string>([...this.manifests.keys(), ...this.corruptManifests]);
+    for (const key of this.chunks.keys()) ids.add(splitKey(key)[0]);
+    return [...ids];
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    this.calls.push(`deleteSession:${sessionId}`);
+    await spend(this.#deleteTicks);
+    this.manifests.delete(sessionId);
+    this.corruptManifests.delete(sessionId);
+    for (const key of [...this.chunks.keys()]) {
+      if (splitKey(key)[0] === sessionId) this.chunks.delete(key);
+    }
+  }
+}
+
+/** Burn `ticks` microtasks, so an operation can be slower than another one. */
+async function spend(ticks: number): Promise<void> {
+  for (let tick = 0; tick < ticks; tick += 1) await Promise.resolve();
+}
+
+function splitKey(key: string): [string, number] {
+  const separator = key.lastIndexOf(":");
+  return [key.slice(0, separator), Number(key.slice(separator + 1))];
+}
+
+/** A blob of `size` deterministic bytes, so a reassembled recording can be checked byte for byte. */
+export function audioBlob(size: number, fill: number): Blob {
+  return new Blob([new Uint8Array(size).fill(fill)]);
+}

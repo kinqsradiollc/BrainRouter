@@ -25,6 +25,11 @@ import {
 
 /** A sub-workflow nest deeper than this fails closed (runaway guard). */
 export const MAX_SUBWORKFLOW_DEPTH = 8;
+/**
+ * Total node executions allowed per run. Depth bounds nesting; this bounds WORK.
+ * A single graph with a loop needs no nesting at all to run forever.
+ */
+export const DEFAULT_EXECUTION_BUDGET = 500;
 
 export interface GraphRunDeps {
   /**
@@ -41,11 +46,66 @@ export interface GraphRunDeps {
    */
   loadSubWorkflow?: (idOrName: string) => Promise<WorkflowGraph | null>;
   /**
-   * Ask a human to approve an `approval` node, returning true to continue. When
-   * absent, approval auto-passes (so headless/test runs don't block) and the
-   * record is flagged `auto: true`. Wired by the desktop to the approval port.
+   * Ask a human to approve an `approval` node, returning true to continue.
+   *
+   * ADR-040 A40-3: when this is absent the node now FAILS, it does not pass.
+   * It used to auto-pass "so headless runs don't block", which meant the one
+   * node type whose entire purpose is to stop and ask a human was a no-op in
+   * exactly the configuration where nobody is watching. A gate that opens when
+   * its keyholder is missing is not a gate.
+   *
+   * A run that genuinely wants no human in the loop says so explicitly with
+   * `allowUnattendedApproval`, which is recorded on the node so the decision is
+   * visible in the execution map rather than inferred from an absent callback.
    */
   requestApproval?: (node: WorkflowNode, summary: string) => Promise<boolean>;
+  /**
+   * Explicit opt-in to running `approval` nodes with no human present. Off by
+   * default: the caller must state it, and every such node is flagged
+   * `unattended: true` in its record.
+   */
+  allowUnattendedApproval?: boolean;
+  /**
+   * Cumulative ceiling on node executions for the WHOLE run, including every
+   * loop iteration and every node inside a subworkflow. `MAX_SUBWORKFLOW_DEPTH`
+   * bounds nesting but not total work: a shallow graph with a wide loop can run
+   * unboundedly without ever nesting. Defaults to `DEFAULT_EXECUTION_BUDGET`.
+   */
+  executionBudget?: number;
+  /** Cooperative cancellation; checked before each node starts. */
+  signal?: AbortSignal;
+  /**
+   * ADR-040 A40-7 — emit the canonical execution map as the run happens.
+   *
+   * The engine does not know what consumes this: Core's reducer projects it,
+   * the durable store persists it, CLI and Desktop render it. Optional so the
+   * engine stays usable headless, and deliberately fire-and-forget — a
+   * subscriber must never be able to fail a run by throwing.
+   */
+  emitExecution?: (event: GraphExecutionEmission) => void;
+  /** Identity for the emitted execution; generated per run when absent. */
+  executionId?: string;
+}
+
+/**
+ * What the engine knows at emit time, in the shape A40-4's vocabulary expects.
+ * The engine stays free of the protocol package; the caller maps this across.
+ */
+export interface GraphExecutionEmission {
+  executionId: string;
+  executionSequence: number;
+  nodeId?: string;
+  attempt?: number;
+  iterationPath?: readonly number[];
+  status?: string;
+  edgeId?: string;
+  edgeState?: 'active' | 'traversed' | 'skipped' | 'blocked';
+  decision?: { kind: string; outcome: string; reasonCodes: readonly string[] };
+  /** A40-7 — bounded, typed terminal reason codes on a failed run's final event. */
+  reasonCodes?: readonly string[];
+  /** A40-5 — a loop node's budget: iterations allowed vs used. Carries its own
+   *  nodeId so it is not mistaken for a node occurrence by the reducer. */
+  loopBudget?: { nodeId: string; declared: number; observed: number };
 }
 
 export interface NodeRunRecord {
@@ -60,6 +120,11 @@ export interface NodeRunRecord {
 
 export interface GraphRunResult {
   ok: boolean;
+  /**
+   * Optional nodes that failed. Non-empty means the run finished DEGRADED: it
+   * produced a result, and part of what was asked for did not happen.
+   */
+  degradedNodes?: readonly string[];
   order: string[];
   nodes: Record<string, NodeRunRecord>;
   /** Text of the last `output` node that ran, if any. */
@@ -72,6 +137,15 @@ interface RunOpts {
   depth: number;
   /** Stack of graph keys above this run, for direct-recursion detection. */
   stack: string[];
+  /**
+   * Node executions remaining for the WHOLE run, shared by reference with every
+   * nested subworkflow. Held in an object so a child's spend is visible to the
+   * parent — a per-run copy would let each nesting level start over, which is
+   * how a "bounded" graph runs unboundedly.
+   */
+  budget: { remaining: number };
+  /** Shared so a subworkflow's occurrences land in the SAME execution. */
+  emit: (e: Omit<GraphExecutionEmission, 'executionId' | 'executionSequence'>) => void;
 }
 
 function compare(a: string, op: string, b: string): boolean {
@@ -267,8 +341,25 @@ export async function runSingleNode(
     }
     case 'approval': {
       const summary = interpolate(String(data.summary ?? data.message ?? 'Approve this step?'), ctx);
-      const approved = deps.requestApproval ? await deps.requestApproval(node, summary) : true;
-      return { id: node.id, type: 'approval', status: 'ok', output: { approved, summary, auto: !deps.requestApproval }, branch: approved ? 'approved' : 'rejected' };
+      if (!deps.requestApproval) {
+        if (!deps.allowUnattendedApproval) {
+          return {
+            id: node.id,
+            type: 'approval',
+            status: 'error',
+            error: 'approval node reached with no approval port wired — refusing to self-approve. Wire requestApproval, or set allowUnattendedApproval to run this graph with no human present.',
+          };
+        }
+        return {
+          id: node.id,
+          type: 'approval',
+          status: 'ok',
+          output: { approved: true, summary, unattended: true },
+          branch: 'approved',
+        };
+      }
+      const approved = await deps.requestApproval(node, summary);
+      return { id: node.id, type: 'approval', status: 'ok', output: { approved, summary, unattended: false }, branch: approved ? 'approved' : 'rejected' };
     }
     case 'extract': {
       const instr = interpolate(String(data.prompt ?? data.instruction ?? ''), ctx);
@@ -321,7 +412,8 @@ async function runSubWorkflow(node: WorkflowNode, ctx: InterpContext, deps: Grap
   const seeded: Record<string, unknown> = { ...ctx.vars };
   for (const [k, v] of Object.entries(inputs)) seeded[k] = typeof v === 'string' ? interpolate(v, ctx) : v;
 
-  const result = await runGraphInternal({ ...sub, vars: { ...(sub.vars ?? {}), ...seeded } }, deps, { depth: opts.depth + 1, stack: [...opts.stack, ref] });
+  // The child shares the parent's budget object, so nesting cannot reset it.
+  const result = await runGraphInternal({ ...sub, vars: { ...(sub.vars ?? {}), ...seeded } }, deps, { depth: opts.depth + 1, stack: [...opts.stack, ref], budget: opts.budget, emit: opts.emit });
   if (!result.ok) return { id: node.id, type: 'subworkflow', status: 'error', error: `sub-workflow ${ref} failed: ${result.error ?? 'unknown'}`, output: { ok: false } };
   return { id: node.id, type: 'subworkflow', status: 'ok', output: { text: result.finalOutput ?? '', ok: true, nodes: result.nodes } };
 }
@@ -333,8 +425,57 @@ async function runSubWorkflow(node: WorkflowNode, ctx: InterpContext, deps: Grap
  * through). A rejected `approval` halts its branch. The first node error fails
  * the run (fail-closed) and is reported.
  */
+/**
+ * A subscriber must not be able to fail a run. Observability that can break the
+ * thing it observes is worse than no observability, because the failure then
+ * looks like the workflow's.
+ */
+function makeEmitter(deps: GraphRunDeps, executionId: string): (e: Omit<GraphExecutionEmission, 'executionId' | 'executionSequence'>) => void {
+  let sequence = 0;
+  return (partial) => {
+    if (!deps.emitExecution) return;
+    sequence += 1;
+    try {
+      deps.emitExecution({ ...partial, executionId, executionSequence: sequence });
+    } catch {
+      /* an observer's failure is not the run's */
+    }
+  };
+}
+
+/**
+ * ADR-040 A40-7 — map a graph run's raw failure string onto BOUNDED, typed
+ * canonical reason codes. The raw error can carry node ids and free text; it is
+ * NEVER surfaced verbatim as a reason code, because a durable, replayable map is
+ * the wrong place for unbounded, possibly sensitive detail. Each failure the
+ * engine can produce maps to one safe code; anything unrecognized is the generic
+ * `error` — a known-unknown, not the raw string.
+ */
+export function canonicalTerminalReasonCodes(error: string | undefined): readonly string[] {
+  if (!error) return [];
+  if (/execution budget exhausted/i.test(error)) return ['budget-exhausted'];
+  if (/run canceled/i.test(error)) return ['canceled'];
+  if (/^node .+ failed/i.test(error)) return ['node-failed'];
+  if (/invalid|validation|no saved workflow graph/i.test(error)) return ['invalid-definition'];
+  return ['error'];
+}
+
 export async function runGraph(graph: WorkflowGraph, deps: GraphRunDeps): Promise<GraphRunResult> {
-  return runGraphInternal(graph, deps, { depth: 0, stack: [graphKey(graph)].filter(Boolean) });
+  const limit = deps.executionBudget ?? DEFAULT_EXECUTION_BUDGET;
+  const executionId = deps.executionId ?? `graph-${graphKey(graph) || 'anon'}`;
+  const emit = makeEmitter(deps, executionId);
+  emit({ status: 'running' });
+  const result = await runGraphInternal(graph, deps, {
+    depth: 0,
+    stack: [graphKey(graph)].filter(Boolean),
+    budget: { remaining: Math.max(0, limit) },
+    emit,
+  });
+  emit({
+    status: result.ok ? 'succeeded' : 'failed',
+    ...(result.ok ? {} : { reasonCodes: canonicalTerminalReasonCodes(result.error) }),
+  });
+  return result;
 }
 
 async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: RunOpts): Promise<GraphRunResult> {
@@ -350,6 +491,7 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
   const records: Record<string, NodeRunRecord> = {};
   const ctx: InterpContext = { nodes: {}, vars: { ...(graph.vars ?? {}) } };
   const activeEdges = new Set<string>();
+  const degraded: string[] = [];
   let finalOutput: string | undefined;
 
   const isActive = (nodeId: string): boolean => {
@@ -363,37 +505,149 @@ async function runGraphInternal(graph: WorkflowGraph, deps: GraphRunDeps, opts: 
       records[id] = { id, type: node.type, status: 'skipped' };
       continue;
     }
+    if (deps.signal?.aborted) {
+      return { ok: false, order, nodes: records, finalOutput, error: 'run canceled' };
+    }
+    if (opts.budget.remaining <= 0) {
+      return {
+        ok: false,
+        order,
+        nodes: records,
+        finalOutput,
+        error: `execution budget exhausted (${deps.executionBudget ?? DEFAULT_EXECUTION_BUDGET} node executions) — the run was stopped rather than allowed to continue`,
+      };
+    }
+    opts.budget.remaining -= 1;
     const upstream = (incoming.get(id) ?? [])
       .filter((e) => activeEdges.has(e.id))
       .map((e) => ({ id: e.source, output: ctx.nodes[e.source] }));
     try {
-      const rec = node.type === 'subworkflow'
-        ? await runSubWorkflow(node, ctx, deps, opts)
-        : await runSingleNode(node, ctx, deps, upstream);
+      // ADR-040 A40-7 — opt-in, bounded per-node retry. `retries` defaults to 0
+      // (a single attempt — identical to the prior behavior) and is clamped to 5.
+      // Each attempt emits its OWN occurrence with its real attempt number, so a
+      // node that failed then recovered SHOWS the recovery instead of pretending
+      // it worked first try. Node-execution throws are caught here so they are
+      // retryable and, once exhausted, fall through to the SAME required/optional
+      // handling as a returned error. Each retry draws from the shared execution
+      // budget (retries can never bust the run's bound) and a cancel stops them.
+      const maxAttempts = 1 + Math.max(0, Math.min(5, Math.floor(Number((node.data as { retries?: unknown } | undefined)?.retries ?? 0)) || 0));
+      let rec!: NodeRunRecord;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (attempt > 1) {
+          if (deps.signal?.aborted) { rec = { id, type: node.type, status: 'error', error: 'run canceled' }; break; }
+          if (opts.budget.remaining <= 0) break;
+          opts.budget.remaining -= 1;
+        }
+        try {
+          rec = node.type === 'subworkflow'
+            ? await runSubWorkflow(node, ctx, deps, opts)
+            : await runSingleNode(node, ctx, deps, upstream);
+        } catch (err) {
+          rec = { id, type: node.type, status: 'error', error: err instanceof Error ? err.message : String(err) };
+        }
+        opts.emit({
+          nodeId: id,
+          attempt,
+          iterationPath: opts.depth > 0 ? [opts.depth] : [],
+          status: rec.status === 'ok' ? 'succeeded' : rec.status === 'skipped' ? 'skipped' : 'failed',
+        });
+        if (rec.status !== 'error') break;
+      }
       records[id] = rec;
       ctx.nodes[id] = rec.output;
+      if (node.type === 'approval') {
+        const approvedOutput = rec.output as { approved?: boolean; unattended?: boolean } | undefined;
+        opts.emit({
+          nodeId: id,
+          decision: {
+            kind: 'approval',
+            outcome: approvedOutput?.approved ? 'approved' : 'rejected',
+            reasonCodes: approvedOutput?.unattended ? ['unattended'] : [],
+          },
+        });
+      }
+      if (node.type === 'loop') {
+        // ADR-040 A40-5 — a loop's BUDGET: what it was allowed vs what it used.
+        // Declared is the same clamp the node ran under (1..100); observed is the
+        // iteration count it reported. A loop that ran to its ceiling looks
+        // identical to one that stopped early UNLESS both numbers are recorded.
+        const declared = Math.max(1, Math.min(100, Math.floor(Number((node.data as { maxIterations?: unknown } | undefined)?.maxIterations ?? 10)) || 10));
+        const observed = Math.max(0, Math.floor(Number((rec.output as { iterations?: unknown } | undefined)?.iterations)) || 0);
+        // nodeId lives INSIDE loopBudget, not at the top level: a top-level nodeId
+        // would make the reducer read this as another node occurrence.
+        opts.emit({ loopBudget: { nodeId: id, declared, observed } });
+      }
       // a sub-workflow node that failed should fail the parent run (fail-closed)
-      if (rec.status === 'error') return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${rec.error ?? 'error'}` };
+      if (rec.status === 'error') {
+        // ADR-040 A40-3 — required vs optional failure.
+        //
+        // Fail-closed is the DEFAULT: a node is required unless its definition
+        // says otherwise, so forgetting to mark one cannot silently turn a
+        // failure into a shrug. An optional node that fails stops its own
+        // branch and lets the rest of the run continue, and the run is reported
+        // as DEGRADED rather than succeeded — "it worked" and "it worked apart
+        // from the bits that did not" are different answers, and collapsing
+        // them is how a partial result gets treated as a whole one.
+        const optional = (node.data as { optional?: unknown } | undefined)?.optional === true;
+        if (!optional) {
+          return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${rec.error ?? 'error'}` };
+        }
+        degraded.push(id);
+        opts.emit({
+          nodeId: id,
+          decision: {
+            kind: 'degradation',
+            outcome: 'optional_node_failed',
+            reasonCodes: ['optional', id],
+          },
+        });
+        continue;
+      }
       if (node.type === 'output' && typeof (rec.output as { text?: unknown })?.text === 'string') {
         finalOutput = (rec.output as { text: string }).text;
       }
       // a rejected approval halts its branch (no outgoing activation)
       const approvalRejected = node.type === 'approval' && (rec.output as { approved?: boolean })?.approved === false;
-      if (!approvalRejected) {
-        for (const e of graph.edges) {
-          if (e.source !== id) continue;
+      // ADR-040 A40-7 — emit every outgoing edge's traversal state, not only the
+      // ones taken. A branch NOT taken (`skipped`) and a branch an approval closed
+      // (`blocked`) are as much a part of the run's shape as the edge followed
+      // (`traversed`) — a map that shows only what fired cannot say why the rest
+      // did not. Only a `traversed` edge activates its target; the others are
+      // recorded but do not propagate.
+      for (const e of graph.edges) {
+        if (e.source !== id) continue;
+        let edgeState: 'traversed' | 'skipped' | 'blocked';
+        if (approvalRejected) {
+          edgeState = 'blocked';
+        } else if (rec.branch !== undefined && e.sourceHandle && e.sourceHandle !== rec.branch) {
           // branch routing: a branching node's handled edges fire only on a match;
           // handle-less edges always pass through.
-          if (rec.branch !== undefined && e.sourceHandle && e.sourceHandle !== rec.branch) continue;
+          edgeState = 'skipped';
+        } else {
           activeEdges.add(e.id);
+          edgeState = 'traversed';
         }
+        opts.emit({ edgeId: e.id, edgeState });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       records[id] = { id, type: node.type, status: 'error', error: message };
-      return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${message}` };
+      // A node that THROWS and a node that returns `status: 'error'` are the
+      // same event to everyone downstream, so the optional rule has to hold on
+      // both paths. Applying it to only one is how "optional" comes to mean
+      // "optional unless it fails in the other way".
+      const optionalOnThrow = (node.data as { optional?: unknown } | undefined)?.optional === true;
+      if (!optionalOnThrow) {
+        return { ok: false, order, nodes: records, finalOutput, error: `node ${id} failed: ${message}` };
+      }
+      degraded.push(id);
+      opts.emit({
+        nodeId: id,
+        decision: { kind: 'degradation', outcome: 'optional_node_failed', reasonCodes: ['optional', id] },
+      });
+      continue;
     }
   }
 
-  return { ok: true, order, nodes: records, finalOutput };
+  return { ok: true, order, nodes: records, finalOutput, degradedNodes: Object.freeze([...degraded]) };
 }

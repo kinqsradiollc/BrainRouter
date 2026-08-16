@@ -44,7 +44,8 @@ import { sessionRowsCacheKey } from './lib/session/list/sessionCache.js';
 import { nextBrowserOpenGeneration } from './lib/browser/browserPanelModel.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
-import { ActivityBar } from './components/layout/ActivityBar.js';
+import { ToolingNotice } from './components/ToolingNotice.js';
+import { ActivityBar, type WorkspaceMode } from './components/layout/ActivityBar.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import {
@@ -173,7 +174,7 @@ export function App(): React.ReactElement {
   const [efficiency, setEfficiency] = useState<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 });
   // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
   // swaps the whole main surface). Code is the default agentic-coding view.
-  const [mode, setMode] = useState<'chat' | 'track' | 'code' | 'meetings'>('code');
+  const [mode, setMode] = useState<WorkspaceMode>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
@@ -337,8 +338,20 @@ export function App(): React.ReactElement {
   const {
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels, lastSessionPanels,
+    closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
+
+  // ADR-028 B2 — artifacts are session-scoped, so switching sessions has to
+  // re-fetch them. `ensurePanel` only lists on OPEN, which is why the panel
+  // used to need closing and reopening: it kept showing the previous session's
+  // artifacts, which is worse than showing none — a stale list is
+  // indistinguishable from a correct one.
+  useEffect(() => {
+    if (!sideTabs.includes('artifacts')) return;
+    q('q-art', 'artifact-list');
+    q('q-annot', 'annotation-list');
+  }, [viewKey, sideTabs, q]);
 
   // Agent browser commands target a main-owned native view even when its React
   // panel is unmounted. Expose the Browser first so it can report bounds and the
@@ -491,12 +504,12 @@ export function App(): React.ReactElement {
   // T-handlers — composer + attachment handlers (submit, AI PR review, file
   // attachments, pasted-image staging, header rename) live in a hook now. Every
   // symbol is destructured back so existing references (render JSX) are unchanged.
-  const { submit, submitDelivery, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
+  const { submit, submitDelivery, reviewPrWithAi, reviewMyUnderstanding, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
     q, draft, setDraft, attachmentUploads, setAttachmentUploads, pastedImages, setPastedImages,
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
     pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
-    ensurePanel, viewKey, componentTags, setComponentTags,
+    ensurePanel, offerPanel, viewKey, componentTags, setComponentTags,
   });
 
   // T-dashtasks — the background/dashboard task derivations (Running list, boards,
@@ -644,11 +657,18 @@ export function App(): React.ReactElement {
     window.dispatchEvent(new CustomEvent('br-browser-uimap'));
   }, [atlasUiMap]);
 
+  // ADR-028 B2 — session key → a human label for artifact scope chips.
+  const sessionTitles = useMemo(() => {
+    const map: Record<string, string | undefined> = {};
+    for (const s of sessions) map[s.sessionKey] = s.firstUserMessage;
+    return map;
+  }, [sessions]);
+
   const renderPanelBody = buildRenderPanelBody({
     q, hostUp, running, info, gitInfo, branches, tokens, liveTurn, contextUsage, efficiency, runningTasks,
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
-    setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
+    setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewMyUnderstanding, reviewFindingsByFile, toolLog,
     backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, submit, taskView, setTaskView, renderRow,
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
@@ -656,6 +676,9 @@ export function App(): React.ReactElement {
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts,
+    // ADR-028 B2 — the Artifacts panel opens scoped to this session and labels
+    // rows by origin once more than one session is in view.
+    viewKey, sessionTitles,
     atlasUiMap, atlasStories, runStory,
   });
   const tabTitle = (id: PanelId): string =>
@@ -697,13 +720,19 @@ export function App(): React.ReactElement {
         }}
         openAccountSettings={() => openSettings('account')} />
 
-      <MainContent
+      <div className="app-main-stack">
+        {/* ADR-028 I1 — once per launch, dismissible, never blocking. Keep it
+            in the main vertical flow so it cannot consume a work surface's
+            horizontal column when it resolves after startup. */}
+        <ToolingNotice />
+        <MainContent
         mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
         railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
         sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}
         sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
-        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan}
+        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView}
+        restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels} lastPlan={lastPlan}
         changedFiles={changedFiles} backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
         worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts}
         ci={ci} envRoom={envRoom} envDrawer={envLayout.drawer} homeMode={homeMode} gitInfo={gitInfo} info={info} sessionTitle={sessionTitle}
@@ -733,7 +762,8 @@ export function App(): React.ReactElement {
         termDockHeight={termDockHeight} resizeTerminal={resizeTerminal} termTabs={termTabs} activeTerm={activeTerm}
         setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab} addBottomTab={addBottomTab} envOpen={envOpen}
         setEnvOpen={setEnvOpen} termDockOpen={termDockOpen} setSideFullScreen={setSideFullScreen} openBottomDock={openBottomDock}
-        workspaceViewContext={workspaceViewContextByRoot[activeRoot] ?? { profileId: 'custom', capabilityIds: [] }} />
+          workspaceViewContext={workspaceViewContextByRoot[activeRoot] ?? { profileId: 'custom', capabilityIds: [] }} />
+      </div>
 
       <AppDialogs
         pop={pop} setPop={setPop} q={q} cmdCtx={cmdCtx} commands={commands}

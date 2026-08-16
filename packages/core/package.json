@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-core",
-  "version": "0.4.19",
+  "version": "0.4.20",
   "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
@@ -87,9 +87,17 @@
       "types": "./dist/hooks/index.d.ts",
       "default": "./dist/hooks/index.js"
     },
+    "./learning": {
+      "types": "./dist/learning/index.d.ts",
+      "default": "./dist/learning/index.js"
+    },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
+    },
+    "./meetings": {
+      "types": "./dist/meetings/index.d.ts",
+      "default": "./dist/meetings/index.js"
     },
     "./memory": {
       "types": "./dist/memory/index.d.ts",
@@ -167,6 +175,10 @@
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session/index.js"
     },
+    "./session/title": {
+      "types": "./dist/session/sessionTitle.d.ts",
+      "default": "./dist/session/sessionTitle.js"
+    },
     "./session/permission-modes": {
       "types": "./dist/session/preferences/permissionModes.d.ts",
       "default": "./dist/session/preferences/permissionModes.js"
@@ -235,6 +247,14 @@
       "types": "./dist/workspace/index.d.ts",
       "default": "./dist/workspace/index.js"
     },
+    "./workspace/references": {
+      "types": "./dist/workspace/references/index.d.ts",
+      "default": "./dist/workspace/references/index.js"
+    },
+    "./workspace/participants": {
+      "types": "./dist/workspace/participants/index.d.ts",
+      "default": "./dist/workspace/participants/index.js"
+    },
     "./workspace/capabilities": {
       "types": "./dist/workspace/capabilities.d.ts",
       "default": "./dist/workspace/capabilities.js"
@@ -262,6 +282,30 @@
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
+    },
+    "./notes": {
+      "types": "./dist/notes/index.d.ts",
+      "default": "./dist/notes/index.js"
+    },
+    "./notes/editing": {
+      "types": "./dist/notes/editing.d.ts",
+      "default": "./dist/notes/editing.js"
+    },
+    "./planner": {
+      "types": "./dist/planner/index.d.ts",
+      "default": "./dist/planner/index.js"
+    },
+    "./tooling": {
+      "types": "./dist/tooling/index.d.ts",
+      "default": "./dist/tooling/index.js"
+    },
+    "./planner/presentation": {
+      "types": "./dist/planner/presentation.d.ts",
+      "default": "./dist/planner/presentation.js"
+    },
+    "./orchestration/runs": {
+      "types": "./dist/orchestration/execution/publicRuns.d.ts",
+      "default": "./dist/orchestration/execution/publicRuns.js"
     }
   },
   "files": [
@@ -274,18 +318,21 @@
     "packs",
     "profile-plugins",
     "extensions",
-    "skills"
+    "skills",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
     "clean": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const entry of fs.readdirSync('dist'))fs.rmSync('dist/'+entry,{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node ../../scripts/bundle-content.mjs --package .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
+    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\"",
+    "postpack": "node ../../scripts/bundle-content.mjs --package . --clean"
   },
   "dependencies": {
-    "@kinqs/brainrouter-agent-protocol": "^0.4.19",
-    "@kinqs/brainrouter-types": "^0.4.19",
+    "@firecrawl/pdf-inspector-wasm": "^0.1.3",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.20",
+    "@kinqs/brainrouter-types": "^0.4.20",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "chalk": "^5.3.0",
     "cheerio": "^1.2.0",

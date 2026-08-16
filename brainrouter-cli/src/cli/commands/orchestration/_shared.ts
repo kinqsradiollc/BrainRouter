@@ -11,25 +11,44 @@ import chalk from 'chalk';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { readWorkerMeta, readWorkerSummary, readWorkerTranscript } from '@kinqs/brainrouter-core/worker';
 import type { CommandContext } from '../_context.js';
+import type { FederationHandle } from '../../../runtime/federation/federationRegistration.js';
 
 export interface DmAddressResolution {
   to: string;
   error?: string;
 }
 
-export function isLikelyFullSessionKey(target: string): boolean {
+/**
+ * ADR-034 D1 — a full session key is already an address; a short prefix is
+ * only a request to look one up. The two must be answered differently when
+ * discovery comes back without a match.
+ */
+function isLikelyFullSessionKey(target: string): boolean {
   return target.length >= 32 || target.includes(':child:');
 }
 
-export async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], target: string): Promise<DmAddressResolution> {
+export async function resolveDmAddress(
+  mcpClient: CommandContext['mcpClient'],
+  target: string,
+  federation?: FederationHandle | null,
+): Promise<DmAddressResolution> {
   const rawTarget = target.trim();
+  if (federation) {
+    const resolved = await federation.resolveTarget(rawTarget);
+    return resolved.route
+      ? { to: resolved.route.sessionKey }
+      : { to: rawTarget, error: resolved.error ?? `No active session matched "${rawTarget}".` };
+  }
   const res = await callMcpTool<{ sessions: Array<{ sessionKey?: string }> }>(
     mcpClient,
     'session_list',
     { includeStale: true },
   );
   if (res.isError) {
-    return { to: rawTarget };
+    return {
+      to: rawTarget,
+      error: `Session discovery failed; no message was queued. Try again when the session list is available.`,
+    };
   }
 
   const sessionKeys = (res.parsed?.sessions ?? [])
@@ -47,6 +66,12 @@ export async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], t
       error: `Ambiguous session prefix "${rawTarget}" matched ${matches.length} sessions (${prefixes}). Use more characters.`,
     };
   }
+  // D1 — only an exact key routes, and discovery is description, not
+  // permission: a listing that did not name this key must not veto an address
+  // the caller already holds, so a full key goes out literally and the send
+  // itself reports whether anyone is there. A prefix that resolved to nothing
+  // is not an address, and sending it literally would address a session that
+  // does not exist.
   if (!isLikelyFullSessionKey(rawTarget)) {
     return {
       to: rawTarget,

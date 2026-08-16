@@ -19,14 +19,20 @@ import { Button } from '../../components/primitives/Button.js';
 import { Chip } from '../../components/primitives/Badge.js';
 import {
   sortArtifacts, artifactCounts, kindLabel, statusClass, isReactArtifact,
+  initialSessionScope, filterBySession, showsSessionProvenance, toggleSession, sessionsIn,
+  type SessionScope,
   ARTIFACT_KIND_OPTIONS, ARTIFACT_STATUS_OPTIONS,
 } from '../../lib/artifacts/artifactsView.js';
 
 const KIND_FILTER: Array<'' | ArtifactKind> = ['', ...ARTIFACT_KIND_OPTIONS];
 const STATUS_FILTER: Array<'' | ArtifactStatus> = ['', ...ARTIFACT_STATUS_OPTIONS];
 
-export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, onPreview, onSave, onRevert, onSendToChat, onAnnotate }: {
+export function ArtifactsPanel({ artifacts, annotations, currentSessionKey, sessionTitles, onCreate, onSetStatus, onPreview, onSave, onRevert, onSendToChat, onAnnotate }: {
   artifacts: ArtifactRecord[];
+  /** ADR-028 B2 — the session the panel opens scoped to. */
+  currentSessionKey?: string | null;
+  /** Session key → a human label, for the scope control and provenance chips. */
+  sessionTitles?: Record<string, string | undefined>;
   /** All workspace annotations — the detail filters to the selected artifact by targetId. */
   annotations?: AnnotationRecord[];
   onCreate?: (title: string) => void;
@@ -46,6 +52,12 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
   const [statusFilter, setStatusFilter] = useState<'' | ArtifactStatus>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
+  // ADR-028 B2 — start scoped to this session, widen deliberately. Opening onto
+  // everything ever produced hands you a search problem you did not ask for.
+  const [sessionScope, setSessionScope] = useState<SessionScope>(() => initialSessionScope(currentSessionKey));
+  // Following the session is the point: switching sessions with the panel open
+  // should show THAT session, not keep you pinned to where you started.
+  useEffect(() => { setSessionScope(initialSessionScope(currentSessionKey)); }, [currentSessionKey]);
 
   // F1/F2 — honor a "focus this artifact" signal from the chat (auto-open on
   // artifact_write, or an inline card's Open button). The target id is stashed in
@@ -65,10 +77,17 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
     return () => window.removeEventListener('br-artifact-focus', focus);
   }, []);
 
-  const filtered = artifacts.filter((a) =>
+  const allSessions = sessionsIn(artifacts);
+  const inScope = filterBySession(artifacts, sessionScope);
+  const filtered = inScope.filter((a) =>
     (!kindFilter || a.kind === kindFilter) && (!statusFilter || a.status === statusFilter));
   const sorted = sortArtifacts(filtered);
-  const counts = artifactCounts(artifacts);
+  const counts = artifactCounts(inScope);
+  // With more than one session in view, every row has to say where it came
+  // from — an aggregated list without provenance is the same misattribution the
+  // stale-panel bug caused, only on purpose.
+  const showProvenance = showsSessionProvenance(sessionScope);
+  const sessionLabel = (key: string): string => sessionTitles?.[key]?.slice(0, 28) || key.slice(0, 8);
   // Keep a valid selection: the first row, unless the user picked one still in view.
   const selected = sorted.find((a) => a.id === selectedId) ?? sorted[0] ?? null;
 
@@ -102,6 +121,22 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
             </select>
           </label>
         </div>
+        {allSessions.length > 1 ? (
+          <div className="annot-filters art-scope">
+            <span className="art-scope-label">Sessions</span>
+            {allSessions.map((key) => {
+              const on = !sessionScope || sessionScope.has(key);
+              return (
+                <button key={key} type="button"
+                  className={`art-scope-chip${on ? ' on' : ''}`}
+                  title={sessionTitles?.[key] || key}
+                  onClick={() => setSessionScope((s) => toggleSession(s, key, allSessions))}>
+                  {key === currentSessionKey ? 'this session' : sessionLabel(key)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         <div className="annot-counts">
           <Chip>{counts.draft} draft</Chip>
           <Chip>{counts.final} final</Chip>
@@ -112,7 +147,7 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
 
       {sorted.length === 0 ? (
         <div className="empty artifact-empty">
-          <span className="empty-title">No artifacts{kindFilter || statusFilter ? ' match this filter' : ' yet'}</span>
+          <span className="empty-title">No artifacts{kindFilter || statusFilter ? ' match this filter' : (sessionScope && allSessions.length > 1 ? ' in the selected session(s)' : ' yet')}</span>
           <span className="empty-note">Design notes, reports, review exports, and verification summaries appear here.</span>
         </div>
       ) : (
@@ -123,6 +158,11 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
               <span className={`req-status ${statusClass(a.status)}`}>{a.status}</span>
               <span className="req-title">{a.title}</span>
               <span className="art-format" title={`format: ${a.format}`}>{a.format}</span>
+              {showProvenance && a.sessionKey ? (
+                <span className="art-provenance" title={sessionTitles?.[a.sessionKey] || a.sessionKey}>
+                  {a.sessionKey === currentSessionKey ? 'this session' : sessionLabel(a.sessionKey)}
+                </span>
+              ) : null}
               <span className="req-id">{a.id}</span>
             </button>
           ))}

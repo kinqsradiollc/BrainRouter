@@ -125,7 +125,24 @@ We explicitly reject: a "what you have not reviewed" notification feed; per-acti
 dialogs as the primary control surface; and explanation panels presented as an oversight
 guarantee. Each is contradicted by the evidence in §1.
 
-### D2 — Replace the turn loop with a graph execution engine
+### D2 — Replace the turn loop with a graph execution engine *(WITHDRAWN 2026-08-12)*
+
+> **Withdrawn, and the code deleted.** D2 shipped the executor, its typed state,
+> checkpointing and compensation ordering — and never the replacement. ADR-028
+> C1 wired the setting that was supposed to select it and found the selector
+> could only ever return the loop: the graph path had no interrupts, no tool
+> authorization, no receipts and no delegation, and `graphExecutor.ts` had one
+> importer in the repository, its own test. A setting a person could flip and
+> watch do nothing was the visible half; the invisible half is that "both
+> engines ship" was true about files and false about the product.
+>
+> `graph/graphExecutor.ts`, `graph/graphState.ts`, `graph/compensation.ts` and
+> `agent/runtime/engineSelection.ts` are deleted, along with the
+> `cli.executionEngine` knob and the desktop dropdown. **The design below is
+> kept and marked**, because the constraints it names — checkpoint boundaries
+> are tool boundaries, side-effecting nodes carry idempotency keys, the
+> non-compensable pivot needs confirmation — are the argument anyone rebuilding
+> this has to satisfy. Nothing in it exists in the tree. See ADR-028 C1.
 
 Today a turn is a loop with bolted-on phases. We move to an explicit **directed graph with typed
 state**: nodes are units of work, edges carry conditional routing, and state is a typed value
@@ -494,7 +511,7 @@ Ordered so that blockers land first and each phase is independently shippable.
 - **P1 — Correctness.** The distributed-systems defects (D12 items 1–4) and the retention half of
   D11. These are bugs, not features.
 - **P2 — Attachments.** Storage, dedup, retention, cascade delete, agent tools (D4 first half).
-- **P3 — Graph execution.** The engine, checkpointing, interrupts (D2).
+- ~~**P3 — Graph execution.** The engine, checkpointing, interrupts (D2).~~ *(withdrawn 2026-08-12; the engine shipped without ever running a turn and is deleted — see D2)*
 - **P4 — Workbench.** Visual system, performance, control layer, feature parity (D5, D6).
 - **P5 — Session model.** Execution root, naming, sweep (D7, D8).
 - **P6 — Review gates.** Local pre-commit engine; PR gate ledger/fingerprint/coverage (D9).
@@ -516,7 +533,8 @@ Ordered so that blockers land first and each phase is independently shippable.
   protected from churn.
 - **The cost:** this is a large release touching every surface. The graph engine (D2) and the
   visual system (D5) are the two highest-risk items, and either could be deferred without
-  invalidating the rest.
+  invalidating the rest. *(D2 was neither deferred nor delivered — it was built and not connected,
+  which is the outcome neither branch of that sentence anticipated. Withdrawn 2026-08-12.)*
 - **The honest risk on the centerpiece:** debt mechanisms can themselves become theater. If the
   comprehension measures turn into a nag, or the gates turn into reflexive clicking, we will have
   added friction and bought nothing. The mitigation is that every mechanism in D1 is designed
@@ -587,6 +605,13 @@ the next step depends on what the model just said, the graph suits work with a k
 survive interruption. Replacing either trades one real strength for another; carrying both costs a
 branch at dispatch. Anything other than an explicit `graph` resolves to `loop`, so a typo cannot
 change how every turn runs. (D2, P3-1)
+
+> **Reopened and answered the other way, 2026-08-12: ONE ENGINE.** "Carrying both
+> costs a branch at dispatch" was the estimate, and the branch was never
+> written — the answer to Q5 shipped as a knob, a dropdown and a status line in
+> front of an engine no turn could reach. Carrying both actually costs parity:
+> interrupts, tool authorization, receipts and delegation, none of which the
+> graph path had. The knob and the engine are deleted; see ADR-028 C1.
 
 ### Still open
 

@@ -173,6 +173,12 @@ function sendKnowledgeFailure(res: Response, failure: KnowledgeDocumentServiceFa
       return sendError(res, 403, 'Knowledge access is forbidden');
     case 'invalid':
       return sendError(res, 400, 'Invalid knowledge document input', { field: failure.field });
+    // ADR-030 Q3 — 503, not 400: the document is fine and this process is full.
+    // A retryable status is what makes the difference actionable to a client
+    // that would otherwise conclude the file was rejected.
+    case 'busy':
+      res.setHeader('Retry-After', '5');
+      return sendError(res, 503, 'Document parsing is at capacity; retry shortly');
   }
 }
 

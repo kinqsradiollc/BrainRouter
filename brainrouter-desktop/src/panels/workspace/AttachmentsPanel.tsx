@@ -6,9 +6,16 @@
  * namespaced per mount), the same self-fetch pattern the Terminal panel uses.
  * Images preview inline via the host's size-capped data URI; text/PDF show the
  * extracted-text snippet the model actually receives.
+ *
+ * ADR-030 Q2/Q4 — a PDF also has a PARSED DOCUMENT, and `DocumentReader` shows
+ * it. That component is loaded on demand rather than imported: it only ever
+ * renders for a PDF, and the renderer's initial-JavaScript budget is the same
+ * 1,750,000 bytes that decided the parser itself runs in the main process.
  */
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState, useCallback } from 'react';
 import type { AttachmentRecord } from '@kinqs/brainrouter-types';
+
+const DocumentReader = lazy(() => import('./DocumentReader.js').then((m) => ({ default: m.DocumentReader })));
 
 type AttachmentReadResult = AttachmentRecord & { dataUri?: string };
 
@@ -129,6 +136,10 @@ function AttachmentDetail({ rec, preview, onSendToChat }: {
       <div className="req-desc" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {meta.map((m, i) => <span key={i} className="pc-tag">{m}</span>)}
       </div>
+      {/* ADR-030 D3 — what the parse could NOT read, in the product's own voice.
+          The record has carried this since ingest and nothing showed it, which
+          made a scanned document look like a document with no text in it. */}
+      {rec.extractionNotice ? <div className="req-desc">{rec.extractionNotice}</div> : null}
 
       {rec.kind === 'image' && preview ? (
         <div className="attachment-preview-img"><img src={preview} alt={rec.name} style={{ maxWidth: '100%', borderRadius: 8 }} /></div>
@@ -140,6 +151,12 @@ function AttachmentDetail({ rec, preview, onSendToChat }: {
       ) : null}
       {rec.kind === 'image' && !preview ? (
         <div className="empty">Preview unavailable (image over the inline size cap).</div>
+      ) : null}
+
+      {rec.kind === 'pdf' ? (
+        <Suspense fallback={null}>
+          <DocumentReader key={rec.id} attachmentId={rec.id} />
+        </Suspense>
       ) : null}
 
       {onSendToChat ? (

@@ -6,8 +6,10 @@
  * documents into the OWNER's memory, and persists the advanced checkpoint +
  * status back to the DB. Driven by the `connector_sync` job executor.
  */
+import fs from "node:fs";
 import path from "node:path";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import { isConnectorSource } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../memory/engine.js";
 import { enqueueAgentJob } from "../memory/scheduler/jobs.js";
 import {
@@ -28,6 +30,7 @@ import {
   ingestConnectorSources,
   type ConnectorSourceStore,
 } from "./knowledgeImport.js";
+import { refreshConnectedIssueDocuments } from "../memory/planner/backend.js";
 
 const SERVER_CONNECTORS_ROOT = path.join(
   process.env.BRAINROUTER_HOME ?? path.join(process.env.HOME ?? ".", ".brainrouter"),
@@ -88,6 +91,14 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
   }
 
   const workspaceRoot = path.join(SERVER_CONNECTORS_ROOT, connectorId);
+  // Create it before anything reads it. `getWorkspaceStateRoot` resolves through
+  // `fs.realpathSync` for its symlink-safety guarantee, and realpath throws
+  // ENOENT on a path that does not exist yet — so the FIRST sync for a connector
+  // died on the directory it was about to use, and kept dying: ~7,000 failed
+  // `connector_sync` jobs on this instance, all
+  // `ENOENT: lstat '<home>/server-connectors'`. "Nothing here yet" is the normal
+  // state of a fresh install, not an error.
+  fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
   const config = conn.config as Record<string, unknown>;
   // One isolated file-connector per workspace — reuse it (its checkpoint persists
   // incremental sync) or create it, seeded from the DB config + checkpoint.
@@ -119,6 +130,21 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
       // Inject the sealed DB token — never env/keychain (that's desktop-only).
       oauthToken: () => ({ token: accessToken }),
       githubClient: () => githubTokenClient(accessToken, { apiBase }),
+      projectPlannerIssues: async ({ documents }) => {
+        if (!conn.orgId) {
+          throw new Error("Connected Planner projection requires an organization-scoped connector.");
+        }
+        if (!isConnectorSource(conn.source)) {
+          throw new Error(`Connected Planner projection does not recognize source ${conn.source}.`);
+        }
+        const projected = await refreshConnectedIssueDocuments(conn.orgId, conn.userId, {
+          connectorId: conn.id,
+          source: conn.source,
+          sourceLabel: conn.name || conn.source,
+          documents,
+        });
+        return projected.created + projected.updated;
+      },
     });
 
     let imported = 0;

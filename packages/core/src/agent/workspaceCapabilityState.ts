@@ -17,6 +17,7 @@ import {
   findDomainPersona,
   renderDomainPersonaBriefing,
 } from '../workspace/domainPersonas.js';
+import { readWorkspaceDesignArtifact } from '../workspace/designArtifact.js';
 import { getWorkspaceProfile } from '../workspace/profiles.js';
 import { workspaceToolProfileIds } from '../workspace/toolProfiles.js';
 
@@ -31,6 +32,31 @@ export interface WorkspaceCapabilityStateHost {
 
 const WORKSPACE_CAPABILITY_TAG = 'workspace-capabilities';
 const WORKSPACE_PERSONA_TAG = 'workspace-domain-persona';
+
+const EMPTY_WORKSPACE_CAPABILITIES: WorkspaceCapabilityResolution = {
+  active: [],
+  reasons: [],
+  skillPacks: [],
+  skills: [],
+  toolProfiles: [],
+  promptBlocks: [],
+};
+
+/**
+ * Remove every checkout-controlled workspace prompt/tool selection layer.
+ * Isolated reviewers call this instead of resolving the manifest because the
+ * checkout being reviewed cannot also supply higher-priority authority for its
+ * own review.
+ */
+export function clearWorkspaceCapabilityState(
+  host: WorkspaceCapabilityStateHost,
+): WorkspaceCapabilityResolution {
+  host.activeWorkspacePersonaId = undefined;
+  host.activeWorkspaceCapabilities = { ...EMPTY_WORKSPACE_CAPABILITIES };
+  host.removeTaggedSystemMessage(WORKSPACE_PERSONA_TAG);
+  host.removeTaggedSystemMessage(WORKSPACE_CAPABILITY_TAG);
+  return host.activeWorkspaceCapabilities;
+}
 
 /** Resolve and publish the additive prompt overlay for one task. */
 export function refreshWorkspaceCapabilityState(
@@ -53,6 +79,11 @@ export function refreshWorkspaceCapabilityState(
     activeAgent,
     task,
     availability: { toolProfiles: workspaceToolProfileIds() },
+    // ADR-031 D5 — read here rather than inside the resolver, which touches no
+    // disk on purpose. Read every turn rather than cached: a design artifact
+    // changes while someone is working on the product it describes, and a
+    // cached copy would be the version they just replaced.
+    designArtifact: readWorkspaceDesignArtifact(host.workspaceRoot),
   });
   host.activeWorkspaceCapabilities = resolution;
 

@@ -13,7 +13,6 @@ import {
   evaluateStackMerge,
   highestMergeableLayer,
   attributeFindingsToLayers,
-  adviseStacking,
   describeStack,
   displayRef,
   REVIEWABLE_LAYER_LINES,
@@ -170,41 +169,14 @@ test('a layer with no new findings reports an empty list, not absence', () => {
   assert.deepEqual(attributed.get(3), []);
 });
 
-test('a small change is not told to stack', () => {
-  const advice = adviseStacking({
-    totalChangedLines: 120,
-    groups: [{ label: 'x', files: ['a.ts'], changedLines: 120 }],
-  });
-  assert.equal(advice.shouldStack, false);
-  assert.match(advice.reason, new RegExp(String(REVIEWABLE_LAYER_LINES)));
-});
-
-test('a large but INDIVISIBLE change is not told to stack either', () => {
-  // Splitting one unit of work produces layers that cannot be reviewed or
-  // merged independently — worse than one honest large PR. A tool that insists
-  // otherwise gets ignored, and then it advises nothing at all.
-  const advice = adviseStacking({
-    totalChangedLines: 900,
-    groups: [{ label: 'mechanical rename', files: ['a.ts', 'b.ts'], changedLines: 900 }],
-  });
-  assert.equal(advice.shouldStack, false);
-  assert.match(advice.reason, /single unit of work/);
-  assert.deepEqual(advice.suggestedLayers, []);
-});
-
-test('a large separable change is stacked along its existing seams', () => {
-  const advice = adviseStacking({
-    totalChangedLines: 640,
-    groups: [
-      { label: 'schema', files: ['migrations/1.sql'], changedLines: 90 },
-      { label: 'store', files: ['store.ts'], changedLines: 250 },
-      { label: 'api', files: ['routes.ts'], changedLines: 300 },
-    ],
-  });
-  assert.equal(advice.shouldStack, true);
-  assert.deepEqual(advice.suggestedLayers.map((l) => l.label), ['schema', 'store', 'api']);
-});
-
+/*
+ * Three `adviseStacking` cases were here — small change, indivisible change,
+ * separable change. They tested advice for a stacking system this release
+ * retired: the build loop emits one squashed patch on one throwaway branch, so
+ * nothing can act on a suggestion to split into layers. The function went with
+ * them. What remains below still matters, because the brain's PR review renders
+ * `describeStack` on a real path.
+ */
 test('the description names the blocking layer rather than just failing', () => {
   const text = describeStack(stack({
     layers: [

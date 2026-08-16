@@ -32,6 +32,8 @@ declare global {
       onEvent(listener: (msg: AgentEventMessage) => void): () => void;
       /** Project order/membership updates from main. May be absent on older preloads. */
       onRecentsChanged?(listener: (data: { recents: string[]; reason: string; workspaceRoot: string }) => void): () => void;
+      /** App-global active organization selected in any Desktop window. */
+      onActiveOrgChanged?(listener: (data: { orgId: string }) => void): () => void;
       /** Folder picker ONLY — returns the picked path; the renderer runs the
        * trust gate and then calls openWorkspace (DESK-5d). */
       addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }>;
@@ -123,6 +125,35 @@ declare global {
         actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
         actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
         toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown>;
+        /** ADR-035 D1/D2 — durable local capture. Absent on older preloads, which
+         *  is why the renderer refuses to record rather than buffering in the heap. */
+        captureBegin?(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string; holderId?: string }): Promise<unknown>;
+        captureAppend?(id: string, bytes: Uint8Array, durationMs: number): Promise<unknown>;
+        captureStop?(id: string): Promise<unknown>;
+        captureRead?(id: string): Promise<unknown>;
+        captureFinalize?(id: string, holderId?: string): Promise<unknown>;
+        captureDiscard?(id: string, holderId?: string): Promise<unknown>;
+        captureResumable?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
+        /** ADR-035 D6 — the captures a window in this process is recording RIGHT
+         *  NOW, so a second window can say who is recording instead of offering it
+         *  back, and the push that says the answer has changed. */
+        captureWriting?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
+        onCaptureWriters?(listener: () => void): () => void;
+        /** ADR-035 D3/D4/D5 — the transcription queue is host-owned; these are the
+         *  renderer's two requests to it and the push it listens to. */
+        captureAdopt?(id: string, holderId?: string): Promise<unknown>;
+        captureRetrySegment?(id: string, index: number): Promise<unknown>;
+        onCaptureProgress?(listener: (progress: unknown) => void): () => void;
+        /** ADR-035 D6 — the retention window: what it is now, and what to make it.
+         *  Absent on an older preload, where the surface says the window is the
+         *  built-in one and offers no control rather than one that does nothing. */
+        retentionRead?(): Promise<unknown>;
+        retentionWrite?(days: number): Promise<unknown>;
+        /** ADR-035 D6 — the compose draft, held by the host in the same 0700
+         *  directory as the audio rather than in a renderer-readable store. */
+        draftRead?(): Promise<unknown>;
+        draftWrite?(draft: { title?: string; transcript?: string; template?: string; language?: string }): Promise<unknown>;
+        draftClear?(): Promise<unknown>;
         serverTracks(orgId?: string): Promise<unknown>;
         serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown>;
         serverTrackTransition(id: string, statusCategory: string, orgId?: string): Promise<unknown>;

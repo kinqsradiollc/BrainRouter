@@ -256,10 +256,23 @@ test('loop refine: stops early when the output contains the stop string', async 
   assert.equal(out.text, 'looks DONE now');
 });
 
-test('approval: auto-passes with no approver; injected reject halts the branch', async () => {
-  const auto = await runSingleNode({ id: 'ap', type: 'approval', data: {} }, ctx0(), echoAgent);
-  assert.equal(auto.branch, 'approved');
-  assert.equal((auto.output as { auto: boolean }).auto, true);
+test('approval: refuses to self-approve with no approver; injected reject halts the branch', async () => {
+  // ADR-040 A40-3 changed this contract, and this test used to encode the bug:
+  // it asserted that an approval node with no approver "auto-passes". A node
+  // whose only job is to stop and ask a human must not pass when no human is
+  // reachable, so the unwired case is now an error and the deliberate
+  // no-human case is an explicit `allowUnattendedApproval` opt-in.
+  const unwired = await runSingleNode({ id: 'ap', type: 'approval', data: {} }, ctx0(), echoAgent);
+  assert.equal(unwired.status, 'error');
+  assert.match(unwired.error ?? '', /refusing to self-approve/i);
+
+  const optedIn = await runSingleNode(
+    { id: 'ap', type: 'approval', data: {} },
+    ctx0(),
+    { ...echoAgent, allowUnattendedApproval: true },
+  );
+  assert.equal(optedIn.branch, 'approved');
+  assert.equal((optedIn.output as { unattended: boolean }).unattended, true);
 
   const g = graph(
     [

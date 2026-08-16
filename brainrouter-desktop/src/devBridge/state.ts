@@ -5,6 +5,7 @@
 // visible everywhere; collections + helpers are shared by reference. Behavior-identical.
 import type { AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 import type { ConnectorCatalogEntry, ConnectorRecord } from '@kinqs/brainrouter-types';
+import { createPlannerFixture } from '@kinqs/brainrouter-ui/planner';
 import { createDevOnboardingState } from './onboarding.js';
 
 export function createDevState() {
@@ -315,6 +316,18 @@ export function createDevState() {
     ],
   };
   let devTrackN = 8;
+  // ADR-029 — the id counter the Notes mock mints blocks and references from.
+  //
+  // It starts PAST the last fixture id (`blk_4`). At 4 the first block anyone
+  // created was minted as `blk_4` again, and the harness then wrote every
+  // keystroke into the fixture page of that name as well — which reads as the
+  // editor typing into two blocks at once.
+  let devNotesN = 5;
+  // ADR-038 — the exact twenty-item density fixture both hosts use in visual
+  // acceptance. It stays mutable so capture, completion, scheduling and retry
+  // can be exercised in the plain-browser preview.
+  const devPlanner = createPlannerFixture('2026-08-11');
+  let devPlannerN = 21;
   const devSprints: Record<string, unknown>[] = [
     { id: 'sp_1', workspaceRoot: wsCurrent, name: 'Sprint 1 — Track foundation', goal: 'Ship the board', state: 'active', capacity: 20, createdAt: '2026-06-18T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
     { id: 'sp_2', workspaceRoot: wsCurrent, name: 'Sprint 2 — Views', state: 'future', createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
@@ -587,6 +600,8 @@ export function createDevState() {
     get annotSeq() { return annotSeq; }, set annotSeq(v) { annotSeq = v; },
     get artSeq() { return artSeq; }, set artSeq(v) { artSeq = v; },
     get devTrackN() { return devTrackN; }, set devTrackN(v) { devTrackN = v; },
+    get devNotesN() { return devNotesN; }, set devNotesN(v) { devNotesN = v; },
+    get devPlannerN() { return devPlannerN; }, set devPlannerN(v) { devPlannerN = v; },
     get devSprintN() { return devSprintN; }, set devSprintN(v) { devSprintN = v; },
     get devModuleN() { return devModuleN; }, set devModuleN(v) { devModuleN = v; },
     get devViewN() { return devViewN; }, set devViewN(v) { devViewN = v; },
@@ -617,6 +632,7 @@ export function createDevState() {
     devAnnotMarkdown,
     devArtifacts,
     devPlanState,
+    devPlanner,
     trackCat,
     mkItem,
     devTrack,

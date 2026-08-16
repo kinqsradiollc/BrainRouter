@@ -43,6 +43,8 @@ test('pentest lens gates only verified high-severity findings and has an isolate
   assert.equal(PENTEST_LENS.isBlocking(f({ severity: 'medium' })), false);
   assert.match(buildPentestContract(), /CVSS 3\.1/);
   assert.match(buildPentestContract(), /authorized target/i);
+  assert.match(buildPentestContract(), /numeric confidence from 0 through 100/);
+  assert.match(buildPentestContract(), /fenced ```json findings array/);
 });
 
 test('code-review contract is self-contained, quality-focused, and defers security', () => {

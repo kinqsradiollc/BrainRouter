@@ -1,66 +1,63 @@
 /**
- * Bundled starter skills: the CLI (and core) ship synced copies of the
- * monorepo's starter skill set so a CLI-only or desktop install still has the
- * onboarding/workflow skills (`skills/` is only edited at the monorepo root;
- * scripts/sync-bundled-skills.mjs copies them). These tests fail on DRIFT —
- * fix by re-running the sync script, never by hand-editing a copy.
+ * ADR-031 D2/D2b — the CLI ships the whole skill library, generated.
+ *
+ * `brainrouter-cli/skills/` used to be thirteen hand-committed copies kept in
+ * agreement by a sync script and this test. It is now generated from the monorepo
+ * root `skills/` at build time and gitignored, so an edit to a copy cannot be
+ * committed at all. What still has to be proved here is that the copy runs, that
+ * it carries the library verbatim, and that discovery still finds it — a CLI-only
+ * or desktop install has no other bundled skills.
+ *
+ * The mechanism itself (breaking a copy, the third-party notice) is exercised in
+ * packages/core/src/tests/skills-bundling.test.ts; each package checks its own
+ * shipped copy so a package's suite fails on that package's drift.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { skillSearchRoots } from '../prompt/skillCatalog.js';
 
 // dist/tests/ → package root is two levels up; monorepo root one above that.
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const repoRoot = path.resolve(cliRoot, '..');
+const library = path.join(repoRoot, 'skills');
+const bundlerPath = path.join(repoRoot, 'scripts', 'bundle-content.mjs');
+const inMonorepo = fs.existsSync(bundlerPath) && fs.existsSync(library);
 
-const STARTER_SKILLS = [
-  'agent/bootstrap-skill',
-  'agent/planning-skill',
-  'agent/spec-driven-skill',
-  'agent/adr-skill',
-  'agent/debugging-and-error-recovery',
-  'agent/handover-skill',
-  'api/testing-skill',
-  'codebase/conventions-skill',
-  'codebase/code-review-and-quality',
-  'lifecycle/incremental-skill',
-  'lifecycle/shipping-skill',
-  'lifecycle/changelog-generator',
-  'qa/verify-loop',
-];
+interface Bundler {
+  listContentFiles(root: string): string[];
+  checkBundledSkills(packageDir: string, options?: { libraryRoot?: string }): string[];
+}
 
-test('every starter skill ships inside the CLI package', () => {
-  for (const skill of STARTER_SKILLS) {
-    const copy = path.join(cliRoot, 'skills', skill, 'SKILL.md');
-    assert.ok(fs.existsSync(copy), `missing bundled copy: skills/${skill}/SKILL.md — run scripts/sync-bundled-skills.mjs`);
+const bundler = (inMonorepo
+  ? ((await import(pathToFileURL(bundlerPath).href)) as unknown as Bundler)
+  : (undefined as unknown as Bundler));
+
+test('the CLI ships the whole library, byte for byte', (t) => {
+  if (!inMonorepo) return t.skip('published install — no monorepo source to compare');
+  const problems = bundler.checkBundledSkills(cliRoot);
+  assert.deepEqual(problems, [], problems.join('\n'));
+});
+
+test('the starter workflow skills /init depends on are among them', (t) => {
+  if (!inMonorepo) return t.skip('published install — no monorepo source to compare');
+  const shipped = new Set(
+    bundler
+      .listContentFiles(path.join(cliRoot, 'skills'))
+      .filter((rel) => path.posix.basename(rel) === 'SKILL.md')
+      .map((rel) => rel.split('/').at(-2)),
+  );
+  for (const skill of ['bootstrap-skill', 'planning-skill', 'spec-driven-skill', 'verify-loop']) {
+    assert.ok(shipped.has(skill), `${skill} must ship with the CLI — /init and onboarding call it`);
   }
 });
 
-test('bundled copies match the monorepo source (no drift)', (t) => {
-  const sourceRoot = path.join(repoRoot, 'skills');
-  if (!fs.existsSync(sourceRoot)) return t.skip('published install — no monorepo source to compare');
-  for (const skill of STARTER_SKILLS) {
-    const source = fs.readFileSync(path.join(sourceRoot, skill, 'SKILL.md'), 'utf8');
-    for (const pkgSkills of [path.join(cliRoot, 'skills'), path.join(repoRoot, 'packages', 'core', 'skills')]) {
-      const copyPath = path.join(pkgSkills, skill, 'SKILL.md');
-      assert.equal(
-        fs.readFileSync(copyPath, 'utf8'),
-        source,
-        `${path.relative(repoRoot, copyPath)} drifted from skills/${skill}/SKILL.md — run scripts/sync-bundled-skills.mjs`,
-      );
-    }
-  }
-});
-
-test('the packages declare skills/ in their published files', () => {
-  for (const pkgJson of [path.join(cliRoot, 'package.json'), path.join(repoRoot, 'packages', 'core', 'package.json')]) {
-    if (!fs.existsSync(pkgJson)) continue;
-    const files: string[] = JSON.parse(fs.readFileSync(pkgJson, 'utf8')).files ?? [];
-    assert.ok(files.includes('skills'), `${pkgJson} must ship skills/ in files`);
-  }
+test('the package declares its generated content in published files', () => {
+  const files: string[] = JSON.parse(fs.readFileSync(path.join(cliRoot, 'package.json'), 'utf8')).files ?? [];
+  assert.ok(files.includes('skills'), 'brainrouter-cli must ship skills/ in files');
+  assert.ok(files.includes('THIRD-PARTY-NOTICES.md'), 'brainrouter-cli must ship its third-party notice');
 });
 
 test('skill discovery includes the CLI package own skills root (bundled tier)', () => {

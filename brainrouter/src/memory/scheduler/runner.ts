@@ -71,6 +71,7 @@ type RetentionCapableStore = {
   runRetentionPass?(options?: { retentionDays?: number; batchSize?: number }): Promise<{
     usageEventsFolded: number;
     jobsCompacted: number;
+    plannerItemsCompacted: number;
   }>;
 };
 
@@ -242,10 +243,11 @@ export class MemoryJobRunner {
   }
 
   /**
-   * Fold expired usage events and compact old job-progress timelines, at most
-   * once per `retentionIntervalMs`. Best-effort and fully isolated: retention
-   * must never be able to stall or break the drain it rides along with, and a
-   * store that predates this capability simply has nothing to call.
+   * Fold expired usage events, compact old job-progress timelines, and minimise
+   * completed planner items past the window (ADR-028 D8) — at most once per
+   * `retentionIntervalMs`. Best-effort and fully isolated: retention must never
+   * be able to stall or break the drain it rides along with, and a store that
+   * predates this capability simply has nothing to call.
    */
   private async maybeRunRetention(): Promise<void> {
     if (this.retentionIntervalMs <= 0) return;
@@ -260,10 +262,11 @@ export class MemoryJobRunner {
       const result = await capable.runRetentionPass(
         this.retentionDays === undefined ? undefined : { retentionDays: this.retentionDays },
       );
-      if (result.usageEventsFolded > 0 || result.jobsCompacted > 0) {
+      if (result.usageEventsFolded > 0 || result.jobsCompacted > 0 || result.plannerItemsCompacted > 0) {
         console.error(
           `[BrainRouter] retention: folded ${result.usageEventsFolded} usage event(s), ` +
-          `compacted ${result.jobsCompacted} job timeline(s)`,
+          `compacted ${result.jobsCompacted} job timeline(s), ` +
+          `${result.plannerItemsCompacted} completed planner item(s)`,
         );
       }
     } catch (err: any) {

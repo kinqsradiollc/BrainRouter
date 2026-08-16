@@ -5,7 +5,6 @@
  * workspace/package skills, applies their subtractive tool policy to Agent
  * state, and formats the small model-facing stage guidance used by runTurn.
  */
-import { randomUUID } from 'node:crypto';
 import type { Agent } from '../agent.js';
 import {
   ProfileStageController,
@@ -21,20 +20,22 @@ export function createProfileStageControllerForTurn(input: {
   agent: Agent;
   resolution: ActiveTurnOrchestrationResolution;
   turnSessionKey: string;
+  turnExecutionId: string;
   onStateChange?: (event: ProfileStageStateEvent) => void;
 }): ProfileStageController | undefined {
   const { agent, resolution } = input;
   if (
     agent.agentDepth !== 0
     || agent.activeSkill
-    || resolution.plan.orchestrationProfileId === null
+    || resolution.plan.workspaceProfileId === null
+    || resolution.plan.planProfileId === null
     || resolution.plan.strategyId === null
     || resolution.plan.stages.length === 0
   ) {
     return undefined;
   }
   return new ProfileStageController(
-    { turnId: randomUUID(), sessionKey: input.turnSessionKey },
+    { turnId: input.turnExecutionId, sessionKey: input.turnSessionKey },
     resolution.plan,
     {
       loadSkill: async (skillId) => await resolveStageSkillActivation({
@@ -60,11 +61,21 @@ export function describeProfileStageTool(
   baseDescription: string,
   plan: ResolvedWorkspaceOrchestrationPlan,
 ): string {
-  const stageSummary = plan.stages.map((stage) => (
-    `${stage.id} (${stage.executor.kind}${stage.executor.kind === 'role' ? `:${stage.executor.roleId}` : ''}; ` +
-    `after: ${stage.after.join(', ') || 'none'}; skills: ${stage.skillIds.join(', ') || 'none'}; ` +
-    `${stage.optional ? 'optional' : 'required'}) — ${stage.objective}`
-  )).join('\n');
+  // `fanOut` is rendered because buildRequiredDelegatedStageCorrection tells the
+  // model to use multiple children "only when the stage description permits
+  // fan-out" — a permission it could not act on while the description omitted the
+  // per-stage min/max. A stage that allows >1 child says so here, in children.
+  const stageSummary = plan.stages.map((stage) => {
+    const fanOut = stage.fanOut && stage.fanOut.max > 1
+      ? `; fan-out: ${stage.fanOut.min}-${stage.fanOut.max} children on DISTINCT angles`
+      : '; fan-out: 1 child';
+    return (
+      `${stage.id} (${stage.executor.kind}${stage.executor.kind === 'role' ? `:${stage.executor.roleId}` : ''}; ` +
+      `after: ${stage.after.join(', ') || 'none'}; skills: ${stage.skillIds.join(', ') || 'none'}` +
+      `${stage.executor.kind === 'role' ? fanOut : ''}; ` +
+      `${stage.optional ? 'optional' : 'required'}) — ${stage.objective}`
+    );
+  }).join('\n');
   return `${baseDescription}\n\nActive strategy: ${plan.strategyId}\nOrdered compiled stages:\n${stageSummary}`;
 }
 

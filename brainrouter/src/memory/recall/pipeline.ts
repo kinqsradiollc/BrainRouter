@@ -1,5 +1,6 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation } from "@kinqs/brainrouter-types";
+import { projectTagFromName } from "@kinqs/brainrouter-types";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { RerankerService } from "../store/reranker.js";
 import { rerankerMaxDocChars } from "../store/reranker.js";
@@ -151,6 +152,24 @@ export class MemoryRecallPipeline {
       for (const r of filePathResultsRaw) candidateIds.add(r.record_id);
       if (candidateIds.size > 0) {
         projectTagLookup = await this.store.getProjectTagsByRecordIds(userId, [...candidateIds]);
+      }
+    }
+
+    // ADR-017 D4 — per-project restricted ACL. Compute once the set of
+    // project_tags of restricted Projects the caller may NOT access, and hand
+    // it to applyFilters so their records are dropped. The store method is
+    // optional on the shared IMemoryStore type — reach it via a narrow cast,
+    // like the org-shared search above.
+    if (filters?.orgId && filters.callerUserId && !filters.deniedProjectTags) {
+      const aclStore = this.store as unknown as {
+        listInaccessibleRestrictedProjectNames?(orgId: string, userId: string): Promise<string[]>;
+      };
+      if (typeof aclStore.listInaccessibleRestrictedProjectNames === "function") {
+        const deniedNames = await aclStore.listInaccessibleRestrictedProjectNames(filters.orgId, filters.callerUserId);
+        const deniedTags = new Set(
+          deniedNames.map((n) => projectTagFromName(n)).filter((t): t is string => typeof t === "string"),
+        );
+        if (deniedTags.size > 0) filters.deniedProjectTags = deniedTags;
       }
     }
 

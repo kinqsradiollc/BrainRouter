@@ -19,6 +19,7 @@
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }
+.app-main-stack { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .workrow { position: relative; flex: 1; min-height: 0; display: flex; overflow-x: hidden; }
 /* DESK-5k — the chat column is a size container: at extreme zoom / tight
@@ -108,6 +109,17 @@
 .topbar-div { flex: none; width: 1px; height: 18px; margin: 0 3px; background: var(--ov-10); border-radius: 1px; }
 .main:has(.views-rail) .topbar-right { padding: 2px; border: 1px solid var(--ov-06); border-radius: 13px; background: color-mix(in srgb, var(--sidebar) 88%, transparent); box-shadow: 0 8px 24px rgba(0,0,0,0.20); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .topbar-right button { -webkit-app-region: no-drag; } /* belt & braces for Electron drag regions */
+/* How much of a mode's own header row the floating cluster above is sitting on.
+   It is absolutely positioned at z-66, so a header whose right-aligned content
+   runs to the window edge puts that content UNDERNEATH these buttons — which is
+   what the planner's status line did, and what the notes header inherited by
+   copying its shape.
+
+   Sized for the WIDEST form of the cluster (four controls in Code mode, left
+   edge ~1142 in a 1280 window), not the two it happens to show today: the count
+   is per-mode, so a clearance that fits the current mode is a collision waiting
+   for the next control someone adds. */
+:root { --topbar-right-clearance: 140px; }
 .app-switcher { height: 30px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
 .app-switcher:hover { background: var(--ov-06); color: var(--text); transform: translateY(-1px); }
 .app-switcher.active { background: #21262d; border-color: var(--ov-20); }
@@ -1667,6 +1679,39 @@ select.toolbar-input { cursor: pointer; }
 /* ARTIFACT-RECORDS — Artifacts panel (reuses req-row / annot-* chrome). */
 .art-panel { padding: 4px 2px; }
 .art-format { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+
+/* ADR-028 B2 — session scope + provenance. The scope chips widen the panel
+   beyond the current session; the row chip says which session produced an
+   artifact, which is required as soon as more than one is in view. */
+.art-scope { align-items: center; gap: 6px; flex-wrap: wrap; }
+.art-scope-label { font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
+.art-scope-chip { border: 1px solid var(--border); background: transparent; color: var(--text-faint);
+  border-radius: 999px; padding: 2px 9px; font-size: 11px; cursor: pointer; max-width: 160px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-scope-chip:hover { color: var(--text); border-color: var(--border-strong, var(--border)); }
+.art-scope-chip.on { color: var(--text); border-color: var(--accent, var(--border)); background: var(--surface-2, transparent); }
+.art-provenance { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono);
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ADR-028 A8 — stack panel. Rows read bottom-up; the blocker is the sentence
+   that makes a row useful, so it gets room rather than a tooltip. */
+.stack-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.stack-summary { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
+.stack-notice { font-size: 12px; line-height: 1.5; color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+/* The blocker gets its OWN line. Without wrapping it competes with the title
+   and squeezes it out entirely, which loses the one thing the row is for. */
+.stack-row { align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.stack-row .req-title { flex: 1 1 auto; min-width: 0; }
+.stack-pos { flex: none; width: 16px; font-size: 10px; color: var(--text-faint); font-family: var(--mono); text-align: right; }
+.stack-blocker { flex: 1 1 100%; font-size: 11px; color: var(--text-faint); line-height: 1.45; padding-left: 24px; }
+.stack-row.st-merged .req-title { opacity: .55; }
+.stack-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 2px; }
+.stack-confirm { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 4px 2px 12px; }
+.stack-confirm-title { font-size: 13px; margin-bottom: 8px; }
+.stack-confirm-list { margin: 0 0 8px; padding-left: 18px; font-size: 12px; line-height: 1.6; font-family: var(--mono); color: var(--text-faint); }
+.stack-confirm-note { font-size: 11px; color: var(--text-faint); line-height: 1.5; }
 /* Artifact lifecycle status pills. */
 .req-status.st-draft { background: rgba(56, 139, 253, 0.08); border-color: rgba(56, 139, 253, 0.35); color: #58a6ff; }
 .req-status.st-final { color: #6cc04a; }
@@ -2888,6 +2933,11 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 /* keyboard-selected card — !important to beat the launchpad's themed border/shadow. */
 .side-chooser .side-launcher.sel { border-color: var(--accent) !important; box-shadow: 0 0 0 1.5px var(--accent-soft), 0 4px 12px rgba(0,0,0,0.22) !important; }
 .side-chooser-actions { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+/* ADR-028 G2 — the escape hatch from the clean start. Quieter than a launcher:
+   it is an undo for a decision the app made, not a view you were looking for. */
+.side-restore-last { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 8px; padding: 8px 11px; border: 1px dashed var(--border-strong); border-radius: 9px; background: transparent; color: var(--text-dim); font: 520 12.5px var(--font); cursor: pointer; text-align: left; }
+.side-restore-last:hover { background: var(--ov-06); color: var(--text); }
+.side-restore-last .launcher-meta { margin-left: auto; color: var(--text-faint); font: 550 10.5px var(--mono); }
 .side-chooser .side-launcher { flex: none; }
 /* DESK-5e — the launcher list is the panel's CONTENT: top-aligned, no void */
 .side-launchers { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
@@ -5430,11 +5480,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .views-rail .side-chooser { display: flex !important; flex-direction: column !important; grid-template-columns: none !important; align-content: stretch !important; gap: 10px !important; padding: 46px 10px 14px !important; }
 .side-chooser-options { display: flex; flex-direction: column; gap: 10px; }
 .side-launcher-group { --launcher-tone: var(--text-dim); display: flex; flex-direction: column; gap: 3px; padding: 7px; background: color-mix(in srgb, var(--raised) 42%, transparent); border: 1px solid var(--border); border-radius: 10px; }
+/* ADR-028 G3 — the chooser's group ids come from `panelCatalog.PANEL_GROUPS`
+   now, not from a taxonomy this rail kept to itself. */
+.side-launcher-group[data-group="code"],
 .side-launcher-group[data-group="work"],
-.side-launcher-group[data-group="plan"],
 .side-launcher-group[data-group="knowledge"],
-.side-launcher-group[data-group="quality"] { --launcher-tone: var(--text-dim); }
-.side-launcher-group[data-group="advanced"] { --launcher-tone: var(--text-dim); }
+.side-launcher-group[data-group="understand"] { --launcher-tone: var(--text-dim); }
+.side-launcher-group[data-group="environment"] { --launcher-tone: var(--text-dim); }
 .side-launcher-group-title { padding: 2px 5px 5px; color: var(--launcher-tone); font-size: 9px; font-weight: 680; letter-spacing: .09em; text-transform: uppercase; }
 .views-rail .side-launcher-group .side-launcher { display: grid !important; grid-template-columns: 20px minmax(0, 1fr) auto !important; flex-direction: row !important; align-items: center !important; justify-content: stretch !important; gap: 9px !important; min-height: 36px !important; padding: 0 9px !important; color: var(--text-dim) !important; background: transparent !important; border: 1px solid transparent !important; border-radius: 7px !important; box-shadow: none !important; text-align: left !important; font-size: 12px !important; font-weight: 520 !important; transform: none !important; }
 .views-rail .side-launcher-group .side-launcher > .ic,
@@ -5800,3 +5852,132 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .home::before, .home::after, .home-kicker-row, .home-greet, .home-mode-grid, .home-context-strip, .home-lower-grid, .settings-content > .set-body, .track-more-menu { animation: none !important; }
   .home-mode-grid > button:hover, .home-context-strip button:hover, .home-view-links button:hover { transform: none; }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* ADR-028 F7 — the comprehension review panel. Reads as a review, not a test:
+   no score, no marks, and the disagree affordance is as prominent as the
+   explanation it disagrees with. */
+.comp-panel { padding: 12px 14px 24px; }
+.comp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 14px; }
+.comp-subject { font-size: 12px; color: var(--text-faint); }
+
+.comp-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.comp-card.answered { opacity: .92; }
+.comp-q-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.comp-q-num { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+.comp-q-focus { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+.comp-q-prompt { font-size: 13px; line-height: 1.55; margin-bottom: 10px; }
+
+.comp-options { display: flex; flex-direction: column; gap: 6px; }
+.comp-option { text-align: left; border: 1px solid var(--border); background: transparent;
+  color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 12px; cursor: pointer; line-height: 1.5; }
+.comp-option:hover { border-color: var(--text-faint); }
+
+.comp-free { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.comp-free textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); padding: 8px 10px; font-size: 12px;
+  line-height: 1.55; font-family: inherit; resize: vertical; }
+
+/* Free and unpenalised — it identifies the gap more precisely than a guess. */
+.comp-skip { margin-top: 8px; border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 0; }
+.comp-skip:hover { color: var(--text); }
+
+.comp-result { display: flex; flex-direction: column; gap: 8px; }
+.comp-your-answer { font-size: 12px; color: var(--text-faint); }
+.comp-pending { font-size: 11px; color: var(--text-faint); }
+.comp-explanation { font-size: 12px; line-height: 1.6; }
+.comp-differs { border-top: 1px solid var(--border); padding-top: 8px; }
+.comp-mine { font-size: 12px; line-height: 1.6; margin-bottom: 8px; }
+/* As prominent as the explanation: the agent can be the one who is wrong. */
+.comp-dispute { border: 1px solid var(--border); background: transparent; color: var(--text);
+  border-radius: 6px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
+.comp-dispute:hover { border-color: var(--text-faint); }
+.comp-ref { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+
+.comp-outcome { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12px; line-height: 1.6; }
+
+
+/* ADR-028 G5 — the consolidated Pull request panel. The chain, the checks and
+   the review findings are sections of one answer rather than three tabs. */
+.pr-panel { display: flex; flex-direction: column; }
+.pr-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+.pr-section-head { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); padding: 0 14px 8px; }
+
+
+/* ADR-028 I1 — the tooling notice. A line, not a modal: a missing tool
+   disables one feature, it does not gate the app. */
+.tool-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.tool-notice.blocked { border-bottom-color: var(--danger, #e5534b); }
+.tool-notice-msg { flex: 1; min-width: 200px; color: var(--text-faint); line-height: 1.5; }
+/* Shown before it runs — a hidden command is asking for trust it has not earned. */
+.tool-notice-cmd { flex-basis: 100%; font-family: var(--mono); font-size: 11px;
+  color: var(--text); background: var(--surface-2, rgba(255,255,255,.05));
+  border-radius: 5px; padding: 6px 9px; user-select: all; }
+.tool-notice-actions { display: flex; align-items: center; gap: 8px; }
+.tool-notice-skip { border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 0; }
+.tool-notice-skip:hover { color: var(--text); }
+
+
+/* ADR-028 G3 — the plan, made scannable.
+
+   The screenshot showed the problem: nine phase rows, then EVERY step from
+   every phase in one flat list below them. Ninety-odd rows of equal weight, so
+   finding the one in progress meant reading all of them.
+
+   These target the classes PlanPanel actually emits — `.plan-phase` carries the
+   phase STATUS as its second class (`completed`, `in_progress`, `pending`), so
+   the states are styled from data rather than from names I invented. My first
+   pass used `.done`/`.active` and would have styled nothing at all. */
+
+.plan-phase { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 5px;
+  padding: 8px 12px; }
+.plan-phase-title { display: flex; align-items: baseline; gap: 10px; }
+.plan-phase-title > span:first-child { font-size: 10px; font-family: var(--mono);
+  color: var(--text-faint); flex: none; }
+.plan-phase-title > strong { flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-phase-title > span:last-child { font-size: 10px; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--text-faint); flex: none; }
+
+/* Finished work steps BACK rather than shouting a colour. A completed list in
+   green competes with the one row you actually need. */
+.plan-phase.completed { opacity: .5; }
+.plan-phase.skipped { opacity: .38; }
+
+/* The in-progress phase is the anchor — findable without reading. */
+.plan-phase.in_progress { border-color: var(--accent, var(--text-faint));
+  border-left-width: 2px; }
+.plan-phase.in_progress .plan-phase-title > strong { font-weight: 650; }
+.plan-phase-progress { margin-top: 4px; font-size: 11px; font-family: var(--mono);
+  color: var(--text-faint); }
+.plan-phase-blocked { margin-top: 4px; font-size: 11px; line-height: 1.5;
+  color: var(--danger, var(--text-faint)); }
+
+/* The step list below the phases: the acceptance line is evidence, not part of
+   the instruction, so it reads as a separate quieter line. */
+.plan-acceptance { display: block; margin-top: 2px; font-size: 11px; line-height: 1.45;
+  color: var(--text-faint); }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "@kinqs/brainrouter-ui/planner.css";
 import "katex/dist/katex.min.css";
 import { AuthGuard } from "../components/AuthGuard";
 import { AuthProvider } from "../components/AuthProvider";
@@ -9,11 +10,11 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 
 export const metadata: Metadata = {
-  title: "BrainRouter | Agent operations workspace",
-  description: "Plan, build, connect, remember, and verify agent work across one desktop, CLI, dashboard, and MCP operating layer.",
+  title: "BrainRouter | One workspace your team works in",
+  description: "Plan the day, run the meeting, write the doc, ship the change — and keep the thread. Planner, meetings, notes, the team board, agents, review, and the knowledge that connects them, in one workspace.",
   openGraph: {
     title: "BrainRouter",
-    description: "The operating workspace for agentic work.",
+    description: "One workspace your agents actually work in — plan, meet, write, build, verify, and keep the thread.",
     type: "website",
   },
   twitter: {

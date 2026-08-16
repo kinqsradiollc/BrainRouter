@@ -10,7 +10,7 @@ import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
-import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
+import { parseHookDecision } from '../../hooks/hooksStore.js';
 import {
   buildFanOutHint,
   shouldSuggestFanOut,
@@ -36,6 +36,14 @@ import {
   requiredSkillPreflightPrompt,
   type RequiredSkillPreflightResult,
 } from './requiredSkillPreflight.js';
+import { applyLearnedContext } from './learningPhase.js';
+import {
+  buildPlannerContext,
+  sourceFreshnessFromItems,
+  PLANNER_CONTEXT_TAG,
+} from '../../planner/agentContext.js';
+import { todayView } from '../../planner/plannerService.js';
+import { listBlocks } from '../../planner/plannerStore.js';
 import { callOpenAI } from '../transport/llmTransport.js';
 
 export interface PrepareTurnContextInput {
@@ -46,6 +54,10 @@ export interface PrepareTurnContextInput {
   requiredSkillPreflight: RequiredSkillPreflightResult;
   carriedPendingChildIds: string[];
   images?: Array<{ mediaType: string; dataBase64: string }>;
+  /** Exact reviewed turns suppress unrelated lifecycle automation. */
+  reviewedExecution?: boolean;
+  /** Recheck the pending root bearer or inherited descendant lease after awaits. */
+  assertReviewedExecutionCurrent?(): void;
 }
 
 export interface PreparedTurnContext {
@@ -83,6 +95,7 @@ export async function prepareTurnContextPhase(
       try {
         const beforeLen = agent.chatHistory.length;
         const compacted = await agent.compactHistory();
+        input.assertReviewedExecutionCurrent?.();
         if (compacted && input.callbacks.onCompactionEvent) {
           input.callbacks.onCompactionEvent({
             droppedMessages: Math.max(
@@ -101,16 +114,23 @@ export async function prepareTurnContextPhase(
   }
 
   await agent.injectRecallContext(prompt, input.mcpTools as any[], input.callbacks);
+  input.assertReviewedExecutionCurrent?.();
 
   if (agent.hookAdvisoryActive()) {
-    runHooks(agent.workspaceRoot, 'pre-turn', { payload: { prompt } });
-    void agent.runExtensionHooks('pre-turn');
+    agent.runExecutionHooks('pre-turn', { payload: { prompt } });
+    input.assertReviewedExecutionCurrent?.();
+    // Advisory extension hooks are open-ended async code without a revocation
+    // signal. A reviewed launch keeps the synchronous, fingerprinted workspace
+    // hook contract, but does not start extension work that could outlive the
+    // reviewed authority or the turn itself.
+    if (!input.reviewedExecution) void agent.runExtensionHooks('pre-turn');
   }
   if (agent.hookEnforceActive()) {
     const extensionDenial = await agent.runExtensionHooks(
       'user-prompt-submit',
       { args: { prompt } },
     );
+    input.assertReviewedExecutionCurrent?.();
     if (extensionDenial) {
       return {
         prompt,
@@ -120,7 +140,7 @@ export async function prepareTurnContextPhase(
       };
     }
 
-    const results = runHooks(agent.workspaceRoot, 'user-prompt-submit', {
+    const results = agent.runExecutionHooks('user-prompt-submit', {
       payload: { prompt },
     });
     const injectedContext: string[] = [];
@@ -145,6 +165,14 @@ export async function prepareTurnContextPhase(
         typeof decision?.additionalContext === 'string' &&
         decision.additionalContext.trim()
       ) {
+        if (input.reviewedExecution) {
+          return {
+            prompt,
+            fanOutHinted: false,
+            blockedAnswer:
+              'Reviewed execution canceled because a user-prompt hook attempted to change its bounded launch context.',
+          };
+        }
         injectedContext.push(decision.additionalContext.trim());
       }
     }
@@ -155,18 +183,25 @@ export async function prepareTurnContextPhase(
 
   agent.lastUserPrompt = prompt;
   agent.lastTurnHitLoopLimit = false;
-  try {
-    agent.autoCaptureRequirement(prompt, input.callbacks);
-  } catch {
-    // Requirement capture is best-effort and cannot fail the user turn.
+  if (!agent.reviewSourceSafety && !input.reviewedExecution) {
+    try {
+      agent.autoCaptureRequirement(prompt, input.callbacks);
+    } catch {
+      // Requirement capture is best-effort and cannot fail the user turn.
+    }
   }
 
-  const fanOutHinted = await preparePlanningHint(
-    agent,
-    prompt,
-    input.callbacks,
-  );
+  const fanOutHinted = input.reviewedExecution
+    ? false
+    : await preparePlanningHint(agent, prompt, input.callbacks);
+  input.assertReviewedExecutionCurrent?.();
   applyGoalAnchor(agent);
+  // ADR-032 D1 — the learned block, attached like every other anchor and
+  // never merged into the base prompt.
+  applyLearnedContext(agent);
+  // ADR-028 D6 — and the planner block, for the same reason: an agent holding
+  // planner TOOLS but no planner CONTEXT has to ask for what it could be told.
+  applyPlannerContext(agent);
   applyRequiredSkillAnchor(agent, input.requiredSkillActivation);
   applyRequiredSkillWorkflows(agent, input.requiredSkillPreflight);
   appendUserMessage(agent, prompt, input.images);
@@ -177,6 +212,50 @@ export async function prepareTurnContextPhase(
   appendCompletionFeedback(agent);
 
   return { prompt, fanOutHinted };
+}
+
+/**
+ * ADR-028 D6 — put today in front of the model, bounded and summarised.
+ *
+ * The planner is user-scoped, so no workspace is threaded — the same `undefined`
+ * the `planner_*` tool handlers pass, so the block and the tools cannot disagree
+ * about whose planner this is.
+ *
+ * Removed rather than left behind when there is nothing to say: a section that
+ * always appears trains the model to skip it, and a yesterday-shaped block after
+ * everything was completed would be a surface claiming a state that has ended.
+ *
+ * Sub-agents (`silent`) are excluded like the learned block: a bounded,
+ * single-purpose turn spends its context better on the task it was given than on
+ * its operator's day.
+ */
+function applyPlannerContext(agent: Agent): void {
+  if (agent.silent) return;
+  let block: string | null = null;
+  try {
+    const nowMs = Date.now();
+    const view = todayView(undefined, {
+      date: new Date(nowMs).toISOString().slice(0, 10),
+      nowMs,
+    });
+    block = buildPlannerContext({
+      todayItems: view.items,
+      // Every open block, not just today's: `buildPlannerContext` picks the next
+      // one itself, and the carried-over count is about the whole backlog.
+      blocks: listBlocks(undefined),
+      freshness: sourceFreshnessFromItems(view.items),
+      nowMs,
+    });
+  } catch {
+    // A missing, unreadable or corrupt planner cache must never be what fails a
+    // turn. No planner is the common case on a fresh install.
+    block = null;
+  }
+  if (!block) {
+    agent.removeTaggedSystemMessage(PLANNER_CONTEXT_TAG);
+    return;
+  }
+  agent.replaceTaggedSystemMessage(PLANNER_CONTEXT_TAG, block);
 }
 
 function applyRequiredSkillWorkflows(

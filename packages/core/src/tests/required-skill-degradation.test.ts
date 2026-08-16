@@ -44,6 +44,7 @@ function harness(input: {
       skillAllowsTool: () => true,
       workspaceAllowsLocalTool: () => true,
       workspaceAllowsMcpTool: () => true,
+      hardSurfaceAllowsTool: () => true,
       requiredSkillActivation: input.activation,
       loadedRequiredSkills: new Set<string>(),
       attemptedRequiredSkills: input.attempted ?? new Set<string>(['adr-skill']),

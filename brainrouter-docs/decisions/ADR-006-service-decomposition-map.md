@@ -1,6 +1,6 @@
 # ADR-006 — Service decomposition map: which capabilities earn their own service
 
-**Status:** proposed (0.4.16) · **Supersedes:** none · **Builds on:** [ADR-005](ADR-005-service-capable-runtime.md) (service-capable runtime)
+**Status:** Closed — partially implemented, remainder superseded (verified 2026-08-16: gateway (#1) and jobs (#4) run as real processes; exec (#2) and retrieval (#3) exist as ports only — those splits were **declined** by ADR-011, and any future split now goes through ADR-041 D12's service-profile mechanism rather than this map) · **Supersedes:** none · **Builds on:** [ADR-005](ADR-005-service-capable-runtime.md) (service-capable runtime)
 
 > ADR-005 said *how* we go multi-service (promote existing ports to an optional
 > network transport; embed by default). This ADR answers *what* — a grounded

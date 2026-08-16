@@ -9,6 +9,7 @@
 import type { Backend } from './backend.js';
 import { normalizeResult, errorResult } from './normalize.js';
 import type { Command, Device, Screen, ScreenSummary, UiCommandResult, UiElement, UiMap } from '../types.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 /** A resolved element reference for `findElement` / the agent. */
 export interface ElementRef {
@@ -37,7 +38,7 @@ export class CommandLayer {
     if (route && /^https?:\/\//i.test(route)) return route;
     if (!route) return base || undefined;
     if (!base) return route;
-    return base.replace(/\/+$/, '') + (route.startsWith('/') ? route : `/${route}`);
+    return stripTrailingSlashes(base) + (route.startsWith('/') ? route : `/${route}`);
   }
 
   // ---- query helpers (manifest-only, no backend) ----

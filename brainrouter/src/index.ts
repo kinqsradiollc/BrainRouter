@@ -31,6 +31,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import express, { type Request, type Response } from 'express';
 import fs from "node:fs";
 
@@ -44,6 +45,7 @@ import {
 import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
 import { collectSystemStatus } from './observability/status.js';
 import { modelGateway } from './services/modelGateway/modelGateway.js';
+import { sessionDeliveryHub } from './services/sessionDeliveryHub.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import { resolveOrgContext } from './tenancy/context.js';
@@ -52,10 +54,14 @@ import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { meetingsRouter, publicMeetingsRouter } from './api/routes/meetings.js';
 import { trackRouter } from './api/routes/track.js';
+import { plannerRouter } from './api/routes/planner.js';
+import { notesRouter } from './api/routes/notes.js';
+import { workspaceRouter } from './api/routes/workspace.js';
 import { teamsRouter } from './api/routes/teams.js';
 import { chatThreadsRouter } from './api/routes/chatThreads.js';
 import { publicSharePageRouter } from './api/routes/publicShare.js';
 import { vulnerabilitiesRouter } from './api/routes/vulnerabilities.js';
+import { learnedBehaviorsRouter } from './api/routes/learnedBehaviors.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { connectorManageRouter } from './api/routes/connectors/manage.js';
@@ -84,11 +90,12 @@ import {
 import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
 import { GatewayProviderService } from './services/gateway/providerPool.js';
-import { mountGatewayDataPlane } from './services/gateway/server.js';
+import { bindGatewayDataPlane } from './services/gateway/server.js';
 import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
+import type { SessionMessageStoreNotification } from '@kinqs/brainrouter-types';
 
 // Strict limiter for the credential endpoints — brute-force backstop.
 const authRateLimit = createRateLimiter({
@@ -104,6 +111,30 @@ const GLOBAL_RATE_LIMIT_WINDOW_MS = Number.parseInt(process.env.BRAINROUTER_RATE
 const apiRateLimit = createRateLimiter({
   windowMs: Number.isFinite(GLOBAL_RATE_LIMIT_WINDOW_MS) ? GLOBAL_RATE_LIMIT_WINDOW_MS : 60_000,
   max: Number.isFinite(GLOBAL_RATE_LIMIT_MAX) ? GLOBAL_RATE_LIMIT_MAX : 600,
+});
+
+/**
+ * Password guessing is per-ACCOUNT, so the throttle has to be too.
+ *
+ * `authRateLimit` keys on IP, which stops one host hammering the login form and
+ * does nothing about the attack that matters: many hosts trying a handful of
+ * passwords against ONE account. A botnet with 200 addresses gets 4,000 attempts
+ * per window against a single victim while every individual IP looks polite.
+ *
+ * Keyed on the submitted email so the budget belongs to the account under
+ * attack. Lower-cased and trimmed, because `Bob@x.com ` and `bob@x.com` are the
+ * same account and must not be two budgets. A missing email falls back to the
+ * IP rather than to a shared bucket — one empty-body flood must not exhaust the
+ * budget of every account at once.
+ */
+const signinAccountRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: "Too many sign-in attempts for this account",
+  keyGenerator: (req) => {
+    const email = String((req.body as { email?: unknown } | undefined)?.email ?? "").trim().toLowerCase();
+    return email ? `account:${email}` : `ip:${req.ip ?? "unknown"}`;
+  },
 });
 
 // ─── CLI flags ────────────────────────────────────────────────────────────────
@@ -126,6 +157,45 @@ registry.build();
 // connect) so we never serve against an un-migrated database.
 await memoryEngine.ready;
 
+// Every brain process listens for committed inbox changes so a recipient or
+// sender bound to a different process still gets an immediate wake. The inbox
+// remains authoritative; absence of this optional concrete-store seam only
+// demotes delivery to the clients' polling fallback.
+const notificationStore = memoryEngine.store as typeof memoryEngine.store & {
+  subscribeSessionMessageNotifications?: (
+    listener: (notification: SessionMessageStoreNotification) => void | Promise<void>,
+  ) => { ready: Promise<void>; close(): Promise<void> };
+};
+const sessionMessageFeed = notificationStore.subscribeSessionMessageNotifications?.(
+  async (notification) => {
+    await sessionDeliveryHub.notifyStoreNotification(
+      notification,
+      (binding) => memoryEngine.store.ownsActiveSessionClaim(
+        binding.orgId,
+        binding.userId,
+        binding.sessionKey,
+        binding.connectionId,
+      ),
+    );
+  },
+);
+void sessionMessageFeed?.ready.catch((error) => {
+  console.error('[BrainRouter] session-message notification feed failed to start:',
+    error instanceof Error ? error.message : String(error));
+});
+
+async function releaseMcpConnection(connectionId: string): Promise<void> {
+  sessionDeliveryHub.disconnect(connectionId);
+  try {
+    await memoryEngine.store.releaseActiveSessionClaims(connectionId);
+  } catch (error) {
+    console.error(
+      '[BrainRouter] failed to release active-session claims:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 // Auto-scan skills dirs for memory_hints on startup
 const skillsDirsToScan = [
   path.join(config.globalRoot, 'skills'),
@@ -141,6 +211,7 @@ if (USE_HTTP) {
     server: Server;
     transport: StreamableHTTPServerTransport;
     identity: McpSessionIdentity;
+    connectionId: string;
   }>();
   // Tracks which User-Agents we've already warned about for missing
   // `text/event-stream` in their Accept header — one warning per UA
@@ -148,6 +219,7 @@ if (USE_HTTP) {
   const warnedUserAgents = new Set<string>();
 
   const app = express();
+  const httpServer = createServer(app);
 
   // OBSERVABILITY (Phase 4) — time every request and record HTTP metrics on
   // finish (always on, cheap + in-process). Opt-in structured access log via
@@ -220,6 +292,8 @@ if (USE_HTTP) {
   // BRAINROUTER_INPROCESS_GATEWAY=on to force it, =off to opt a brain out.
   const serveGateway = process.env.BRAINROUTER_INPROCESS_GATEWAY === "on"
     || (SERVICE === "brain" && process.env.BRAINROUTER_INPROCESS_GATEWAY !== "off");
+  let inProcessGatewayService: GatewayProviderService | undefined;
+  let gatewayAudioStreaming: ReturnType<typeof bindGatewayDataPlane> | undefined;
 
   // Health check (fast liveness probe).
   app.get('/health', (_req: Request, res: Response) => {
@@ -253,8 +327,9 @@ if (USE_HTTP) {
     const gatewayDbUrl = process.env.BRAINROUTER_DATABASE_URL ?? process.env.DATABASE_URL;
     if (gatewayDbUrl) {
       const gatewayService = new GatewayProviderService(gatewayDbUrl, JWT_SECRET);
+      inProcessGatewayService = gatewayService;
       app.use('/v1', apiRateLimit);
-      mountGatewayDataPlane(app, gatewayService);
+      gatewayAudioStreaming = bindGatewayDataPlane(app, httpServer, gatewayService);
       // Point internal scoped dispatch (dashboard brain-chat) at THIS in-process
       // gateway (base URL — modelGateway appends /v1/chat/completions) so a
       // single-node deploy needs no separate :3748 process.
@@ -269,8 +344,15 @@ if (USE_HTTP) {
 
   if (serveRest) {
   app.use("/api", apiRateLimit);
-  app.use("/api/auth/signin", authRateLimit);
+  app.use("/api/auth/signin", authRateLimit, signinAccountRateLimit);
   app.use("/api/auth/signup", authRateLimit);
+  // Both of these send mail and write a row for an UNAUTHENTICATED caller, so
+  // the global 600/min was the only thing between a stranger and using our
+  // mail sender as an amplifier against someone else's inbox. The reset side is
+  // included because a token guess is a credential attempt like any other.
+  app.use("/api/auth/forgot-password", authRateLimit);
+  app.use("/api/auth/reset-password", authRateLimit);
+  app.use("/api/auth/resend-verification", authRateLimit);
   app.use("/api/auth", authRouter);
   app.use("/api/users", usersRouter);
   app.use("/api/orgs", orgsRouter);
@@ -298,12 +380,20 @@ if (USE_HTTP) {
   // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).
   app.use("/api/triggers", triggersRouter);
   app.use("/api/memories", memoriesRouter);
+  app.use("/api/learned-behaviors", learnedBehaviorsRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/meetings", meetingsRouter);
   app.use("/api/public/meetings", publicMeetingsRouter);
   app.use("/api/track", trackRouter);
+  // ADR-028 Part D — per-user planner sync (migration 051).
+  app.use("/api/planner", plannerRouter);
+  // ADR-029 Part D — per-user notes sync (migration 052).
+  app.use("/api/notes", notesRouter);
+  // ADR-029 Q5 — resolution is server-side, because the dashboard has no local
+  // store to resolve a reference against.
+  app.use("/api/workspace", workspaceRouter);
   app.use("/api/teams", teamsRouter);
   app.use("/api/chat/threads", chatThreadsRouter);
   // Human-facing public share page — the /m/<token> link minted for a public meeting.
@@ -400,10 +490,11 @@ if (USE_HTTP) {
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
+      const connectionId = randomUUID();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, { server: mcpServer, transport, identity: requestIdentity });
+          sessions.set(id, { server: mcpServer, transport, identity: requestIdentity, connectionId });
         },
       });
 
@@ -412,9 +503,12 @@ if (USE_HTTP) {
         isAdmin: user.isAdmin,
         defaultOrgId,
         defaultRole: orgCtx?.role,
+        connectionId,
+        sessionDeliveryHub,
       });
 
       transport.onclose = () => {
+        void releaseMcpConnection(connectionId);
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];
         if (id) sessions.delete(id);
       };
@@ -447,9 +541,14 @@ if (USE_HTTP) {
     app.get('/mcp', handleMcp);
 
     // DELETE — client-side session teardown
-    app.delete('/mcp', (req: Request, res: Response) => {
+    app.delete('/mcp', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (sessionId) sessions.delete(sessionId);
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      if (session) {
+        sessions.delete(sessionId!);
+        await releaseMcpConnection(session.connectionId);
+        try { await session.transport.close(); } catch { /* already closed */ }
+      }
       res.status(204).send();
     });
   }
@@ -472,14 +571,13 @@ if (USE_HTTP) {
   // to clients in production. Mounted LAST so specific handlers (413) run first.
   app.use(errorHandler({ production: IS_PRODUCTION }));
 
-  const httpServer = app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`\n🧠 BrainRouter MCP Server`);
     console.log(`   Transport : HTTP (Streamable)`);
     console.log(`   Endpoint  : http://localhost:${PORT}/mcp`);
     console.log(`   Health    : http://localhost:${PORT}/health`);
     console.log(`   Root      : ${config.localRoot}\n`);
   });
-
   // Fast, idempotent shutdown on SIGINT *and* SIGTERM (the latter is what
   // `tsx watch` sends on a file change). Without this the open keep-alive
   // connections + background sweeper intervals keep the event loop alive, so
@@ -492,12 +590,33 @@ if (USE_HTTP) {
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
-    // Stop the engine's sweepers/job-runner and close the pg pool so the event
-    // loop drains cleanly (best-effort; the hard deadline above still guarantees
-    // exit if the pool is slow to close).
-    void closeMemoryEngine().catch(() => undefined);
-    try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
-    httpServer.close(() => process.exit(0));
+    // Both halves of shutdown, in the only order that is safe for either.
+    //
+    // ADR-034 must stop DELIVERING before anything is torn down, or a message
+    // routed into a closing session is a receipt that lies. D10 must stop
+    // accepting upgraded audio and await generation-bound adapter cleanup
+    // BEFORE the shared HTTP listener or the provider pool disappears, or a
+    // stream outlives the thing it writes through. Neither constraint moves, so
+    // the disconnects run first, the audio plane closes next, and the listener
+    // goes only once both are quiet.
+    const closingSessions = [...sessions.values()];
+    for (const session of closingSessions) sessionDeliveryHub.disconnect(session.connectionId);
+    sessions.clear();
+    void (async () => {
+      await gatewayAudioStreaming?.close().catch(() => undefined);
+      await Promise.all(closingSessions.map(async (session) => {
+        await releaseMcpConnection(session.connectionId);
+        try { await session.transport.close(); } catch { /* already closed */ }
+      }));
+      const httpClosed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
+      await httpClosed;
+      await Promise.allSettled([
+        closeMemoryEngine(),
+        inProcessGatewayService?.close(),
+      ]);
+      process.exit(0)
+    })();
   };
   process.on('SIGINT', shutdownHttp);
   process.on('SIGTERM', shutdownHttp);
@@ -551,7 +670,13 @@ if (USE_HTTP) {
   stdioIsAdmin = user.isAdmin;
   console.error(`[BrainRouter] Authenticated via BRAINROUTER_API_KEY. Mapping local session to user: ${user.displayName || user.userId}`);
 
-  const server = buildMcpServer(registry, { defaultUserId: stdioUserId, isAdmin: stdioIsAdmin });
+  const stdioConnectionId = `stdio-${randomUUID()}`;
+  const server = buildMcpServer(registry, {
+    defaultUserId: stdioUserId,
+    isAdmin: stdioIsAdmin,
+    connectionId: stdioConnectionId,
+    sessionDeliveryHub,
+  });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('BrainRouter MCP server running on stdio');
@@ -560,9 +685,12 @@ if (USE_HTTP) {
   const shutdownStdio = async () => {
     if (stdioShuttingDown) return;
     stdioShuttingDown = true;
+    sessionDeliveryHub.disconnect(stdioConnectionId);
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
+    await releaseMcpConnection(stdioConnectionId);
     try { await server.close(); } catch { /* ignore */ }
+    await closeMemoryEngine().catch(() => undefined);
     process.exit(0);
   };
   process.on('SIGINT', shutdownStdio);

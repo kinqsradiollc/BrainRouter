@@ -7,3 +7,4 @@ export * from './format/detect.js';
 export * from './format/imageMeta.js';
 export * from './ingest/ingest.js';
 export * from './format/pdfText.js';
+export * from './document/index.js';

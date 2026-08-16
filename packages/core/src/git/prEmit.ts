@@ -29,12 +29,19 @@
  *    hanging the synchronous reply path.
  *  - Agent-authored text (PR title/body) and command stderr are run through a
  *    secret redactor before they leave the machine or surface to the user.
+ *  - ADR-028 I3 — the push is compared against the account this workspace has
+ *    pushed as before, and declines rather than disclosing under the wrong one.
  */
 import { spawnSync } from 'node:child_process';
+import type { PrRoute } from '../review/prRouter.js';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getBrainrouterHome } from '../storage/store.js';
+import { getBrainrouterHome, readJsonFile, writeJsonFile } from '../storage/store.js';
+import {
+  bindWorkspace, checkIdentity,
+  type GitHubAccount, type IdentityVerdict, type WorkspaceBinding,
+} from '../tooling/gitIdentity.js';
 import { slugifyBranchPart } from '../track/git/index.js';
 import { detectForgeProvider, type ForgeId } from '../forge/forge.js';
 
@@ -118,7 +125,11 @@ export interface EmitPrResult {
   pushed?: boolean;
   forge?: ForgeId;
   /** Why the emit was a no-op / declined (distinct from a hard error). */
-  skipped?: 'no-gh' | 'no-forge-cli' | 'unsupported-forge' | 'no-remote' | 'no-patch' | 'base-unknown';
+  skipped?:
+    | 'no-gh' | 'no-forge-cli' | 'unsupported-forge' | 'no-remote' | 'no-patch'
+    | 'base-unknown'
+    /** ADR-028 I3 — the active GitHub account is not this workspace's. */
+    | 'identity';
   error?: string;
 }
 
@@ -200,6 +211,79 @@ function resolveBaseBranch(run: CmdRunner, sourceRoot: string, override?: string
   return branch && isSafeRef(branch) ? branch : undefined;
 }
 
+/* ------------------------------------------------- ADR-028 I3 · identity */
+
+/**
+ * The workspace→account bindings, in the file the desktop host also keeps.
+ *
+ * One file, one format (`WorkspaceBinding` from `tooling/gitIdentity.ts`), so a
+ * workspace bound by the Track create-PR button is the same workspace this push
+ * compares against. A second store would drift, and a drifting identity guard is
+ * worse than none because it would be believed.
+ *
+ * It records a LOGIN NAME and holds no token, so it can grant nothing.
+ */
+function readPushBinding(workspaceRoot: string): WorkspaceBinding | null {
+  const all = readJsonFile<Record<string, WorkspaceBinding>>(
+    path.join(getBrainrouterHome(), 'git-bindings.json'),
+    {},
+  );
+  return all[workspaceRoot] ?? null;
+}
+
+function rememberPushBinding(binding: WorkspaceBinding): void {
+  const file = path.join(getBrainrouterHome(), 'git-bindings.json');
+  const all = readJsonFile<Record<string, WorkspaceBinding>>(file, {});
+  all[binding.workspaceRoot] = binding;
+  writeJsonFile(file, all);
+}
+
+/** Who `gh` is acting as, read fresh — a cached identity check is a wrong one. */
+function activeGitHubAccount(sourceRoot: string, run: CmdRunner): GitHubAccount | null {
+  const status = run('gh', ['auth', 'status', '--active'], sourceRoot);
+  if (!status.ok) return null;
+  const login = /account (\S+)/.exec(status.stdout ?? '')?.[1];
+  const host = /Logged in to (\S+)/.exec(status.stdout ?? '')?.[1] ?? 'github.com';
+  return login ? { login, host, active: true } : null;
+}
+
+/**
+ * ADR-028 I3 — may this branch be pushed as the account `gh` is holding?
+ *
+ * The build loop is the path an AGENT takes, and it was the one path with no
+ * check: a work branch pushed from a personal account is a disclosure, and it
+ * does not become less of one because a fleet job did it rather than a person.
+ *
+ * The first push BINDS rather than interrogating, exactly as it does on the
+ * Track path, so an unbound workspace is never blocked for not having answered a
+ * question nobody asked it.
+ *
+ * `declineReason` is the emit's answer, and it is narrower than the verdict.
+ * A `mismatch` always stops — that is the disclosure. `signed_out` stops only
+ * where a binding EXISTS: an unreadable `gh auth status` in a workspace that has
+ * never pushed contradicts no expectation, and refusing there would break every
+ * emit on a box that authenticates by token rather than by a named login. Where
+ * there IS an expectation and it cannot be verified, the emit declines, because
+ * pushing anyway would be this ADR's own defect — acting as though a state had
+ * been established.
+ */
+export function checkPushIdentity(
+  sourceRoot: string,
+  run: CmdRunner,
+): { verdict: IdentityVerdict; declineReason: string | null } {
+  const binding = readPushBinding(sourceRoot);
+  const active = activeGitHubAccount(sourceRoot, run);
+  const verdict = checkIdentity({ operation: 'push', active, binding });
+  if (verdict.kind === 'bind' && active) {
+    rememberPushBinding(bindWorkspace(sourceRoot, active, new Date().toISOString()));
+  }
+  const declineReason =
+    verdict.kind === 'mismatch' ? verdict.message
+      : verdict.kind === 'signed_out' && binding ? verdict.message
+        : null;
+  return { verdict, declineReason };
+}
+
 /** Throwaway worktree path for the (unique) PR branch. */
 function prWorktreePath(branch: string): string {
   const safe = branch.replace(/[^a-zA-Z0-9._-]+/g, '-');
@@ -278,11 +362,42 @@ export function emitPrFromPatch(input: EmitPrInput, run: CmdRunner = defaultCmdR
     return { ok: false, branch, error: `git commit failed: ${redactErr(commit.stderr)}` };
   }
 
+  // ADR-028 I3 — the last thing before the disclosure could happen. Checked here
+  // rather than at the top so the binding is only written when a push is
+  // genuinely about to run: binding a workspace whose patch failed to apply
+  // would record an expectation from a push that never happened.
+  //
+  // GitHub only. `gh auth status` says nothing about a GitLab remote, and a
+  // guard that answers for a host it cannot see would be a check in name.
+  if (forge.id === 'github') {
+    const { declineReason } = checkPushIdentity(sourceRoot, run);
+    if (declineReason) {
+      cleanup();
+      return { ok: false, forge: forge.id, branch, pushed: false, skipped: 'identity', error: declineReason };
+    }
+  }
+
   const push = run('git', ['push', '-u', 'origin', branch], wt);
   if (!push.ok) { cleanup(); return { ok: false, branch, pushed: false, error: `git push failed: ${redactErr(push.stderr)}` }; }
 
+  // ADR-028 A7/H2 — one branch, therefore one pull request, stated rather than
+  // decided. This emit captures the whole build as ONE squashed patch on ONE
+  // throwaway branch, so there is no second layer to lay down and nothing here
+  // could honour a stack route: asking the router would only produce an answer
+  // this function cannot carry out. A stack is published from a checkout that
+  // is already part of one — the Track create-PR path, where the user made the
+  // stack with `gh stack` themselves.
+  const route: PrRoute = {
+    kind: 'single',
+    reason: 'The build loop delivers its work as one squashed patch on one branch.',
+  };
+
   const pr = forge.createChangeRequest({ remote: remoteUrl, cwd: wt, run }, {
     base, head: branch, title, body, draft: input.draft !== false,
+    // Passed explicitly rather than omitted: the forge adapter builds its argv
+    // from the route, and a route with a stated reason is what makes the "one
+    // pull request" claim inspectable instead of a default.
+    route,
   });
   cleanup();
   if (!pr.ok) {

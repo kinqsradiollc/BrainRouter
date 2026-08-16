@@ -16,6 +16,21 @@ import type readline from 'node:readline';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
+import type { ExecutionIntentHandle } from '@kinqs/brainrouter-types/agent';
+import type { FederationHandle } from '../../runtime/federation/federationRegistration.js';
+
+/**
+ * ADR-040 A40-2 — host-owned metadata for one agent turn. Execution intent is opaque
+ * and never embedded in the model-visible prompt; only an explicit host action
+ * supplies it, while ordinary and compatibility turns omit it.
+ */
+export interface RunAgentTurnOptions {
+  agent?: Agent;
+  ephemeral?: boolean;
+  executionIntent?: ExecutionIntentHandle;
+  /** ADR-040 A40-9 — explicit-strategy launch previewed and confirmed via `/runs start`. */
+  explicitStrategyId?: string;
+}
 
 /**
  * Lifecycle / REPL-scoped state that command handlers can read or mutate.
@@ -24,6 +39,8 @@ import type { Config } from '@kinqs/brainrouter-core/config';
  * one instance per session and threads it through every dispatch call.
  */
 export interface ReplContext {
+  /** One participant's unified local + remote session-messaging surface. */
+  federation?: FederationHandle | null;
   /** Refresh the readline prompt (color reflects access mode + status segments). */
   refreshPromptForMode: () => void;
   /** Replace the startup banner in the active chat scrollback, if the UI supports it. */
@@ -31,13 +48,15 @@ export interface ReplContext {
   /** True while the REPL is mid-turn; loop ticks should defer when set. */
   isProcessing: () => boolean;
   /** Programmatically run an agent turn (used by /continue and friends). */
-  runAgentTurn: (prompt: string) => void;
+  runAgentTurn: (prompt: string, options?: RunAgentTurnOptions) => void;
   /**
-   * Awaitable variant — same semantics but the caller can attach a .finally
-   * to do post-turn cleanup. Used by /side and /btw to restore the parent
-   * sessionKey after the side conversation finishes.
+   * Awaitable variant. `/side` and `/btw` supply an isolated Agent and mark the
+   * turn ephemeral so the shared renderer can skip durable REPL side effects.
    */
-  runAgentTurnAsync: (prompt: string) => Promise<void>;
+  runAgentTurnAsync: (
+    prompt: string,
+    options?: RunAgentTurnOptions,
+  ) => Promise<void>;
 }
 
 /**

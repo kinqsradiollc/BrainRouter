@@ -39,6 +39,11 @@ export interface ProvenanceRef {
 
 export interface ProfileStageEventView {
   phase: 'resolved' | 'updated' | 'terminated';
+  /** Absent on legacy host events emitted before dual profile identity. */
+  workspaceProfileId?: string;
+  /** Absent on legacy host events; profileId remains its compatibility alias. */
+  planProfileId?: string;
+  /** @deprecated Compatibility alias for planProfileId. */
   profileId: string;
   strategyId: string;
   selectionSource: 'explicit' | 'adaptive-model' | 'deterministic' | 'fallback';
@@ -97,7 +102,7 @@ export interface BriefingRecord {
 /** Browser-safe projection of the shared Work Contract steering receipt. */
 export interface SteeringReceiptEventView {
   id: string;
-  source: 'user' | 'parent' | 'extension';
+  source: 'user' | 'parent' | 'extension' | 'peer-session';
   classification?: 'clarification' | 'plan_change' | 'evidence' | 'goal_conflict';
   receivedAt: string;
   appliedAt?: string;
@@ -108,6 +113,16 @@ export interface SteeringReceiptEventView {
   affectedPhaseIds?: string[];
   summary: string;
   status: 'pending' | 'applied' | 'rejected' | 'needs_user';
+}
+
+export interface PeerSessionSenderEventView {
+  sessionKey: string;
+  deviceId?: string;
+  clientKind?: 'cli' | 'desktop';
+  workspaceRoot?: string;
+  title?: string;
+  transport?: 'local' | 'remote';
+  sentAt?: number;
 }
 
 export type AgentEvent =
@@ -151,19 +166,23 @@ export type AgentEvent =
   | { kind: 'assurance-run'; action: AssuranceRunEventAction; run: AssuranceRunEventView; provenance?: ProvenanceRef }
   | { kind: 'approval-decision'; tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }
   | { kind: 'interaction-request'; request: InteractionRequest }
+  /** Host-side resolution (for example, the same decision made in another UI surface). */
+  | { kind: 'interaction-resolved'; id: string }
   | { kind: 'turn-complete'; answer: string }
   | { kind: 'turn-error'; message: string }
   | {
       kind: 'input-delivery';
       id: string;
       mode: 'queue' | 'steer';
-      state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled';
+      state: 'queued' | 'steered' | 'applied' | 'expired' | 'running' | 'completed' | 'canceled';
       text: string;
       position?: number;
-      source?: 'user' | 'extension';
+      source?: 'user' | 'extension' | 'peer-session';
+      sender?: PeerSessionSenderEventView;
       receipt?: SteeringReceiptEventView;
     }
   | { kind: 'steering-receipt'; receipt: SteeringReceiptEventView }
+  | { kind: 'session-title'; title: string; source: 'agent' | 'hook' | 'human' | 'derived' }
   | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number }
   | { kind: 'usage-live'; promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number }
   | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string; running?: boolean }
@@ -178,9 +197,10 @@ const EVENT_KINDS = new Set<string>([
   'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
   'child-complete', 'plan-update', 'profile-stage', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
-  'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live',
+  'interaction-request', 'interaction-resolved', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live',
   'session-changed', 'query-result', 'notice', 'files-changed', 'input-delivery',
   'steering-receipt',
+  'session-title',
   'assurance-run',
 ]);
 

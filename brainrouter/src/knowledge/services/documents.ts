@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { extractPdf } from "@kinqs/brainrouter-core/attachment";
+import { documentText, parsePdfDocument } from "@kinqs/brainrouter-core/attachment";
+import { documentParseGate } from "./documentParseGate.js";
 import { redactSensitiveMemoryText } from "../../memory/util/redaction.js";
 import { canUseKnowledge } from "../contracts/actor.js";
 import type { KnowledgeActor } from "../contracts/actor.js";
@@ -97,7 +98,10 @@ export class KnowledgeDocumentService {
     const base = await this.store.getKnowledgeBase(normalizedBaseId, actor.orgId, project.projectId);
     if (!base) return NOT_FOUND;
 
-    const normalized = normalizePdfInput(input);
+    // ADR-030 Q3 — the tenant the parse is charged to. A personal account is its
+    // own tenant, so one person cannot fill the queue on everyone else's behalf
+    // either.
+    const normalized = await normalizePdfInput(input, actor.orgId ?? `user:${actor.userId}`);
     if (!normalized.ok) return normalized;
     return this.#enqueueNormalized(actor, project.projectId, base.baseId, normalized.value);
   }
@@ -371,9 +375,20 @@ function normalizeTextInput(
   return { ok: true, value: { title, sourceName, sourceFormat: input.sourceFormat, contentText } };
 }
 
-function normalizePdfInput(
+/**
+ * ADR-030 Q3 — hosted documents are parsed HERE, in the backend, bounded, and
+ * through the same seam the desktop uses locally.
+ *
+ * `documentText` rather than the Markdown alone because a knowledge document has
+ * one body and nowhere else to put the parse notice: a scanned contract stored
+ * with an empty body is indistinguishable from a contract with nothing in it,
+ * and the row that says "this document is a scan; no text layer exists" is the
+ * one a search has to be able to return.
+ */
+async function normalizePdfInput(
   input: IngestKnowledgePdfInput,
-): KnowledgeDocumentServiceResult<NormalizedDocumentInput> {
+  tenant: string,
+): Promise<KnowledgeDocumentServiceResult<NormalizedDocumentInput>> {
   const title = normalizeMetadata(input.title, 500, false);
   if (title === null) return { ok: false, code: "invalid", field: "title" };
   const sourceName = normalizeMetadata(input.sourceName ?? "", 500, true);
@@ -381,8 +396,24 @@ function normalizePdfInput(
   const pdf = decodeCanonicalPdf(input.contentBase64);
   if (!pdf) return { ok: false, code: "invalid", field: "contentBase64" };
 
-  const extracted = extractPdf(pdf, { maxChars: MAX_PDF_EXTRACTED_CHARS });
-  const normalizedContent = normalizeExtractedPdfText(extracted.text);
+  // ADR-030 Q3 / ADR-027 D12 — admitted, then parsed. The call inside is a
+  // synchronous WebAssembly parse that nothing in this process can preempt, so
+  // the queue in front of it is bounded and a request that cannot get in is
+  // refused now rather than served long after its client stopped waiting.
+  const admission = await documentParseGate.run(
+    tenant,
+    () => parsePdfDocument(pdf, { maxChars: MAX_PDF_EXTRACTED_CHARS }),
+  );
+  if (!admission.admitted) return { ok: false, code: "busy" };
+  const parsed = admission.value;
+  // A file we could not parse at all — malformed, encrypted, or not really a PDF
+  // — is still rejected. A file we parsed and found to be a SCAN is not: that is
+  // a valid document whose honest body is the sentence saying so, and rejecting
+  // it as "invalid" was telling the uploader their contract was corrupt.
+  if (parsed.classification === "unreadable") {
+    return { ok: false, code: "invalid", field: "contentBase64" };
+  }
+  const normalizedContent = normalizeExtractedPdfText(documentText(parsed));
   const contentText = redactSensitiveMemoryText(normalizedContent);
   if (!contentText
     || Buffer.byteLength(contentText, "utf8") > MAX_KNOWLEDGE_TEXT_BYTES) {

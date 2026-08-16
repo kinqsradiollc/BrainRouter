@@ -1,6 +1,13 @@
 // Internal implementation port for required core capability extensions.
 // Public/user/workspace extensions never receive this runtime object.
 import fs from 'node:fs';
+import {
+  todayView as plannerToday,
+  findItems as plannerFind,
+  addItem as plannerAddItem,
+  updateItem as plannerUpdateItem,
+  scheduleBlock as plannerScheduleBlock,
+} from '../../planner/index.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
@@ -8,6 +15,10 @@ import { NoTTYError } from '../../agent/support/prompter.js';
 import { runHooks } from '../../hooks/hooksStore.js';
 import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
+import { formatWorkspaceRef, parseWorkspaceRef } from '../../workspace/references/index.js';
+import {
+  buildLocalWorkspaceRegistry, fenceWorkspaceResolutions, linkWorkspaceRef, localWorkspaceViewer,
+} from '../../workspace/participants/index.js';
 
 // Per-turn computer_use action cap — module const in the original agent.ts; kept
 // here because the internal capability runtime is its only consumer.
@@ -20,6 +31,7 @@ import {
 import { startBackgroundShell, readBackgroundOutput, killBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
+import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
@@ -81,6 +93,7 @@ import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
+import { isSensitiveReviewSourcePath, redactReviewSourceText } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../workflow/run/workflowRun.js';
@@ -231,7 +244,46 @@ export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: stri
   }
 }
 
-export async function invokeBuiltinToolRuntime(this: any, name: string, args: Record<string, any>): Promise<string> {
+/** Reviewer reads never follow aliases: policy is evaluated on lexical and canonical paths. */
+function isSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string): boolean {
+  const root = fs.realpathSync(workspaceRoot);
+  const lexical = path.resolve(resolvedPath);
+  const lexicalRelative = path.relative(root, lexical).replaceAll('\\', '/');
+  const instructionFile = path.basename(lexicalRelative).toLowerCase();
+  // A changed instruction file is part of the fenced diff being reviewed, not
+  // an authority source that may govern its own review.
+  if (['agent.md', 'agents.md', 'claude.md', '.cursorrules', 'codex.md'].includes(instructionFile)) {
+    return false;
+  }
+  if (isSensitiveReviewSourcePath(lexicalRelative)) return false;
+  try {
+    const canonical = fs.realpathSync(lexical);
+    // Deny both a file symlink and any symlinked directory component. Besides
+    // preventing a benign alias to `.env`, this keeps reviewer scope explainable.
+    if (canonical !== lexical) return false;
+    const canonicalRelative = path.relative(root, canonical).replaceAll('\\', '/');
+    return !isSensitiveReviewSourcePath(canonicalRelative);
+  } catch {
+    return false;
+  }
+}
+
+function assertSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string, requestedPath: unknown): void {
+  if (!isSafeReviewerFilesystemPath(workspaceRoot, resolvedPath)) {
+    throw new Error(`Review source policy denied credential-bearing, mutable-instruction, or symlinked path: ${String(requestedPath)}`);
+  }
+}
+
+export async function invokeBuiltinToolRuntime(
+  this: any,
+  name: string,
+  args: Record<string, any>,
+  authorizeMcpTarget?: (
+    name: string,
+    args: Record<string, unknown>,
+    descriptor: unknown,
+  ) => void,
+): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
     // The Agent might have been constructed with a workspace different from
     // the launching shell's cwd (e.g. /resume from another dir), and cwd can
@@ -239,10 +291,151 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
     const resolveHere = (p: string, opts: { forWrite?: boolean } = {}) =>
       resolveWorkspacePath(this.workspaceRoot, p, opts);
     switch (name) {
+      // ADR-028 D6 — the planner. User-scoped, so no workspace is threaded.
+      case 'planner_today': {
+        const date = typeof args.date === 'string' ? args.date : new Date().toISOString().slice(0, 10);
+        const view = plannerToday(undefined, { date, nowMs: Date.now() });
+        return JSON.stringify({
+          // Bounded and summarised, never the whole list: fifty low-signal
+          // lines make the model worse at the five that matter.
+          items: view.items.slice(0, 10).map((i) => ({
+            id: i.id, title: i.title.value, dueDate: i.dueDate?.value ?? null,
+            source: i.source ?? null,
+          })),
+          more: Math.max(0, view.items.length - 10),
+          nextBlock: view.scheduled[0] ?? view.unscheduled[0] ?? null,
+          carriedOver: view.stalled.length,
+          conflicts: view.conflicts.length,
+          staleSources: view.staleSources,
+          drift: view.drift.description,
+          syncState: view.syncState,
+        }, null, 2);
+      }
+      case 'planner_find': {
+        const hits = plannerFind(undefined, String(args.query ?? ''));
+        return JSON.stringify({
+          items: hits.slice(0, 20).map((i) => ({
+            id: i.id, title: i.title.value, completed: i.completed?.value === true,
+          })),
+        }, null, 2);
+      }
+      case 'planner_add': {
+        const title = String(args.title ?? '').trim();
+        if (!title) throw new Error('A title is required.');
+        const item = plannerAddItem(undefined, {
+          title,
+          ...(typeof args.notes === 'string' ? { notes: args.notes } : {}),
+          ...(typeof args.dueDate === 'string' ? { dueDate: args.dueDate } : {}),
+        }, Date.now());
+        return JSON.stringify({ id: item.id, title: item.title.value });
+      }
+      case 'planner_schedule': {
+        const itemId = String(args.itemId ?? '');
+        const minutes = Number(args.estimateMinutes);
+        if (!itemId) throw new Error('An item id is required.');
+        if (!Number.isFinite(minutes) || minutes <= 0) throw new Error('A positive estimate is required.');
+        const block = plannerScheduleBlock(undefined, {
+          itemId, estimateMinutes: minutes,
+          ...(typeof args.scheduledFor === 'string' ? { scheduledFor: args.scheduledFor } : {}),
+        }, Date.now());
+        return JSON.stringify({ id: block.id, itemId: block.itemId, estimateMinutes: block.estimateMinutes });
+      }
+      case 'planner_complete': {
+        // The tool exists, but the JUDGEMENT is the user's. The spec tells the
+        // model never to infer this; the runtime cannot enforce intent, so the
+        // refusal lives where the model reads it.
+        const itemId = String(args.itemId ?? '');
+        if (!itemId) throw new Error('An item id is required.');
+        const updated = plannerUpdateItem(undefined, itemId, { completed: true }, Date.now());
+        if (!updated) throw new Error(`No planner item ${itemId}.`);
+        return JSON.stringify({ id: updated.id, completed: true });
+      }
+      // ADR-029 C3 — the same verbs the UI calls, over the same registry.
+      case 'workspace_resolve': {
+        const registry = buildLocalWorkspaceRegistry({ workspaceRoot: this.workspaceRoot });
+        const viewer = localWorkspaceViewer({ workspaceRoot: this.workspaceRoot });
+        const resolution = await registry.resolveUri(String(args.uri ?? ''), viewer);
+        // C4 — fenced and neutralised before it is a tool result. Any mode is a
+        // delivery vector for every other, so the boundary is drawn where the
+        // content enters the turn rather than where it was written.
+        return fenceWorkspaceResolutions([resolution]) ?? 'Nothing to show for that reference.';
+      }
+      case 'workspace_create': {
+        const title = String(args.title ?? '').trim();
+        if (!title) throw new Error('A title is required.');
+        const registry = buildLocalWorkspaceRegistry({ workspaceRoot: this.workspaceRoot });
+        const viewer = localWorkspaceViewer({ workspaceRoot: this.workspaceRoot });
+        const from = typeof args.from === 'string' ? parseWorkspaceRef(args.from) : null;
+        // A malformed `from` is refused rather than dropped: the caller asked
+        // for the new record to remember where it came from, and silently
+        // creating one that does not is the quietly-wrong outcome A3 rules out.
+        if (from && !from.ok) throw new Error(`"from" is not a reference: ${from.detail}`);
+        const outcome = await registry.create(
+          {
+            mode: String(args.mode ?? ''),
+            kind: String(args.kind ?? ''),
+            title,
+            ...(from?.ok ? { from: from.ref } : {}),
+            // ADR-029 Part E — the fields a created record arrives WITH. A
+            // database row created without its cells needs a second call to
+            // become what was asked for, and the window between the two is a row
+            // whose every column is empty.
+            ...(args.fields && typeof args.fields === 'object' && !Array.isArray(args.fields)
+              ? { fields: args.fields as Record<string, unknown> }
+              : {}),
+          },
+          viewer,
+        );
+        if (outcome.status === 'refused') throw new Error(outcome.detail);
+        return JSON.stringify({ status: outcome.status, uri: formatWorkspaceRef(outcome.ref) });
+      }
+      case 'workspace_update': {
+        const target = parseWorkspaceRef(args.uri);
+        if (!target.ok) throw new Error(`"uri" is not a reference: ${target.detail}`);
+        const registry = buildLocalWorkspaceRegistry({ workspaceRoot: this.workspaceRoot });
+        const viewer = localWorkspaceViewer({ workspaceRoot: this.workspaceRoot });
+        const outcome = await registry.update(
+          {
+            ref: target.ref,
+            ...(typeof args.title === 'string' ? { title: args.title } : {}),
+            ...(args.fields && typeof args.fields === 'object' && !Array.isArray(args.fields)
+              ? { fields: args.fields as Record<string, unknown> }
+              : {}),
+          },
+          viewer,
+        );
+        if (outcome.status === 'refused') throw new Error(outcome.detail);
+        return JSON.stringify({
+          status: outcome.status,
+          uri: formatWorkspaceRef(outcome.ref),
+          changed: outcome.changed,
+          // Returned rather than dropped: a caller told only about the four
+          // fields that worked concludes the fifth did too, and finds out a long
+          // way from here.
+          ...(outcome.ignored?.length ? { ignored: outcome.ignored } : {}),
+          ...(outcome.label ? { label: outcome.label } : {}),
+        });
+      }
+      case 'workspace_link': {
+        const from = parseWorkspaceRef(args.from);
+        const to = parseWorkspaceRef(args.to);
+        if (!from.ok) throw new Error(`"from" is not a reference: ${from.detail}`);
+        if (!to.ok) throw new Error(`"to" is not a reference: ${to.detail}`);
+        const outcome = linkWorkspaceRef({ workspaceRoot: this.workspaceRoot }, from.ref, to.ref);
+        if (!outcome.ok) throw new Error(outcome.detail);
+        return JSON.stringify({
+          from: formatWorkspaceRef(outcome.from),
+          to: formatWorkspaceRef(outcome.to),
+          alreadyLinked: outcome.alreadyLinked,
+        });
+      }
       case 'read_file': {
         const resolved = resolveHere(args.path);
         if (!fs.existsSync(resolved)) {
           throw new Error(`File not found: ${args.path}`);
+        }
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(this.workspaceRoot, resolved, args.path);
         }
         // Bound the bytes pulled into memory. Previously this read the WHOLE file
         // (truncation only trimmed the RETURNED string), so a multi-GB file would
@@ -263,17 +456,20 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         this.filesReadThisSession.add(resolved); // CC-P6.4 — read-before-edit ledger
         // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
         // reads stay snappy, and guarded so a rejection never escapes.
-        void this.maybeReindexSource(resolved, content).catch(() => {});
+        if (!this.reviewSourceSafety) {
+          void this.maybeReindexSource(resolved, content).catch(() => {});
+        }
+        const visibleContent = this.reviewSourceSafety ? redactReviewSourceText(content) : content;
         const startLine = args.startLine ? Number(args.startLine) : 1;
         const endLine = args.endLine ? Number(args.endLine) : undefined;
 
         if (startLine === 1 && endLine === undefined) {
           // CC-P7.3 — cap an unbounded full-file read so a huge file can't blow
           // the context window; the model gets an explicit reread affordance.
-          return truncateFullRead(content, String(args.path)).text;
+          return truncateFullRead(visibleContent, String(args.path)).text;
         }
 
-        const lines = content.split('\n');
+        const lines = visibleContent.split('\n');
         const endIdx = endLine !== undefined ? Math.min(endLine, lines.length) : lines.length;
         const startIdx = Math.max(1, Math.min(startLine, lines.length));
         
@@ -300,6 +496,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           reason: 'silent child agent requested a file write',
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         // A successful overwrite means the on-disk content is now what the agent
         // wrote — keep the read ledger accurate so a follow-up edit is allowed.
         this.filesReadThisSession.add(resolved);
@@ -328,6 +525,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           reason: 'silent child agent requested a notebook edit',
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         this.captureFileSnapshot(resolved); // undo log for /rewind --files
         const result = applyNotebookEdit(fs.readFileSync(resolved, 'utf8'), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
         fs.writeFileSync(resolved, result.content, 'utf8');
@@ -371,6 +569,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           reason: 'silent child agent requested a file edit',
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
         fs.writeFileSync(resolved, updated, 'utf8');
         const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
@@ -382,33 +581,57 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
           throw new Error(`Directory not found: ${args.path || '.'}`);
         }
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(this.workspaceRoot, targetDir, args.path || '.');
+        }
         const items = fs.readdirSync(targetDir);
-        const list = items.map(item => {
+        const list = items.flatMap(item => {
           const full = path.join(targetDir, item);
+          if (this.reviewSourceSafety && !isSafeReviewerFilesystemPath(this.workspaceRoot, full)) {
+            return [];
+          }
           const stat = fs.statSync(full);
-          return {
+          return [{
             name: item,
             type: stat.isDirectory() ? 'directory' : 'file',
             size: stat.isFile() ? stat.size : undefined
-          };
+          }];
         });
         return JSON.stringify(list, null, 2);
       }
       case 'grep_search': {
         const wsRoot = fs.realpathSync(this.workspaceRoot);
         const root = resolveHere(args.path || '.');
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(wsRoot, root, args.path || '.');
+        }
         const query = String(args.query ?? '');
         if (!query) throw new Error('Missing parameter "query" for grep_search.');
         // grepSearch: regex match (not literal `includes`) + accepts a file OR a
         // directory (the old inline version crashed with ENOTDIR on a file path).
-        return JSON.stringify(grepSearch(query, root, wsRoot), null, 2);
+        const hits = grepSearch(
+          query,
+          root,
+          wsRoot,
+          50,
+          this.reviewSourceSafety
+            ? (candidate) => isSafeReviewerFilesystemPath(wsRoot, path.resolve(wsRoot, candidate))
+            : undefined,
+        );
+        return this.reviewSourceSafety
+          ? redactReviewSourceText(JSON.stringify(hits, null, 2))
+          : JSON.stringify(hits, null, 2);
       }
       case 'glob_files': {
         const pattern = args.pattern;
         if (!pattern) {
           throw new Error('Missing parameter "pattern" for glob_files.');
         }
-        const matches = globFiles(pattern, this.workspaceRoot);
+        const reviewRoot = this.reviewSourceSafety ? fs.realpathSync(this.workspaceRoot) : this.workspaceRoot;
+        const matches = globFiles(pattern, this.workspaceRoot).filter((candidate) => (
+          !this.reviewSourceSafety
+          || isSafeReviewerFilesystemPath(reviewRoot, path.resolve(reviewRoot, candidate))
+        ));
         return JSON.stringify(matches, null, 2);
       }
       case 'run_command': {
@@ -500,6 +723,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
                 ? 'dangerous command requested by a silent child agent'
                 : 'silent child agent shell command requires parent approval',
             });
+            this.assertInheritedExecutionAuthorityCurrent();
             if (!approved) return 'Command execution rejected by parent approval.';
             parentApproved = true;
           } else if (dangerous) {
@@ -555,6 +779,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           const approved = this.interactionPort
             ? await this.interactionPort.confirm({ title: 'Run shell command?', detail: cmd, dangerous, tool: 'run_command' })
             : await this.prompter.askYesNo(question, false);
+          this.assertInheritedExecutionAuthorityCurrent();
           if (!approved) {
             return 'Command execution rejected by user.';
           }
@@ -564,6 +789,10 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         // past it here), but detach instead of blocking the turn. v1 runs
         // unsandboxed, so it is refused while cli.sandbox=on.
         if (args.background === true) {
+          this.assertInheritedExecutionAuthorityCurrent();
+          if (this.inheritedExecutionAuthorityGuard()) {
+            return 'Background run_command is unavailable inside reviewed execution until detached processes have an execution-owned revocation lease.';
+          }
           if (this.pentestMode) return 'Background run_command is disabled for pentests; commands must remain in the Docker/proxy perimeter.';
           // CODEX-SANDBOX-UNATTENDED — background runs are unsandboxed (v1), so
           // they are refused whenever the sandbox is active: either the user
@@ -588,6 +817,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           });
         }
         if (this.pentestMode) {
+          this.assertInheritedExecutionAuthorityCurrent();
           const result = runPentestCommand(cmd, this.pentestSandbox
             ? { ...this.pentestSandbox, workspaceRoot: this.workspaceRoot }
             : resolvePentestSandbox(this.workspaceRoot));
@@ -598,6 +828,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
+        this.assertInheritedExecutionAuthorityCurrent();
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         // WS5 — remember commits WE authored this session, so a later
         // `git commit --amend` of one of them is allowed (vs. amending a
@@ -888,13 +1119,28 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const target = String(args.name ?? '').trim();
         if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
         const tool = await this.findVisibleMcpTool(target);
+        this.assertInheritedExecutionAuthorityCurrent();
         if (!tool) throw new Error(`mcp_call: "${target}" is not an available MCP tool. Use mcp_search to find the exact name.`);
         const callArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
           ? (args.args as Record<string, any>)
           : {};
         const toolName = String(tool.name);
         const mcpArgs = applyFederationIdentity(toolName, callArgs, this.federationSessionKey) as Record<string, any>;
+        authorizeMcpTarget?.(toolName, mcpArgs, tool);
+        const permissionNames = [
+          toolName,
+          String(tool.__rawName ?? '').trim(),
+        ].filter((name, index, names) => name && names.indexOf(name) === index);
+        if (permissionNames.some((permissionName) => evaluatePermissionRules(
+          getCliKnobs().permissions,
+          permissionName,
+          primaryArgText(permissionName, mcpArgs),
+          { workspace: this.workspaceRoot },
+        ) === 'deny')) {
+          throw new Error(`mcp_call target "${toolName}" denied by cli.permissions.`);
+        }
         await this.approveMcpToolCall(toolName, tool, mcpArgs);
+        this.assertInheritedExecutionAuthorityCurrent();
         const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
         return extractToolText(mcpRes);
       }
@@ -915,8 +1161,11 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         }
         if (!args.file) throw new Error('lsp requires a `file`.');
         const resolved = resolveHere(String(args.file));
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(this.workspaceRoot, resolved, args.file);
+        }
         const { runLspQuery } = await import('../../lsp/manager.js');
-        return await runLspQuery({
+        const result = await runLspQuery({
           action,
           file: resolved,
           line: args.line != null ? Number(args.line) : undefined,
@@ -924,6 +1173,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           cwd: this.workspaceRoot,
           servers: getCliKnobs().lspServers,
         });
+        return this.reviewSourceSafety ? redactReviewSourceText(result) : result;
       }
       case 'extract_result': {
         const resultRef = String(args.resultRef ?? '').trim();
@@ -993,6 +1243,11 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         return JSON.stringify({ marked: true, title, note: 'Chapter recorded — the user can browse with /chapters.' });
       }
       case 'switch_model': {
+        if (this.inheritedExecutionAuthorityGuard()) {
+          throw new Error(
+            'switch_model is unavailable inside reviewed execution because the reviewed provider and model identity are fixed for the execution.',
+          );
+        }
         // MC-D3 — agent-initiated switch to a named LLM profile: the explicit
         // sibling of the first-line tier self-escalation marker. Validated
         // against the configured profiles + the availableModels enforcement
@@ -1041,7 +1296,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           nextLlm = { ...route.llm };
           resolvedRoute = route.slug;
         }
-        this.llmConfig = nextLlm;
+        this.setLLMConfig(nextLlm);
         try {
           setSessionRuntime(this.workspaceRoot, this.sessionKey, {
             model: routeProfileModel ? result.profile.model : nextLlm.model,
@@ -1070,6 +1325,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
       }
       case 'task_output': {
         // CC-P11.1 — incremental output of a background run_command.
+        if (this.inheritedExecutionAuthorityGuard()) {
+          throw new Error('task_output is unavailable inside reviewed execution because background process ids are not execution-owned.');
+        }
         const id = String(args.id ?? '').trim();
         if (!id) throw new Error('task_output requires an id (from run_command background:true).');
         const fromByte = typeof args.fromByte === 'number' && args.fromByte >= 0 ? Math.floor(args.fromByte) : 0;
@@ -1078,6 +1336,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         return JSON.stringify(out);
       }
       case 'kill_command': {
+        if (this.inheritedExecutionAuthorityGuard()) {
+          throw new Error('kill_command is unavailable inside reviewed execution because background process ids are not execution-owned.');
+        }
         const id = String(args.id ?? '').trim();
         if (!id) throw new Error('kill_command requires an id (from run_command background:true).');
         const signal = args.signal === 'SIGKILL' || args.signal === 'SIGINT' ? args.signal : 'SIGTERM';
@@ -1119,6 +1380,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           dangerous: safety.touchesVcs || safety.deletes > 0,
         });
         if (parentDenial) return parentDenial;
+        this.assertInheritedExecutionAuthorityCurrent();
         // 0.4.x-3b — capture each target file's prior content before the patch
         // applies (undo log for /rewind --files). Parse the envelope's file
         // headers (`*** Add/Update/Delete File: <path>`).

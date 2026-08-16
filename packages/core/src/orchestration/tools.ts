@@ -20,19 +20,22 @@ import { handleSpawn } from './tools/spawn.js';
 import { handleList, handleWait, handleWaitBatch, handleReadTranscript, handleClose } from './tools/wait.js';
 import { handleSendInput, handleResumeAgent } from './tools/continuation.js';
 import { DELEGATE_TOOL_PREFIX, resolveDelegateAgentId, isOrchestrationToolName, synthesizeDelegateTools } from './tools/toolNames.js';
-import { DEFAULT_TASK_AGENT_TIMEOUT_MS, inferRoleFromTask, clampAccess, extractChildPreview } from './tools/helpers.js';
+import { DEFAULT_TASK_AGENT_TIMEOUT_MS, inferRoleFromTask, clampAccess, extractChildPreview, resolveGraphAgentAccess } from './tools/helpers.js';
 import { trackedPromiseFor, childAgentsFor, registerInterruptibleAgent, unregisterInterruptibleAgent } from './tools/registry.js';
 import type { OrchestrationContext } from './tools/context.js';
 import { resolveRole, type AccessMode } from './roles/roles.js';
 import { ownershipRequirementError } from './ownership/ownership.js';
 import { listAll } from './agents/agentRegistry.js';
-import { runWorkflow } from '../workflow/template/workflowTool.js';
+import { runWorkflowAuthorized } from '../workflow/template/workflowTool.js';
 import { loadWorkflowGraph } from '../workflow/graph/graphStore.js';
-import { runGraph } from '../workflow/graph/graphEngine.js';
+import type { WorkflowNode } from '../workflow/graph/graph.js';
+import { runGraph, type GraphRunResult } from '../workflow/graph/graphEngine.js';
+import { runGraphAsCanonicalExecution } from './execution/graphAdapter.js';
 import { routeTask } from './delegation/router.js';
 import { localModelProfileActive } from '../provider/modelFamily.js';
 import { getCliKnobs } from '../config/config.js';
 import { OrchestrationRuntimeUnavailableError } from './runtime/activeTurnRuntime.js';
+import { rejectExecutionDispatchReceipt } from './execution/authority.js';
 
 // ---------------------------------------------------------------------------
 // Routing / delegation handlers — thin glue over handleSpawn (foreground vs
@@ -52,10 +55,16 @@ async function handleRouteTask(args: any, ctx: OrchestrationContext): Promise<st
   } catch {
     toolNames = undefined;
   }
+  // The tier the router picks must be one this turn can act on. `parentVisibleLocalTools`
+  // is the post-policy list (workspace catalog, user overrides, skill allowlists),
+  // so a workspace without workflow launch or background workers is routed to a
+  // tier it can actually reach instead of a tool name it cannot emit.
+  const localTools = ctx.parentVisibleLocalTools?.();
   const result = await routeTask({
     task,
     mcpClient: ctx.mcpClient,
     mcpToolNames: toolNames,
+    availableTools: localTools ? new Set(localTools) : undefined,
     sessionKey: ctx.parentSessionKey,
     // HONK-L6 — bias toward bounded inline tasks when the parent runs a local model.
     localModel: localModelProfileActive(ctx.llmConfig?.model, getCliKnobs().localModelProfile),
@@ -80,7 +89,12 @@ async function handleTaskAgent(args: any, ctx: OrchestrationContext): Promise<st
 async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Promise<string> {
   const id = String(args?.id ?? args?.workflowId ?? '').trim();
   if (!id) throw new Error('run_workflow_graph requires an `id` — the saved workflow-graph id/name (see the Workflows canvas).');
-  const graph = loadWorkflowGraph(ctx.workspaceRoot, id);
+  // A trusted launch supplies the immutable definition reviewed by the host.
+  // The live file is only a legacy/internal fallback; production launch remains
+  // closed until graph approvals and referenced-subworkflow revisions are bound.
+  const graph = args?.definition && typeof args.definition === 'object'
+    ? args.definition
+    : loadWorkflowGraph(ctx.workspaceRoot, id);
   if (!graph) throw new Error(`No saved workflow graph "${id}". Build and save one in the Workflows canvas, or check the id with the desktop's workflow list.`);
 
   // Seed run vars from the caller's `vars` object over the graph's own defaults.
@@ -89,9 +103,12 @@ async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Pro
     : {};
   const seeded = { ...graph, vars: { ...(graph.vars ?? {}), ...callerVars } };
 
-  const result = await runGraph(seeded, {
-    runAgent: async (prompt) => {
-      const out = await handleTaskAgent({ prompt }, ctx);
+  const graphDeps = {
+    runAgent: async (prompt: string, node: WorkflowNode) => {
+      // ADR-040 A40-3 — honor the agent node's DECLARED role/access (validated,
+      // fail-closed). It is only a request: the spawn path clamps it to the
+      // parent's access, so a saved graph node cannot escalate beyond the launch.
+      const out = await handleTaskAgent({ prompt, ...resolveGraphAgentAccess(node) }, ctx);
       // handleTaskAgent may return raw text or a JSON envelope — surface the text.
       try {
         const j = JSON.parse(out) as Record<string, unknown>;
@@ -99,8 +116,36 @@ async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Pro
       } catch { /* raw text */ }
       return out;
     },
-    loadSubWorkflow: async (ref) => loadWorkflowGraph(ctx.workspaceRoot, ref),
-  });
+    loadSubWorkflow: async (ref: string) => loadWorkflowGraph(ctx.workspaceRoot, ref),
+  };
+
+  // ADR-040 A40-7 — run saved graphs THROUGH the canonical adapter so a production
+  // graph run lands in the same durable execution map and `/runs` projection as
+  // every other run, instead of emitting nothing. Re-run-safe by construction: the
+  // runId is UNIQUE per invocation, so the adapter's only pre-run failure point
+  // (startDurableRun's exclusive create) cannot collide — the single realistic
+  // throw is therefore BEFORE the graph executes, so the catch runs the graph
+  // exactly once, never twice. Canonical projection does not change the graph's own
+  // semantics: no `requestApproval` dep is passed, so approval nodes still
+  // fail-closed exactly as before.
+  const runId = ctx.executionLaunch?.runId ?? `graph-${id}-${Date.now()}`;
+  const executionId = ctx.executionLaunch?.parentExecutionId ?? `graph:${id}`;
+  let result: GraphRunResult;
+  try {
+    result = (await runGraphAsCanonicalExecution({
+      graph: seeded,
+      deps: graphDeps,
+      executionId,
+      runId,
+      sessionKey: ctx.parentSessionKey ?? 'local',
+      workspaceRoot: ctx.workspaceRoot,
+      startedAt: new Date().toISOString(),
+      definitionId: id,
+    })).result;
+  } catch {
+    // Canonical emission is never allowed to stop a graph from running.
+    result = await runGraph(seeded, graphDeps);
+  }
 
   if (!result.ok) return `Workflow "${id}" failed: ${result.error ?? 'unknown error'}`;
   const ran = result.order.filter((n) => result.nodes[n]?.status === 'ok').length;
@@ -192,7 +237,12 @@ async function handleSpawnBatch(args: any, ctx: OrchestrationContext): Promise<s
         effectiveAccess = 'read';
       }
     }
-    const err = ownershipRequirementError(effectiveAccess, entry.ownership, entry.allowOverlap);
+    // Ownership separates parallel writers. A singleton batch is explicitly
+    // serialized by the phase runner, so there is no sibling to overlap with;
+    // the child still retains its normal access/path policy.
+    const err = list.length > 1
+      ? ownershipRequirementError(effectiveAccess, entry.ownership, entry.allowOverlap)
+      : null;
     if (err) {
       const who = entry.label ? `"${entry.label}"` : `agents[${i}] (${roleNames[i]})`;
       throw new Error(`spawn_agents: ${who} — ${err}`);
@@ -229,6 +279,15 @@ export async function executeOrchestrationTool(
   args: any,
   ctx: OrchestrationContext,
 ): Promise<string> {
+  if (
+    ctx.executionAuthorityGuard
+    && !ctx.executionLaunch
+    && isOrchestrationToolName(name)
+  ) {
+    throw new Error(
+      'Orchestration tools are unavailable inside reviewed PhasePlan children because the deterministic executor owns every declared child and lifecycle edge.',
+    );
+  }
   // MAS-P2-M1: synthesized delegate_<agentId> tools route through
   // task_agent (foreground wait). Resolved against the live registry
   // so an in-session pack swap takes effect on the next call.
@@ -266,8 +325,18 @@ export async function executeOrchestrationTool(
     case 'close_agent':
       return handleClose(args, ctx);
     case 'send_input':
+      if (ctx.executionLaunch?.assertAuthorityCurrent || ctx.executionAuthorityGuard) {
+        throw new Error(
+          'send_input is unavailable during reviewed execution because the exact PhasePlan does not declare child-continuation edges.',
+        );
+      }
       return await handleSendInput(args, ctx);
     case 'resume_agent':
+      if (ctx.executionLaunch?.assertAuthorityCurrent || ctx.executionAuthorityGuard) {
+        throw new Error(
+          'resume_agent is unavailable during reviewed execution because the exact PhasePlan does not declare child-continuation edges.',
+        );
+      }
       return await handleResumeAgent(args, ctx);
     case 'route_task':
       return await handleRouteTask(args, ctx);
@@ -275,11 +344,22 @@ export async function executeOrchestrationTool(
       // WF-TOOL — execute a declarative PhasePlan deterministically. Inject this
       // very dispatcher as the spawn backend (run_workflow's children go through
       // the same spawn_agents/wait_agents path everything else does).
-      return await runWorkflow(args, ctx, { dispatch: executeOrchestrationTool });
+      if (!ctx.executionLaunch) {
+        throw new Error('run_workflow requires a trusted Core execution launch.');
+      }
+      return await runWorkflowAuthorized(args, ctx, {
+        dispatch: executeOrchestrationTool,
+      });
     case 'run_workflow_graph':
       // §7 L4 — run a saved visual-workflow GRAPH. Agent nodes delegate to the
       // same task_agent spawn path; sub-workflow nodes load from the same store.
-      return await handleRunWorkflowGraph(args, ctx);
+      if (!ctx.executionLaunch) {
+        throw new Error('run_workflow_graph requires a trusted Core execution launch.');
+      }
+      rejectExecutionDispatchReceipt(ctx.executionLaunch.dispatchReceipt);
+      throw new Error(
+        'Saved workflow graph production launch is not enabled yet. Use Test run only as a preview until graph approvals and cumulative budgets fail closed.',
+      );
     default:
       throw new Error(`Unknown orchestration tool: ${name}`);
   }

@@ -138,12 +138,12 @@ export default function AuthPage() {
         {/* Column 1: Identity Card Visualization */}
         <div style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--color-golden-accent)", fontWeight: 700 }}>COGNITIVE IDENTITY CARD</span>
+            <span style={{ fontSize: "11px", letterSpacing: "0.15em", color: "var(--color-golden-accent)", fontWeight: 700 }}>ONE WORKSPACE, ONE THREAD</span>
             <h1 className="serif-display" style={{ fontSize: "36px", margin: 0, fontWeight: 400, lineHeight: 1.15 }}>
-              Your Memory <span className="gradient-gold-text">Gateway</span>
+              Your team&apos;s <span className="gradient-gold-text">workspace</span>
             </h1>
             <p style={{ color: "var(--color-stone-text)", fontSize: "14px", lineHeight: 1.5, margin: 0 }}>
-              Establish a secure cognitive interface to bridge persistent local files, rules, and vector search spaces to your active AI agents.
+              Plan the day, run the meeting, write the doc, ship the change — and pick tomorrow up where the workspace left off.
             </p>
           </div>
 
@@ -241,7 +241,7 @@ export default function AuthPage() {
                   boxShadow: "none"
                 }} />
                 <span style={{ fontSize: "9px", fontWeight: 600, color: "var(--color-white-frost)", letterSpacing: "0.07em", textTransform: "uppercase" }}>
-                  {loading ? "syncing" : "vault core active"}
+                  {loading ? "connecting" : "workspace ready"}
                 </span>
               </div>
             </div>
@@ -249,7 +249,7 @@ export default function AuthPage() {
             {/* Middle Line (Card Number / Mock Key) */}
             <div style={{ zIndex: 1 }}>
               <div style={{ fontSize: "8px", letterSpacing: "0.08em", color: "var(--color-stone-text)", fontWeight: 600, textTransform: "uppercase", marginBottom: "4px" }}>
-                Secure Client Token
+                Workspace key
               </div>
               <code style={{ 
                 fontSize: "14px", 
@@ -266,21 +266,21 @@ export default function AuthPage() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: "8px", letterSpacing: "0.08em", color: "var(--color-stone-text)", fontWeight: 600, textTransform: "uppercase", marginBottom: "2px" }}>
-                  Vault Owner
+                  Signing in as
                 </div>
                 <div style={{ fontSize: "13px", color: "var(--color-white-frost)", fontWeight: 500, fontFamily: "var(--font-inter)" }}>
-                  {mode === "signin" 
-                    ? (signin.email ? signin.email.split("@")[0].toUpperCase() : "CHIP OWNER") 
-                    : (signup.displayName ? signup.displayName.toUpperCase() : "CHIP OWNER")
+                  {mode === "signin"
+                    ? (signin.email ? signin.email.split("@")[0].toUpperCase() : "YOUR NAME")
+                    : (signup.displayName ? signup.displayName.toUpperCase() : "YOUR NAME")
                   }
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: "8px", letterSpacing: "0.08em", color: "var(--color-stone-text)", fontWeight: 600, textTransform: "uppercase", marginBottom: "2px" }}>
-                  Node Address
+                  Account
                 </div>
                 <div style={{ fontSize: "11px", color: "var(--color-golden-accent)", fontWeight: 600, fontFamily: "var(--font-inter)" }}>
-                  {mode === "signin" ? (signin.email || "LOCAL-CORE-01") : (signup.email || "LOCAL-CORE-01")}
+                  {mode === "signin" ? (signin.email || "you@yourteam.com") : (signup.email || "you@yourteam.com")}
                 </div>
               </div>
             </div>
@@ -289,8 +289,8 @@ export default function AuthPage() {
           {/* Secure Details list */}
           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             {[
-              { label: "Absolute Privacy", desc: "Protected by JWT cryptographic tunnels and local client vault structures." },
-              { label: "Open Architecture", desc: "Direct integrations with Claude Desktop, Cursor, Next.js, and custom REST API bindings." }
+              { label: "Your workspace stays yours", desc: "Sessions are signed, provider secrets are write-only, and no endpoint reads a stored secret back to a client." },
+              { label: "Open by design", desc: "MIT-licensed and self-hostable, reachable from the desktop app, the terminal, MCP clients, and a documented HTTP API." }
             ].map((item) => (
               <div key={item.label} style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
                 <div style={{

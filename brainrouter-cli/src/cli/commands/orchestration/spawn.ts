@@ -6,6 +6,7 @@
  */
 
 import chalk from 'chalk';
+import { randomUUID } from 'node:crypto';
 import { listRoles, getSession } from '@kinqs/brainrouter-core/orchestration';
 import type { CommandContext } from '../_context.js';
 
@@ -31,20 +32,36 @@ export async function handleBg(ctx: CommandContext): Promise<boolean> {
 }
 
 export async function handleBuild(ctx: CommandContext): Promise<boolean> {
-  const { args } = ctx;
-  // BUILD-LOOP (0.4.12 P1) — run the plan → implement → verify → review loop
-  // for one task via the `build` workflow template. Single-agent stays the
-  // default; this is the explicit opt-in trigger.
+  const { args, agent } = ctx;
+  // ADR-040 A40-2 — run the plan → implement → verify → review loop for one task via
+  // the `build` workflow template. This explicit command is the trusted action
+  // that binds the exact arguments; the following model prompt carries no
+  // execution authority by itself.
   const task = args.join(' ').trim();
   if (!task) {
     console.log(chalk.red('\nUsage: /build <task>\n'));
     console.log(chalk.gray('  Runs a plan → implement → verify → review loop. The worker implements in an isolated worktree (merged back on clean completion).\n'));
     return true;
   }
+  const slug = `build-${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+  const toolArgs = { template: 'build', templateArgs: { task }, slug };
+  let executionIntent;
+  try {
+    executionIntent = await agent.issueExecutionIntent({
+      source: 'user-command',
+      toolName: 'run_workflow',
+      args: toolArgs,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(chalk.red(`\nCould not authorize build workflow: ${message}\n`));
+    return true;
+  }
   ctx.repl.runAgentTurn(
-    `Run the build loop for this task using the run_workflow tool with template "build" and templateArgs ${JSON.stringify({ task })}. ` +
+    `Run the build loop for this task using the run_workflow tool with template "build", templateArgs ${JSON.stringify({ task })}, and slug "${slug}". ` +
     `It runs four phases — plan (architect) → implement (worker) → verify (verifier) → review (reviewer). ` +
     `When it finishes, report: what changed, the verify PASS/FAIL, and the review verdict.`,
+    { executionIntent },
   );
   return true;
 }

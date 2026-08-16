@@ -155,9 +155,15 @@ describe("scheduled PR review repository-context composition", () => {
     }));
     const recordCandidates = vi.fn(async () => publicationGate);
     const complete = vi.fn(async () => ({ status: "completed" }));
+    const contextForPaths = vi.fn(() => ({
+      text: "projected context",
+      packetRefs: ["packet-1"],
+      artifactRefs: ["artifact-1"],
+    }));
     const session = {
       runId: "run-1",
       prepareContext,
+      contextForPaths,
       recordCandidates,
       complete,
       fail: vi.fn(),
@@ -166,6 +172,10 @@ describe("scheduled PR review repository-context composition", () => {
     mocks.createAnalysis.mockReturnValue(analysis);
     mocks.start.mockResolvedValue(session);
     mocks.execute.mockImplementation(async (_input, deps) => {
+      expect(deps.executionBudget).toEqual({
+        maxModelCalls: 40,
+        maxDurationMs: 90_000 * 40,
+      });
       let authorizationHeader: string | null = "Authorization: Basic secret";
       await deps.onAssuranceReady?.({
         policy,
@@ -185,10 +195,11 @@ describe("scheduled PR review repository-context composition", () => {
         msg: "diff fetched",
         data: { files: 3 },
       });
-      await deps.prepareRepositoryContext?.({
+      const prepared = await deps.prepareRepositoryContext?.({
         headSha: "head-1",
         changed: [{ path: "src/index.ts", line: 4 }],
       });
+      expect(prepared?.contextForPaths?.(["src/index.ts"])).toBe("projected context");
       const assuranceGate = await deps.onCandidatesReady?.({
         headSha: "head-1",
         currentHeadSha: "head-1",
@@ -200,6 +211,13 @@ describe("scheduled PR review repository-context composition", () => {
         }],
         coverage: result.coverage,
         changedFiles: 3,
+        execution: {
+          modelCalls: 2,
+          elapsedMs: 1_000,
+          remainingModelCalls: 38,
+          remainingDurationMs: (90_000 * 40) - 1_000,
+          deadlineAt: 9_999_999,
+        },
       });
       return { ...result, assuranceGate };
     });
@@ -228,12 +246,20 @@ describe("scheduled PR review repository-context composition", () => {
       repositoryContext: analysis,
     }));
     expect(prepareContext).toHaveBeenCalledWith([{ path: "src/index.ts", line: 4 }]);
+    expect(contextForPaths).toHaveBeenCalledWith(["src/index.ts"]);
     expect(recordCandidates).toHaveBeenCalledWith(
       "head-1",
       [expect.objectContaining({ file: "src/index.ts", confidence: 90 })],
       result.coverage,
       3,
       "head-1",
+      {
+        modelCalls: 2,
+        elapsedMs: 1_000,
+        remainingModelCalls: 38,
+        remainingDurationMs: (90_000 * 40) - 1_000,
+        deadlineAt: 9_999_999,
+      },
     );
     expect(complete).toHaveBeenCalledWith(
       { ...result, assuranceGate: publicationGate },

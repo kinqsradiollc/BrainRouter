@@ -320,12 +320,21 @@ test('manifest v3 engineering defaults expose the reviewed matrix and keep advan
   for (const toolId of [
     'read_file', 'edit_file', 'run_command', 'web_search', 'artifact_write',
     'update_plan', 'route_task', 'delegate_agent',
+    // `run_workflow` sits with the rest of active-turn orchestration rather than
+    // behind the advanced group: `route_task` and `spawn_agents` both instruct
+    // the model to hand a phase chain to it, and splitting them left an
+    // engineering workspace reading guidance for a tool it could not emit. It
+    // runs the same in-turn children as `spawn_agents`, which is already here.
+    'run_workflow',
   ]) {
     assert.equal(allowed(selection, toolId), true, toolId);
   }
   for (const toolId of [
     'computer_use', 'connector_run', 'mcp_call',
-    'run_workflow', 'spawn_worker_thread', 'file_vulnerability',
+    // Still closed, and for a reason that survives the line above: a saved graph
+    // is a stored artifact rather than a turn-scoped plan, and a worker thread
+    // outlives the turn that started it.
+    'run_workflow_graph', 'spawn_worker_thread', 'file_vulnerability',
   ]) {
     assert.equal(allowed(selection, toolId), false, toolId);
   }

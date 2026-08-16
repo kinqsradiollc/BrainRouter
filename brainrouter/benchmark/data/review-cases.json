@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-09T07:43:30.000Z",
+  "observationCutoff": "2026-08-09T07:43:30.000Z",
+  "groundTruthBias": "Known issues are manually curated from later standalone fixes and each issue represents one conceptual defect with explicit semantic aliases and all eligible reviewed-revision locations. This covers only defects noticed and fixed later. Clean controls mean no later fix was linked to that pull request through the observation cutoff, not proof that the change has no latent defect. Compare paired arms on this frozen corpus; do not treat absolute recall as a repository bug-finding rate.",
+  "cases": [
+    {
+      "id": "pr-743",
+      "pr": 743,
+      "sha": "cad5d79e9bc0ac2a20d84b60c78a767367791606",
+      "title": "fix(desktop): dereference @kinqs workspace symlinks before electron-builder (#743)",
+      "issues": [
+        {
+          "id": "pr-743-unbuilt-workspace-aborts-packaging",
+          "description": "The dereference sweep exits when any workspace symlink has no dist directory, including workspaces outside the desktop package dependency closure, so an unrelated unbuilt workspace aborts packaging.",
+          "fixedBy": "a3221035a9c5e2ada8a6a39817b78f96a0b39735",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
+              "line": 31,
+              "endLine": 32
+            }
+          ],
+          "semanticRequirements": [
+            ["unbuilt workspace", "missing dist", "not built"],
+            ["exit", "abort", "fails the build", "process exit"],
+            ["unrelated workspace", "not a packaged dependency", "outside the dependency closure", "all workspace symlinks"]
+          ]
+        },
+        {
+          "id": "pr-743-declared-runtime-assets-not-copied",
+          "description": "The dereference helper copies only package.json and dist instead of the package's declared files, so runtime assets such as config or agents disappear from the packaged application.",
+          "fixedBy": "9393a98275b626af95049032793ef164a1f9a5c1",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
+              "line": 36,
+              "endLine": 37
+            }
+          ],
+          "semanticRequirements": [
+            ["runtime assets", "declared files", "package files", "config", "agents"],
+            ["only copies dist", "omits", "missing", "not copied"],
+            ["packaged", "electron builder", "release build"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-1242",
+      "pr": 1242,
+      "sha": "36ac80ce0d374c15760d812af338f087a39111cf",
+      "title": "fix(desktop): verify packaged browser without debugger (#1242)",
+      "issues": [
+        {
+          "id": "pr-1242-smoke-does-not-exercise-runtime-assets",
+          "description": "The packaged smoke verifies only the browser bridge and never invokes the utility host or workspace-manifest path, so a package missing required runtime assets can still pass.",
+          "fixedBy": "9393a98275b626af95049032793ef164a1f9a5c1",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/electron/packagedBrowserSmoke.ts",
+              "line": 34,
+              "endLine": 43
+            }
+          ],
+          "semanticRequirements": [
+            ["smoke test", "self test", "verification"],
+            ["utility host", "host query", "session info", "workspace manifest"],
+            ["not exercised", "does not verify", "can still pass", "blind"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-1241",
+      "pr": 1241,
+      "sha": "560f89fcdc05d34cf4af5cc985838a0c7d94719c",
+      "title": "fix(desktop): isolate packaged smoke profile (#1241)",
+      "issues": [
+        {
+          "id": "pr-1241-smoke-inherits-real-user-config",
+          "description": "The packaged smoke isolates Chromium's profile but does not override HOME, USERPROFILE, or BrainRouter state, so it can read a developer's real configuration and produce a non-hermetic result.",
+          "fixedBy": "f900181864403f9cf0672f0dc8dcd5ce92e38af7",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
+              "line": 158,
+              "endLine": 170
+            }
+          ],
+          "semanticRequirements": [
+            ["home", "userprofile", "brainrouter home", "configuration"],
+            ["real user", "developer config", "host config", "not isolated"],
+            ["packaged smoke", "smoke harness", "verifier"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-1240",
+      "pr": 1240,
+      "sha": "69c9843a0249bd0a5a1f107a055c6b03d5086258",
+      "title": "fix(desktop): enable packaged smoke debugger (#1240)",
+      "issues": [
+        {
+          "id": "pr-1240-packaged-app-opens-debugger",
+          "description": "The release smoke enables a DevTools remote-debugging listener inside the packaged application, adding a debugger attack surface to production qualification instead of using an in-process self-test.",
+          "fixedBy": "36ac80ce0d374c15760d812af338f087a39111cf",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/electron/packagedSmokeBootstrap.ts",
+              "line": 21,
+              "endLine": 29
+            }
+          ],
+          "semanticRequirements": [
+            ["remote debugging", "devtools", "debugger", "debugging port"],
+            ["packaged", "release app", "production build"],
+            ["expose", "attack surface", "security", "listener"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-70",
+      "pr": 70,
+      "sha": "7b8267281e60203ba85fc85928bb00305ca26293",
+      "title": "feat(0.4.1): brain-side job queue + agent registry (BRAIN-P1) (#70)",
+      "issues": [
+        {
+          "id": "pr-70-job-dedup-read-then-write-race",
+          "description": "Agent-job idempotency lists in-flight rows and then inserts separately, allowing concurrent deliveries to both observe no row and enqueue duplicate work.",
+          "fixedBy": "9b262e6d17c4db51d7c732e5192d2933ea0a09e2",
+          "locations": [
+            {
+              "file": "brainrouter/src/memory/scheduler/jobs.ts",
+              "line": 52,
+              "endLine": 62
+            }
+          ],
+          "semanticRequirements": [
+            ["dedup", "idempotency"],
+            ["read then write", "race", "concurrent"],
+            ["duplicate job", "both enqueue", "duplicate work", "webhook"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-446",
+      "pr": 446,
+      "sha": "c8ee4adcd972075a47172881b0e57c65e30ecac2",
+      "title": "feat(desktop): in-app Monaco code editor (editable tabs, save, dirty, preview fallback) (#446)",
+      "issues": [
+        {
+          "id": "pr-446-monaco-receives-non-hex-theme-colors",
+          "description": "CSS palette values are passed directly into Monaco's theme, but Monaco requires hex colors; hsl/rgb values can throw and leave the editor on its fallback theme.",
+          "fixedBy": "c4cf2d264c931f140a27efb5629fdca6f9c00339",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/src/lib/editor/monacoEnv.ts",
+              "line": 41,
+              "endLine": 51
+            }
+          ],
+          "semanticRequirements": [
+            ["monaco", "editor theme"],
+            ["hsl", "rgb", "css variable", "non hex"],
+            ["illegal color", "throws", "rejects", "crash"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-416",
+      "pr": 416,
+      "sha": "f8497517da0de5cb9c2d4e9c2b220c257d3fc966",
+      "title": "feat(desktop): per-session model — each chat keeps its own model (item 10) (#416)",
+      "issues": [
+        {
+          "id": "pr-416-model-picks-default-to-all-chats",
+          "description": "The model selector defaults to global scope, so an ordinary model pick changes the shared default and synchronizes into other chats despite the per-session feature contract.",
+          "fixedBy": "d0c3b389b0e51eeb5ccc857d3956c2467298ff1f",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/src/App.tsx",
+              "line": 650,
+              "endLine": 652
+            },
+            {
+              "file": "brainrouter-desktop/electron/hostCore.ts",
+              "line": 248,
+              "endLine": 252
+            }
+          ],
+          "semanticRequirements": [
+            ["model selection", "model pick", "model scope"],
+            ["global", "all chats", "other session"],
+            ["sync", "changes", "overwrites", "shared default"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pr-110",
+      "pr": 110,
+      "sha": "b9a4025c632faf3d9ef86eab1c398fa52bc01355",
+      "title": "feat(0.4.2): /effort max as an alias for xhigh (#110)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    },
+    {
+      "id": "pr-127",
+      "pr": 127,
+      "sha": "a0b112a37686005fd36ae22da7f6e30450917b5b",
+      "title": "feat(0.4.3): command-registry taxonomy guard + fix duplicate /model help (CLI-12) (#127)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    },
+    {
+      "id": "pr-130",
+      "pr": 130,
+      "sha": "ce09029e9ed5126f4f9c2bb0ada8e0a1298d778b",
+      "title": "feat(0.4.3): tool-call repair telemetry in /context (CLI-8) (#130)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    },
+    {
+      "id": "pr-147",
+      "pr": 147,
+      "sha": "8bdf8e21dd339d0b1342e08b4934bf9b117379cc",
+      "title": "feat(0.4.3): retrieval benchmark summary + regression gate (MEM-9) (#147)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    }
+  ]
+}

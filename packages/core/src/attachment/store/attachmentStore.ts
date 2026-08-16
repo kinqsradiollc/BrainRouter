@@ -38,9 +38,21 @@ function writeFile(workspaceRoot: string, data: AttachmentFile): void {
   writeJsonFile(file(workspaceRoot), data);
 }
 
-/** Absolute directory the blob for an attachment id lives in. */
+/**
+ * Where an attachment's blobs live — the formula, without creating anything.
+ *
+ * Split from {@link attachmentDir} because reading is not writing: a resolver
+ * asked about an id that has never existed must not leave an empty directory
+ * behind as proof it was asked. One formula, so the reader and the writer cannot
+ * disagree about where the bytes are.
+ */
+export function attachmentDirPath(workspaceRoot: string, id: string): string {
+  return path.join(getStateDir(workspaceRoot), 'attachments', id);
+}
+
+/** Absolute directory the blob for an attachment id lives in, created if needed. */
 export function attachmentDir(workspaceRoot: string, id: string): string {
-  const dir = path.join(getStateDir(workspaceRoot), 'attachments', id);
+  const dir = attachmentDirPath(workspaceRoot, id);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -65,6 +77,10 @@ export interface CreateAttachmentInput {
   taskId?: string;
   extractedText?: string;
   textTruncated?: boolean;
+  /** ADR-030 D3 — what the parse could not read, in our voice, not the file's. */
+  extractionNotice?: string;
+  /** ADR-030 Q4 — where the whole parsed document is, when one was stored. */
+  documentRef?: string;
   width?: number;
   height?: number;
   pageCount?: number;
@@ -97,6 +113,8 @@ export function createAttachment(workspaceRoot: string, input: CreateAttachmentI
   if (input.taskId) record.taskId = input.taskId;
   if (input.extractedText !== undefined) record.extractedText = input.extractedText;
   if (input.textTruncated !== undefined) record.textTruncated = input.textTruncated;
+  if (input.extractionNotice) record.extractionNotice = input.extractionNotice;
+  if (input.documentRef) record.documentRef = input.documentRef;
   if (input.width !== undefined) record.width = input.width;
   if (input.height !== undefined) record.height = input.height;
   if (input.pageCount !== undefined) record.pageCount = input.pageCount;
@@ -108,6 +126,32 @@ export function createAttachment(workspaceRoot: string, input: CreateAttachmentI
 
 export function getAttachment(workspaceRoot: string, id: string): AttachmentRecord | undefined {
   return readFile(workspaceRoot).attachments.find((a) => a.id === id);
+}
+
+/**
+ * ADR-029 D3 — the record for these exact bytes, if one is already here.
+ *
+ * "An image pasted into three notes is one object with three references" needs a
+ * way to ask whether the object exists, and the hash is already computed and
+ * already stored on every record; this is only the lookup that was missing.
+ *
+ * Scoped by `sessionKey` when one is given, because the two uses want opposite
+ * things: a note's picture should find the copy another note already stored
+ * (they share the notes scope), while a file attached to two different chats is
+ * two attachments as far as each chat is concerned. The blob is still written
+ * once per scope rather than once per workspace — going further would mean a
+ * record whose deletion is not its own, and this store deletes a blob with its
+ * record.
+ */
+export function findAttachmentBySha256(
+  workspaceRoot: string,
+  sha256: string,
+  sessionKey?: string,
+): AttachmentRecord | undefined {
+  if (!sha256) return undefined;
+  return readFile(workspaceRoot).attachments.find((a) => (
+    a.sha256 === sha256 && (sessionKey === undefined || a.sessionKey === sessionKey)
+  ));
 }
 
 export interface AttachmentFilter {
@@ -173,7 +217,13 @@ export function linkAttachmentMemory(
   return a;
 }
 
-/** Delete an attachment record + its blob directory. Returns whether it existed. */
+/**
+ * Delete an attachment record + its blob directory. Returns whether it existed.
+ *
+ * The whole directory, which is also how ADR-030's parsed document goes: the
+ * artifact is written in here beside the bytes it was parsed from, so it has no
+ * delete of its own and cannot outlive its file.
+ */
 export function deleteAttachment(workspaceRoot: string, id: string): boolean {
   const data = readFile(workspaceRoot);
   const idx = data.attachments.findIndex((a) => a.id === id);
@@ -181,7 +231,7 @@ export function deleteAttachment(workspaceRoot: string, id: string): boolean {
   data.attachments.splice(idx, 1);
   writeFile(workspaceRoot, data);
   try {
-    fs.rmSync(path.join(getStateDir(workspaceRoot), 'attachments', id), { recursive: true, force: true });
+    fs.rmSync(attachmentDirPath(workspaceRoot, id), { recursive: true, force: true });
   } catch { /* best-effort blob cleanup */ }
   return true;
 }

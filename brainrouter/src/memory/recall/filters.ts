@@ -52,6 +52,14 @@ export interface RecallFilters {
   /** ADR-010 P5 — the caller's user id, paired with {@link orgId} to allow the
    *  caller's own records plus org-shared ones. */
   callerUserId?: string;
+  /**
+   * ADR-017 D4 — per-project restricted ACL. The set of `project_tag`s of
+   * restricted Projects the caller may NOT access (computed once per recall from
+   * projects + project_members + the caller's org role). A record carrying one
+   * of these tags is dropped. NULL-tolerant: an untagged record is never in a
+   * restricted Project, so it always surfaces.
+   */
+  deniedProjectTags?: Set<string>;
 }
 
 /**
@@ -119,6 +127,15 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
     // ADR-010 P5 — org isolation + visibility (hard cross-org boundary,
     // NULL-tolerant on untagged records). Runs before the optional filters.
     if (filters.orgId && !orgVisibilityAllows(r as { org_id?: string | null; visibility?: string | null; user_id?: string | null; team_access?: boolean }, filters.orgId, filters.callerUserId)) return false;
+    // ADR-017 D4 — per-project restricted ACL. Drop records whose Project the
+    // caller may not access. NULL-tolerant: an untagged record surfaces.
+    if (filters.deniedProjectTags && filters.deniedProjectTags.size > 0) {
+      const ptag =
+        (r as { project_tag?: string | null }).project_tag ??
+        projectTagLookup?.get(r.record_id) ??
+        null;
+      if (ptag !== null && filters.deniedProjectTags.has(ptag)) return false;
+    }
     if (types && !types.has(r.type)) return false;
     if (scenes && (!r.scene_name || !scenes.has(r.scene_name))) return false;
     if (filters.skillTag && r.skill_tag !== filters.skillTag) return false;

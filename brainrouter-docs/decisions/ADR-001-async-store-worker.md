@@ -1,6 +1,6 @@
 # ADR-001 — Async store via a SQLite worker thread
 
-> Status: **PROPOSED — design only; implementation deferred (not in 0.4.14).**
+> Status: **SUPERSEDED (2026-08-16) — the SQLite store this ADR would have made async was removed entirely by the ADR-007 Postgres cutover; an async SQLite worker is moot.**
 > Date: 2026-06-07. Covers the 0.4.14 ASYNC-2 + ASYNC-3 workstreams (they are one
 > change, not two — see below).
 

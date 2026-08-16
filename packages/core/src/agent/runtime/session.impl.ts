@@ -32,14 +32,24 @@ import { runHooks } from '../../hooks/hooksStore.js';
 import { callMcpTool } from '../../mcp/mcpUtils.js';
 import { emitAgentEvent } from '../../memory/memoryEvents.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
-import { readTranscriptEntries } from '../../session/transcript/sessionStore.js';
+import {
+  readTranscriptEntries,
+  type TranscriptReplayEntry,
+} from '../../session/transcript/sessionStore.js';
 import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from '../guards/toolCallRecovery.js';
 import { appendDeveloperPromptLayer } from '../transport/llmTransport.js';
+import { scheduleLearningCheckpoint } from './learningPhase.js';
 
 export async function compactHistory(this: Agent): Promise<{ summary: string; estimatedTokens: number; durationMs: number; replacedMessages: number } | null> {
     if (this.chatHistory.length < 4) return null;
+    // ADR-032 D5 — the compaction checkpoint, fired BEFORE the history is
+    // replaced. Compaction is the moment the trajectory stops existing: after
+    // this function returns, the turns that would have taught us something are
+    // a summary. Reflection still runs off-turn (the call is dispatched, not
+    // awaited), but it has to read the window while the window is still there.
+    scheduleLearningCheckpoint(this, 'compaction');
     // CC-P4.2 — advisory pre-compact hook (notify/log; cannot block).
     if (this.hookAdvisoryActive()) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
     const before = this.chatHistory.length;
@@ -400,7 +410,7 @@ export function getPolicyAudit(this: Agent): ReadonlyArray<{ tool: string; actio
    * runtime so workspace/session context is fresh, but the user/assistant/tool
    * messages are kept verbatim.
    */
-export function loadHistory(this: Agent, entries: Array<{ role: string; content?: unknown; name?: string; tool_call_id?: string; tool_calls?: unknown }>): number {
+export function loadHistory(this: Agent, entries: TranscriptReplayEntry[]): number {
     const replay = entries
       .filter((e) => e.role === 'user' || e.role === 'assistant' || e.role === 'tool')
       .map((e) => {
@@ -408,6 +418,9 @@ export function loadHistory(this: Agent, entries: Array<{ role: string; content?
         if (e.name) msg.name = e.name;
         if (e.tool_call_id) msg.tool_call_id = e.tool_call_id;
         if (e.tool_calls) msg.tool_calls = e.tool_calls;
+        if (e.deliveryId) msg.deliveryId = e.deliveryId;
+        if (e.trust) msg.trust = e.trust;
+        if (e.provenance) msg.provenance = { ...e.provenance };
         return msg;
       });
     // The transcript is replayed VERBATIM, so a prior turn that died after
@@ -416,6 +429,7 @@ export function loadHistory(this: Agent, entries: Array<{ role: string; content?
     // every request with `400 ... tool call result does not follow tool call
     // (2013)` — bricking the resumed session. Repair the pairing once on load.
     this.chatHistory = [this.createSystemMessage(), ...sanitizeToolCallPairing(replay)];
+    this.restoreAppliedPeerDeliveries(entries);
     this.initialized = true;
     // DESK-5t — the resumed history is a DIFFERENT session; the prior
     // session's last prompt count no longer describes this context. Reset so

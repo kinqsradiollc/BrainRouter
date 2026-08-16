@@ -25,7 +25,9 @@ test('P23-8 every onboarding profile derives orchestration defaults from its bun
     // bundled plan resolved — never the TypeScript compatibility fallback —
     // and that the plan is either its own or its declared alias, so an
     // accidental alias to some unrelated profile still fails.
-    assert.equal(defaults.planId, ORCHESTRATION_PLAN_ALIASES[profileId] ?? profileId);
+    assert.equal(defaults.workspaceProfileId, profileId);
+    assert.equal(defaults.planProfileId, ORCHESTRATION_PLAN_ALIASES[profileId] ?? profileId);
+    assert.equal(defaults.planId, defaults.planProfileId);
     assert.deepEqual(manifest.orchestration, {
       mode: defaults.mode,
       availableRoles: defaults.availableRoles,
@@ -39,6 +41,8 @@ test('P23-8 custom setup is a valid primary-only plan that can be skipped or con
   const manifest = createWorkspaceManifest({ name: 'custom', profile: 'custom', by: 'wizard' });
   const preview = buildWorkspaceOnboardingPreview(manifest);
 
+  assert.equal(preview.workspaceProfileId, 'custom');
+  assert.equal(preview.planProfileId, 'custom');
   assert.equal(preview.plan?.id, 'custom');
   assert.equal(preview.plan?.mode, 'off');
   assert.equal(preview.plan?.selectedStrategyId, 'direct');

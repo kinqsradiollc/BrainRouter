@@ -167,7 +167,7 @@ function validateSteeringArray(value: unknown, errors: string[]): void {
       continue;
     }
     validateId(receipt.id, `${label}.id`, errors);
-    if (!['user', 'parent', 'extension'].includes(String(receipt.source))) {
+    if (!['user', 'parent', 'extension', 'peer-session'].includes(String(receipt.source))) {
       errors.push(`${label}.source is invalid.`);
     }
     if (

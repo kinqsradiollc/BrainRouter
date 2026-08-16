@@ -419,6 +419,9 @@ export function finalizeBuildLoop(
       body: derivePrBody({ slug, verifyGreen, changedFiles: cleanup.changedFiles ?? 0, reviewOutput: phaseOutput('review'), attributionSessionUrl: getCliKnobs().attribution.sessionUrl }),
       baseBranch: getCliKnobs().buildLoopPrBaseBranch,
       draft: getCliKnobs().buildLoopPrDraft,
+      // ADR-028 A7 — no stacking inputs: the emit lays down ONE squashed patch
+      // on ONE branch, so there is no second layer for a stack to hold. Stacks
+      // are published from a checkout that is already part of one.
     });
     if (res.ok) {
       pr = { ok: true, url: res.prUrl, number: res.prNumber, branch: res.branch };

@@ -1,6 +1,15 @@
+/**
+ * Lifecycle wrapper for one MCP client connection.
+ *
+ * Owns transport creation, session-aware reconnects, identity, and wake
+ * subscriptions behind one stable API. Connectivity failures degrade locally,
+ * and a host wake listener cannot break the authenticated receive loop.
+ */
+
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { LLMConfig, ServerConfig } from '../../config/config.js';
 import { getCliKnobs } from '../../config/config.js';
 import { VERSION } from '../../version.js';
@@ -10,6 +19,15 @@ import type { McpIdentity } from '../types.js';
 import { resolveIdentityFromConfig } from './identity.js';
 import { isSessionNotFoundError } from './sessionErrors.js';
 import { buildHttpTransport, buildStdioTransport } from './transport.js';
+import {
+  HOST_LEARNING_REQUEST_METHOD,
+  type HostLearningRequest,
+  type HostLearningResult,
+} from '../hostLearning.js';
+import {
+  SessionMessageNotificationSchema,
+  type SessionMessageWakeListener,
+} from '../sessionMessages.js';
 
 export class McpClientWrapper {
   public client: Client;
@@ -40,12 +58,36 @@ export class McpClientWrapper {
    */
   private lastServerConfig?: ServerConfig;
   private lastLlmConfig?: LLMConfig;
+  private readonly sessionMessageWakeListeners = new Set<SessionMessageWakeListener>();
 
   constructor() {
     this.client = new Client(
       { name: 'brainrouter-cli', version: VERSION },
       { capabilities: {} }
     );
+    this.installSessionMessageWakeHandler();
+  }
+
+  private installSessionMessageWakeHandler(): void {
+    this.client.setNotificationHandler(SessionMessageNotificationSchema, async (notification) => {
+      const wake = {
+        sessionKey: notification.params.sessionKey,
+        messageIds: [...notification.params.messageIds],
+      };
+      for (const listener of this.sessionMessageWakeListeners) {
+        try {
+          await listener(wake);
+        } catch {
+          // A presentation host must not be able to break the MCP receive loop.
+        }
+      }
+    });
+  }
+
+  /** Subscribe to authenticated BrainRouter inbox wake hints. */
+  public subscribeSessionMessageWakes(listener: SessionMessageWakeListener): () => void {
+    this.sessionMessageWakeListeners.add(listener);
+    return () => { this.sessionMessageWakeListeners.delete(listener); };
   }
 
   /** Whether this wrapper has an active MCP transport. */
@@ -276,6 +318,68 @@ export class McpClientWrapper {
   }
 
   /**
+   * Host-only learned-state lifecycle channel.
+   *
+   * This uses a custom MCP request rather than tools/call, so the Agent's model
+   * tool adapter has no name or argument shape with which to invoke it. It is
+   * additionally pinned to a connection positively identified as BrainRouter;
+   * learned state must never be forwarded to an arbitrary third-party MCP.
+   */
+  async callHostLearning(
+    request: HostLearningRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<HostLearningResult> {
+    const errorResult = (text: string): HostLearningResult => ({
+      isError: true,
+      content: [{ type: 'text', text }],
+    });
+    if (!this.connected) {
+      return errorResult('BrainRouter MCP is not connected; host learning lifecycle is unavailable.');
+    }
+    if (this.identity !== 'brainrouter') {
+      return errorResult('Host learning lifecycle requires a verified BrainRouter MCP connection.');
+    }
+    if (options?.signal?.aborted) {
+      return errorResult('Host learning lifecycle interrupted by user.');
+    }
+
+    const timeoutMs = getCliKnobs().mcpTimeoutMs;
+    const invoke = () => Promise.race([
+      this.client.request(
+        { method: HOST_LEARNING_REQUEST_METHOD, params: request } as any,
+        CallToolResultSchema,
+        { signal: options?.signal, timeout: timeoutMs },
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`MCP host learning request timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        ),
+      ),
+    ]);
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let reconnects = 0;
+    let sessionRedials = 0;
+    for (;;) {
+      try {
+        return await invoke() as HostLearningResult;
+      } catch (err) {
+        if (err instanceof Error && /\btimed out after \d+ms\b/.test(err.message)) throw err;
+        if (isSessionNotFoundError(err) && this.lastServerConfig && sessionRedials < 2) {
+          sessionRedials += 1;
+          try { await this.reinit(); continue; } catch { /* use bounded reconnect below */ }
+        }
+        if (!isConnectivityError(err)) throw err;
+        reconnects += 1;
+        if (reconnects > 2) throw err;
+        try { await this.reinit(); } catch { /* retry exposes the connection failure */ }
+        await sleep(reconnectBackoffMs(reconnects, { capMs: 4000 }));
+      }
+    }
+  }
+
+  /**
    * Force-tear-down the transport + reconnect using the stashed
    * `serverConfig`. Used by the session-expiry recovery path; safe to
    * call repeatedly because `close()` swallows its own errors.
@@ -296,6 +400,7 @@ export class McpClientWrapper {
       { name: 'brainrouter-cli', version: VERSION },
       { capabilities: {} },
     );
+    this.installSessionMessageWakeHandler();
     await this._connect(this.lastServerConfig!, this.lastLlmConfig);
   }
 

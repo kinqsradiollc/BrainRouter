@@ -1,0 +1,10 @@
+/* ADR-038 — Dashboard shell-only layout; Planner presentation lives in UI. */
+.page { width: 100%; max-width: 1100px; min-width: 0; }
+.error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  font-size: 12px;
+}

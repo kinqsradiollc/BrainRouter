@@ -1,8 +1,15 @@
+/**
+ * Desktop HostCore lifecycle and interaction-broker regressions. Tests preserve
+ * exact session identity across host actions and require user decisions, peer
+ * expiry, reviewed execution authority, and shutdown to resolve once without
+ * stale-session application.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike } from './hostCore.js';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import type { AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import type { ExecutionIntentHandle } from '@kinqs/brainrouter-types/agent';
 import {
   __resetExternalSteering,
   publishExternalSteering,
@@ -72,6 +79,643 @@ test('start-turn: forwards inline images to runTurn opts (vision)', async () => 
   const core = createHostCore({ agent, send });
   await core.handle({ kind: 'start-turn', prompt: 'what is this?', images: [{ mediaType: 'image/png', dataBase64: 'AAAA' }] });
   assert.deepEqual(seenImages, [{ mediaType: 'image/png', dataBase64: 'AAAA' }]);
+});
+
+test('ADR-040 A40-2: trusted Desktop host carries only the reviewed opaque intent into the exact turn', async () => {
+  type IssueInput = Parameters<NonNullable<AgentLike['issueExecutionIntent']>>[0];
+  type RunOptions = Parameters<AgentLike['runTurn']>[2];
+  const { out, send } = collect();
+  const issued: IssueInput[] = [];
+  const runOptions: RunOptions[] = [];
+  const phaseHandle = Object.freeze({}) as ExecutionIntentHandle;
+  const graphHandle = Object.freeze({}) as ExecutionIntentHandle;
+  const handles = [phaseHandle, graphHandle];
+  const agent: AgentLike = {
+    sessionKey: 'sess-reviewed',
+    issueExecutionIntent: async (input) => {
+      issued.push(input);
+      return handles[issued.length - 1]!;
+    },
+    runTurn: async (_prompt, _callbacks, options) => {
+      runOptions.push(options);
+      return 'done';
+    },
+  };
+  const core = createHostCore({ agent, send });
+  const phaseArgs = { template: 'build', templateArgs: { goal: 'ship it' } };
+  const graphArgs = { id: 'release-check', vars: { branch: 'feature' } };
+
+  await core.startReviewedExecution({
+    prompt: 'Run the reviewed build workflow.',
+    toolName: 'run_workflow',
+    args: phaseArgs,
+    requestId: 'reviewed-request-1',
+  });
+  await core.startReviewedExecution({
+    prompt: 'Run the reviewed release graph.',
+    toolName: 'run_workflow_graph',
+    args: graphArgs,
+  });
+
+  assert.deepEqual(issued.map(({ source, toolName, requestId }) => ({ source, toolName, requestId })), [
+    { source: 'reviewed-ui', toolName: 'run_workflow', requestId: 'reviewed-request-1' },
+    { source: 'reviewed-ui', toolName: 'run_workflow_graph', requestId: undefined },
+  ]);
+  assert.deepEqual(issued[0]?.args, phaseArgs, 'the host sends the exact reviewed phase-plan values to Core');
+  assert.deepEqual(issued[1]?.args, graphArgs, 'the host sends the exact reviewed graph values to Core');
+  assert.notEqual(issued[0]?.args, phaseArgs, 'reviewed phase-plan arguments cross the async boundary as a host-owned snapshot');
+  assert.notEqual(issued[1]?.args, graphArgs, 'reviewed graph arguments cross the async boundary as a host-owned snapshot');
+  assert.equal(runOptions[0]?.executionIntent, phaseHandle, 'the minted object identity reaches only its phase-plan turn');
+  assert.equal(runOptions[1]?.executionIntent, graphHandle, 'the minted object identity reaches only its graph turn');
+  assert.equal(JSON.stringify(out).includes('executionIntent'), false, 'no event serializes bearer proof back toward the renderer');
+});
+
+test('ADR-040 A40-2: reviewed execution fails closed when issuance is unavailable or rejected', async () => {
+  const unavailable = collect();
+  let unavailableRuns = 0;
+  const unavailableCore = createHostCore({
+    agent: {
+      sessionKey: 'sess-unavailable',
+      runTurn: async () => { unavailableRuns += 1; return 'unexpected'; },
+    },
+    send: unavailable.send,
+  });
+  await unavailableCore.startReviewedExecution({
+    prompt: 'run',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  assert.equal(unavailableRuns, 0);
+  assert.ok(unavailable.out.some((message) => message.event.kind === 'turn-error'
+    && message.event.message.includes('unavailable')));
+
+  const rejected = collect();
+  let rejectedRuns = 0;
+  const rejectedCore = createHostCore({
+    agent: {
+      sessionKey: 'sess-rejected',
+      issueExecutionIntent: async () => { throw new Error('Reviewed launch arguments are invalid.'); },
+      runTurn: async () => { rejectedRuns += 1; return 'unexpected'; },
+    },
+    send: rejected.send,
+  });
+  await rejectedCore.startReviewedExecution({
+    prompt: 'run',
+    toolName: 'run_workflow_graph',
+    args: { id: 'missing' },
+  });
+  assert.equal(rejectedRuns, 0);
+  assert.ok(rejected.out.some((message) => message.event.kind === 'turn-error'
+    && message.event.message === 'Reviewed launch arguments are invalid.'));
+});
+
+test('ADR-040 A40-2: a session switch while reviewed intent issuance is pending cancels the launch', async () => {
+  const { out, send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveIssue!: (value: ExecutionIntentHandle) => void;
+  const issueGate = new Promise<ExecutionIntentHandle>((resolve) => { resolveIssue = resolve; });
+  let markIssuing!: () => void;
+  const issuing = new Promise<void>((resolve) => { markIssuing = resolve; });
+  let runs = 0;
+  const agent: AgentLike = {
+    sessionKey: 'sess:A',
+    issueExecutionIntent: async () => { markIssuing(); return await issueGate; },
+    runTurn: async () => { runs += 1; return 'unexpected'; },
+    resetSessionCounters: () => {},
+    clearHistory: () => {},
+  };
+  const core = createHostCore({ agent, send, transcriptExists: () => true });
+
+  const launch = core.startReviewedExecution({
+    prompt: 'run reviewed workflow',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await issuing;
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  resolveIssue(handle);
+  await launch;
+
+  assert.equal(runs, 0, 'an intent minted across a session change never starts a turn');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:A'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')));
+});
+
+test('ADR-040 A40-2: A to B to A while issuance waits still invalidates reviewed authority', async () => {
+  const { out, send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveIssue!: (value: ExecutionIntentHandle) => void;
+  const issueGate = new Promise<ExecutionIntentHandle>((resolve) => { resolveIssue = resolve; });
+  let markIssuing!: () => void;
+  const issuing = new Promise<void>((resolve) => { markIssuing = resolve; });
+  let runs = 0;
+  const agent: AgentLike = {
+    sessionKey: 'sess:A',
+    issueExecutionIntent: async () => { markIssuing(); return await issueGate; },
+    runTurn: async () => { runs += 1; return 'unexpected'; },
+    resetSessionCounters: () => {},
+    clearHistory: () => {},
+  };
+  const core = createHostCore({ agent, send, transcriptExists: () => true });
+
+  const launch = core.startReviewedExecution({
+    prompt: 'run reviewed workflow',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await issuing;
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  assert.equal(agent.sessionKey, 'sess:A', 'the original object and session identity are restored');
+  resolveIssue(handle);
+  await launch;
+
+  assert.equal(runs, 0, 'restoring the same identity cannot restore stale launch authority');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:A'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')));
+});
+
+test('ADR-040 A40-2: a completed same-session turn invalidates an earlier pending issuance', async () => {
+  const { out, send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveIssue!: (value: ExecutionIntentHandle) => void;
+  const issueGate = new Promise<ExecutionIntentHandle>((resolve) => { resolveIssue = resolve; });
+  let markIssuing!: () => void;
+  const issuing = new Promise<void>((resolve) => { markIssuing = resolve; });
+  const prompts: string[] = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess:same',
+    issueExecutionIntent: async () => { markIssuing(); return await issueGate; },
+    runTurn: async (prompt) => { prompts.push(prompt); return 'done'; },
+  };
+  const core = createHostCore({ agent, send });
+
+  const launch = core.startReviewedExecution({
+    prompt: 'stale reviewed workflow',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await issuing;
+  await core.handle({ kind: 'start-turn', prompt: 'ordinary same-session turn' });
+  resolveIssue(handle);
+  await launch;
+
+  assert.deepEqual(prompts, ['ordinary same-session turn'], 'a completed turn advances authority even after running clears');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:same'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')));
+});
+
+test('ADR-040 A40-2: a provider/model switch cancels reviewed issuance before launch', async () => {
+  const { out, send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveIssue!: (value: ExecutionIntentHandle) => void;
+  const issueGate = new Promise<ExecutionIntentHandle>((resolve) => { resolveIssue = resolve; });
+  let markIssuing!: () => void;
+  const issuing = new Promise<void>((resolve) => { markIssuing = resolve; });
+  let runs = 0;
+  let liveConfig: Record<string, unknown> | undefined;
+  const agent: AgentLike = {
+    sessionKey: 'sess:model-fence',
+    issueExecutionIntent: async () => { markIssuing(); return await issueGate; },
+    runTurn: async () => { runs += 1; return 'unexpected'; },
+    setLLMConfig: (config) => { liveConfig = config as Record<string, unknown>; },
+  };
+  const nextConfig = {
+    provider: 'second-provider',
+    model: 'second-model',
+    endpoint: 'https://second.invalid/v1',
+    apiKey: 'test-only',
+  };
+  const core = createHostCore({
+    agent,
+    send,
+    resolveProviderLlm: async () => nextConfig,
+  });
+
+  const launch = core.startReviewedExecution({
+    prompt: 'must stay with the reviewed runtime actor',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await issuing;
+  await core.handle({
+    kind: 'set-model',
+    model: 'second-model',
+    providerName: 'second-provider',
+    persist: false,
+  });
+  resolveIssue(handle);
+  await launch;
+
+  assert.deepEqual(liveConfig, nextConfig, 'the explicit model switch itself still succeeds');
+  assert.equal(runs, 0, 'a pending reviewed action cannot retarget to the new provider');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:model-fence'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')));
+});
+
+test('ADR-040 A40-2: model selection revokes Core reviewed authority before provider resolution awaits', async () => {
+  const { send } = collect();
+  const lifecycle: string[] = [];
+  let markResolving!: () => void;
+  const resolving = new Promise<void>((resolve) => { markResolving = resolve; });
+  let releaseResolution!: () => void;
+  const resolutionGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+  const agent: AgentLike = {
+    sessionKey: 'sess:model-revoke-order',
+    runTurn: async () => 'idle',
+    revokeReviewedExecutionAuthority: () => { lifecycle.push('revoke'); },
+    setLLMConfig: () => { lifecycle.push('apply'); },
+  };
+  const core = createHostCore({
+    agent,
+    send,
+    resolveProviderLlm: async () => {
+      lifecycle.push('resolve');
+      markResolving();
+      await resolutionGate;
+      return {
+        provider: 'second-provider',
+        model: 'second-model',
+        endpoint: 'https://second.invalid/v1',
+        apiKey: 'test-only',
+      };
+    },
+  });
+
+  const switching = core.handle({
+    kind: 'set-model',
+    model: 'second-model',
+    providerName: 'second-provider',
+    persist: false,
+  });
+  await resolving;
+
+  assert.deepEqual(
+    lifecycle,
+    ['revoke', 'resolve'],
+    'Core authority is retired synchronously before the first provider-resolution await',
+  );
+  releaseResolution();
+  await switching;
+  assert.deepEqual(lifecycle, ['revoke', 'resolve', 'apply']);
+});
+
+test('ADR-040 A40-2: a global model selection revokes every pooled reviewed runtime', async () => {
+  const { send } = collect();
+  const revoked: string[] = [];
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    pendingSteeringCount: 1,
+    runTurn: async () => 'idle',
+    revokeReviewedExecutionAuthority: () => { revoked.push('sess:A'); },
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:B',
+    runTurn: async () => 'idle',
+    resetSessionCounters: () => {},
+    revokeReviewedExecutionAuthority: () => { revoked.push('sess:B'); },
+  };
+  const core = createHostCore({
+    agent: agentA,
+    send,
+    spawnAgent: () => agentB,
+    transcriptExists: () => true,
+  });
+
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  revoked.length = 0;
+  await core.handle({ kind: 'set-model', model: 'global-model', persist: true });
+
+  assert.deepEqual(new Set(revoked), new Set(['sess:A', 'sess:B']));
+});
+
+test('ADR-040 A40-2: provider resolution cannot retarget a model selection across a session switch', async () => {
+  const { out, send } = collect();
+  let markResolving!: () => void;
+  const resolving = new Promise<void>((resolve) => { markResolving = resolve; });
+  let releaseResolution!: () => void;
+  const resolutionGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+  const applied: string[] = [];
+  const sessionLlms: Array<[string, unknown]> = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => 'idle',
+    resetSessionCounters: () => {},
+    clearHistory: () => {},
+    revokeReviewedExecutionAuthority: () => {},
+    setLLMConfig: () => { applied.push(agent.sessionKey); },
+  };
+  const core = createHostCore({
+    agent,
+    send,
+    transcriptExists: () => true,
+    setSessionLlm: (sessionKey, patch) => { sessionLlms.push([sessionKey, patch]); },
+    resolveProviderLlm: async (_providerName, model) => {
+      markResolving();
+      await resolutionGate;
+      return {
+        provider: 'second-provider',
+        model,
+        endpoint: 'https://second.invalid/v1',
+        apiKey: 'test-only',
+      };
+    },
+  });
+
+  const switching = core.handle({
+    kind: 'set-model',
+    model: 'second-model',
+    providerName: 'second-provider',
+    persist: false,
+  });
+  await resolving;
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  releaseResolution();
+  await switching;
+
+  assert.deepEqual(applied, [], 'the retargeted Agent object is not mutated after the await');
+  assert.deepEqual(sessionLlms, [], 'the stale A command never writes a B session override');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:A'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('active session changed')));
+});
+
+test('ADR-040 A40-2: interrupt permanently cancels a reviewed launch awaiting issuance', async () => {
+  const { out, send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveIssue!: (value: ExecutionIntentHandle) => void;
+  const issueGate = new Promise<ExecutionIntentHandle>((resolve) => { resolveIssue = resolve; });
+  let markIssuing!: () => void;
+  const issuing = new Promise<void>((resolve) => { markIssuing = resolve; });
+  let interrupts = 0;
+  let runs = 0;
+  const agent: AgentLike = {
+    sessionKey: 'sess:stop-pending',
+    issueExecutionIntent: async () => { markIssuing(); return await issueGate; },
+    requestInterrupt: () => { interrupts += 1; },
+    runTurn: async () => { runs += 1; return 'unexpected'; },
+  };
+  const core = createHostCore({ agent, send });
+
+  const launch = core.startReviewedExecution({
+    prompt: 'must not run after Stop',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await issuing;
+  await core.handle({ kind: 'interrupt' });
+  resolveIssue(handle);
+  await launch;
+
+  assert.equal(interrupts, 1, 'ordinary cooperative interrupt behavior is preserved');
+  assert.equal(runs, 0, 'a handle minted after Stop cannot begin runTurn');
+  assert.equal(out.some((message) => message.event.kind === 'turn-start'), false);
+  assert.ok(out.some((message) => message.sessionKey === 'sess:stop-pending'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')));
+});
+
+test('ADR-040 A40-2: a mutation queued before reviewed entry cancels against the captured origin', async () => {
+  const { out, send } = collect();
+  let releaseDrain!: () => void;
+  const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+  let markDraining!: () => void;
+  const draining = new Promise<void>((resolve) => { markDraining = resolve; });
+  let issueCalls = 0;
+  const agent: AgentLike = {
+    sessionKey: 'sess:A',
+    issueExecutionIntent: async () => { issueCalls += 1; return Object.freeze({}) as ExecutionIntentHandle; },
+    runTurn: async () => 'unexpected',
+    endSession: async () => { markDraining(); await drainGate; },
+    resetSessionCounters: () => {},
+    clearHistory: () => {},
+  };
+  const core = createHostCore({ agent, send, transcriptExists: () => true });
+  const args = { template: 'build' };
+  const request = {
+    prompt: 'must remain scoped to A',
+    toolName: 'run_workflow' as const,
+    args,
+  };
+
+  const switching = core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const launch = core.startReviewedExecution(request);
+  await draining;
+  request.prompt = 'caller mutation while the session tail is pending';
+  args.template = 'review';
+  releaseDrain();
+  await Promise.all([switching, launch]);
+
+  assert.equal(issueCalls, 0, 'a click queued behind a mutation never issues against the post-mutation Agent');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:A'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')),
+  'cancellation remains attached to the synchronously captured origin');
+});
+
+test('ADR-040 A40-2: caller mutation during issuance cannot change the captured reviewed request', async () => {
+  type IssueInput = Parameters<NonNullable<AgentLike['issueExecutionIntent']>>[0];
+  const { send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveIssue!: (value: ExecutionIntentHandle) => void;
+  const issueGate = new Promise<ExecutionIntentHandle>((resolve) => { resolveIssue = resolve; });
+  let markIssuing!: () => void;
+  const issuing = new Promise<void>((resolve) => { markIssuing = resolve; });
+  let issued: IssueInput | undefined;
+  const prompts: string[] = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess:snapshot',
+    issueExecutionIntent: async (input) => {
+      issued = input;
+      markIssuing();
+      return await issueGate;
+    },
+    runTurn: async (prompt) => { prompts.push(prompt); return 'done'; },
+  };
+  const core = createHostCore({ agent, send });
+  const args = { template: 'build', templateArgs: { goal: 'original goal' } };
+  const request = {
+    prompt: 'original prompt',
+    toolName: 'run_workflow' as const,
+    args,
+    requestId: 'original-request',
+  };
+
+  const launch = core.startReviewedExecution(request);
+  await issuing;
+  request.prompt = 'mutated prompt';
+  request.requestId = 'mutated-request';
+  args.template = 'review';
+  args.templateArgs.goal = 'mutated goal';
+  resolveIssue(handle);
+  await launch;
+
+  assert.ok(issued);
+  assert.notEqual(issued.args, args, 'Core receives a host-owned snapshot, not the caller object');
+  assert.deepEqual(issued, {
+    source: 'reviewed-ui',
+    toolName: 'run_workflow',
+    args: { template: 'build', templateArgs: { goal: 'original goal' } },
+    requestId: 'original-request',
+  });
+  assert.equal(Object.isFrozen((issued.args as { templateArgs: object }).templateArgs), true, 'the nested snapshot is immutable');
+  assert.deepEqual(prompts, ['original prompt'], 'runTurn receives the synchronously reviewed prompt');
+});
+
+test('ADR-040 A40-2: reviewed request accessors are rejected without invocation', async () => {
+  const { out, send } = collect();
+  let getterCalls = 0;
+  let issueCalls = 0;
+  const args = Object.defineProperty({}, 'template', {
+    enumerable: true,
+    get: () => { getterCalls += 1; return 'build'; },
+  }) as Record<string, unknown>;
+  const core = createHostCore({
+    agent: {
+      sessionKey: 'sess:accessor',
+      issueExecutionIntent: async () => { issueCalls += 1; return Object.freeze({}) as ExecutionIntentHandle; },
+      runTurn: async () => 'unexpected',
+    },
+    send,
+  });
+
+  await core.startReviewedExecution({ prompt: 'run', toolName: 'run_workflow', args });
+
+  assert.equal(getterCalls, 0, 'descriptor capture never executes caller code');
+  assert.equal(issueCalls, 0);
+  assert.ok(out.some((message) => message.event.kind === 'turn-error'
+    && message.event.message.includes('must not be an accessor')));
+});
+
+test('ADR-040 A40-2: a session switch during host policy validation also cancels before runTurn', async () => {
+  const { out, send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let resolveValidation!: (value: string | null) => void;
+  const validationGate = new Promise<string | null>((resolve) => { resolveValidation = resolve; });
+  let markValidating!: () => void;
+  const validating = new Promise<void>((resolve) => { markValidating = resolve; });
+  let runs = 0;
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    issueExecutionIntent: async () => handle,
+    runTurn: async () => { runs += 1; return 'unexpected'; },
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => 'idle',
+    resetSessionCounters: () => {},
+  };
+  const core = createHostCore({
+    agent: agentA,
+    spawnAgent: () => agentB,
+    send,
+    transcriptExists: () => true,
+    validateTurn: async (sessionKey) => {
+      if (sessionKey !== 'sess:A') return null;
+      markValidating();
+      return await validationGate;
+    },
+  });
+
+  const launch = core.startReviewedExecution({
+    prompt: 'run reviewed workflow',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await validating;
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  resolveValidation(null);
+  await launch;
+
+  assert.equal(runs, 0, 'policy validation cannot race a reviewed turn into the prior session');
+  assert.ok(out.some((message) => message.sessionKey === 'sess:A'
+    && message.event.kind === 'turn-error'
+    && message.event.message.includes('runtime authority changed')));
+});
+
+test('ADR-040 A40-2: canceling a reserved reviewed turn preserves its queued follow-up after a session switch', async () => {
+  const { send } = collect();
+  const handle = Object.freeze({}) as ExecutionIntentHandle;
+  let releaseValidation!: () => void;
+  const validationGate = new Promise<void>((resolve) => { releaseValidation = resolve; });
+  let markValidating!: () => void;
+  const validating = new Promise<void>((resolve) => { markValidating = resolve; });
+  let resolveFollowUp!: () => void;
+  const followUpDone = new Promise<void>((resolve) => { resolveFollowUp = resolve; });
+  const prompts: string[] = [];
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    issueExecutionIntent: async () => handle,
+    runTurn: async (prompt) => {
+      prompts.push(prompt);
+      if (prompt === 'queued follow-up') resolveFollowUp();
+      return 'done';
+    },
+  };
+  const core = createHostCore({
+    agent: agentA,
+    spawnAgent: (sessionKey) => ({
+      sessionKey,
+      runTurn: async () => 'idle',
+      resetSessionCounters: () => {},
+    }),
+    send,
+    transcriptExists: () => true,
+    validateTurn: async (sessionKey) => {
+      if (sessionKey === 'sess:A' && prompts.length === 0) {
+        markValidating();
+        await validationGate;
+      }
+      return null;
+    },
+  });
+
+  const reviewed = core.startReviewedExecution({
+    prompt: 'reviewed launch that becomes stale',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+  await validating;
+  await core.handle({
+    kind: 'start-turn',
+    prompt: 'queued follow-up',
+    delivery: 'queue',
+    deliveryId: 'queued-after-reviewed',
+  });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  releaseValidation();
+  await reviewed;
+  await followUpDone;
+
+  assert.deepEqual(prompts, ['queued follow-up']);
+});
+
+test('ADR-040 A40-2: renderer command traffic cannot reach the reviewed execution issuer', async () => {
+  const { out, send } = collect();
+  let issueCalls = 0;
+  const core = createHostCore({
+    agent: {
+      sessionKey: 'sess-wire',
+      issueExecutionIntent: async () => { issueCalls += 1; return Object.freeze({}) as ExecutionIntentHandle; },
+      runTurn: async () => 'unexpected',
+    },
+    send,
+  });
+
+  await core.handle({
+    kind: 'start-reviewed-execution',
+    prompt: 'forged renderer request',
+    toolName: 'run_workflow',
+    args: { template: 'build' },
+  });
+
+  assert.equal(issueCalls, 0, 'the host-only method is absent from AgentCommand');
+  assert.deepEqual(out, [], 'forged renderer traffic is ignored without emitting capability material');
 });
 
 test('observeTurnEvent: receives the turn tool stream tagged with the turn sessionKey (verification scoping)', async () => {
@@ -354,6 +998,92 @@ test('DESK-5v concurrent sessions: a mid-turn switch spawns a second agent and n
   assert.ok(out.some((m) => m.sessionKey === 'sess:B' && m.event.kind === 'assistant-delta'), "B's stream stayed tagged B");
 });
 
+test('ADR-032 D5: a background session fires its session-end checkpoint when its agent is dropped', async () => {
+  // The desktop pool discards a finished BACKGROUND agent; that is where the
+  // session actually ends on this surface. Without this the CLI's `/exit` was
+  // the only place D5 ever ran, so a desktop-only user never learned anything
+  // from a session that ended without a compaction.
+  const { out, send } = collect();
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  const gateA = new Promise<void>((r) => { releaseA = r; });
+  const gateB = new Promise<void>((r) => { releaseB = r; });
+  let endedB = 0;
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await gateA; return 'done-A'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm', clearHistory: () => {},
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => { await gateB; return 'done-B'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+    clearHistory: () => {}, endSession: () => { endedB += 1; },
+  };
+  const core = createHostCore({
+    agent: agentA, send, spawnAgent: () => agentB,
+    transcriptExists: (k) => k === 'sess:A' || k === 'sess:B',
+  });
+  // A is busy, so switching spawns a SECOND agent for B rather than reusing A.
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'long A' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const turnB = core.handle({ kind: 'start-turn', prompt: 'long B' });
+  // Look away: B keeps running, but it is now a BACKGROUND session.
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  assert.equal(endedB, 0, 'a session still running has not ended');
+  releaseB();
+  await turnB;
+  assert.equal(endedB, 1, 'the dropped background agent never fired its session-end checkpoint');
+  releaseA();
+  await turnA;
+  assert.ok(out.length > 0);
+});
+
+test('ADR-032 D5: shutdown awaits a drain that outlived background pool eviction', async () => {
+  const { send } = collect();
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  let releaseDrain!: () => void;
+  const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+  const gateB = new Promise<void>((resolve) => { releaseB = resolve; });
+  const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+  let shutdownRan = false;
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await gateA; return 'done-A'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => { await gateB; return 'done-B'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+    endSession: async () => { await drainGate; },
+  };
+  const core = createHostCore({
+    agent: agentA,
+    send,
+    spawnAgent: () => agentB,
+    transcriptExists: () => true,
+    onShutdown: () => { shutdownRan = true; },
+  });
+
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'A' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const turnB = core.handle({ kind: 'start-turn', prompt: 'B' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  releaseB();
+  await turnB;
+  releaseA();
+  await turnA;
+
+  const shutdown = core.handle({ kind: 'shutdown' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(shutdownRan, false, 'transport teardown cannot pass an evicted Agent checkpoint');
+  releaseDrain();
+  await shutdown;
+  assert.equal(shutdownRan, true);
+});
+
 test('session-changed carries the AUTHORITATIVE running flag so the renderer can clear a stale "working…"', async () => {
   const { out, send } = collect();
   let releaseA!: () => void;
@@ -424,17 +1154,28 @@ test('query: routes to handlers; unknown names error; thrown handlers error', as
   assert.deepEqual(results[0].event.result, [{ sessionKey: 's1' }]);
 });
 
-test('garbage on the wire is ignored; shutdown dismisses + calls onShutdown', async () => {
+test('garbage is ignored; shutdown dismisses, drains learning, then calls onShutdown', async () => {
   const { out, send } = collect();
   let shut = false;
-  const core = createHostCore({ agent: fakeAgent(), send, onShutdown: () => { shut = true; } });
+  let releaseLearning!: () => void;
+  const learning = new Promise<void>((resolve) => { releaseLearning = resolve; });
+  const lifecycle: string[] = [];
+  const agent: AgentLike = {
+    ...fakeAgent(),
+    endSession: async () => { await learning; lifecycle.push('learning'); },
+  };
+  const core = createHostCore({ agent, send, onShutdown: () => { lifecycle.push('shutdown'); shut = true; } });
   await core.handle('garbage');
   await core.handle({ kind: 'unknown-thing' });
   assert.equal(out.length, 0);
   const p = core.broker.request({ type: 'confirm', title: 'x' });
-  await core.handle({ kind: 'shutdown' });
+  const shutdown = core.handle({ kind: 'shutdown' });
   assert.deepEqual(await p.response, { type: 'dismissed' });
+  assert.equal(shut, false, 'transport teardown waits for the bounded learning drain');
+  releaseLearning();
+  await shutdown;
   assert.equal(shut, true);
+  assert.deepEqual(lifecycle, ['learning', 'shutdown']);
 });
 
 test('interrupt flags the agent for a cooperative stop', async () => {
@@ -455,12 +1196,234 @@ test('new-session: fresh key + cleared history + session-changed event', async (
     resetSessionCounters: () => {},
     getModel: () => 'test-model',
   };
-  const core = createHostCore({ agent, send });
+  const titles: Array<{ sessionKey: string; title: string; source: string }> = [];
+  const core = createHostCore({
+    agent,
+    send,
+    onSessionTitle: (sessionKey, title, source) => titles.push({ sessionKey, title, source }),
+  });
   await core.handle({ kind: 'new-session', label: 'My Chat!' });
   assert.equal(cleared, true);
-  assert.equal(agent.sessionKey, 'root:My-Chat-');
+  assert.match(agent.sessionKey, /^root:new-[0-9a-f-]{36}$/);
   const ev = out.find((m) => m.event.kind === 'session-changed')!.event as { sessionKey: string; loadedMessages: number };
   assert.equal(ev.loadedMessages, 0);
+  assert.deepEqual(titles, [{ sessionKey: agent.sessionKey, title: 'My Chat!', source: 'human' }]);
+});
+
+test('new-session fails loudly instead of spinning when every generated identity collides', async () => {
+  const { send } = collect();
+  const agent = fakeAgent();
+  const core = createHostCore({ agent, send, transcriptExists: () => true });
+
+  await assert.rejects(
+    core.handle({ kind: 'new-session', label: 'Collision' }),
+    /Could not mint a fresh session identity after 8 collision checks/,
+  );
+  assert.equal(agent.sessionKey, 'sess-test');
+});
+
+test('ADR-032 D5: an idle retarget awaits endSession before changing session identity', async () => {
+  const { send } = collect();
+  let releaseDrain!: () => void;
+  const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+  const lifecycle: string[] = [];
+  const agent: AgentLike = {
+    ...fakeAgent(),
+    sessionKey: 'root:old',
+    endSession: async () => {
+      lifecycle.push(`drain:${agent.sessionKey}`);
+      await drainGate;
+    },
+    resetSessionCounters: () => { lifecycle.push(`reset:${agent.sessionKey}`); },
+    clearHistory: () => { lifecycle.push(`clear:${agent.sessionKey}`); },
+  };
+  const core = createHostCore({
+    agent,
+    send,
+    transcriptExists: (sessionKey) => sessionKey === 'root:old' || sessionKey === 'root:saved',
+  });
+
+  const retarget = core.handle({ kind: 'new-session', label: 'next' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(agent.sessionKey, 'root:old', 'the old key remains pinned while its checkpoint drains');
+  assert.deepEqual(lifecycle, ['drain:root:old']);
+
+  releaseDrain();
+  await retarget;
+  const nextKey = agent.sessionKey;
+  assert.match(nextKey, /^root:new-[0-9a-f-]{36}$/);
+  assert.deepEqual(lifecycle, ['drain:root:old', `reset:${nextKey}`, `clear:${nextKey}`]);
+
+  await core.handle({ kind: 'resume-session', sessionKey: 'root:saved' });
+  assert.equal(agent.sessionKey, 'root:saved');
+  assert.deepEqual(lifecycle.slice(-2), [`drain:${nextKey}`, 'reset:root:saved']);
+});
+
+test('ADR-032 D8: tenant rebind drains every pooled Agent before transport replacement and respawn', async () => {
+  const { send } = collect();
+  const lifecycle: string[] = [];
+  let releaseA!: () => void;
+  let releaseDrainA!: () => void;
+  let releaseDrainB!: () => void;
+  const turnGateA = new Promise<void>((resolve) => { releaseA = resolve; });
+  const drainGateA = new Promise<void>((resolve) => { releaseDrainA = resolve; });
+  const drainGateB = new Promise<void>((resolve) => { releaseDrainB = resolve; });
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await turnGateA; return 'done-A'; },
+    requestInterrupt: () => { lifecycle.push('interrupt:A'); releaseA(); },
+    endSession: async () => { lifecycle.push(`drain-start:${agentA.sessionKey}`); await drainGateA; lifecycle.push('drain-end:A'); },
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => 'done-B',
+    endSession: async () => { lifecycle.push(`drain-start:${agentB.sessionKey}`); await drainGateB; lifecycle.push('drain-end:B'); },
+    getModel: () => 'old-model',
+  };
+  const replacement: AgentLike = {
+    sessionKey: 'replacement',
+    runTurn: async () => { lifecycle.push('replacement-turn'); return 'new-tenant'; },
+    getModel: () => 'new-model',
+  };
+  const core = createHostCore({
+    agent: agentA,
+    send,
+    spawnAgent: () => agentB,
+    transcriptExists: () => true,
+  });
+
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'old tenant work' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const rebind = core.rebindTenant(async (sessionKey) => {
+    lifecycle.push(`reconnect:${sessionKey}`);
+    lifecycle.push('spawn:new');
+    return replacement;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(lifecycle.includes('reconnect:sess:B'), false, 'transport stayed old while either checkpoint was pending');
+
+  releaseDrainA();
+  releaseDrainB();
+  await rebind;
+  await turnA;
+  assert.ok(lifecycle.indexOf('drain-end:A') < lifecycle.indexOf('reconnect:sess:B'));
+  assert.ok(lifecycle.indexOf('drain-end:B') < lifecycle.indexOf('reconnect:sess:B'));
+  assert.ok(lifecycle.indexOf('reconnect:sess:B') < lifecycle.indexOf('spawn:new'));
+
+  await core.handle({ kind: 'start-turn', prompt: 'new tenant work' });
+  assert.equal(lifecycle.at(-1), 'replacement-turn', 'only the replacement serves turns after rebinding');
+});
+
+test('ADR-032 D8: commands arriving during tenant transport replacement wait for the new boundary', async () => {
+  const { out, send } = collect();
+  let releaseTransport!: () => void;
+  const transportGate = new Promise<void>((resolve) => { releaseTransport = resolve; });
+  const lifecycle: string[] = [];
+  const replacement = fakeAgent();
+  replacement.sessionKey = 'replacement';
+  const core = createHostCore({
+    agent: { ...fakeAgent(), endSession: () => { lifecycle.push('drain'); } },
+    send,
+    queries: {
+      'central-mutation': () => { lifecycle.push('query'); return { ok: true }; },
+    },
+  });
+
+  const rebind = core.rebindTenant(async () => {
+    lifecycle.push('transport-start');
+    await transportGate;
+    lifecycle.push('transport-ready');
+    return replacement;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const query = core.handle({ kind: 'query', id: 'q-tenant', name: 'central-mutation' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(lifecycle, ['drain', 'transport-start'], 'the old transport cannot serve a concurrent query');
+
+  releaseTransport();
+  await Promise.all([rebind, query]);
+  assert.deepEqual(lifecycle, ['drain', 'transport-start', 'transport-ready', 'query']);
+  assert.ok(out.some((message) => message.event.kind === 'query-result' && message.event.id === 'q-tenant'));
+});
+
+test('ADR-032 D8: identity resolving mid-turn preserves the turn and enables learning for the next turn', async () => {
+  const { send } = collect();
+  let releaseTurn!: () => void;
+  const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve; });
+  let binding = { tenant: { userId: 'unresolved-profile-a', orgId: null as string | null }, enabled: false };
+  const observed: Array<typeof binding> = [];
+  let interrupts = 0;
+  let clears = 0;
+  const agent: AgentLike = {
+    sessionKey: 'sess:identity',
+    runTurn: async () => {
+      observed.push(structuredClone(binding));
+      if (observed.length === 1) await turnGate;
+      return 'done';
+    },
+    requestInterrupt: () => { interrupts += 1; },
+    clearHistory: () => { clears += 1; },
+    setLearningBinding: (tenant, enabled) => { binding = { tenant: { ...tenant }, enabled }; },
+  };
+  const core = createHostCore({ agent, send });
+
+  const firstTurn = core.handle({ kind: 'start-turn', prompt: 'already running' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const identityBind = core.bindLearning({ userId: 'user-a', orgId: 'org-a' }, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(interrupts, 0, 'background identity discovery never interrupts an active turn');
+  assert.equal(clears, 0, 'background identity discovery never clears conversation history');
+  assert.deepEqual(binding, {
+    tenant: { userId: 'unresolved-profile-a', orgId: null },
+    enabled: false,
+  }, 'the running turn keeps the disabled boot binding until finalization');
+
+  releaseTurn();
+  await Promise.all([firstTurn, identityBind]);
+  await core.handle({ kind: 'start-turn', prompt: 'next turn' });
+
+  assert.deepEqual(observed, [
+    { tenant: { userId: 'unresolved-profile-a', orgId: null }, enabled: false },
+    { tenant: { userId: 'user-a', orgId: 'org-a' }, enabled: true },
+  ]);
+  assert.equal(interrupts, 0);
+  assert.equal(clears, 0);
+});
+
+test('ADR-032 D8: a failed transport replacement installs a usable tenant-derived fallback Agent', async () => {
+  const { send } = collect();
+  const lifecycle: string[] = [];
+  const fallback: AgentLike = {
+    sessionKey: 'fallback',
+    runTurn: async () => { lifecycle.push('fallback-turn'); return 'offline-ready'; },
+    getModel: () => 'fallback-model',
+  };
+  const core = createHostCore({
+    agent: {
+      ...fakeAgent(),
+      sessionKey: 'sess:active',
+      endSession: () => { lifecycle.push('drain'); },
+    },
+    send,
+    spawnAgent: (sessionKey) => {
+      lifecycle.push(`fallback:${sessionKey}`);
+      return fallback;
+    },
+  });
+
+  await assert.rejects(
+    core.rebindTenant(async () => {
+      lifecycle.push('transport');
+      throw new Error('transport replacement failed');
+    }),
+    /transport replacement failed/,
+  );
+  assert.deepEqual(lifecycle, ['drain', 'transport', 'fallback:sess:active']);
+  assert.equal(fallback.sessionKey, 'sess:active');
+
+  await core.handle({ kind: 'start-turn', prompt: 'continue offline' });
+  assert.equal(lifecycle.at(-1), 'fallback-turn', 'the failed switch never leaves the host without an active Agent');
 });
 
 test('DESK-6t resume-session: switches + emits count, but LAZY-loads history on the first turn (not on resume)', async () => {
@@ -524,7 +1487,7 @@ test('new-session after lazy resume does not load the previous transcript on fir
 
   await core.handle({ kind: 'start-turn', prompt: 'brand new prompt' });
   assert.equal(historyLoads, 0, 'fresh chat did not ingest the lazily-resumed transcript');
-  assert.equal(agent.sessionKey, 'root:fresh');
+  assert.match(agent.sessionKey, /^root:new-[0-9a-f-]{36}$/);
 });
 
 test('set-model: switches + persists; persist failure degrades gracefully', async () => {
@@ -703,8 +1666,9 @@ test('a spawned/focused session restores its stored per-session model', async ()
     agent, send,
     spawnAgent: (k) => modelAgent(k),
     getSessionModel: (k) => (k === 'sess-test:feature' ? 'qwen3-coder' : undefined),
+    transcriptExists: () => true,
   });
-  await core.handle({ kind: 'new-session', label: 'feature' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess-test:feature' });
   // The agent now serving sess-test:feature must carry that session's model.
   const sc = out.filter((m) => m.event.kind === 'session-changed').pop();
   assert.equal(sc!.sessionKey, 'sess-test:feature');

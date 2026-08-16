@@ -37,6 +37,8 @@ import type { RemoteAccessClient } from '../remoteAccessClient.js';
 import type { BrowserHost } from '../browserHost.js';
 import type { DevServerRegistry } from '../devServerRegistry.js';
 import type { DesktopAccountModelCatalog } from '../accountIntegration.js';
+import type { HumanCorrectionIngress } from './humanCorrectionIngress.js';
+import type { DesktopSessionMessaging } from './sessionMessaging.js';
 
 type WsGit = ReturnType<typeof resolveWorkspaceGit>;
 
@@ -76,6 +78,8 @@ export interface HostContext {
   getLlm: () => LLMConfig;
   setLlm: (next: LLMConfig) => void;
   mcpClient: McpClientPool;
+  /** ADR-034 active Desktop participant + local/remote inbox lifecycle. */
+  sessionMessaging: DesktopSessionMessaging;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   callBrainAtlas: (tool: string, args: Record<string, unknown>) => Promise<any | null>;
   broker: import('@kinqs/brainrouter-agent-protocol').InteractionBroker;
@@ -93,8 +97,22 @@ export interface HostContext {
   refreshAccountModelCatalog: (force?: boolean) => Promise<DesktopAccountModelCatalog>;
   peekAccountModelCatalog: () => DesktopAccountModelCatalog;
   syncActiveSessionLlm: (base?: LLMConfig) => LLMConfig;
+  /** Revoke pending/active reviewed authority before runtime-policy writes. */
+  revokeReviewedExecutionAuthority: (scope: 'active-session' | 'workspace') => void;
+  /** ADR-032 D8 — drains every pooled Agent, installs the org-bound MCP
+   * transport, then respawns the active Agent under the same local tenant. */
+  rebindActiveAccountOrg: (
+    next: ReturnType<typeof import('@kinqs/brainrouter-core/config').loadConfig>,
+    options?: { forceIdentity?: boolean },
+  ) => Promise<boolean>;
+  /** Fail closed if another Desktop host changed the global org before this
+   * host finished rebinding both its pinned Agent and central transport. */
+  activeTenantBindingError: () => string | null;
+  /** Explicit human-only ADR-032 ingress. Renderer identity/provenance fields
+   * never cross this host-owned stamping and tenant-verification boundary. */
+  humanCorrectionIngress: HumanCorrectionIngress;
   spawnAgent: (sessionKey: string) => AgentLike;
-  spawnReviewer: (sessionKey?: string) => AgentLike;
+  spawnReviewer: (sessionKey?: string, systemPromptOverride?: string) => AgentLike;
   spawnTaskAgent: (sessionKey: string, access: 'read' | 'write') => AgentLike;
   activeMemorySessionKey: () => string;
   lifecycleActionFor: (change: string) => RecordLifecycleAction;

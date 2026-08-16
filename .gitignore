@@ -30,6 +30,7 @@ build/
 !brainrouter-desktop/build/**
 out/
 brainrouter-desktop/release/
+brainrouter-desktop/.planner-visual/
 .next/
 .open-next/
 .wrangler/
@@ -65,6 +66,8 @@ brainrouter/mcp_server.log
 brainrouter/benchmark/data/longmemeval_s_cleaned.json
 brainrouter-benchmark/results/**
 !brainrouter-benchmark/results/.gitkeep
+brainrouter/benchmark/results/**
+!brainrouter/benchmark/results/.gitkeep
 brainrouter-benchmark/reports/**
 !brainrouter-benchmark/reports/.gitkeep
 # Published benchmark results (the rest of reports/ stays scratch).

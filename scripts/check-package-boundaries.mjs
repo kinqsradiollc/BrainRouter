@@ -28,6 +28,7 @@ const INTERNAL_PACKAGES = new Map([
   ['@kinqs/brainrouter-core', 'core'],
   ['@kinqs/brainrouter-sdk', 'sdk'],
   ['@kinqs/brainrouter-hooks', 'hooks'],
+  ['@kinqs/brainrouter-ui', 'ui'],
   ['@kinqs/brainrouter-mcp-server', 'backend'],
   ['@kinqs/brainrouter-cli', 'cli'],
 ]);
@@ -38,12 +39,32 @@ const ALLOWED_INTERNAL_EDGES = new Map([
   ['core', new Set(['types', 'protocol'])],
   ['sdk', new Set(['types'])],
   ['hooks', new Set(['sdk', 'types'])],
+  ['ui', new Set(['core'])],
   ['backend', new Set(['core', 'types'])],
   ['cli', new Set(['core', 'sdk', 'types'])],
   ['desktop-host', new Set(['core', 'protocol', 'types'])],
-  ['desktop-renderer', new Set(['core', 'protocol', 'types'])],
-  ['dashboard', new Set(['hooks', 'sdk', 'types'])],
+  ['desktop-renderer', new Set(['core', 'protocol', 'types', 'ui'])],
+  ['dashboard', new Set(['hooks', 'sdk', 'types', 'ui'])],
 ]);
+
+/**
+ * Exceptions granted to ONE specifier, not to a package.
+ *
+ * ADR-035 D1b decides that a meeting captured in the browser gets the same
+ * guarantee as one captured on the desktop, and that "the session model, the
+ * segment protocol, and the recovery flow are shared — only the write target is
+ * host-specific". The dashboard therefore has to import the shared meetings
+ * module rather than mirror it; a mirrored copy is the "two features, and the
+ * second one is quietly worse" failure that ADR names by name, and it would mean
+ * two retry rules that drift.
+ *
+ * Granting the whole `dashboard -> core` edge would be the lazy way to say that
+ * and would let anything else in Core follow. This allowlist is by exact
+ * specifier, so `@kinqs/brainrouter-core/meetings` — pure TypeScript with no
+ * filesystem, network or Node builtin in it — is in, and the rest of Core stays
+ * out and still fails this check.
+ */
+const ALLOWED_INTERNAL_SPECIFIERS = new Map([['dashboard', new Set(['@kinqs/brainrouter-core/meetings'])]]);
 
 const SOURCE_AREAS = [
   { id: 'types', root: 'packages/types/src' },
@@ -51,6 +72,7 @@ const SOURCE_AREAS = [
   { id: 'core', root: 'packages/core/src' },
   { id: 'sdk', root: 'packages/sdk/src' },
   { id: 'hooks', root: 'packages/hooks/src' },
+  { id: 'ui', root: 'packages/ui/src' },
   { id: 'backend', root: 'brainrouter/src' },
   { id: 'cli', root: 'brainrouter-cli/src' },
   { id: 'desktop-host', root: 'brainrouter-desktop/electron' },
@@ -58,7 +80,7 @@ const SOURCE_AREAS = [
   { id: 'dashboard', root: 'brainrouter-dashboard' },
 ];
 
-const PACKAGE_SOURCE_AREAS = new Set(['types', 'protocol', 'core', 'sdk', 'hooks']);
+const PACKAGE_SOURCE_AREAS = new Set(['types', 'protocol', 'core', 'sdk', 'hooks', 'ui']);
 const APPLICATION_ROOTS = [
   'brainrouter/src',
   'brainrouter-cli/src',
@@ -106,6 +128,18 @@ const MANIFEST_RULES = new Map([
       path: 'packages/hooks/package.json',
       requiredInternalDependencies: ['@kinqs/brainrouter-sdk', '@kinqs/brainrouter-types'],
       requiredPeerDependencies: ['react'],
+    },
+  ],
+  [
+    'ui',
+    {
+      path: 'packages/ui/package.json',
+      requiredInternalDependencies: ['@kinqs/brainrouter-core'],
+      requiredPeerDependencies: ['react', 'react-dom'],
+      requiredPeerRanges: {
+        react: '^18.3.1 || ^19.0.0',
+        'react-dom': '^18.3.1 || ^19.0.0',
+      },
     },
   ],
 ]);
@@ -185,8 +219,28 @@ export function checkImport({ area, filePath, specifier, policy }) {
 
   if (packageName) {
     const target = INTERNAL_PACKAGES.get(packageName);
-    if (target !== area && !ALLOWED_INTERNAL_EDGES.get(area)?.has(target)) {
+    if (
+      target !== area
+      && !ALLOWED_INTERNAL_EDGES.get(area)?.has(target)
+      && !ALLOWED_INTERNAL_SPECIFIERS.get(area)?.has(specifier)
+    ) {
       return violation(`${area} may not depend on ${target}`);
+    }
+
+    // Two narrow doors, not one, and both for the same reason: a feature whose
+    // RULES have no legal shared home gets two copies of them, one per host,
+    // and they drift. That is what happened to the planner's sync wording —
+    // one host said "could not be sent", the other said "waiting to sync" for
+    // the same wedged queue. Widen this list only to entrypoints that are pure:
+    // Core's `./planner` reaches storage and the network and would break the
+    // dashboard's bundle.
+    if (
+      area === 'ui'
+      && packageName === '@kinqs/brainrouter-core'
+      && specifier !== '@kinqs/brainrouter-core/notes/editing'
+      && specifier !== '@kinqs/brainrouter-core/planner/presentation'
+    ) {
+      return violation('ui may import Core only through the browser-safe notes/editing or planner/presentation entrypoints');
     }
 
     if (packageName === '@kinqs/brainrouter-core' && specifier !== packageName) {
@@ -202,7 +256,7 @@ export function checkImport({ area, filePath, specifier, policy }) {
     }
   }
 
-  if ((area === 'sdk' || area === 'hooks') && !isTestFile(filePath) && specifier.startsWith('node:')) {
+  if ((area === 'sdk' || area === 'hooks' || area === 'ui') && !isTestFile(filePath) && specifier.startsWith('node:')) {
     return violation(`${area} production code must remain browser-safe and may not import node:*`);
   }
 
@@ -249,8 +303,20 @@ export function checkManifest(area, manifest, manifestPath = 'package.json') {
       add(`${dependency} must remain a peer dependency`);
     }
   }
+  for (const [dependency, range] of Object.entries(rule.requiredPeerRanges ?? {})) {
+    if (peerDependencies[dependency] && peerDependencies[dependency] !== range) {
+      add(`${dependency} peer range must remain ${range}`);
+    }
+  }
   if ((area === 'types' || area === 'protocol') && Object.keys(dependencies).length > 0) {
     add(`${area} must remain dependency-free`);
+  }
+  if (area === 'ui') {
+    const unexpectedRuntime = Object.keys(dependencies)
+      .filter((name) => name !== '@kinqs/brainrouter-core');
+    if (unexpectedRuntime.length > 0) {
+      add('ui runtime dependencies must contain only @kinqs/brainrouter-core; React belongs in peerDependencies');
+    }
   }
   return violations;
 }

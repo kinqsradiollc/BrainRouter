@@ -12,6 +12,7 @@ import { resolveRoutes } from './resolve.js';
 import { classifyRouterFailure, getRouterPolicy } from './policy.js';
 import { executeWithProviderRecovery } from './recovery.js';
 import type { CatalogPrefixMode, ModelRegistryEntry } from './types.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 /** A non-streaming upstream call — defaults to callOpenAI; injectable for tests. */
 export type RouterGatewayTransport = (
@@ -256,7 +257,7 @@ export function createRouterGatewayHandler(options: RouterGatewayOptions) {
       if (req.method === 'OPTIONS') { res.writeHead(204, CORS_HEADERS); return res.end(); }
       // Accept both `/v1/...` (drop-in OpenAI base_url) and `/router/v1/...`.
       const url = new URL(req.url ?? '/', `http://${options.host}:${options.port}`);
-      const path = url.pathname.replace(/^\/router\/v1/, '/v1').replace(/\/+$/, '') || '/';
+      const path = stripTrailingSlashes(url.pathname.replace(/^\/router\/v1/, '/v1')) || '/';
 
       if (!authorized(req, options.serveKey)) {
         return apiError(res, 401, 'Incorrect API key provided.', 'authentication_error', 'invalid_api_key');

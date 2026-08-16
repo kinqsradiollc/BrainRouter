@@ -8,6 +8,7 @@ import {
   resolveWorkspaceOrchestrationPlan,
   type WorkspaceOrchestrationResolutionInput,
 } from '../orchestration/profiles/orchestrationProfileResolver.js';
+import { resolveOrchestrationPlanIdentity } from '../workspace/orchestrationPlanIdentity.js';
 import { getWorkspaceProfile } from '../workspace/profiles.js';
 
 function input(
@@ -40,7 +41,8 @@ function input(
 test('P23-3 deterministically resolves and narrows the Engineering delivery preview', () => {
   const result = resolveWorkspaceOrchestrationPlan(input());
 
-  assert.equal(result.activation, 'preview');
+  assert.equal(result.workspaceProfileId, 'engineering');
+  assert.equal(result.planProfileId, 'engineering');
   assert.equal(result.orchestrationProfileId, 'engineering');
   assert.equal(result.strategyId, 'delivery');
   assert.equal(result.selectionSource, 'deterministic');
@@ -180,22 +182,81 @@ test('P23-3 respects off, explicit, and skipped-setup no-manifest primary paths'
   assert.equal(explicitDelivery.selectionSource, 'explicit');
 
   const legacy = resolveWorkspaceOrchestrationPlan(input({ manifest: null }));
+  assert.equal(legacy.workspaceProfileId, null);
+  assert.equal(legacy.planProfileId, null);
   assert.equal(legacy.orchestrationProfileId, null);
   assert.equal(legacy.strategyId, null);
   assert.deepEqual(legacy.stages.map((stage) => stage.executor.kind), ['primary']);
   assert.equal(legacy.diagnostics[0]?.code, 'no-manifest');
 });
 
-test('P23-3 fails closed for a mismatched profile plan or invalid fallback', () => {
+test('ADR-040 A40-1 accepts only exact or host-resolved bundled plan identity', () => {
+  const identity = resolveOrchestrationPlanIdentity('product-management');
+  assert.equal(identity.resolution, 'bundled-alias');
+  assert.ok(identity.definition);
+  const aliased = input({ definition: identity.definition });
+  aliased.manifest!.profile = 'product-management';
+  const aliasResult = resolveWorkspaceOrchestrationPlan(aliased);
+  assert.equal(aliasResult.workspaceProfileId, 'product-management');
+  assert.equal(aliasResult.planProfileId, 'engineering');
+  assert.equal(aliasResult.orchestrationProfileId, 'engineering');
+
+  assert.equal(Object.isFrozen(identity.definition), true);
+  assert.equal(Object.isFrozen(identity.definition.strategies), true);
+  assert.throws(
+    () => Object.defineProperty(identity.definition!, 'toJSON', {
+      value: () => structuredClone(identity.definition),
+    }),
+    /not extensible|Cannot define property/i,
+  );
+  assert.throws(
+    () => Object.defineProperty(identity.definition!.limits, 'maxParallel', {
+      get: () => 16,
+    }),
+    /Cannot redefine property/i,
+  );
+
+  const unprovenAlias = input();
+  unprovenAlias.manifest!.profile = 'product-management';
+  const unprovenAliasResult = resolveWorkspaceOrchestrationPlan(unprovenAlias);
+  assert.equal(unprovenAliasResult.planProfileId, null);
+  assert.equal(unprovenAliasResult.diagnostics[0]?.code, 'profile-plan-mismatch');
+
+  const undeclaredAlias = input();
+  undeclaredAlias.manifest!.profile = 'research';
+  const undeclaredAliasResult = resolveWorkspaceOrchestrationPlan(undeclaredAlias);
+  assert.equal(undeclaredAliasResult.planProfileId, null);
+  assert.equal(undeclaredAliasResult.diagnostics[0]?.code, 'profile-plan-mismatch');
+
+  const replacedAliasTarget = input({
+    definition: structuredClone(identity.definition),
+  });
+  replacedAliasTarget.manifest!.profile = 'product-management';
+  replacedAliasTarget.definition!.displayName = 'Caller-authored replacement';
+  const replacedAliasResult = resolveWorkspaceOrchestrationPlan(replacedAliasTarget);
+  assert.equal(replacedAliasResult.planProfileId, null);
+  assert.equal(replacedAliasResult.diagnostics[0]?.code, 'profile-plan-mismatch');
+
   const mismatched = input();
   mismatched.manifest!.profile = 'research';
   const mismatchResult = resolveWorkspaceOrchestrationPlan(mismatched);
+  assert.equal(mismatchResult.workspaceProfileId, 'research');
+  assert.equal(mismatchResult.planProfileId, null);
   assert.equal(mismatchResult.orchestrationProfileId, null);
   assert.equal(mismatchResult.diagnostics[0]?.code, 'profile-plan-mismatch');
+
+  const noPlan = resolveWorkspaceOrchestrationPlan(input({ definition: null }));
+  assert.equal(noPlan.workspaceProfileId, 'engineering');
+  assert.equal(noPlan.planProfileId, null);
+});
+
+test('P23-3 fails closed for an invalid fallback', () => {
 
   const invalid = structuredClone(input().definition!);
   invalid.fallbackStrategyId = 'missing';
   const invalidResult = resolveWorkspaceOrchestrationPlan(input({ definition: invalid }));
+  assert.equal(invalidResult.workspaceProfileId, 'engineering');
+  assert.equal(invalidResult.planProfileId, null);
   assert.equal(invalidResult.orchestrationProfileId, null);
   assert.equal(invalidResult.diagnostics[0]?.code, 'invalid-plan');
 });

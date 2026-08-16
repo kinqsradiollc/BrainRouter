@@ -1,0 +1,138 @@
+745:             node["memory_proposals"].append(proposal)
+746:             emit(run, "memory.write.proposed", node_id, proposal)
+747:     if result.question:
+748:         question = {"id": f"q-{uuid4().hex[:6]}", "node_id": node_id, "text": result.question, "blocking": result.outcome == "blocked", "status": "open"}
+749:         run["queues"]["questions"].append(question)
+750:         emit(run, "question.raised", node_id, question)
+751:     node.update(
+752:         state="completed" if result.outcome in {"complete", "pass"} else result.outcome,
+753:         state_reason=result.summary,
+754:         activity=f"Returned {result.outcome}",
+755:     )
+756:     if node_id == run["org"]["completion_node"]:
+757:         emit(run, "review.completed", node_id, {"verdict": result.outcome, "summary": result.summary})
+758:         if result.outcome == "pass":
+759:             implementation = latest_artifact(run, "implementation")
+760:             if implementation:
+761:                 implementation.update(status="verified", reviewed_by=node_id)
+762:                 emit(run, "artifact.verified", node_id, {"artifact_id": implementation["id"]})
+763:     emit(run, "node.loop.completed", node_id, {"attempt": node["attempt"], "outcome": result.outcome, "summary": result.summary})
+764:     activate_edge(run, node_id, result.outcome)
+765:     return {"route": result.outcome, "source": node_id}
+766: 
+767: 
+768: async def approval_node(run_id, state):
+769:     run = load_run(run_id)
+770:     source = state.get("source")
+771:     source_node = next((node for node in run["nodes"] if node["id"] == source), None)
+772:     if not source_node:
+773:         return {"route": "failed", "source": "approval"}
+774:     source_artifact = latest_artifact(run, source_node["artifact_type"])
+775:     destination_id = edge_target(run, "approval", "approved")
+776:     destination = next((node for node in run["nodes"] if node["id"] == destination_id), None)
+777:     if not source_artifact or not destination:
+778:         return {"route": "failed", "source": "approval"}
+779:     approval_id = f"approval-{run_id}-{source}-{source_node['attempt']}"
+780:     approval = next((item for item in run["queues"]["approvals"] if item["id"] == approval_id), None)
+781:     if not approval:
+782:         approval = {
+783:             "id": approval_id,
+784:             "node_id": source,
+785:             "source_node_id": source,
+786:             "destination_node_id": destination_id,
+787:             "destination_name": destination["name"],
+788:             "artifact_id": source_artifact["id"],
+789:             "title": f"Approve {source_node['name']} {source_node['artifact_type']} for {destination['name']}",
+790:             "policy": run["org"]["policies"]["approval"],
+791:             "risk": "bounded handoff",
+792:             "impact": f"Approval releases {source_artifact['id']} to {destination['name']} within its declared boundaries; rejection ends the run blocked.",
+793:             "status": "pending",
+794:             "options": ["approve", "reject"],
+795:             "created_at": now(),
+796:         }
+797:         run["queues"]["approvals"].append(approval)
+798:         source_node.update(state="waiting_for_approval", state_reason=approval["policy"])
+799:         run["run"]["status"] = "waiting_for_approval"
+800:         emit(run, "approval.requested", source, {"approval_id": approval_id, "title": approval["title"]})
+801:     decision = interrupt({key: approval[key] for key in ("id", "title", "policy", "risk", "impact", "artifact_id", "destination_node_id", "options")})
+802:     route = "rejected" if decision.get("decision") == "reject" else "approved"
+803:     approval.update(status="rejected" if route == "rejected" else "approved", decision=decision, resolved_at=now())
+804:     source_artifact.update(status="rejected" if route == "rejected" else "approved", approval_id=approval_id)
+805:     source_node.update(state="blocked" if route == "rejected" else "completed", state_reason=f"Approval {approval['status']}")
+806:     run["run"]["status"] = "blocked" if route == "rejected" else "running"
+807:     emit(run, "approval.resolved", source, {"approval_id": approval_id, "decision": decision.get("decision")})
+808:     activate_edge(run, "approval", route)
+809:     return {"route": route, "source": "approval"}
+810: 
+811: 
+812: def build_graph(run):
+813:     builder = StateGraph(GraphState)
+=== build_graph ===
+812: def build_graph(run):
+813:     builder = StateGraph(GraphState)
+814:     node_ids = [node["id"] for node in run["nodes"]]
+815:     for node_id in node_ids:
+816:         async def execute(state, node_id=node_id):
+817:             return await execute_node(run["run"]["id"], node_id, state)
+818:         builder.add_node(node_id, execute)
+819:     if any(edge["from"] == "approval" or edge["to"] == "approval" for edge in run["edges"]):
+820:         async def approve(state):
+821:             return await approval_node(run["run"]["id"], state)
+822:         builder.add_node("approval", approve)
+823: 
+824:     grouped = {}
+825:     for edge in run["edges"]:
+826:         grouped.setdefault(edge["from"], []).append(edge)
+827:     for source in node_ids + (["approval"] if "approval" in grouped else []):
+828:         edges = grouped.get(source, [])
+829:         if not edges:
+830:             builder.add_edge(source, END)
+831:             continue
+832:         targets = {edge["when"]: END if edge["to"] == "END" else edge["to"] for edge in edges}
+833:         targets["__end__"] = END
+834:         allowed = set(targets)
+835:         builder.add_conditional_edges(source, lambda state, allowed=allowed: state.get("route") if state.get("route") in allowed else "__end__", targets)
+836:     builder.add_edge(START, run["org"]["entry_node"])
+837:     return builder.compile(checkpointer=InMemorySaver())
+838: 
+839: 
+840: async def drive(run_id, value):
+841:     run = load_run(run_id)
+842:     try:
+843:         graph = GRAPHS.get(run_id)
+844:         if not graph:
+845:             if run["run"]["status"] == "cancelled":
+846:                 return
+847:             raise RuntimeError("Run graph is unavailable")
+848:         result = await graph.ainvoke(value, {"configurable": {"thread_id": run_id}, "recursion_limit": len(run["nodes"]) + 5})
+849:         if result.get("__interrupt__"):
+850:             return
+851:         if run["run"]["status"] == "cancelled":
+852:             return
+853:         route, source = result.get("route"), result.get("source")
+854:         if route == "pass":
+855:             run["run"]["status"] = "completed"
+856:             await remember_verified(run)
+857:             emit(run, "run.completed", data={"verdict": "pass"})
+858:         elif route in {"rejected", "blocked", "failed"}:
+859:             run["run"]["status"] = "blocked"
+860:             emit(run, "run.blocked", data={"reason": "Approval rejected" if route == "rejected" else route, "source": source})
+861:         elif run["run"]["status"] not in TERMINAL:
+862:             run["run"]["status"] = "failed"
+863:             emit(run, "run.failed", data={"reason": route or "No eligible edge"})
+864:     except asyncio.CancelledError:
+865:         return
+866:     except Exception as exc:
+867:         if run["run"]["status"] != "cancelled":
+868:             run["run"]["status"] = "failed"
+869:             emit(run, "run.failed", data={"reason": str(exc)[:1000]})
+870:     finally:
+871:         if run["run"]["status"] in TERMINAL:
+872:             GRAPHS.pop(run_id, None)
+873: 
+874: 
+875: app = FastAPI(title="Graphroom", version="0.2.0")
+876: 
+877: 
+878: @app.get("/api/health")
+879: def health():

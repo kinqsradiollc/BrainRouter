@@ -110,9 +110,20 @@ export function normalizeDelegatedTaskPacket(
     disallowedTools: strings(input.toolPolicyCeiling?.disallowedTools),
     budgets: normalizeBudgetInput(input.budgets),
   });
+  const orchestration = input.orchestration;
+  const workspaceProfileId = normalizedIdentifier(
+    orchestration?.workspaceProfileId,
+  );
+  const planProfileId = Object.prototype.hasOwnProperty.call(
+    orchestration ?? {},
+    'planProfileId',
+  )
+    ? normalizedIdentifier(orchestration?.planProfileId)
+    : normalizedIdentifier(orchestration?.profileId);
   packet.orchestration = {
     ...packet.orchestration,
-    ...optionalIdentifier('profileId', input.orchestration?.profileId),
+    ...(workspaceProfileId ? { workspaceProfileId } : {}),
+    ...(planProfileId ? { planProfileId, profileId: planProfileId } : {}),
     ...optionalIdentifier('strategyId', input.orchestration?.strategyId),
     ...optionalIdentifier('stageId', input.orchestration?.stageId),
     ...(input.orchestration?.skillIds?.length
@@ -217,13 +228,19 @@ function capBudgets(
 }
 
 function optionalIdentifier(
-  key: 'profileId' | 'strategyId' | 'stageId',
+  key: 'strategyId' | 'stageId',
   value: unknown,
 ): Partial<DelegatedTaskPacket['orchestration']> {
+  const normalized = normalizedIdentifier(value);
+  return normalized ? { [key]: normalized } : {};
+}
+
+function normalizedIdentifier(value: unknown): string | undefined {
   const normalized = text(value).trim();
-  return normalized && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalized)
-    ? { [key]: bounded(normalized, 128) }
-    : {};
+  return normalized.length <= 128
+    && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function accessMode(value: unknown): DelegatedTaskPacket['toolPolicyCeiling']['accessMode'] {

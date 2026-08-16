@@ -1,6 +1,8 @@
 import {
   addGoalTokens,
   buildGoalContinuationPrompt,
+  decideGoalContinuation,
+  recordGoalContinuation,
   formatBudget,
   goalHasBudgetLeft,
   readGoal,
@@ -43,12 +45,26 @@ export function installGoalContinuation(ctx: RunChatContext): void {
     // Reset the strike counter the moment the model actually emits tool calls.
     if (agent.lastTurnToolCalls > 0) ctx.goalNoToolStrikes = 0;
 
-    const goalActive = !!goalAfter && goalAfter.status === 'active' && goalHasBudgetLeft(goalAfter) && agent.lastGoalTransition === undefined;
-    const correctiveAvailable = goalActive && agent.lastTurnToolCalls === 0 && ctx.goalNoToolStrikes < 1;
+    // ADR-040 A40-2 — one goal-continuation decision, shared with Desktop
+    // (`decideGoalContinuation`). CLI no longer mirrors the continue/corrective
+    // logic inline, so the two hosts cannot drift on when a goal keeps going.
+    const continuation = decideGoalContinuation(goalAfter ?? null, {
+      lastTurnToolCalls: agent.lastTurnToolCalls,
+      noToolStrikes: ctx.goalNoToolStrikes,
+      lastGoalTransition: agent.lastGoalTransition,
+    });
+    const correctiveAvailable = continuation.kind === 'continue' && continuation.corrective === true;
+    const shouldContinue = continuation.kind === 'continue';
 
-    const shouldContinue =
-      goalActive &&
-      (agent.lastTurnToolCalls > 0 || correctiveAvailable);
+    // A40-2 goal supervisor — record the content-free continuation reason for this
+    // turn under its goal instance, so the CLI and Desktop share one history.
+    if (goalAfter) {
+      recordGoalContinuation(agent.workspaceRoot, agent.sessionKey, {
+        goalId: `${agent.sessionKey}:${goalAfter.setAt}`,
+        decision: continuation,
+        at: new Date().toISOString(),
+      });
+    }
 
     if (goalAfter && goalAfter.status === 'complete') {
       ctx.controller?.push.notice(`🎯 Goal achieved — ${goalAfter.blockedReason ?? 'evidence on record.'}`, 'info');

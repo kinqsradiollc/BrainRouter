@@ -1,6 +1,12 @@
 /** Hosted model-gateway HTTP boundary. Upstream credentials never cross it. */
 import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import express, { type Request, type Response, type NextFunction } from "express";
+import {
+  corsMiddleware,
+  resolveCorsAllowlist,
+  securityHeaders,
+} from "../../api/middleware/securityHeaders.js";
 import { GatewayAuthError, type GatewayAuthContext } from "./auth.js";
 import {
   registerGatewayDataPlane,
@@ -8,7 +14,14 @@ import {
   type GatewayDataPlaneOptions,
   type GatewayDataPlaneService,
 } from "./chatRoutes.js";
+import { createGatewayAudioStreamingPort } from "./audio-streaming-adapter.js";
+import { registerGatewayAudioCapabilities } from "./audio-capabilities.js";
 import { registerGatewayAudioPlane } from "./audioRoutes.js";
+import {
+  attachGatewayAudioStreamingPlane,
+  type GatewayAudioStreamingController,
+  type GatewayAudioStreamingOptions,
+} from "./audio-streaming-server.js";
 
 export interface GatewayHttpService extends GatewayDataPlaneService {
   ping(): Promise<boolean>;
@@ -17,6 +30,13 @@ export interface GatewayHttpService extends GatewayDataPlaneService {
 
 export interface GatewayAppOptions extends GatewayDataPlaneOptions {
   requestId?: () => string;
+  audioStreaming?: GatewayAudioStreamingOptions;
+}
+
+export interface GatewayServer {
+  readonly app: import("express").Express;
+  readonly server: Server;
+  readonly audioStreaming: GatewayAudioStreamingController;
 }
 
 function generatedRequestId(): string {
@@ -74,27 +94,81 @@ function gatewayAuthMiddleware(svc: Pick<GatewayHttpService, "authenticate">) {
   };
 }
 
+function capturedOptions(options: GatewayAppOptions, includeStreamingPort: boolean): GatewayAppOptions {
+  const mutableAudioStreaming: {
+    -readonly [Key in keyof GatewayAudioStreamingOptions]: GatewayAudioStreamingOptions[Key]
+  } = {
+    ...(options.audioStreaming ?? {}),
+    production: options.audioStreaming?.production ?? (process.env.NODE_ENV === "production"),
+    ...(options.audioStreaming?.allowedOrigins
+      ? { allowedOrigins: Object.freeze([...options.audioStreaming.allowedOrigins]) }
+      : {}),
+  };
+  if (!includeStreamingPort) delete mutableAudioStreaming.port;
+  const audioStreaming = Object.freeze(mutableAudioStreaming);
+  return Object.freeze({ ...options, audioStreaming });
+}
+
+function registerGatewayHttpDataPlane(
+  app: import("express").Express,
+  svc: GatewayHttpService,
+  options: GatewayAppOptions,
+): void {
+  const origins = [...(options.audioStreaming?.allowedOrigins ?? resolveCorsAllowlist())];
+  const production = options.audioStreaming?.production;
+  app.use(
+    "/v1",
+    securityHeaders({ production }),
+    corsMiddleware(origins, { production }),
+    requestIdMiddleware(options),
+    gatewayAuthMiddleware(svc),
+  );
+  registerGatewayDataPlane(app, svc, options);
+  registerGatewayAudioCapabilities(app, options.audioStreaming?.port);
+  registerGatewayAudioPlane(app, svc);
+}
+
 /**
- * Mount the OpenAI-compatible /v1 data-plane onto an EXISTING Express app — the
- * brain on :3747 — so a SINGLE port fronts the model gateway (only :3747 needs
- * exposing/port-forwarding). Everything is scoped under /v1 so it never touches
- * the brain's /api or /mcp planes; the brain's global express.json already parsed
- * the body, so we add only request-id + the gateway auth context. The standalone
- * :3748 process (createGatewayApp) is intentionally left byte-identical.
+ * Mount the OpenAI-compatible HTTP routes onto an existing Express app. New
+ * production callers should use `bindGatewayDataPlane` so HTTP capability
+ * discovery and WebSocket admission capture one immutable configuration.
  */
 export function mountGatewayDataPlane(
   app: import("express").Express,
   svc: GatewayHttpService,
   options: GatewayAppOptions = {},
 ): void {
-  app.use("/v1", requestIdMiddleware(options), gatewayAuthMiddleware(svc));
-  registerGatewayDataPlane(app, svc, options);
-  registerGatewayAudioPlane(app, svc);
+  registerGatewayHttpDataPlane(app, svc, capturedOptions(options, false));
 }
 
-export function createGatewayApp(svc: GatewayHttpService, options: GatewayAppOptions = {}) {
+/**
+ * Bind both gateway data planes from one immutable option snapshot.
+ *
+ * This is where ADR-035 D10's adapter seam is filled. An explicitly passed port
+ * always wins; otherwise the environment decides, and with
+ * `BRAINROUTER_STT_STREAM_URL` unset that is `undefined` — capabilities keep
+ * advertising `streaming: null`, the upgrade keeps answering 503, and the batch
+ * POST is untouched. Only a BOUND plane may hold a port: an HTTP-only mount has
+ * no WebSocket to serve, so `capturedOptions` drops it there rather than letting
+ * one advertise a live path it cannot honour.
+ */
+export function bindGatewayDataPlane(
+  app: import("express").Express,
+  server: Server,
+  svc: GatewayHttpService,
+  options: GatewayAppOptions = {},
+): GatewayAudioStreamingController {
+  const port = options.audioStreaming?.port ?? createGatewayAudioStreamingPort() ?? undefined;
+  const captured = capturedOptions(
+    { ...options, audioStreaming: { ...options.audioStreaming, ...(port ? { port } : {}) } },
+    true,
+  );
+  registerGatewayHttpDataPlane(app, svc, captured);
+  return attachGatewayAudioStreamingPlane(server, svc, captured.audioStreaming);
+}
+
+function createGatewayBaseApp(svc: GatewayHttpService) {
   const app = express();
-  app.use(requestIdMiddleware(options));
   app.use(express.json({ limit: "256kb" }));
 
   // Health is unauthenticated (liveness/readiness probes).
@@ -103,12 +177,10 @@ export function createGatewayApp(svc: GatewayHttpService, options: GatewayAppOpt
     res.json({ status: db ? "ok" : "degraded", service: "provider-gateway", db });
   });
 
-  // All data-plane routes derive identity and tenant scope here.
-  app.use(gatewayAuthMiddleware(svc));
+  return app;
+}
 
-  registerGatewayDataPlane(app, svc, options);
-  registerGatewayAudioPlane(app, svc);
-
+function registerGatewayTerminalHandlers(app: import("express").Express): void {
   // /v1/resolve intentionally no longer exists. Data-plane routes consume
   // res.locals.gatewayAuth and keep decrypted upstream custody in-process.
   app.use((_req: Request, res: Response) => {
@@ -153,6 +225,21 @@ export function createGatewayApp(svc: GatewayHttpService, options: GatewayAppOpt
       code: "internal_error",
     });
   });
+}
+
+export function createGatewayApp(svc: GatewayHttpService, options: GatewayAppOptions = {}) {
+  const app = createGatewayBaseApp(svc);
+  mountGatewayDataPlane(app, svc, options);
+  registerGatewayTerminalHandlers(app);
 
   return app;
+}
+
+/** Create an unlistened standalone server with one HTTP/WebSocket binding. */
+export function createGatewayServer(svc: GatewayHttpService, options: GatewayAppOptions = {}): GatewayServer {
+  const app = createGatewayBaseApp(svc);
+  const server = createServer(app);
+  const audioStreaming = bindGatewayDataPlane(app, server, svc, options);
+  registerGatewayTerminalHandlers(app);
+  return { app, server, audioStreaming };
 }

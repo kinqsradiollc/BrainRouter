@@ -129,11 +129,17 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
   {
     id: 'orchestration',
     label: 'Active-turn orchestration',
-    description: 'Route tasks and coordinate bounded child agents while the owning turn is active.',
+    description:
+      'Route tasks and coordinate bounded child agents while the owning turn is active, including the built-in phase templates.',
     category: 'orchestration-workflows',
+    // `run_workflow` remains permission-eligible here for compatibility with
+    // existing manifests and explicit host launch commands. The live Agent hides
+    // it from ordinary turns and exposes it only while an exact, single-use
+    // execution intent is active. `workflow-launch` keeps the saved-graph and
+    // progress surfaces that are not ordinary in-turn delegation.
     toolIds: [
-      'profile_stage', 'task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'wait_agents',
-      'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task',
+      'profile_stage', 'task_agent', 'delegate_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents',
+      'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task', 'run_workflow',
     ],
     mcpToolIds: [],
     extensionIds: [],
@@ -244,4 +250,3 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     extensionIds: ['browser'],
   },
 ] as const;
-

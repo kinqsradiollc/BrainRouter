@@ -1,67 +1,21 @@
-import dns from 'node:dns';
-import net from 'node:net';
 import { load } from 'cheerio';
 import type { CrawlResult, CrawlerOptions } from './types.js';
 import { isAllowedByRobots } from './robots.js';
+import { fetchGuardedBytes, MAX_GUARDED_REDIRECTS } from '../net/guardedFetch.js';
 
 const hostNextFetchAt = new Map<string, number>();
-const MAX_REDIRECTS = 5;
 
-/** True for any address the agent's web tools must never reach: loopback,
- *  RFC1918 private, CGNAT, link-local (incl. 169.254.169.254 cloud metadata),
- *  IPv6 loopback/ULA/link-local, and anything unparsable (fail closed). This is
- *  the core SSRF guard — without it fetch_url could hit internal services and
- *  cloud metadata endpoints. */
-export function isBlockedAddress(ip: string): boolean {
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
-  const v = mapped ? mapped[1] : ip;
-  if (net.isIPv4(v)) {
-    const p = v.split('.').map(Number);
-    if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-    const [a, b] = p;
-    if (a === 0 || a === 127) return true;               // unspecified / loopback
-    if (a === 10) return true;                            // 10/8 private
-    if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16/12 private
-    if (a === 192 && b === 168) return true;              // 192.168/16 private
-    if (a === 169 && b === 254) return true;              // link-local + cloud metadata
-    if (a === 100 && b >= 64 && b <= 127) return true;    // 100.64/10 CGNAT
-    return false;
-  }
-  if (net.isIPv6(ip)) {
-    const low = ip.toLowerCase().replace(/^\[|\]$/g, '');
-    if (low === '::1' || low === '::') return true;       // loopback / unspecified
-    if (low.startsWith('fe80') || low.startsWith('fec0')) return true; // link/site-local
-    if (low.startsWith('fc') || low.startsWith('fd')) return true;     // fc00::/7 ULA
-    return false;
-  }
-  return true; // unknown format → fail closed
-}
-
-/** Resolve `hostname` and return a block reason if it (or any resolved IP) is a
- *  non-public address. A literal IP is checked directly; a name is DNS-resolved
- *  and every A/AAAA record checked (re-run per redirect hop to blunt rebinding).
- *  DNS failure returns null so the real fetch surfaces a normal network error. */
-async function privateAddressReason(hostname: string): Promise<string | null> {
-  if (net.isIP(hostname)) {
-    return isBlockedAddress(hostname) ? `Refusing to fetch a non-public address (${hostname}).` : null;
-  }
-  let records: Array<{ address: string }>;
-  try {
-    records = await dns.promises.lookup(hostname, { all: true });
-  } catch {
-    return null;
-  }
-  const bad = records.find((r) => isBlockedAddress(r.address));
-  return bad ? `Refusing to fetch ${hostname} — it resolves to a non-public address (${bad.address}).` : null;
-}
+/**
+ * The SSRF guard moved to `net/guardedFetch.ts` when ADR-029 F3 gave it two
+ * more callers (a bookmark preview, an image pasted as an address). It is
+ * re-exported here because a second implementation of "which addresses are
+ * off-limits" is the defect this codebase has already paid for once — and
+ * because the existing importers name this module.
+ */
+export { isBlockedAddress } from '../net/guardedFetch.js';
 
 export function clearCrawlerStateForTests(): void {
   hostNextFetchAt.clear();
-}
-
-function combineSignals(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
-  return signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
 }
 
 async function waitForHost(url: string, ratePerHostMs: number): Promise<void> {
@@ -124,7 +78,10 @@ export async function fetchAndExtract(url: string, opts: CrawlerOptions): Promis
     return { ok: false, url, reason: 'network', error: 'Only HTTP and HTTPS URLs can be fetched.' };
   }
 
-  const signal = combineSignals(opts.timeoutMs, opts.signal);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(Math.max(1, opts.timeoutMs)),
+    ...(opts.signal ? [opts.signal] : []),
+  ]);
   const fetcher = opts.fetchImpl ?? fetch;
   const robots = await isAllowedByRobots(parsed.href, {
     userAgent: opts.userAgent,
@@ -136,73 +93,43 @@ export async function fetchAndExtract(url: string, opts: CrawlerOptions): Promis
     return { ok: false, url: parsed.href, reason: 'robots-blocked', error: robots.reason ?? 'Blocked by robots.txt.' };
   }
 
-  try {
-    // Follow redirects manually so the SSRF + egress checks run on EVERY hop —
-    // the default auto-follow let a public URL 30x-redirect straight to an
-    // internal IP / cloud metadata, bypassing both guards.
-    let res!: Response;
-    for (let hop = 0; ; hop++) {
-      if (!['http:', 'https:'].includes(parsed.protocol)) {
-        return { ok: false, url: parsed.href, reason: 'network', error: 'Only HTTP and HTTPS URLs can be fetched.' };
-      }
-      if (opts.isEgressAllowed && !opts.isEgressAllowed(parsed.href)) {
-        return { ok: false, url: parsed.href, reason: 'network', error: 'A redirect target was blocked by egress policy.' };
-      }
-      // SSRF guard on the REAL network path only — a mock fetchImpl controls its
-      // own egress (and fake test hosts must not hit real DNS).
-      if (!opts.fetchImpl) {
-        const reason = await privateAddressReason(parsed.hostname);
-        if (reason) return { ok: false, url: parsed.href, reason: 'network', error: reason };
-      }
-      await waitForHost(parsed.href, opts.ratePerHostMs);
-      res = await fetcher(parsed, { headers: { 'User-Agent': opts.userAgent }, signal, redirect: 'manual' });
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get('location');
-        if (!location) break;
-        if (hop >= MAX_REDIRECTS) {
-          return { ok: false, url: parsed.href, reason: 'network', error: `Too many redirects (>${MAX_REDIRECTS}).` };
-        }
-        try { parsed = new URL(location, parsed); } catch {
-          return { ok: false, url: parsed.href, reason: 'network', error: 'A redirect returned an invalid location.' };
-        }
-        continue;
-      }
-      break;
-    }
-    if (!res.ok) {
-      return { ok: false, url: parsed.href, reason: 'http-status', status: res.status, error: `${res.status} ${res.statusText}` };
-    }
-    const contentLength = Number(res.headers.get('content-length') ?? 0);
-    if (contentLength > opts.maxHtmlBytes) {
-      return { ok: false, url: parsed.href, reason: 'oversized', error: `Response is ${contentLength} bytes; limit is ${opts.maxHtmlBytes}.` };
-    }
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > opts.maxHtmlBytes) {
-      return { ok: false, url: parsed.href, reason: 'oversized', error: `Response is ${buf.byteLength} bytes; limit is ${opts.maxHtmlBytes}.` };
-    }
-    const raw = buf.toString('utf8');
-    const contentType = res.headers.get('content-type') ?? '';
-    const isHtml = /html|xml/i.test(contentType) || /<html[\s>]|<!doctype html/i.test(raw);
-    const extracted = isHtml
-      ? extractHtml(raw, opts.maxContentChars)
-      : { title: '', text: cleanText(raw, opts.maxContentChars) };
-    if (!extracted.text) {
-      return { ok: false, url: parsed.href, reason: 'unparseable', error: 'No readable text could be extracted.' };
-    }
-    return {
-      ok: true,
-      title: extracted.title,
-      url: parsed.href,
-      text: extracted.text,
-      contentType,
-    };
-  } catch (err: any) {
-    const aborted = signal.aborted || err?.name === 'AbortError' || err?.name === 'TimeoutError';
+  // The redirect chain, the per-hop SSRF check and the size caps are the shared
+  // guard's, not this file's: `fetch_url`, a bookmark preview and an image
+  // pasted as an address all reach a URL a person typed, and three copies of
+  // that policy is three chances for one of them to be the weak one.
+  const fetched = await fetchGuardedBytes(parsed.href, {
+    timeoutMs: opts.timeoutMs,
+    maxBytes: opts.maxHtmlBytes,
+    userAgent: opts.userAgent,
+    maxRedirects: MAX_GUARDED_REDIRECTS,
+    signal,
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.isEgressAllowed ? { isEgressAllowed: opts.isEgressAllowed } : {}),
+    beforeHop: (href) => waitForHost(href, opts.ratePerHostMs),
+  });
+  if (!fetched.ok) {
     return {
       ok: false,
-      url: parsed.href,
-      reason: aborted ? 'timeout' : 'network',
-      error: err?.message ?? String(err),
+      url: fetched.url,
+      reason: fetched.reason,
+      error: fetched.error,
+      ...(fetched.status === undefined ? {} : { status: fetched.status }),
     };
   }
+
+  const raw = fetched.bytes.toString('utf8');
+  const isHtml = /html|xml/i.test(fetched.contentType) || /<html[\s>]|<!doctype html/i.test(raw);
+  const extracted = isHtml
+    ? extractHtml(raw, opts.maxContentChars)
+    : { title: '', text: cleanText(raw, opts.maxContentChars) };
+  if (!extracted.text) {
+    return { ok: false, url: fetched.url, reason: 'unparseable', error: 'No readable text could be extracted.' };
+  }
+  return {
+    ok: true,
+    title: extracted.title,
+    url: fetched.url,
+    text: extracted.text,
+    contentType: fetched.contentType,
+  };
 }

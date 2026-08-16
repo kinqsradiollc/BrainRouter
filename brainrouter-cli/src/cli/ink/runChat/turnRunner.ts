@@ -1,5 +1,10 @@
+/**
+ * One-turn CLI lifecycle and callback bridge. Checkpoints and peer receipts
+ * follow actual turn outcomes; title and expiry callbacks are generation-bound
+ * so a completed old turn cannot mutate the active logical session.
+ */
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { readPreferences } from '@kinqs/brainrouter-core/session';
+import { getSessionMeta, readPreferences } from '@kinqs/brainrouter-core/session';
 import { runHooks, applyMessageDisplayHooks } from '@kinqs/brainrouter-core/hooks';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError } from '@kinqs/brainrouter-core/storage';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../../runtime/commands/autoSkill.js';
@@ -7,7 +12,12 @@ import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { toolPairKey } from '../../../runtime/observability/toolPairing.js';
 import { expandMentions } from '../../../memory/mentions.js';
 import { formatToolCall } from '../text/toolFormat.js';
+import type { RunAgentTurnOptions } from '../../commands/_context.js';
 import type { RunChatContext } from './context.js';
+import {
+  forgetExpiredPeerMessageForAgent,
+  markApprovedPeerMessageApplied,
+} from '../../../runtime/federation/peerMessageAdmission.js';
 
 /**
  * Run a single agent turn through the Ink chat REPL. Mirrors
@@ -21,9 +31,15 @@ export function installTurnRunner(ctx: RunChatContext): void {
   const { agent, mcpClient } = ctx;
   const isQuiet = () => ctx.isQuiet();
 
-  ctx.runChatTurn = async (rawInput: string): Promise<void> => {
+  ctx.runChatTurn = async (
+    rawInput: string,
+    options: RunAgentTurnOptions = {},
+  ): Promise<void> => {
     if (!ctx.controller) return;
     const controller = ctx.controller;
+    const turnAgent = options.agent ?? agent;
+    const ephemeral = options.ephemeral === true;
+    const turnSessionKey = turnAgent.sessionKey;
     if (ctx.isProcessing) {
       controller.push.notice('A previous turn is still running.');
       return;
@@ -31,13 +47,16 @@ export function installTurnRunner(ctx: RunChatContext): void {
     // A fresh turn supersedes any armed auto-resume watch.
     ctx.cancelChildResume();
     ctx.isProcessing = true;
+    if (!ephemeral) void ctx.federation?.updateRegistration({ state: 'working' });
     ctx.clearIdleHint();
     // CLI-21 — crash checkpoint: record the in-flight prompt before the turn so
     // a mid-turn crash can be recovered on the next launch. Cleared in finally.
-    beginTurnCheckpoint(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
+    if (!ephemeral) {
+      beginTurnCheckpoint(turnAgent.workspaceRoot, turnAgent.sessionKey, rawInput, new Date().toISOString());
+    }
     let turnToolCalls = 0; // MEM-33b — multi-step signal for auto skill extraction
 
-    const { expanded, mentions } = expandMentions(rawInput, agent.workspaceRoot);
+    const { expanded, mentions } = expandMentions(rawInput, turnAgent.workspaceRoot);
     if (mentions.length > 0 && !isQuiet()) {
       controller.push.notice(`📎 Attached ${mentions.length} file${mentions.length === 1 ? '' : 's'}: ${mentions.map((m) => m.token).join(', ')}`);
     }
@@ -50,7 +69,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
     const tickStatus = (status: string) => {
       if (parentDone) return;
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      const u = agent.lastTurnUsage;
+      const u = turnAgent.lastTurnUsage;
       const tokens = u.calls > 0 ? `  ${u.promptTokens.toLocaleString()}↑ ${u.completionTokens.toLocaleString()}↓` : '';
       // When children are alive — typically because the parent is in a
       // wait_agent / wait_agents / R1 guardrail auto-drain — append a
@@ -128,12 +147,41 @@ export function installTurnRunner(ctx: RunChatContext): void {
       pendingSpawnTimer = setTimeout(flushPendingSpawns, 120);
     };
     try {
-      const answer = await agent.runTurn(expanded, {
+      const answer = await turnAgent.runTurn(expanded, {
+        onSessionTitle: (event) => {
+          // Title generation completes asynchronously after first-turn
+          // persistence. Publish immediately, but never let a late callback
+          // rename a participant that /resume or /new has already rebound.
+          if (ephemeral || turnAgent !== agent) return;
+          if (agent.sessionKey !== turnSessionKey) return;
+          if (agent.getFederationSessionKey() !== turnSessionKey) return;
+          if (ctx.federation?.sessionKey !== turnSessionKey) return;
+          void ctx.federation.updateRegistration({
+            title: event.title,
+            titleSource: event.source,
+          });
+        },
         onStatusUpdate: tickStatus,
-        onSteerApplied: (_input, receipt) => {
+        onSteerApplied: (input, receipt) => {
+          if (input.source === 'peer-session') {
+            markApprovedPeerMessageApplied(turnAgent, turnSessionKey, input.id);
+            void ctx.federation?.transitionInbound(input.id, 'applied');
+          }
           controller!.push.notice(
-            `Steer received · ${receipt.id.slice(0, 8)} · awaiting classification`,
+            `${input.source === 'peer-session' ? 'Peer message applied at a safe boundary' : 'Steer received'} · ${receipt.id.slice(0, 8)} · awaiting classification`,
             'info',
+          );
+        },
+        onSteerExpired: (input) => {
+          forgetExpiredPeerMessageForAgent(turnAgent, input.id);
+          void ctx.federation?.transitionInbound(
+            input.id,
+            'expired',
+            'Message expired before recipient safe-boundary application.',
+          );
+          controller!.push.notice(
+            `Peer message expired before safe-boundary application · ${input.id.slice(0, 8)}`,
+            'warn',
           );
         },
         onSteerReceipt: (receipt) => {
@@ -351,7 +399,10 @@ export function installTurnRunner(ctx: RunChatContext): void {
         onNotice: (notice) => {
           if (notice?.message) controller!.push.memory(notice.level ?? 'info', `✂️ ${notice.message}`);
         },
-      });
+      }, (options.executionIntent || options.explicitStrategyId) ? {
+        ...(options.executionIntent ? { executionIntent: options.executionIntent } : {}),
+        ...(options.explicitStrategyId ? { explicitStrategyId: options.explicitStrategyId } : {}),
+      } : undefined);
 
       parentDone = true;
       // Flush any pending batch-spawn notice + final fleet snapshot so
@@ -369,11 +420,11 @@ export function installTurnRunner(ctx: RunChatContext): void {
         childId, role: info.role, tool: info.tool,
       })));
       const elapsed = Date.now() - startedAt;
-      const u = agent.lastTurnUsage;
+      const u = turnAgent.lastTurnUsage;
       // Pass the raw answer to ChatApp; ChatApp's ScrollbackRow renders
       // it through marked-terminal unless `raw: true` is set. Honors the
       // user's rawScrollback preference exactly like the readline path.
-      const prefsForRender = readPreferences(agent.workspaceRoot);
+      const prefsForRender = readPreferences(turnAgent.workspaceRoot);
       // CC-hooks parity — message-display hook. A user hook may TRANSFORM the
       // about-to-display assistant text ({"updatedOutput":"…"}) or HIDE it
       // ({"decision":"deny"}). No-op when the hooks system is off or no
@@ -385,7 +436,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
         try {
           const outcome = applyMessageDisplayHooks(
             answer,
-            runHooks(agent.workspaceRoot, 'message-display', { payload: { text: answer } }),
+            runHooks(turnAgent.workspaceRoot, 'message-display', { payload: { text: answer } }),
           );
           displayText = outcome.text;
           displayHidden = outcome.hidden;
@@ -400,7 +451,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
           calls: u.calls,
         });
       }
-      const warning = agent.takeContradictionWarning();
+      const warning = turnAgent.takeContradictionWarning();
       if (warning) {
         controller.push.memory('warn', `Memory: ${warning}`);
         controller.push.memory('info', `Use /memory or /briefing to investigate, /forget <id> to archive obsolete records.`);
@@ -408,20 +459,20 @@ export function installTurnRunner(ctx: RunChatContext): void {
 
       // Goal continuation lives at the bottom of the success path so a
       // failed turn doesn't trigger it (we don't want auto-retry loops).
-      ctx.scheduleGoalContinuation(rawInput, answer);
+      if (!ephemeral) ctx.scheduleGoalContinuation(rawInput, answer);
 
       // C1 — if this turn ended with timed-out children, arm the auto-resume watch
       // (skipped when a goal continuation already owns the next turn).
-      ctx.scheduleChildResume();
+      if (!ephemeral) ctx.scheduleChildResume();
 
       // MEM-33b — after a successful MULTI-STEP turn, fire-and-forget distil a
       // reusable skill (the brain's <no-skill/> gate drops trivial runs). Opt-in
       // (cli.autoExtractSkills, off by default — one LLM call per turn). Fully
       // self-contained so it can never disturb the session.
-      if (shouldAutoExtractSkill({ enabled: getCliKnobs().autoExtractSkills, toolCalls: turnToolCalls, answerLength: (answer ?? '').length })) {
+      if (!ephemeral && shouldAutoExtractSkill({ enabled: getCliKnobs().autoExtractSkills, toolCalls: turnToolCalls, answerLength: (answer ?? '').length })) {
         const summary = buildSessionSummary(rawInput, answer, turnToolCalls);
         void (async () => {
-          try { await callMcpTool(mcpClient, 'memory_extract_skill', { sessionSummary: summary, sessionKey: agent.sessionKey, activeSkill: agent.activeSkill }); }
+          try { await callMcpTool(mcpClient, 'memory_extract_skill', { sessionSummary: summary, sessionKey: turnAgent.sessionKey, activeSkill: turnAgent.activeSkill }); }
           catch { /* best-effort — never disturb the session */ }
         })();
       }
@@ -430,23 +481,31 @@ export function installTurnRunner(ctx: RunChatContext): void {
       controller.push.notice(`✗ Execution failed: ${err?.message ?? err}`, 'error');
       // CLI-21 — a connectivity failure means the prompt wasn't really handled;
       // queue it so it isn't lost (offered for replay on reconnect / relaunch).
-      if (isConnectivityError(err)) {
-        queueOfflinePrompt(agent.workspaceRoot, agent.sessionKey, rawInput, new Date().toISOString());
+      if (!ephemeral && isConnectivityError(err)) {
+        queueOfflinePrompt(turnAgent.workspaceRoot, turnAgent.sessionKey, rawInput, new Date().toISOString());
         controller.push.notice('↺ Saved to the offline queue — it was a connectivity error.', 'info');
       }
     } finally {
       ctx.isProcessing = false;
+      if (!ephemeral) {
+        const sessionMeta = getSessionMeta(turnAgent.workspaceRoot, turnAgent.sessionKey);
+        void ctx.federation?.updateRegistration({
+          state: 'idle',
+          title: sessionMeta.title,
+          titleSource: sessionMeta.titleSource,
+        });
+      }
       // CLI-21 — turn settled (success or normal error): clear the in-flight
       // checkpoint so only a true crash leaves one behind.
-      endTurnCheckpoint(agent.workspaceRoot, agent.sessionKey);
+      if (!ephemeral) endTurnCheckpoint(turnAgent.workspaceRoot, turnAgent.sessionKey);
       controller.push.setPhase('idle');
       controller.push.setStatus('');
-      agent.activeSkill = undefined;
-      agent.activeSkills = [];
+      turnAgent.activeSkill = undefined;
+      turnAgent.activeSkills = [];
       // CC-SKILLS-D3 — the skill's per-turn tool blacklist is cleared with it.
-      agent.activeSkillDisallowedTools = [];
-      agent.activeSkillAllowedTools = undefined;
-      agent.refreshSystemPrompt();
+      turnAgent.activeSkillDisallowedTools = [];
+      turnAgent.activeSkillAllowedTools = undefined;
+      turnAgent.refreshSystemPrompt();
       ctx.refreshFooter();
       // If background children survived the parent turn (delegate_agent
       // fire-and-forget pattern), arm the polling ticker so the footer
@@ -461,7 +520,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
       ctx.armIdleHint();
       // C2 — run the next queued message (if any) now the turn has settled and
       // nothing else (goal continuation / child auto-resume) owns the next turn.
-      ctx.drainInputQueue();
+      if (!ephemeral) ctx.drainInputQueue();
     }
   };
 }

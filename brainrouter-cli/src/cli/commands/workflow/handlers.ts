@@ -5,7 +5,9 @@
  */
 
 import path from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
@@ -19,7 +21,7 @@ import { askYesNo } from '../../prompt/cliPrompt.js';
 import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrouter-core/review';
 import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/review';
 import { getLatestReview } from '@kinqs/brainrouter-core/review';
-import { buildReviewInstructionBlock } from '@kinqs/brainrouter-core/review';
+import { buildReviewInstructionBlockForDiff } from '@kinqs/brainrouter-core/review';
 import { formatPlan, readPlan, updatePlan } from '@kinqs/brainrouter-core/task';
 import { appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { recordPlanDecision, readPlanHistory, diffSnapshots } from '@kinqs/brainrouter-core/task';
@@ -35,10 +37,10 @@ import {
 } from '../../../prompt/skillCatalog.js';
 import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from '../_helpers.js';
 import { collectReviewDiff } from '../../../runtime/platform/gitContext.js';
-import { buildReviewPrompt } from '../reviewPrompt/index.js';
 import { execPromise, parseForceFlag, printWorkflowSwitchConfirmation, capturePlanDecision } from './helpers.js';
 import { shouldSkipGrillMe } from './grillGuard.js';
 import { normalizeSkillsList } from './skills.js';
+import { buildReviewFixPrompt, renderCliReviewReport, runCliLocalReview } from './localReview.js';
 
 export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config, rl, repl } = ctx;
@@ -514,11 +516,12 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     case '/review':
     {
       // `--force` accepted but ignored — see /feature-dev for rationale.
-      // `--fix` (PARITY-R1): after the high-signal filter, apply the surviving
-      // fixes in place and re-verify, instead of stopping at the report.
+      // The read pass is always the shared ADR-033 bundle/position/reflection
+      // pipeline. `--fix` is a distinct write-capable follow-up over its surviving
+      // findings; it never substitutes a one-shot write turn for the review.
       const fix = args.includes('--fix');
       const parsed = parseForceFlag(args.filter((a) => a !== '--fix'));
-      const scope = parsed.rest.join(' ').trim() || 'current unstaged and staged changes (git diff HEAD)';
+      const scope = parsed.rest.join(' ').trim() || 'current tracked and untracked working-tree changes';
       const accessMode = agent.getAccessMode();
       // REVIEW-FIX — `--fix` mutates the tree, so it needs write/shell up front.
       if (fix && accessMode === 'read') {
@@ -526,13 +529,13 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         console.log(chalk.gray('  Switch with /policy workspace (or /access write), then re-run.\n'));
         return true;
       }
-      // REVIEW-FIX — inject `git diff HEAD` so the model never spawns a child
-      // just to read the diff (the collapse foot-gun). Default scope == the diff.
-      const usingDiffScope = parsed.rest.join(' ').trim() === '';
       const reviewDiff = await collectReviewDiff(agent.workspaceRoot);
-      if (usingDiffScope && !reviewDiff.hasChanges) {
-        console.log(chalk.yellow('\nNothing to review — `git diff HEAD` is empty.'));
-        console.log(chalk.gray('  Make or stage some changes, or pass an explicit scope: /review src/foo.ts\n'));
+      if (reviewDiff.error) {
+        console.log(chalk.red(`\nReview could not collect the working-tree diff: ${reviewDiff.error}\n`));
+        return true;
+      }
+      if (!reviewDiff.hasChanges) {
+        console.log(chalk.yellow('\nNothing to review — tracked and untracked working-tree changes are empty.\n'));
         return true;
       }
       const reviewTitle = fix ? `Review+fix: ${scope}` : `Review: ${scope}`;
@@ -540,23 +543,44 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       const reportPath = artifactRelativePath(agent.workspaceRoot, meta.slug, 'review.md');
       const modeNote = accessMode === 'read' ? ' (read mode: findings printed to chat, not written)' : fix ? ' (--fix: will apply + verify surviving fixes)' : '';
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${modeNote}`));
-      // REVIEW-FIX — one authoritative prompt (no generic-skill double-path):
-      // the diff-injected, access-aware fan-out workflow, run directly. The
-      // skill is latched only so memory recall/capture see the review context.
-      const reviewPrompt = buildReviewPrompt({
-        scope,
-        slug: meta.slug,
-        reportPath,
+      updateWorkflowStatus(agent.workspaceRoot, meta.slug, 'in-progress');
+      const spinner = makeSpinner(chalk.gray(`Reviewing ${reviewDiff.files.length} changed file(s)...`)).start();
+      const result = await runCliLocalReview({
+        parent: agent,
         diff: reviewDiff.diff,
-        diffTruncated: reviewDiff.truncated,
-        accessMode,
-        fix,
-        // Repo-root REVIEW.md (if any) — highest-priority review policy.
-        reviewInstructions: buildReviewInstructionBlock(agent.workspaceRoot),
+        scope,
+        reviewInstructions: buildReviewInstructionBlockForDiff(agent.workspaceRoot, reviewDiff.diff),
+        onBundleSettled: (description) => { spinner.text = chalk.gray(description); },
       });
-      agent.activeSkill = SLASH_TO_SKILL['/review'] ?? 'code-review-and-quality';
-      agent.activeSkills = [agent.activeSkill];
-      ctx.repl.runAgentTurn(reviewPrompt);
+      spinner.stop();
+
+      const colorSummary = result.run.status === 'completed' ? chalk.green : chalk.red;
+      console.log(colorSummary(`\n${result.run.summary}`));
+      for (const finding of result.run.findings) {
+        const line = finding.line ? `:${finding.line}` : '';
+        console.log(`  ${chalk.bold(`[${finding.severity}]`)} ${chalk.cyan(`${finding.file}${line}`)} — ${finding.summary}`);
+        if (finding.suggestion) console.log(chalk.gray(`    ${finding.suggestion}`));
+      }
+
+      if (accessMode !== 'read') {
+        writeFileSync(path.join(agent.workspaceRoot, reportPath), renderCliReviewReport(result, scope), 'utf8');
+        console.log(chalk.gray(`  Report: ${reportPath}`));
+      }
+      if (result.run.status === 'completed') updateWorkflowStatus(agent.workspaceRoot, meta.slug, 'completed');
+
+      if (fix && result.run.status !== 'completed') {
+        console.log(chalk.yellow('  Fixes were not started because review coverage was incomplete. Re-run /review --fix after the failed bundle is available.\n'));
+        return true;
+      }
+      if (fix && result.run.findings.length > 0) {
+        agent.activeSkill = SLASH_TO_SKILL['/review'] ?? 'code-review-and-quality';
+        agent.activeSkills = [agent.activeSkill];
+        ctx.repl.runAgentTurn(buildReviewFixPrompt(result.run));
+      } else if (fix) {
+        console.log(chalk.gray('  No surviving findings to fix.\n'));
+      } else {
+        console.log();
+      }
       return true;
     }
     case '/review-auto':
@@ -718,17 +742,32 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         return true;
       }
       if (sub === 'run') {
-        // WF-LAUNCH — kick off a workflow from a template. Builds + validates the
-        // plan, then runs a turn where the agent fires one run_workflow call.
-        const template = (args[1] ?? '').trim();
-        const templateArgs = parseTemplateArgs(args.slice(2).join(' '));
-        const kick = buildWorkflowRunKickoff(template, templateArgs);
+        // ADR-040 A40-2 — validate first, then have the trusted CLI bind the exact
+        // arguments before asking the model for one run_workflow call. The
+        // prompt requests execution but cannot authorize it by itself.
+        const kick = buildWorkflowRunKickoff(
+          (args[1] ?? '').trim(),
+          parseTemplateArgs(args.slice(2).join(' ')),
+          `run-${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+        );
         if (!kick.ok) {
           console.log(chalk.red(`\n${kick.error}\n`));
           return true;
         }
+        let executionIntent;
+        try {
+          executionIntent = await agent.issueExecutionIntent({
+            source: 'user-command',
+            toolName: 'run_workflow',
+            args: kick.toolArgs,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(chalk.red(`\nCould not authorize workflow launch: ${message}\n`));
+          return true;
+        }
         console.log(chalk.green(`\n▶  Running workflow "${kick.title}"…\n`));
-        ctx.repl.runAgentTurn(kick.prompt);
+        ctx.repl.runAgentTurn(kick.prompt, { executionIntent });
         return true;
       }
       if (sub === 'switch') {

@@ -62,6 +62,7 @@ import { finishConnectorRun, getConnector, recordConnectorRun } from '../store/c
 import { upsertConnectorDocuments } from '../store/documentStore.js';
 import type { ConnectorRuntimeHost } from './host/contracts.js';
 import { nodeConnectorRuntimeHost } from './host/nodeConnectorRuntimeHost.js';
+import type { PlannerIssueProjection } from '../../planner/connectorIssueAdapter.js';
 
 /** The shared checkpoint result shape every `run<Source>ConnectorCheckpoint` returns. */
 export interface CheckpointResult {
@@ -101,6 +102,12 @@ export interface CheckpointRunnerDeps {
   oauthToken?: (connector: ConnectorRecord, label: string) => { token?: string; error?: string };
   /** Root the workspace lives at — used to resolve relative filesystem-connector roots. */
   workspaceRoot?: string;
+  /**
+   * Optional, explicitly scoped Planner sink. There is deliberately no default:
+   * this shared runtime cannot guess which personal planner owns server or
+   * multi-user connector data.
+   */
+  projectPlannerIssues?: PlannerIssueProjection;
 }
 
 const OAUTH_KEYCHAIN_GUIDANCE =
@@ -252,6 +259,7 @@ export interface RunConnectorCheckpointResult {
   run: ConnectorRunRecord;
   documents: ConnectorDocumentRecord[];
   failures: string[];
+  plannerItemsProjected: number;
   error?: string;
 }
 
@@ -286,6 +294,9 @@ export async function runConnectorCheckpointCore(
   try {
     const result = await runCheckpoint(connector);
     const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
+    const plannerItemsProjected = result.failures.length === 0 && deps.projectPlannerIssues
+      ? await deps.projectPlannerIssues({ connector, documents: persisted })
+      : 0;
     const run =
       finishConnectorRun(workspaceRoot, connector.id, running.id, {
         status: result.failures.length ? 'failed' : 'succeeded',
@@ -300,6 +311,7 @@ export async function runConnectorCheckpointCore(
       run,
       documents: persisted,
       failures: result.failures,
+      plannerItemsProjected,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -308,6 +320,6 @@ export async function runConnectorCheckpointCore(
         status: 'failed',
         error: message,
       }) ?? running;
-    return { ok: false, run, documents: [], failures: [message], error: message };
+    return { ok: false, run, documents: [], failures: [message], plannerItemsProjected: 0, error: message };
   }
 }

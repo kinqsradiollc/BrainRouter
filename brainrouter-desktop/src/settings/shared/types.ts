@@ -6,6 +6,7 @@
 import type { SettingsSection } from '../../lib/commands/commands.js';
 import type { ConnectorCatalogEntry, ConnectorRecord, ConnectorRunRecord, ModelPolicy } from '@kinqs/brainrouter-types';
 import type { ConfigSchemaDescriptor } from '@kinqs/brainrouter-core/config';
+import type { LearnedItem, LearnedTenant, LearningLogEntry } from '@kinqs/brainrouter-core/learning';
 
 export interface ConnectorSlimPreview {
   id: string;
@@ -95,6 +96,16 @@ export interface ConfigSnapshot {
     trusted: boolean;
     items: Array<{ name: string; version: string; source: 'builtin' | 'user' | 'workspace'; description: string; contributes: string[]; enabled: boolean; blocked: boolean }>;
   };
+  /** ADR-032 Q4 — the exact tenant-scoped behavioural store that reaches the
+   * agent, exposed read-only here except for explicit human correction/revert. */
+  learning?: {
+    tenant: LearnedTenant;
+    items: LearnedItem[];
+    log: LearningLogEntry[];
+    correctionAllowed: boolean;
+    correctionBlockedReason?: string;
+    error?: string;
+  };
 }
 
 export interface GithubRepoSnapshot {
@@ -182,7 +193,7 @@ export const NAV: SettingsNavItem[] = [
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Agent', description: 'Recall, briefing, and persona behavior', keywords: 'pipeline memories persona quiet mode brain forget export import blackboard consolidation' },
   { section: 'tools', icon: 'gear', title: 'Tools', group: 'Agent', description: 'Built-in and connected tool access', keywords: 'enable disable override protected mcp local model read edit run plan goal' },
   { section: 'workflow-automation', icon: 'fork', title: 'Auto-planning', group: 'Automation', description: 'Requirements, plans, and sprint flow', keywords: 'autopilot propose detect requirements sync track reconcile sprints stages' },
-  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Automation', description: 'Execution backends, isolated runs, and preview port defaults', keywords: 'container host worktree archive jit secrets serve remote runtime preview port reservations budget critic hosted cli agents' },
+  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Automation', description: 'Execution backends, isolated runs, and preview port defaults', keywords: 'execution backend comprehension understand review questions container host worktree archive jit secrets serve remote runtime preview port reservations budget critic hosted cli agents' },
   { section: 'automations', icon: 'globe', title: 'Automations', group: 'Automation', description: 'Inbound triggers, webhooks, and jobs', keywords: 'github slack gitlab jira signing secret listener daemon rules allowed repos' },
   { section: 'reviews', icon: 'shield', title: 'PR reviews', group: 'Automation', description: 'Automated GitHub review behavior', keywords: 'security code review findings branch protection push repositories app installation webhook' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Automation', description: 'Agent lifecycle hook commands', keywords: 'session start stop turn tool command scripts timeout lifecycle' },

@@ -7,22 +7,8 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
-import { VALID_PANEL_IDS } from '../../constants.js';
 import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
-
-// Persisted layouts can carry renamed/retired panel ids. The Markdown writing
-// experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
-// The Browser panel's internal id was renamed 'uitest' → 'browser', so a persisted
-// open-tab layout survives the rename. Unknown ids are dropped, and duplicates are
-// collapsed, so an upgrade never leaves a dead or doubled tab.
-const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor', uitest: 'browser' };
-const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
-const migratePanelIds = (ids: unknown[]): PanelId[] => {
-  const seen = new Set<PanelId>();
-  return ids
-    .map((p) => migratePanelId(String(p)))
-    .filter((p) => VALID_PANEL_IDS.has(p) && !seen.has(p) && (seen.add(p), true));
-};
+import { LAST_SESSION_PANELS_KEY, readLastSessionPanels } from './lastSessionPanels.js';
 
 export interface TermTab { id: number; kind: 'shell' | PanelId }
 
@@ -49,7 +35,20 @@ export interface PanelsApi {
   setTermDockHeight: Dispatch<SetStateAction<number>>;
   setTermTabs: Dispatch<SetStateAction<TermTab[]>>;
   setActiveTerm: Dispatch<SetStateAction<number>>;
+  /** HUMAN intent: add, activate, open. */
   ensurePanel: (id: PanelId) => void;
+  /** ADR-028 G1 — AGENT intent: make available, mark unread, do not take focus. */
+  offerPanel: (id: PanelId) => void;
+  markPanelRead: (id: PanelId) => void;
+  unreadPanels: Set<PanelId>;
+  /** ADR-028 G2 — bring back the previous session's panels, on request. */
+  restoreLastSessionPanels: () => void;
+  /**
+   * What that action would reopen — empty when there is nothing to bring back.
+   * The affordance has to know this: an always-present "reopen last session"
+   * that silently does nothing is worse than not offering one.
+   */
+  lastSessionPanels: PanelId[];
   closeSideTab: (id: PanelId) => void;
   reorderSideTab: (dragged: PanelId, target: PanelId) => void;
   togglePanel: (id: PanelId) => void;
@@ -63,28 +62,27 @@ export interface PanelsApi {
 }
 
 export function usePanels(q: (id: string, name: string, args?: Record<string, unknown>) => void): PanelsApi {
-  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => {
-    const saved = localStorage.getItem('br-side-tabs');
-    if (saved !== null) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return migratePanelIds(parsed);
-      } catch (e) {
-        // ignore
-      }
-    }
-    return devPanels();
-  });
-  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => {
-    const saved = localStorage.getItem('br-active-side-tab');
-    if (saved !== null && saved !== 'null') return migratePanelId(saved);
-    return devPanels()[0] ?? null;
-  });
-  const [sidePanelOpen, setSidePanelOpen] = useState(() => {
-    const saved = localStorage.getItem('br-side-open');
-    if (saved !== null) return saved === '1';
-    return devFlag('side') || devPanels().length > 0;
-  });
+  /**
+   * ADR-028 G2 — the app starts with the panel CLOSED and no tabs open.
+   *
+   * These used to restore from localStorage, so a session that ended with six
+   * tabs open started with six tabs open. Panel state is SESSION state, not
+   * preference state: it reflects what you were doing an hour ago, not how you
+   * want to work, and nobody ever prunes it. Width, the pinned flag and the
+   * dock height ARE preferences and are still persisted below.
+   *
+   * The previous session's tabs are kept under a separate key so "reopen last
+   * session's panels" can restore them — this removes an assumption, not a
+   * capability.
+   */
+  // Read BEFORE this session's first write to the same key, which lands on mount
+  // and would otherwise replace the record with the empty list G2 starts from.
+  const [lastSessionPanels, setLastSessionPanels] = useState<PanelId[]>(readLastSessionPanels);
+  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => devPanels());
+  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => devPanels()[0] ?? null);
+  const [sidePanelOpen, setSidePanelOpen] = useState(() => devFlag('side') || devPanels().length > 0);
+  // ADR-028 G1 — panels the agent made available that you have not looked at.
+  const [unreadPanels, setUnreadPanels] = useState<Set<PanelId>>(() => new Set());
   // On launch, it starts at its minimum size (SIDE_RAIL_MIN).
   const [sideWidth, setSideWidth] = useState(SIDE_RAIL_MIN);
   const [sideFullScreen, setSideFullScreen] = useState(() => localStorage.getItem('br-side-fullscreen') === '1');
@@ -118,11 +116,18 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   }, [sidePinned]);
 
   useEffect(() => {
-    localStorage.setItem('br-side-open', sidePanelOpen ? '1' : '0');
+    // Recorded for the explicit "reopen last session's panels" action, NOT
+    // read at startup — see G2.
+    localStorage.setItem('br-side-open-last', sidePanelOpen ? '1' : '0');
   }, [sidePanelOpen]);
 
+  const tabsRecorded = useRef(false);
   useEffect(() => {
-    localStorage.setItem('br-side-tabs', JSON.stringify(sideTabs));
+    // Skip the mount write. G2 starts from an empty list, so recording it would
+    // erase the previous session's tabs before anyone could ask for them back —
+    // the restore existed but had nothing left to restore.
+    if (!tabsRecorded.current) { tabsRecorded.current = true; return; }
+    localStorage.setItem(LAST_SESSION_PANELS_KEY, JSON.stringify(sideTabs));
   }, [sideTabs]);
 
   useEffect(() => {
@@ -164,17 +169,42 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
       return next;
     });
   }
-  /** Show a view as the side panel's active tab (terminal lives in the dock). */
-  function ensurePanel(id: PanelId): void {
-    if (id === 'terminal') { openBottomDock(); return; }
+  /**
+   * ADR-028 G1 — the panel's data refresh, without any claim on your attention.
+   *
+   * Split out of `ensurePanel` so a caller can load a panel's data without also
+   * deciding what you are looking at.
+   */
+  function refreshPanelData(id: PanelId): void {
     if (id === 'files') { q('q-list', 'list-files'); q('q-files', 'changed-files'); }
     if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
-    if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
+    // ADR-028 G5 — the Pull request panel renders the review findings inline,
+    // so opening it has to fetch them. This used to key off `review`, an id
+    // that no longer exists, which is how the consolidated panel came to show
+    // Checks and nothing else.
+    if (id === 'stack') q('q-review-current', 'review-current');
     if (id === 'requirements') q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — list on open
     if (id === 'annotations') q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — list on open
     if (id === 'artifacts') { q('q-art', 'artifact-list'); q('q-annot', 'annotation-list'); } // ARTIFACT-RECORDS — list on open (+ annotations so §8 artifact annotations show)
     if (id === 'plan') q('q-annot', 'annotation-list'); // §plan-comments — load per-step comments on open
     if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
+  }
+
+  /**
+   * HUMAN intent: add the tab, make it active, open the panel.
+   *
+   * Called when a person asked for this panel — a click, a command, a keyboard
+   * shortcut, or an interaction request that blocks the turn until they answer.
+   */
+  function ensurePanel(id: PanelId): void {
+    if (id === 'terminal') { openBottomDock(); return; }
+    // ADR-028 G5 — no alias step here. `review` and `ci` are gone from
+    // `PanelId`, so every call site names a panel that renders; aliasing them
+    // at the entry point instead let callers keep asking for a retired panel
+    // and quietly handed them one that could not answer. Migration belongs to
+    // `readLastSessionPanels`, which is the only place a retired id can still
+    // arrive from.
+    refreshPanelData(id);
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -182,6 +212,36 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     // width; widen-only, so a manual resize is never overridden, and a no-op
     // returns the same number so React skips the re-render.
     setSideWidth((w) => openWidthFor(id, w));
+  }
+
+  /**
+   * ADR-028 G1 — AGENT intent: make a panel available without taking focus.
+   *
+   * The bug this fixes: `ensurePanel` did three things at once, and 21 call
+   * sites used it — many fired by agent activity. So the agent editing a file
+   * yanked you off whatever you were reading. That is a claim about your
+   * attention that nothing established, which is the thing this ADR objects to
+   * everywhere else.
+   *
+   * The tab appears and is marked unread. Nothing else changes: not the active
+   * tab, not whether the panel is open, not its width. The dot is how you learn
+   * a diff is waiting without being moved to it.
+   */
+  function offerPanel(id: PanelId): void {
+    if (id === 'terminal') return;
+    refreshPanelData(id);
+    setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
+    setUnreadPanels((u) => (u.has(id) || activeSideTab === id ? u : new Set([...u, id])));
+  }
+
+  /** Clear the dot once the person actually looks at the panel. */
+  function markPanelRead(id: PanelId): void {
+    setUnreadPanels((u) => {
+      if (!u.has(id)) return u;
+      const next = new Set(u);
+      next.delete(id);
+      return next;
+    });
   }
   function closeSideTab(id: PanelId): void {
     setSideTabs((tabs) => {
@@ -223,9 +283,27 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     setActiveTerm(termSeq.current);
   }
 
+  /**
+   * ADR-028 G2 — bring back the previous session's panels, on request.
+   *
+   * The escape hatch for the case where restoring was actually wanted. Offered
+   * rather than assumed, which is the whole difference.
+   */
+  function restoreLastSessionPanels(): void {
+    if (lastSessionPanels.length === 0) return;
+    setSideTabs(lastSessionPanels);
+    setActiveSideTab(lastSessionPanels[0] ?? null);
+    setSidePanelOpen(true);
+    // Once restored they are simply the open tabs; offering to restore them
+    // again would be offering the state you are already in.
+    setLastSessionPanels([]);
+  }
+
   return {
+    lastSessionPanels,
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels,
+    closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   };
 }

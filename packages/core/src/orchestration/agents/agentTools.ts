@@ -4,7 +4,16 @@
  * (name/description/inputSchema) consumed by agent/tools/specs.ts to build
  * the orchestration capability extension. No shared state and no Agent-runtime
  * dependencies; re-exported from tools.ts for back-compat.
+ *
+ * Tool descriptions are also where the orchestration CONTRACT lives. The base
+ * system prompt is at its token cap, and a description the model reads next to
+ * the schema it is about to fill in is a better place for "what makes this call
+ * worth its cost" than one more line of general instruction it read 5k tokens
+ * ago.
  */
+
+import { adversarialLens, investigationLenses, reviewLenses } from '../lenses.js';
+
 export function createProfileStageTool() {
   return {
     name: 'profile_stage',
@@ -110,6 +119,11 @@ export function createTaskAgentTool() {
         stageId: {
           type: 'string',
           description: 'Optional role-stage id from the active profile strategy. When present, the runtime owns the role, objective, skills, output contract, and ceilings; prompt is only a bounded assignment.',
+        },
+        effort: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'xhigh'],
+          description: 'Reasoning effort for this child (default: inherits the session /effort). Raise it for design, adversarial review, or subtle debugging; lower it for mechanical edits. Ignored when stageId is set — the runtime owns a stage child\'s ceilings.',
         },
       },
       required: ['prompt'],
@@ -236,9 +250,13 @@ export function createSpawnAgentsTool() {
   return {
     name: 'spawn_agents',
     description:
-      'Spawn multiple child agents in parallel with one tool call. Returns all child ids immediately. ' +
-      'Use this for batched fan-out (e.g. 3 explorers covering different parts of the codebase) instead of N back-to-back spawn_agent calls. ' +
-      'Write/shell children MUST declare an `ownership` glob so parallel writers cannot collide — or pass `allowOverlap: true` on the entry to opt out.',
+      'Spawn several child agents in parallel with ONE tool call, and the primary way to work at high effort on a broad task. Returns all child ids immediately; drain with `wait_agents`, then synthesize.\n\n' +
+      'What makes a fan-out worth its cost — all four, not just the first:\n' +
+      `1. **≥3 children, each on a DISTINCT named lens.** Give every child a \`label\` naming its lens and tell it to ignore findings outside that lens. Review lenses: ${reviewLenses().join(' / ')}. Investigation lenses: ${investigationLenses().join(' / ')}. Three children asking the SAME question in three folders is breadth of path, not of thinking — it costs 3x and returns one angle.\n` +
+      `2. **One adversarial child.** Its brief: ${adversarialLens()}. Its output is answered, not merged — a conclusion nobody tried to break is an opinion.\n` +
+      '3. **Write/shell children declare `ownership`.** Parallel writers without a glob would clobber each other, so the batch is rejected before any child starts. Read-only lenses need none.\n' +
+      '4. **You synthesize.** Merge the lens findings into one answer and state explicitly what the adversary failed to break. Do not hand the user a list of child ids, and do not defer ("I\'ll summarize once they finish") — you are the last step.\n\n' +
+      'Raise `effort` on children doing design, adversarial review, or subtle debugging. For a task whose phases feed forward (plan → implement → verify → review), recommend an explicit host launch. CLI users can run `/build <task>` or `/workflow run <template> [jsonArgs]`; this tool cannot authorize that launch.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -249,13 +267,18 @@ export function createSpawnAgentsTool() {
             type: 'object',
             properties: {
               role: { type: 'string', description: 'explorer | architect | reviewer | worker | verifier (omit to auto-route from the prompt).' },
-              prompt: { type: 'string', description: 'Bounded task prompt for this child.' },
-              label: { type: 'string' },
+              prompt: { type: 'string', description: 'Bounded task prompt for this child, including the lens it must stay inside.' },
+              label: { type: 'string', description: 'Short label naming THIS child\'s distinct lens. Children sharing a label are not a fan-out.' },
               access: { type: 'string', enum: ['read', 'write', 'shell'] },
               workdir: { type: 'string' },
               seedRecordIds: { type: 'array', items: { type: 'string' } },
               ownership: { type: 'string', description: 'File glob this child may write within (e.g. "src/payments/**"). Required for write/shell access unless allowOverlap is set. Enforced on write_file / edit_file / apply_patch.' },
               allowOverlap: { type: 'boolean', description: 'Opt out of the ownership requirement for this entry (writes are then unbounded). Default false.' },
+              effort: {
+                type: 'string',
+                enum: ['low', 'medium', 'high', 'xhigh'],
+                description: 'Reasoning effort for this child (default: inherits the session /effort). Raise it for the adversarial and design children.',
+              },
             },
             required: ['prompt'],
           },
@@ -293,14 +316,14 @@ export function createRunWorkflowTool() {
   return {
     name: 'run_workflow',
     description:
-      'Run a deterministic multi-phase workflow in ONE call. Hand over a declarative plan; the runtime fans out a child agent per phase entry, waits for the WHOLE phase, synthesizes it, then feeds that into the next phase — you do not orchestrate spawn/wait/synthesize yourself. Use for "review each of these → summarize", "compare A vs B vs C → recommend", or multi-stage research. Each phase has EITHER an explicit `agents` list OR a `fanOut` over targets (one clone per target, {{target}} substituted). A later phase consumes an earlier one via `inputFrom` (its synthesis replaces {{input}}).',
+      'Low-level deterministic multi-phase workflow target. A call is accepted only with an unexpired, single-use execution intent issued by the live host for this exact workspace, session, user, turn, tool, and normalized arguments. A chat request, active goal, planner/router recommendation, or prior approval does not create that authority. CLI users must launch explicitly with `/build <task>` or `/workflow run <template> [jsonArgs]`. Desktop production launch is unavailable until its reviewed launch control is enabled.\n\n' +
+      'When authorized, the runtime fans out a child agent per phase entry, waits for the WHOLE phase, synthesizes it, then feeds that into the next phase. Each phase has EITHER an explicit `agents` list OR a `fanOut` over targets (one clone per target, {{target}} substituted). A later phase consumes an earlier one via `inputFrom` (its synthesis replaces {{input}}).\n\n' +
+      `The built-in \`build\` template is the adversarial shape in full: plan → implement on an isolated worktree → verify against the real \`git diff\` (not the worker's self-report) → review fanned out over ${reviewLenses().length} independent lenses (${reviewLenses().join(' / ')}) merged by role-rollup. \`investigate\` is its read-only twin: ${investigationLenses().length} lenses in parallel → architect synthesis → one adversary briefed to break that synthesis.`,
     inputSchema: {
       type: 'object',
       properties: {
         slug: { type: 'string', description: 'Optional run slug (defaults from the plan title).' },
-        background: { type: 'boolean', description: 'Run detached so the turn is not blocked by a long fan-out; track via /workflows or the background panel. Default false.' },
-        resume: { type: 'string', description: 'Resume an interrupted run by slug — skips already-completed phases (their output feeds {{input}}) and re-runs from the failed one. Provide instead of plan/template.' },
-        template: { type: 'string', enum: ['compare', 'review-wide', 'research', 'build'], description: 'Built-in workflow shape — pass this + templateArgs INSTEAD of an explicit plan. compare {targets[],criteria?,goal?} · review-wide {paths[],focus?} · research {question,angles?} · build {task, slices?[]} (the plan→implement→verify→review build loop on isolated worktrees).' },
+        template: { type: 'string', enum: ['compare', 'review-wide', 'research', 'build', 'investigate'], description: 'Built-in workflow shape — pass this + templateArgs INSTEAD of an explicit plan. compare {targets[],criteria?,goal?} · review-wide {paths[],focus?} · research {question,angles?} · build {task, slices?[]} (the plan→implement→verify→review build loop on isolated worktrees) · investigate {question, lenses?[]} (read-only multi-lens investigation → synthesis → adversarial challenge).' },
         templateArgs: { type: 'object', description: 'Arguments for the chosen template, e.g. { targets: ["optionA","optionB"] } or { paths: ["src/a","src/b"] }.' },
         plan: {
           type: 'object',
@@ -309,6 +332,7 @@ export function createRunWorkflowTool() {
             phases: {
               type: 'array',
               minItems: 1,
+              maxItems: 16,
               items: {
                 type: 'object',
                 properties: {
@@ -316,6 +340,7 @@ export function createRunWorkflowTool() {
                   title: { type: 'string' },
                   agents: {
                     type: 'array',
+                    maxItems: 16,
                     description: 'Explicit, heterogeneous agents. Mutually exclusive with fanOut.',
                     items: {
                       type: 'object',
@@ -331,7 +356,7 @@ export function createRunWorkflowTool() {
                     type: 'object',
                     description: 'Spawn one clone of `agent` per `over` target ({{target}} substituted). Mutually exclusive with agents.',
                     properties: {
-                      over: { type: 'array', items: { type: 'string' }, minItems: 1 },
+                      over: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 16 },
                       agent: {
                         type: 'object',
                         properties: {
@@ -365,7 +390,7 @@ export function createRunWorkflowGraphTool() {
   return {
     name: 'run_workflow_graph',
     description:
-      'Run a saved VISUAL workflow graph (built on the Workflows canvas) by id, in ONE call. The runtime executes the graph node-by-node — AI Agent nodes run as real child agents, Condition/Switch/Filter/Sort/Limit/Aggregate/Loop wire the dataflow, and Sub-workflow nodes call other saved graphs — then returns the graph\'s final output. Use this to invoke a reusable automation the user designed visually, instead of re-orchestrating it by hand. Distinct from `run_workflow` (which takes an inline declarative phase-plan); this one loads a named, saved graph.',
+      'Low-level saved visual workflow-graph target. A call requires an unexpired, single-use execution intent issued by the live host for this exact workspace, session, user, turn, graph revision, and normalized arguments. A chat request, active goal, planner/router recommendation, or prior approval does not create that authority. Production graph launch remains unavailable until durable graph approvals and cumulative budgets fail closed; Desktop Test run is preview-only. When enabled, the runtime executes the graph node-by-node — AI Agent nodes run as child agents and the deterministic nodes wire the dataflow — then returns the final output.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -387,7 +412,18 @@ export function createRouteTaskTool() {
   return {
     name: 'route_task',
     description:
-      'Direct-first delegation dry-run. Returns `{ tier, reason, recommendedTool, agentId, confidence, memoryEvidence }`. Tiers: `answer-direct` (no tool — reply in prose), `direct-tool` (one concrete tool answers — e.g. `read_file`, `grep_search`, `run_command`), `spawn-inline` (specialized child via `delegate_<id>`), `spawn-worker` (long-running detached work that outlives the turn → `spawn_worker_thread`). Call this BEFORE spawning to pick the right tier — fan-out without it routinely over-delegates.',
+      'Direct-first delegation dry-run. Returns `{ tier, reason, recommendedTool, agentId, confidence, memoryEvidence }`. Six tiers, cheapest first: ' +
+      '`answer-direct` (no tool — reply in prose) · ' +
+      '`direct-tool` (one concrete tool answers — e.g. `read_file`, `grep_search`, `run_command`) · ' +
+      '`spawn-inline` (one specialized child via `delegate_<id>`) · ' +
+      '`fan-out` (separable breadth — several children on DISTINCT lenses in ONE `spawn_agents` call, then `wait_agents` and synthesize) · ' +
+      '`workflow` (a dependency chain worth an explicit host launch; `recommendedTool` is null and `reason` recommends CLI `/workflow run <template> [jsonArgs]` or `/build <task>` because routing cannot authorize execution) · ' +
+      // The tier is named; the tool is not. Background workers are a separate
+      // catalog group a workspace may not have enabled, and this description is
+      // static while the tool list is not. `recommendedTool` in the RESULT is
+      // gated on what this turn can emit, so that is where the name belongs.
+      '`spawn-worker` (long-running detached work that outlives the turn). ' +
+      'Call this BEFORE spawning to pick the right tier: it stops trivial reads from becoming children, AND stops genuinely broad work from being answered by one child.',
     inputSchema: {
       type: 'object',
       properties: {

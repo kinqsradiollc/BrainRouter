@@ -22,6 +22,22 @@ export type InteractionResponse =
   | { type: 'dismissed' };
 
 /**
+ * Lossless confirmation result for workflows that must distinguish an
+ * explicit rejection from a closed, interrupted, or timed-out prompt.
+ */
+export type ExplicitConfirmDecision = 'approved' | 'declined' | 'dismissed';
+
+/**
+ * Project the existing confirm wire response onto its lossless host-neutral
+ * decision. An unexpected response kind fails closed as dismissed.
+ */
+export function toExplicitConfirmDecision(response: InteractionResponse): ExplicitConfirmDecision {
+  if (response.type === 'dismissed') return 'dismissed';
+  if (response.type !== 'confirm') return 'dismissed';
+  return response.approved ? 'approved' : 'declined';
+}
+
+/**
  * What the agent runtime calls when it needs a human decision. The CLI
  * implements this with readline prompts; the Desktop host implements it by
  * emitting `interaction-request` and awaiting the matching
@@ -29,6 +45,19 @@ export type InteractionResponse =
  */
 export interface InteractionPort {
   confirm(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }): Promise<boolean>;
+  /**
+   * Lossless confirmation for admission and other workflows where dismissing
+   * a prompt must not be recorded as an explicit user rejection.
+   *
+   * Optional for backwards-compatible hosts. Callers must fail closed when a
+   * host does not expose this capability.
+   */
+  confirmExplicit?(req: {
+    title: string;
+    detail?: string;
+    dangerous?: boolean;
+    tool?: string;
+  }): Promise<ExplicitConfirmDecision>;
   choice(req: {
     question: string;
     header: string;

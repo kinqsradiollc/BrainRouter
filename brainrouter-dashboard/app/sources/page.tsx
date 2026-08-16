@@ -151,7 +151,7 @@ function SourcesContent() {
       {!scopeState.loading && scopedDocs.length === 0 && (
         <EmptyState
           title="No sources in this scope"
-          description="Connect a repository, document service, or communication account to make its material available to agents."
+          description="Connect a repository, document service, or communication account to bring its material into this workspace."
         >
           <Link href={addSourceHref}>
             <PremiumButton variant="primary">Add a source</PremiumButton>

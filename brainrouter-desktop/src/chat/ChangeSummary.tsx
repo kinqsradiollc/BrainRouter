@@ -25,7 +25,7 @@ export function ChangeSummary({ gitInfo, changedFiles, ensurePanel, q }: {
         <span className="change-title">{n} file{n === 1 ? '' : 's'} changed</span>
         <span className="change-stat"><span className="add-n">+{gitInfo.insertions.toLocaleString()}</span> <span className="del-n">−{gitInfo.deletions.toLocaleString()}</span></span>
         <span className="change-actions">
-          <span className="change-btn" role="button" title="Open the review panel" onClick={(e) => { e.stopPropagation(); ensurePanel('review'); }}>Review</span>
+          <span className="change-btn" role="button" title="Open the Pull request panel — checks and review findings" onClick={(e) => { e.stopPropagation(); ensurePanel('stack'); }}>Review</span>
           <span className="step-chevron">{open ? '⌄' : '›'}</span>
         </span>
       </button>

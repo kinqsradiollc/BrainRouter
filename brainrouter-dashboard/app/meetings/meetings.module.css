@@ -138,5 +138,38 @@ button.chip:disabled{opacity:.6;cursor:default}
 .importAudio input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .recordActions{display:flex;gap:7px}
 .modalActions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+/* ADR-035 D2 — unfinished recordings still on this device, offered back */
+.recoverRow{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:7px 2px;border-top:1px solid var(--mv-line2)}
+.recoverRow:first-of-type{border-top:0}
+.recoverWhat{display:flex;flex-direction:column;gap:2px;min-width:0}
+.recoverWhat b{font-size:12px;font-weight:600;color:var(--mv-tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recoverWhat span{font-size:10.5px;color:var(--mv-tx3);font-family:var(--mv-mono)}
+.recoverActions{display:flex;gap:7px;flex-shrink:0}
+/* §6 — the recovered audio, played back. Full width so the scrubber is usable. */
+.recoverPlayer{display:flex;flex-direction:column;gap:5px;padding:0 2px 7px}
+.recoverPlayer audio{width:100%;height:32px}
+.recoverPlayer small{font-size:10.5px;color:var(--warn);line-height:1.5}
+/* ADR-035 D4/D5 — live transcript: provisional, settled, and stated gaps */
+.liveHead{display:flex;align-items:baseline;justify-content:space-between;gap:9px}
+.liveHead .teamPickH{padding-bottom:6px}
+.liveCounts{font-size:10.5px;color:var(--mv-tx3);font-family:var(--mv-mono);flex-shrink:0}
+.liveEmpty{font-size:11.5px;color:var(--mv-tx3);line-height:1.55;padding:2px}
+.liveRows{display:flex;flex-direction:column;max-height:210px;overflow-y:auto;gap:2px}
+.liveRow{display:flex;gap:9px;align-items:flex-start;padding:4px 2px;border-top:1px solid var(--mv-line2)}
+.liveRow:first-child{border-top:0}
+.liveTime{font-size:10.5px;font-family:var(--mv-mono);color:var(--mv-tx3);flex-shrink:0;padding-top:2px}
+.liveText{font-size:12px;line-height:1.55;color:var(--mv-tx2);min-width:0;overflow-wrap:anywhere}
+/* Provisional is visibly not text yet — never styled as if it had arrived. */
+.liveProvisional{font-size:11.5px;line-height:1.55;color:var(--mv-tx3);font-style:italic}
+/* ADR-035 D4/D10 — live utterances. Both faces are PROVISIONAL: a partial the
+   endpoint may still revise, and a final this device has not saved yet. Neither
+   may be styled like `.liveText`, which is text that has settled. */
+.liveUtterance{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0}
+.liveUtterance span{font-size:12px;line-height:1.55;color:var(--mv-tx3);font-style:italic;overflow-wrap:anywhere}
+.liveUtterance small{font-size:10px;font-family:var(--mv-mono);color:var(--mv-tx3);opacity:.75}
+.liveSettling span{font-style:normal}
+.liveGap{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.liveGap b{font-size:11.5px;font-weight:500;font-family:var(--mv-mono);color:var(--warn);overflow-wrap:anywhere}
+.liveGap small{font-size:10.5px;color:var(--mv-tx3);line-height:1.5;overflow-wrap:anywhere}
 @media(max-width:900px){.wrap{grid-template-columns:1fr}.list{max-height:390px;min-height:280px}.body{grid-template-columns:1fr}}
 @media(max-width:620px){.dHeadRow{flex-direction:column}.hActions{width:100%;flex-wrap:wrap}.pop{right:auto;left:0;width:min(312px,calc(100vw - 54px))}.body{padding:12px}.modalScrim{align-items:flex-end;padding:0}.modal{width:100%;max-height:94vh;border-radius:var(--radius-panel) var(--radius-panel) 0 0}.captureOptions{align-items:stretch;flex-direction:column}.modalActions{align-items:stretch;flex-direction:column}.modalActions>div{width:100%;justify-content:flex-end}.recordActions{justify-content:flex-start!important}}

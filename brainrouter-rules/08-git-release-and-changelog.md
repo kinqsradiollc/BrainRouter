@@ -63,7 +63,7 @@ coupled change as one `* type(scope): …` bullet so the squash body remains rea
 ### 4. Release trains on `release/x.y.z`; tag `vX.Y.Z` on the merge to main
 
 Each version is developed on a `release/x.y.z` branch (current:
-`release/0.4.18`). Feature PRs target the release branch and are squash-merged. To
+`release/0.4.20`). Feature PRs target the release branch and are squash-merged. To
 ship: merge `origin/main` into the release branch, land the bump + changelog
 commits, open a PR from the release branch into `main`, and tag the merge commit
 `vX.Y.Z`. Release-bump work can go through a `chore/release-x.y.z` side branch.

@@ -13,6 +13,86 @@
  * the `createHostCore({ queries })` map.
  */
 import { createBrokerPort, createHostCore, type AgentLike } from '../hostCore.js';
+import {
+  TOOL_REQUIREMENTS, planProvisioning, checkIdentity, bindWorkspace,
+  type ForgeOperation,
+} from '@kinqs/brainrouter-core/tooling';
+import {
+  recordActual as plannerRecordActual,
+  syncOnce,
+  updateBlock as plannerUpdateBlock,
+  writePlanner,
+} from '@kinqs/brainrouter-core/planner';
+import { createPlannerTransport } from './plannerTransport.js';
+// ADR-029 Part B — Notes is USER-scoped for the same reason the planner is
+// (D1), so none of these take a workspace root either.
+import {
+  createBlock as notesCreate, createPage as notesCreatePage, updateBlock as notesUpdate,
+  // ADR-030 D5 — a parsed document becomes a page of blocks.
+  importDocumentAsNote,
+  deleteBlock as notesDelete, moveBlock as notesMove,
+  buildNoteTree, readNotes, writeNotes, resolveConflict as notesResolveConflict,
+  beginEditing as notesBeginEditing, keepEditing as notesKeepEditing, endEditing as notesEndEditing,
+  describeBlockLease, describeNotesSync, syncNotesOnce, blockReferences,
+  listBlocks as notesList, searchNotes, blocksReferencing, type NoteBlockKind,
+  // ADR-029 Part E — the editing model. Every judgement below lives in core so
+  // the desktop, the dashboard and the CLI cannot disagree about what Enter
+  // does; the host only routes.
+  splitBlock as notesSplit, mergeIntoPrevious as notesMergeBack,
+  duplicateBlock as notesDuplicate, moveBlockUp as notesMoveUp,
+  moveBlockDown as notesMoveDown, indentBlock as notesIndent,
+  outdentBlock as notesOutdent, restoreBlock as notesRestore,
+  listTrash as notesTrash, listFavourites as notesFavourites,
+  applyInputRule, searchSlashCatalog, numberedOrdinals, pageTitleOrDefault,
+  describeTrashEntry,
+  // ADR-029 F4/F3 — page-level undo, comments and templates. The inverses, the
+  // guard, the merge and the reference rewrite are all core's; the host routes
+  // and flattens, which is what keeps the dashboard able to do the same.
+  undoNotes as notesUndo, redoNotes as notesRedo, noteUndoState as notesUndoState,
+  addComment as notesAddComment, setCommentResolved as notesSetCommentResolved,
+  editComment as notesEditComment, removeComment as notesRemoveComment,
+  blockComments, orphanedComments as notesOrphanedComments,
+  isLiveBlock as isLiveNoteBlock, listAllBlocks as notesAllBlocks, subtreeBlockIds,
+  listTemplates as notesListTemplates, instantiateTemplate as notesInstantiateTemplate,
+  describeInstantiation as describeNoteInstantiation,
+  // ADR-029 E3 — databases. A row is a page, so every one of these composes the
+  // block mutations above rather than reaching a second store; the host routes.
+  createDatabase as notesCreateDatabase, listDatabases as notesListDatabases,
+  addProperty as notesAddProperty, updateProperty as notesUpdateProperty,
+  removeProperty as notesRemoveProperty, reorderProperties as notesReorderProperties,
+  addRow as notesAddRow, setRowValue as notesSetRowValue, removeRow as notesRemoveRow,
+  saveView as notesSaveView, removeView as notesRemoveView,
+  readDatabaseView as notesReadDatabaseView, readDatabase,
+  DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS, operatorsFor,
+  type NotePropertyType, type NoteViewKind, type NoteDatabaseView,
+  // ADR-029 Part F — the blocks the slash menu offered and could not draw. Both
+  // reach the network through core's ONE guarded fetch, which is also what
+  // `fetch_url` uses: a bookmark preview reaching an internal service is the
+  // same defect as a tool call reaching one.
+  fetchBookmarkPreview, fetchNoteImage, noteImageRef, NOTE_ATTACHMENT_SESSION,
+  // ADR-029 F2/F3 — the derived columns: the function catalogue a formula
+  // editor lists, the aggregates a rollup offers, and the refusal that makes a
+  // metadata column read-only in one place rather than in each surface.
+  FORMULA_FUNCTIONS, isDerivedPropertyType, NOTE_ROLLUP_AGGREGATES,
+  rollupTargetProperties as notesRollupTargets,
+  type NoteRollupSpec,
+  // ADR-029 F3 — a synced block is an ADDRESS, resolved here because the source
+  // is usually on a page the renderer is not holding; and getting data out,
+  // written by core so the desktop and the dashboard produce the same file.
+  readSyncedBlock, describeSyncedState, exportNote, exportFormatsFor,
+  walkSubtree as walkNoteSubtree,
+} from '@kinqs/brainrouter-core/notes';
+import { createNotesTransport } from './notesTransport.js';
+import {
+  formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
+} from '@kinqs/brainrouter-core/workspace/references';
+import {
+  buildLocalWorkspaceRegistry, linkWorkspaceRef, listCodeSymbols, locateCodeFile,
+  localWorkspaceViewer, readSourceForSymbols,
+} from '@kinqs/brainrouter-core/workspace/participants';
+import {
+  readDeclinedTools, writeDeclinedTool, readWorkspaceBinding, writeWorkspaceBinding,
+} from './toolingState.js';
 import { mergeGithubCliEnv, normalizeGithubCliError } from '../ghCli.js';
 import { shellQuoteArg } from '../shellQuote.js';
 import {
@@ -27,6 +107,7 @@ import {
   resolveDesktopAccountIdentity,
   startAccountConnectorOAuth,
   timeoutFetch,
+  withAccountOrgId,
 } from '../accountIntegration.js';
 import { fetchAccountReviewAssurance } from '../reviewAccountContract.js';
 // host/helpers — pure, closure-free helpers (config scrubbing, Track↔GitHub
@@ -51,10 +132,11 @@ import {
   type TrackGithubConfig,
 } from './helpers.js';
 import { exec, execFileSync } from 'node:child_process';
-import { ensureBrainSession, endBrainSession, setBrainSessionRelay } from './brainSession.js';
+import { ensureBrainSession, setBrainSessionRelay } from './brainSession.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import {
   InteractionBroker,
@@ -68,10 +150,36 @@ import {
 } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
-import { callOpenAI } from '@kinqs/brainrouter-core/agent';
+import { callOpenAI, learnedTenantForAgent } from '@kinqs/brainrouter-core/agent';
+import {
+  listLearnedItems,
+  readLearningLog,
+  revertLearnedItemLifecycle,
+} from '@kinqs/brainrouter-core/learning';
+// ADR-028 Part D — the planner is USER-scoped, so none of these take a
+// workspace root. If one ever needs one, the scoping has regressed (D9).
+import {
+  addItem as plannerAdd, updateItem as plannerUpdate, deleteItem as plannerDelete,
+  scheduleBlock as plannerSchedule, resolveConflict as plannerResolveConflict,
+  listItems as plannerListItems, listBlocks as plannerListBlocks,
+  readPlanner, todayView, summarizeDrift, plannerOutboxDetails,
+  retryPlannerOperation, describeFreshness, isStale,
+} from '@kinqs/brainrouter-core/planner';
 // BROWSER — story prompt/validation helpers + the driver step types the
 // browser:* handlers below use. The host instance itself arrives via ctx.browser.
 import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-core/browser';
+// ADR-040 A40-10 — the SAME curated run projection the CLI /runs renders, so the
+// two hosts cannot disagree about what a run looks like. Read-only: the resume
+// material (readDurableRunResumeState) is deliberately NOT on this surface.
+import {
+  openDurableRuns,
+  listDurableRuns,
+  previewTurnStrategy,
+  readDurableRunSafe,
+  readRunDetail,
+  toRunsListRows,
+  toRunDetailView,
+} from '@kinqs/brainrouter-core/orchestration/runs';
 // IPC boundary: the browser:* channel is agent-reachable, so validate every input.
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
 import type { BrowserStep, BrowserStepResult } from '../browserHost.js';
@@ -148,7 +256,6 @@ import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/
 import { WorkspaceFileListCache, type WorkspaceFileListResult } from '../workspaceFileListCache.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/review';
 import { isFindingStatus } from '@kinqs/brainrouter-core/review';
 import { getLatestReview, updateReviewFinding } from '@kinqs/brainrouter-core/review';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
@@ -175,6 +282,7 @@ import {
   resumeGoal,
   editGoal,
   decideGoalContinuation,
+  recordGoalContinuation,
   buildGoalContinuationPrompt,
   goalCorrectiveNotice,
   tickGoalIteration,
@@ -213,6 +321,11 @@ import { desktopReviewRunRequest } from '../reviewRunRequest.js';
 // durable attachment records, shared with the CLI `/attach` store.
 import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/attachment';
 import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/attachment';
+// ADR-030 Q2/Q3 — the document parser is 4.6 MB of WebAssembly and the
+// renderer's initial-JS budget is 1,750,000 bytes, so it runs HERE, in the main
+// process, and the renderer asks. What it asks for is the artifact ingest
+// already wrote (Q4); nothing below re-parses.
+import { readDocumentArtifact, documentOutlineState } from '@kinqs/brainrouter-core/attachment';
 // TELEMETRY (0.4.15 workflow gaps) — local-first task/review/upload lifecycle.
 import { recordTelemetry } from '@kinqs/brainrouter-core/telemetry';
 import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
@@ -364,72 +477,90 @@ import { readRun } from '@kinqs/brainrouter-core/workflow';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from '../sessionModeBridge.js';
 import { buildWorkspaceKnowledgeQueries } from '../knowledgeBridge.js';
 import type { HostContext, TrackPrView } from './context.js';
+import { isBrainRouterLearningProfile } from './learningIdentity.js';
 import type { QueryHandler } from '../hostCore.js';
 
-import {
-  describeStackAction,
-  adviseStackingAction,
-  createStackLayerAction,
-  type StackActionDeps,
-} from './stackActions.js';
+export function createSerialWorkQueue(): <T>(work: () => T | Promise<T>) => Promise<T> {
+  let tail: Promise<void> = Promise.resolve();
+  return <T>(work: () => T | Promise<T>): Promise<T> => {
+    const result = tail.then(work, work);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+}
 
-/** Changed lines per file, parsed from a unified diff. */
-function changedLinesByFile(diff: string): Map<string, number> {
-  const out = new Map<string, number>();
-  let current: string | null = null;
-  for (const line of diff.split('\n')) {
-    const header = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (header) { current = header[1]!; continue; }
-    if (!current) continue;
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
-    if (line.startsWith('+') || line.startsWith('-')) {
-      out.set(current, (out.get(current) ?? 0) + 1);
-    }
+export interface DesktopPlannerScope {
+  /** Opaque local-store partition. It never contains a credential or raw id. */
+  storeId: string;
+  signedIn: boolean;
+  /** A remote sync is safe only when this exact org is also on the request. */
+  orgId: string | null;
+}
+
+/**
+ * Bind the local Planner cache to the same account and organization as sync.
+ *
+ * A single `planner-local.json` is unsafe on a shared install: after an account
+ * or organization switch its queued text can otherwise be uploaded under the
+ * new bearer. Hashing the identity keeps filenames free of account ids and API
+ * credentials while still producing a stable, collision-resistant partition.
+ */
+export function desktopPlannerScope(config: unknown): DesktopPlannerScope {
+  const candidate = (config && typeof config === 'object' ? config : {}) as {
+    cli?: { account?: { userId?: unknown; orgId?: unknown; url?: unknown; email?: unknown } };
+  };
+  const profile = candidate.cli?.account;
+  const connected = resolveBrainRouterAccountApi(config);
+  if (!profile && !connected) return { storeId: 'local', signedIn: false, orgId: null };
+
+  const userId = typeof profile?.userId === 'string' ? profile.userId.trim() : '';
+  const orgId = typeof profile?.orgId === 'string' ? profile.orgId.trim() : '';
+  const profileUrl = typeof profile?.url === 'string' ? profile.url.trim() : '';
+  const email = typeof profile?.email === 'string' ? profile.email.trim().toLowerCase() : '';
+  // Legacy API-key profiles may predate cli.account.userId. The credential is
+  // suitable partition entropy, but only its digest is retained or returned.
+  const subject = userId || [
+    connected?.baseUrl ?? profileUrl,
+    connected?.apiKey ?? '',
+    email,
+  ].join('\0');
+  const digest = createHash('sha256')
+    .update(subject)
+    .update('\0')
+    .update(orgId || 'personal')
+    .digest('hex');
+  return {
+    storeId: `account_${digest.slice(0, 40)}`,
+    signedIn: true,
+    orgId: orgId || null,
+  };
+}
+
+function readNoteConflictClock(
+  expected: unknown,
+  key: 'oursAt' | 'theirsAt',
+): { physical: number; logical: number; deviceId: string } | null {
+  if (!expected || typeof expected !== 'object' || !Object.hasOwn(expected, key)) return null;
+  const value = (expected as Record<string, unknown>)[key];
+  if (!value || typeof value !== 'object') return null;
+  const clock = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(clock.physical) || Number(clock.physical) < 0
+    || !Number.isSafeInteger(clock.logical) || Number(clock.logical) < 0
+    || typeof clock.deviceId !== 'string' || clock.deviceId.length < 1 || clock.deviceId.length > 200) {
+    return null;
   }
-  return out;
+  return {
+    physical: Number(clock.physical),
+    logical: Number(clock.logical),
+    deviceId: clock.deviceId,
+  };
 }
 
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
-  let repoSlugCache: string | null = null;
-  void (async () => {
-    const view = await ctx.ghJson<{ nameWithOwner?: unknown }>(['repo', 'view', '--json', 'nameWithOwner'], { timeout: 8_000 });
-    const slug = view.data?.nameWithOwner;
-    if (typeof slug === 'string' && slug.includes('/')) repoSlugCache = slug;
-  })();
-
-  /**
-   * Deps for the stack actions, assembled from what the host already has.
-   * `workingTreeGroups` groups the working diff by top-level directory: a crude
-   * seam, but a real one, and better than asking the model to invent cut points
-   * from a file list. Stacking advice only ever suggests — it never cuts.
-   */
-  const stackDeps = (): StackActionDeps => ({
-    ghJson: ctx.ghJson,
-    // Resolved through gh rather than a context field: there is no repo-slug
-    // accessor on HostContext, and inventing one that silently returns null
-    // would make every stack action a no-op that still reports success.
-    repo: () => repoSlugCache,
-    workingTreeGroups: async () => {
-      const working = await ctx.collectWorkingDiff();
-      // `files` is a plain string[]; per-file change counts are not carried, so
-      // they are parsed from the unified diff rather than guessed. Counting
-      // nothing would make every change look small enough to skip stacking,
-      // which is the failure mode that matters here.
-      const perFile = changedLinesByFile(working?.diff ?? '');
-      const byGroup = new Map<string, { files: string[]; changedLines: number }>();
-      for (const filePath of working?.files ?? []) {
-        const label = filePath.split('/')[0] || 'root';
-        const entry = byGroup.get(label) ?? { files: [], changedLines: 0 };
-        entry.files.push(filePath);
-        entry.changedLines += perFile.get(filePath) ?? 0;
-        byGroup.set(label, entry);
-      }
-      return {
-        totalChangedLines: [...byGroup.values()].reduce((sum, g) => sum + g.changedLines, 0),
-        groups: [...byGroup.entries()].map(([label, g]) => ({ label, ...g })),
-      };
-    },
-  });
+  // Planner state is persisted as one atomic JSON document. Keep every local
+  // read-modify-write and network reconciliation in one queue so a sync that
+  // started from snapshot A can never overwrite a mutation that produced A+B.
+  const withPlannerStoreLock = createSerialWorkQueue();
 
   const {
     browser,
@@ -442,12 +573,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     config,
     secretBridge,
     mcpClient,
+    sessionMessaging,
     callBrainAtlas,
     agent,
     llmForSession,
     refreshAccountModelCatalog,
     peekAccountModelCatalog,
     syncActiveSessionLlm,
+    revokeReviewedExecutionAuthority,
+    rebindActiveAccountOrg,
+    activeTenantBindingError,
+    humanCorrectionIngress,
     spawnTaskAgent,
     taskEventView,
     emitTaskEvent,
@@ -491,6 +627,60 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     setPrStatusMapCache,
     resetGhEnvCache,
   } = ctx;
+  /**
+   * ADR-029 C1 — the registry the UI verbs resolve through.
+   *
+   * Rebuilt per call rather than cached, because `workspaceRoot` is captured
+   * from the host context at construction and a registry holding a stale one
+   * would resolve `code/file/...` against a checkout nobody is looking at — a
+   * wrong answer that is indistinguishable from a right one.
+   */
+  const localWorkspaceRegistry = () => buildLocalWorkspaceRegistry({ workspaceRoot });
+
+  /**
+   * Is this a reference SOMEONE ELSE can answer, rather than one that is gone?
+   *
+   * `no_resolver_here` is the structural case — a meeting lives only on the
+   * server, so this process has nothing to read. That is precisely the case Q5
+   * calls a backend capability with a client cache in front of it, so it is
+   * worth a round trip. Every other outcome, tombstones included, is an ANSWER
+   * and asking again would replace a correct one with a slower one.
+   */
+  const isAnsweredElsewhere = (resolution: { status: string; reason?: string }): boolean =>
+    resolution.status === 'unavailable' && resolution.reason === 'no_resolver_here';
+
+  /**
+   * Ask the brain to resolve what this client cannot.
+   *
+   * Returns null on any failure — no account, no network, a non-200 — because
+   * the local answer is already correct-if-coarse ("not available in this
+   * app"), and replacing it with an error would turn a reference that merely
+   * lives elsewhere into one that looks broken.
+   */
+  const askBrainToResolve = async (
+    verb: 'resolve' | 'describe',
+    uri: string,
+  ): Promise<{ resolution?: unknown; line: string } | null> => {
+    try {
+      const account = await resolveBrainRouterAccountContext(loadConfig());
+      if (!account) return null;
+      const url = new URL(`/api/workspace/${verb}`, account.baseUrl);
+      url.searchParams.set('uri', uri);
+      const res = await fetch(url, {
+        headers: brainRouterAccountHeaders(account),
+        // `manual` so a redirect cannot move an authenticated request to a host
+        // the configured base URL did not name.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as { resolution?: unknown; line?: unknown };
+      return typeof body.line === 'string' ? { resolution: body.resolution, line: body.line } : null;
+    } catch {
+      return null;
+    }
+  };
+
   let runtimeRunnerClient: RuntimeRunnerClient | null = null;
   let runtimeRunnerRemoteUrl = '';
   const getRuntimeRunnerClient = () => {
@@ -580,6 +770,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // pinned first, then the store's recency order (sessionRows already sorts).
         return rows.sort((a, b) => Number(b.pinned) - Number(a.pinned));
       },
+      // ADR-034 — one Desktop participant surface over local discovery and the
+      // authenticated Brain inbox. Addresses remain exact keys/unique prefixes;
+      // titles are display metadata only.
+      'peers-list': () => sessionMessaging.listPeers(),
+      'peers-send': (args) => sessionMessaging.send(
+        typeof args.to === 'string' ? args.to : '',
+        typeof args.text === 'string' ? args.text : '',
+      ),
+      'peers-held': () => ({ messages: sessionMessaging.listHeld() }),
+      'peers-held-decide': async (args) => {
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        if (!id) throw new Error('A held message id is required.');
+        if (typeof args.approved !== 'boolean') throw new Error('An explicit approve or reject decision is required.');
+        return sessionMessaging.decideHeld(id, args.approved);
+      },
+      'peers-receipts': async () => ({ receipts: await sessionMessaging.listReceipts() }),
+      'peers-receipts-ack': async (args) => sessionMessaging.acknowledgeReceipts(
+        Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === 'string') : [],
+      ),
       // DESK-5d — another project's chat history, for the sidebar's expanded
       // project folders. Read-only transcript summaries; the trust gate still
       // guards SWITCHING into the workspace.
@@ -627,17 +836,61 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           typeof args.name === 'string' ? args.name : '',
         ),
       }),
+      // ADR-040 A40-10 — Desktop Runs. These mirror the CLI /runs handlers EXACTLY
+      // (same openDurableRuns best-effort, same toRunsListRows/toRunDetailView, same
+      // absent snapshot) so the panel and the CLI render one projection, not two.
+      'runs.list': () => {
+        // Migration/reconciliation is maintenance, not resume material; listing
+        // still works if it throws.
+        try { openDurableRuns(workspaceRoot); } catch { /* listing still works */ }
+        return { runs: toRunsListRows(listDurableRuns(workspaceRoot, { limit: 20 }).runs) };
+      },
+      'runs.detail': (args) => {
+        const runId = typeof args.runId === 'string' ? args.runId : '';
+        // A40-9 — rebuild the map from the run's retained event journal, the same
+        // way the CLI /runs does. A run with no journal reduces to an absent
+        // snapshot and the view says `unavailable` rather than drawing an empty
+        // map as though it were the whole run.
+        const run = readRunDetail(workspaceRoot, runId);
+        return { run: run ?? null };
+      },
+      // A40-10 — explicit strategy launch: preview the plan a strategy would run,
+      // so "Run with strategy" shows the validated strategy, its stages, and
+      // whether it spawns children before the user confirms. Read-only; the same
+      // PlanPreview the CLI `/runs start` renders.
+      'runs.preview': (args) => {
+        const task = typeof args.task === 'string' ? args.task : '';
+        const strategyId = typeof args.strategyId === 'string' && args.strategyId ? args.strategyId : undefined;
+        if (!task.trim()) return { preview: null };
+        try {
+          return { preview: previewTurnStrategy({ workspaceRoot, task, ...(strategyId ? { strategyId } : {}) }) };
+        } catch {
+          return { preview: null };
+        }
+      },
+      // A40-10 — the confirmed launch. The explicit UI action is the trusted
+      // action; the turn runs with the chosen strategy as its topology
+      // (selectionSource `explicit`). Fire-and-forget like the CLI, so the panel
+      // does not block on a long run.
+      'runs.start': (args) => {
+        const task = typeof args.task === 'string' ? args.task : '';
+        const strategyId = typeof args.strategyId === 'string' && args.strategyId ? args.strategyId : undefined;
+        if (!task.trim()) return { started: false };
+        void getActiveAgent().runTurn(
+          task,
+          { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} },
+          strategyId ? { explicitStrategyId: strategyId } : {},
+        );
+        return { started: true };
+      },
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
       // pretend to be the general connector abstraction.
       'connectors-catalog': () => ({ catalog: listConnectorCatalog() }),
-      // ADR-027 D13 — the host half of the `stack.*` control actions. These
-      // were declarations with no implementation until now, which is the same
-      // "module with no caller" gap that made the stack model inert when it
-      // first shipped.
-      'stack-describe': async (args) => describeStackAction(stackDeps(), args ?? {}),
-      'stack-advise': async () => adviseStackingAction(stackDeps()),
-      'stack-add-layer': async (args) => createStackLayerAction(stackDeps(), args ?? {}),
+      // ADR-028 A8 — `stack-describe` and `stack-advise` were registered here
+      // and dispatched by nothing: the only renderer that would have called
+      // them was the stack panel, whose own buttons dispatched three OTHER
+      // names that were never registered. Both are retired with that panel.
       'connectors-list': (args) => {
         const source = typeof args.source === 'string' ? args.source as ConnectorSource : undefined;
         const status = typeof args.status === 'string' ? args.status as never : undefined;
@@ -1060,6 +1313,58 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const rec = getAttachment(workspaceRoot, typeof a.id === 'string' ? a.id : '');
         return rec ? { id: rec.id, name: rec.name, markdown: attachmentContextMarkdown(rec) } : null;
       },
+      // ADR-030 Q4 — a parsed document, by its parts. The panel shows the whole
+      // document rather than the bounded extract the turn got, and it does it
+      // WITHOUT the parser: the artifact was written at ingest, so this is a
+      // JSON read. `null` when this attachment has no parsed document — an
+      // image, or a PDF ingested before this shipped — which the panel renders
+      // as "no parsed document" rather than as an empty one.
+      'attachment-document': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        if (!getAttachment(workspaceRoot, id)) return null;
+        const artifact = readDocumentArtifact(workspaceRoot, id);
+        if (!artifact) return null;
+        return { attachmentId: id, ...documentOutlineState(artifact).documentOutline };
+      },
+      // One part's own text. Separate from the outline for the reason resolving
+      // one is separate: the outline is a list and costs a line per part, and a
+      // panel that fetched every part to show one would put a whole document
+      // across the bridge to render a page of it.
+      'attachment-document-part': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        const index = Number(a.part);
+        if (!getAttachment(workspaceRoot, id)) return null;
+        const artifact = readDocumentArtifact(workspaceRoot, id);
+        if (!artifact) return null;
+        const part = artifact.parts.find((candidate) => candidate.index === index);
+        return part ? { attachmentId: id, partCount: artifact.parts.length, ...part } : null;
+      },
+      /**
+       * ADR-030 D5 — the second landing place, as a gesture a person performs.
+       *
+       * "An imported document becomes a page of blocks, addressable at
+       * `brainrouter://notes/block/…`." The judgement is core's
+       * (`importDocumentAsNote`) so the desktop, the CLI and the agent's
+       * `workspace_create` all produce the same page; this reads the artifact
+       * that ingest already wrote and hands it over. It parses nothing.
+       *
+       * Refused with a reason rather than half-done: an attachment that is not
+       * a parsed document — an image, or a PDF ingested before this shipped —
+       * leads somewhere different from one that does not exist.
+       */
+      'notes-import-document': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        if (!getAttachment(workspaceRoot, id)) {
+          return { ok: false, reason: 'no attachment with that id in this workspace' };
+        }
+        const artifact = readDocumentArtifact(workspaceRoot, id);
+        if (!artifact) return { ok: false, reason: 'this attachment has no parsed document to import' };
+        const imported = importDocumentAsNote({
+          artifact,
+          ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+        });
+        return { ok: true, ...imported };
+      },
       // DESK-5l — live model, not the boot-time snapshot: session-info runs on
       // every sidebar refresh, and returning stale llm.model used to stomp the
       // UI back to the old model right after a switch.
@@ -1255,6 +1560,29 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'shortcuts-get': () => {
         const cli = (loadConfig() as { cli?: { shortcuts?: Record<string, string> } }).cli;
         return { overrides: (cli?.shortcuts && typeof cli.shortcuts === 'object') ? cli.shortcuts : {} };
+      },
+      /**
+       * ADR-032 D8 — record the active organization for the learned store's
+       * tenant partition.
+       *
+       * This lives in the HOST and not in the meetings ipcMain bridge on
+       * purpose. The bridge runs in Electron main; the Agent, and therefore
+       * `learnedTenantForAgent`, runs here in the utility process. Those are
+       * separate processes with separate module state, so a `saveConfig` plus
+       * `_resetCliKnobsCache()` performed over there would write the file and
+       * leave THIS process reading its boot-time cache — the partition would
+       * change on disk and not in the only process that learns.
+       */
+      'account-set-active-org': async (args) => {
+        const requestedOrgId = typeof args.orgId === 'string' ? args.orgId.trim() : '';
+        // The provider emits an initial empty state while org memberships load.
+        // Treat that as "not selected yet", not a switch to a personal tenant:
+        // an authenticated BrainRouter MCP without an org header would otherwise
+        // fall back centrally while the local ledger pinned `personal`.
+        if (!requestedOrgId) return { ok: true, changed: false };
+        const { changed, next } = withAccountOrgId(loadConfig(), args.orgId);
+        const rebound = await rebindActiveAccountOrg(next as Parameters<typeof saveConfig>[0]);
+        return { ok: true, changed: changed || rebound };
       },
       'shortcuts-save': (args) => {
         const raw = (args.overrides && typeof args.overrides === 'object') ? (args.overrides as Record<string, unknown>) : {};
@@ -1996,6 +2324,1153 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // CLI's artifactStore (already unit-tested) so the desktop panel and the
       // terminal CLI share the same artifacts.json. Enum inputs are guard-validated
       // here so a bad kind/status/format is rejected, not silently written.
+      // ADR-028 G6 — the planner mode. User-scoped and cross-workspace, so the
+      // handlers pass `undefined` for the user until account identity is
+      // threaded: one planner per install today, per person once it is.
+      // ADR-028 F7 — the comprehension review. Invoked from the Understand
+      // panel; never produced unprompted, which is the difference between this
+      // and the pop quiz Part F originally refused.
+      // ADR-028 I1 — what is missing and what it unlocks. Detects only; the
+      // install happens on an explicit click, never here.
+      'tooling-check': async () => {
+        const statuses = await Promise.all(TOOL_REQUIREMENTS.map(async (r) => {
+          if (r.id === 'gh-stack') {
+            const list = await ghText(['extension', 'list'], { timeout: 8_000 });
+            return { id: r.id, present: list.ok && /gh-stack/.test(list.stdout) };
+          }
+          if (r.id === 'git') {
+            const v = await git(['--version'], workspaceRoot).catch(() => '');
+            return { id: r.id, present: /git version/.test(v), version: v.trim() || undefined };
+          }
+          const v = await ghText(['--version'], { timeout: 8_000 });
+          return { id: r.id, present: v.ok, version: v.stdout?.split('\n')[0] };
+        }));
+        const declined = readDeclinedTools();
+        const plan = planProvisioning(statuses, {
+          declined,
+          autoInstall: getCliKnobs().autoInstallTools,
+        });
+        // ADR-028 I1 — actually run it. Only the low-blast-radius commands
+        // reach here: `planProvisioning` never puts a system package manager in
+        // `install`, so this cannot invoke brew or xcode-select however the
+        // setting is configured.
+        if (plan.kind === 'auto_install') {
+          const installed: string[] = [];
+          for (const req of plan.install) {
+            const res = await ghText(['extension', 'install', 'github/gh-stack'], { timeout: 90_000 });
+            if (res.ok) installed.push(req.label);
+          }
+          return { plan, statuses, installed };
+        }
+        return { plan, statuses };
+      },
+      'tooling-decline': (a) => {
+        // Remembered, so the same offer is never made twice. Asking again next
+        // launch is how a prompt becomes noise.
+        writeDeclinedTool(String(a.id ?? ''));
+        return { declined: true };
+      },
+
+      // ADR-028 I3 — which account is this workspace pushing as? Reads never
+      // reach here (I4); only operations that can disclose do.
+      'git-identity-check': async (a) => {
+        const raw = await ghText(['auth', 'status', '--active'], { timeout: 8_000 });
+        const login = /account (\S+)/.exec(raw.stdout ?? '')?.[1] ?? null;
+        const host = /Logged in to (\S+)/.exec(raw.stdout ?? '')?.[1] ?? 'github.com';
+        const active = login ? { login, host, active: true } : null;
+        const binding = readWorkspaceBinding(workspaceRoot);
+        const verdict = checkIdentity({
+          operation: (a.operation as ForgeOperation) ?? 'push',
+          active,
+          binding,
+        });
+        // The first push BINDS rather than interrogating.
+        if (verdict.kind === 'bind' && active) {
+          writeWorkspaceBinding(bindWorkspace(workspaceRoot, active, new Date().toISOString()));
+        }
+        return verdict;
+      },
+      'comprehension-start': async () => {
+        // ADR-028 F7 — off means OFF. A surface that cannot do its job is worse
+        // than no surface: it takes a click and returns nothing.
+        const settings = getCliKnobs().comprehension;
+        if (settings && settings.enabled === false) {
+          return { subject: '', questions: [], reason: 'Comprehension reviews are turned off in settings.' };
+        }
+        // The QUESTIONS come from the agent — generating good ones needs its
+        // view of what it just built and why. Until a turn has produced work
+        // worth reviewing there is nothing to ask about, and saying so is
+        // better than inventing questions from a diff.
+        const porcelain = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).trim();
+        const changed = porcelain ? porcelain.split('\n').filter(Boolean) : [];
+        if (changed.length === 0) {
+          return { subject: '', questions: [], reason: 'No uncommitted work to review yet.' };
+        }
+        return {
+          subject: `${changed.length} changed file(s) in this workspace`,
+          questions: [],
+          reason: 'Ask the agent for a comprehension review — it needs its own reasoning to write the questions.',
+        };
+      },
+      'comprehension-answer': (a) => ({
+        // Multiple choice is decidable here; free text is not, and pretending
+        // otherwise would tell someone who understands the code that they are
+        // wrong (F7).
+        verdict: typeof a.answer === 'string' && a.answer.trim() ? 'needs_model_judgement' : 'skipped',
+      }),
+      'comprehension-dispute': (a) => ({ questionId: String(a.questionId ?? ''), noted: true }),
+      'planner-read': () => withPlannerStoreLock(() => {
+        const plannerScope = desktopPlannerScope(loadConfig()).storeId;
+        const items = plannerListItems(plannerScope, { includeCompleted: true });
+        const blocks = plannerListBlocks(plannerScope);
+        const nowMs = Date.now();
+        const pending = plannerOutboxDetails(plannerScope, nowMs);
+        const localNow = new Date();
+        const today = [
+          localNow.getFullYear(),
+          String(localNow.getMonth() + 1).padStart(2, '0'),
+          String(localNow.getDate()).padStart(2, '0'),
+        ].join('-');
+        const view = todayView(plannerScope, { date: today, nowMs });
+        const drift = summarizeDrift(blocks);
+        const itemTitle = new Map(items.map((item) => [item.id, item.title.value]));
+        const blockItem = new Map(blocks.map((block) => [block.id, block.itemId]));
+        const ageLabel = (ageMs: number): string => {
+          const minutes = Math.max(1, Math.round(ageMs / 60_000));
+          if (minutes < 60) return `${minutes}m`;
+          const hours = Math.round(minutes / 60);
+          return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+        };
+        return {
+          today,
+          items: items.map((i) => ({
+            id: i.id,
+            title: i.title.value,
+            notes: i.notes?.value,
+            dueDate: i.dueDate?.value ?? undefined,
+            priority: i.priority?.value,
+            completed: i.completed?.value === true,
+            origin: i.origin,
+            source: i.source,
+            ...(i.provenance
+              ? {
+                  provenance: {
+                    source: i.provenance.sourceLabel,
+                    kind: i.provenance.sourceId,
+                    externalId: i.provenance.externalId,
+                    url: i.provenance.sourceUrl,
+                    fetchedAt: i.provenance.fetchedAt,
+                  },
+                  sourceFreshness: {
+                    label: describeFreshness({
+                      sourceId: i.provenance.sourceLabel,
+                      lastFetchedAt: i.provenance.fetchedAt,
+                      itemCount: 1,
+                    }, nowMs),
+                    fetchedAt: i.provenance.fetchedAt,
+                    stale: isStale({
+                      sourceId: i.provenance.sourceId,
+                      lastFetchedAt: i.provenance.fetchedAt,
+                      itemCount: 1,
+                    }, nowMs),
+                  },
+                }
+              : {}),
+            estimateMinutes: i.estimateMinutes,
+            blockedReason: i.blockedReason?.value ?? undefined,
+            capabilities: {
+              editTitle: i.origin === 'owned',
+              complete: i.origin === 'owned',
+              delete: i.origin === 'owned',
+            },
+            conflictFields: Object.keys(i.conflicts ?? {}),
+            conflicts: Object.entries(i.conflicts ?? {}).map(([field, conflict]) => ({
+              field,
+              versionA: { label: 'Version A', value: String(conflict.ours) },
+              versionB: { label: 'Version B', value: String(conflict.theirs) },
+            })),
+          })),
+          blocks: blocks.map((b) => ({
+            id: b.id, itemId: b.itemId, scheduledFor: b.scheduledFor,
+            estimateMinutes: b.estimateMinutes, actualMinutes: b.actualMinutes,
+            carriedOver: b.carriedOver, completedAt: b.completedAt,
+          })),
+          sync: {
+            label: view.syncState,
+            pendingCount: pending.length,
+            issues: pending.map((detail) => {
+              const parentItemId = detail.entity === 'block'
+                ? blockItem.get(detail.targetId)
+                : detail.targetId;
+              return {
+                id: detail.idempotencyKey,
+                entity: detail.entity,
+                itemId: parentItemId ?? detail.targetId,
+                itemTitle: parentItemId ? itemTitle.get(parentItemId) : undefined,
+                action: detail.kind,
+                createdAt: detail.queuedAt,
+                ageLabel: ageLabel(detail.ageMs),
+                attempts: detail.attempts,
+                lastError: detail.lastError,
+                stuck: detail.status === 'needs_attention',
+                retryRequested: detail.status === 'retry_requested',
+              };
+            }),
+          },
+          staleSources: view.staleSources,
+          driftNote: drift.description,
+        };
+      }),
+      'planner-add': (a) => withPlannerStoreLock(() => {
+        const title = String(a.title ?? '').trim();
+        if (!title) return { error: 'A title is required.' };
+        return plannerAdd(desktopPlannerScope(loadConfig()).storeId, { title }, Date.now());
+      }),
+      'planner-update': (a) => withPlannerStoreLock(() => {
+        const id = String(a.id ?? '');
+        if (!id) return { error: 'An item id is required.' };
+        return plannerUpdate(desktopPlannerScope(loadConfig()).storeId, id, {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(typeof a.notes === 'string' ? { notes: a.notes } : {}),
+          ...(a.dueDate !== undefined ? { dueDate: a.dueDate as string | null } : {}),
+          ...(typeof a.priority === 'number' ? { priority: a.priority } : {}),
+          ...(typeof a.completed === 'boolean' ? { completed: a.completed } : {}),
+        }, Date.now());
+      }),
+      'planner-delete': (a) => withPlannerStoreLock(
+        () => plannerDelete(desktopPlannerScope(loadConfig()).storeId, String(a.id ?? ''), Date.now()),
+      ),
+      'planner-schedule': (a) => withPlannerStoreLock(() => {
+        const itemId = String(a.itemId ?? '');
+        const minutes = Number(a.estimateMinutes ?? 0);
+        if (!itemId || !Number.isFinite(minutes) || minutes <= 0) {
+          return { error: 'A block needs an item and a positive estimate.' };
+        }
+        return plannerSchedule(desktopPlannerScope(loadConfig()).storeId, {
+          itemId, estimateMinutes: minutes,
+          ...(typeof a.scheduledFor === 'string' ? { scheduledFor: a.scheduledFor } : {}),
+        }, Date.now());
+      }),
+      // ADR-028 G6 — the calendar's primary gesture: click an hour, block it.
+      'planner-schedule-at': (a) => withPlannerStoreLock(() => {
+        const at = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
+        if (!at) return { error: 'A time is required.' };
+        // Blocking time needs something to block it FOR. Creating the item and
+        // the block together is what makes the gesture one click rather than a
+        // form — you can rename it after.
+        const plannerScope = desktopPlannerScope(loadConfig()).storeId;
+        const item = plannerAdd(plannerScope, { title: 'Focus block' }, Date.now());
+        return plannerSchedule(plannerScope, {
+          itemId: item.id,
+          estimateMinutes: Number(a.estimateMinutes) || 60,
+          scheduledFor: at,
+        }, Date.now());
+      }),
+      'planner-reschedule-block': (a) => withPlannerStoreLock(() => {
+        const blockId = typeof a.blockId === 'string' ? a.blockId : '';
+        const scheduledFor = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
+        if (!blockId || !scheduledFor || !Number.isFinite(Date.parse(scheduledFor))) {
+          return { error: 'A block and a valid time are required.' };
+        }
+        return plannerUpdateBlock(desktopPlannerScope(loadConfig()).storeId, blockId, { scheduledFor }, Date.now())
+          ?? { error: 'That time block no longer exists.' };
+      }),
+      'planner-record-actual': (a) => withPlannerStoreLock(() => {
+        const blockId = typeof a.blockId === 'string' ? a.blockId : '';
+        const actualMinutes = Number(a.actualMinutes);
+        if (!blockId || !Number.isFinite(actualMinutes) || actualMinutes < 0) {
+          return { error: 'A block and non-negative actual minutes are required.' };
+        }
+        return plannerRecordActual(
+          desktopPlannerScope(loadConfig()).storeId,
+          blockId,
+          actualMinutes,
+          Date.now(),
+        ) ?? { error: 'That time block no longer exists.' };
+      }),
+      'planner-resolve': (a) => withPlannerStoreLock(() => {
+        const keep = a.keep === 'theirs' ? 'theirs' : 'ours';
+        return plannerResolveConflict(
+          desktopPlannerScope(loadConfig()).storeId,
+          String(a.id ?? ''),
+          String(a.field ?? ''),
+          keep,
+          Date.now(),
+        );
+      }),
+      'planner-retry-operation': (a) => withPlannerStoreLock(() => {
+        const idempotencyKey = typeof a.idempotencyKey === 'string' ? a.idempotencyKey : '';
+        if (!idempotencyKey) return { error: 'An operation id is required.' };
+        return retryPlannerOperation(desktopPlannerScope(loadConfig()).storeId, idempotencyKey, Date.now())
+          ?? { error: 'That queued change no longer exists.' };
+      }),
+      'planner-retry-all': () => withPlannerStoreLock(() => {
+        const plannerScope = desktopPlannerScope(loadConfig()).storeId;
+        const details = plannerOutboxDetails(plannerScope, Date.now());
+        for (const detail of details) {
+          retryPlannerOperation(plannerScope, detail.idempotencyKey, Date.now());
+        }
+        return { requested: details.length };
+      }),
+      // Sync needs a configured server; with none the cache IS the truth (D9),
+      // so this reports state rather than failing.
+      // ADR-028 D11 — actually reconcile with the server. This counted pending
+      // operations and returned the number, which looks like syncing and is
+      // not: the store, the merge rules, the outbox and the backend all
+      // existed, and nothing carried operations between them.
+      'planner-sync': () => withPlannerStoreLock(async () => {
+        const config = loadConfig();
+        const plannerScope = desktopPlannerScope(config);
+        const brainUrl = getCliKnobs().brainUrl;
+        if (!brainUrl) {
+          // Local-only is a supported mode, not a failure (D9). The planner is
+          // authoritative until a server is configured.
+          return { pending: readPlanner(plannerScope.storeId).outbox.operations.length, localOnly: true };
+        }
+        const account = await resolveBrainRouterAccountContext(config).catch(() => null);
+        if (!account || !plannerScope.orgId || account.orgId !== plannerScope.orgId) {
+          return {
+            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
+            authRequired: !plannerScope.signedIn,
+            orgRequired: plannerScope.signedIn,
+            error: plannerScope.signedIn
+              ? 'Choose an active BrainRouter organization before syncing Planner changes.'
+              : 'Sign in before syncing Planner changes with the server.',
+          };
+        }
+        const token = account?.apiKey
+          ?? await secretBridge?.get('account:access-token').catch(() => undefined);
+        if (!token) {
+          return {
+            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
+            authRequired: true,
+            error: 'Sign in before syncing Planner changes with the server.',
+          };
+        }
+        const state = readPlanner(plannerScope.storeId);
+        const result = await syncOnce(
+          state,
+          createPlannerTransport({
+            baseUrl: account?.baseUrl ?? brainUrl,
+            token,
+            ...(account?.orgId ? { orgId: account.orgId } : {}),
+          }),
+          Date.now(),
+        );
+        writePlanner(plannerScope.storeId, state);
+        return {
+          pending: state.outbox.operations.length,
+          pulled: result.pulled,
+          pushed: result.pushed,
+          offline: result.offline,
+          conflicted: result.conflicted,
+          ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+        };
+      }),
+
+      // ADR-029 Part B — the Notes mode. User-scoped like the planner (D1), so
+      // no workspace is threaded: the same note has to be readable from a
+      // different checkout of the same work.
+      'notes-read': () => {
+        // ONE read of the store, not one per block: `readNotes` parses the whole
+        // user-scoped file, and calling it inside the walk made rendering a page
+        // O(blocks) file parses — invisible at three blocks and a stall at three
+        // hundred.
+        const state = readNotes(undefined);
+        const tree = buildNoteTree(Object.values(state.blocks));
+        const now = Date.now();
+        // E4 — the ordinal is a function of tree position and is computed here,
+        // once, rather than counted in the renderer. A stored one goes wrong the
+        // moment a sibling is deleted on another device.
+        const ordinals = numberedOrdinals(tree.roots);
+        const flat: Array<Record<string, unknown>> = [];
+        const walk = (nodes: ReturnType<typeof buildNoteTree>['roots']): void => {
+          for (const node of nodes) {
+            const block = node.block;
+            flat.push({
+              id: block.id,
+              parentId: block.parentId.value,
+              depth: node.depth,
+              kind: block.kind.value,
+              text: block.text.value,
+              checked: block.checked?.value === true,
+              level: block.level?.value ?? null,
+              language: block.language?.value ?? null,
+              collapsed: block.collapsed?.value === true,
+              icon: block.icon?.value ?? null,
+              cover: block.cover?.value ?? null,
+              favourite: block.favourite?.value === true,
+              // F3 — a template is a PAGE with a mark on it (B4), so it travels
+              // as a flag rather than as a kind.
+              template: block.template?.value === true,
+              // F3 — the thread, flattened. The stamps are a sync concern and
+              // the renderer draws a line of text; sending `Stamped<string>`
+              // would make a component know about hybrid logical clocks.
+              comments: blockComments(block).map((comment) => ({
+                id: comment.id,
+                body: comment.body.value,
+                author: comment.author,
+                resolved: comment.resolved.value === true,
+                createdAtMs: comment.createdAt.physical,
+              })),
+              ordinal: ordinals.get(block.id) ?? null,
+              // Only a CONTAINER has a title — a page, and E3's database, whose
+              // name is the heading over its rows. Sending one for every block
+              // would put "Untitled" on empty paragraphs, which reads as a name
+              // rather than as an absence.
+              title: block.kind.value === 'page' || block.kind.value === DATABASE_BLOCK_KIND
+                ? pageTitleOrDefault(block)
+                : null,
+              hasChildren: node.children.length > 0,
+              refs: blockReferences(block),
+              // The REASON travels with the field, not just the field name: a
+              // paragraph kept beside a version this device never saw needs a
+              // different sentence from two people typing at once, and the
+              // renderer cannot re-derive which happened from a field name.
+              conflicts: Object.entries(block.conflicts ?? {})
+                .map(([field, conflict]) => ({
+                  field,
+                  reason: conflict.reason,
+                  oursAt: conflict.oursAt,
+                  theirsAt: conflict.theirsAt,
+                })),
+              lockedBy: describeBlockLease(state.leases[block.id], state.deviceId, now),
+            });
+            walk(node.children);
+          }
+        };
+        walk(tree.roots);
+        return {
+          blocks: flat,
+          // A repair is REPORTED rather than inferred: a block that moved to the
+          // top level because its parent vanished should say so, not look like
+          // someone dragged it there.
+          repairs: tree.repairs,
+          pending: state.outbox.operations.length,
+          // A read reports the QUEUE, not a sync that did not happen: pulled and
+          // pushed are zero here because nothing was sent, and claiming
+          // otherwise would show "synced" to someone who is offline.
+          syncState: describeNotesSync(
+            { pulled: 0, pushed: 0, offline: false, conflicted: [], rejected: [] },
+            state.outbox,
+          ),
+          // Counted over the rendered tree, so a conflict on a block nobody can
+          // see does not put a banner on a page with nothing to resolve.
+          conflictCount: flat.filter((b) => (b.conflicts as unknown[]).length > 0).length,
+        };
+      },
+      'notes-create': (a) => notesCreate(undefined, {
+        ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+        ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
+        ...(typeof a.text === 'string' ? { text: a.text } : {}),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+      }, Date.now()),
+      'notes-create-page': (a) => notesCreatePage(undefined, {
+        title: String(a.title ?? 'Untitled'),
+        ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+      }, Date.now()),
+      'notes-update': (a) => notesUpdate(undefined, String(a.id ?? ''), {
+        ...(typeof a.text === 'string' ? { text: a.text } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
+        ...(typeof a.checked === 'boolean' ? { checked: a.checked } : {}),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+        ...(typeof a.language === 'string' ? { language: a.language } : {}),
+        ...(typeof a.collapsed === 'boolean' ? { collapsed: a.collapsed } : {}),
+        ...(typeof a.icon === 'string' ? { icon: a.icon } : {}),
+        ...(typeof a.cover === 'string' ? { cover: a.cover } : {}),
+        ...(typeof a.favourite === 'boolean' ? { favourite: a.favourite } : {}),
+        ...(typeof a.template === 'boolean' ? { template: a.template } : {}),
+      }, Date.now()),
+      'notes-delete': (a) => ({ deleted: notesDelete(undefined, String(a.id ?? ''), Date.now()) }),
+
+      // ADR-029 F4 — page-level undo. The stack, the inverses and the guard are
+      // core's; this only says which page is being read. A stack per page is the
+      // decision that keeps ⌘Z from taking back something off screen.
+      'notes-undo': (a) => notesUndo(
+        undefined, typeof a.pageId === 'string' ? a.pageId : null, Date.now(),
+      ),
+      'notes-redo': (a) => notesRedo(
+        undefined, typeof a.pageId === 'string' ? a.pageId : null, Date.now(),
+      ),
+      'notes-undo-state': (a) => notesUndoState(
+        undefined, typeof a.pageId === 'string' ? a.pageId : null,
+      ),
+
+      // ADR-029 F3 — comments. Content, so they are stamped and merged like
+      // every other field; C5, so deleting the block never deletes them.
+      'notes-comment-add': (a) => notesAddComment(undefined, String(a.id ?? ''), {
+        body: String(a.body ?? ''),
+        ...(typeof a.author === 'string' ? { author: a.author } : {}),
+      }, Date.now()),
+      'notes-comment-resolve': (a) => notesSetCommentResolved(
+        undefined, String(a.id ?? ''), String(a.commentId ?? ''), a.resolved === true, Date.now(),
+      ),
+      'notes-comment-edit': (a) => notesEditComment(
+        undefined, String(a.id ?? ''), String(a.commentId ?? ''), String(a.body ?? ''), Date.now(),
+      ),
+      'notes-comment-remove': (a) => notesRemoveComment(
+        undefined, String(a.id ?? ''), String(a.commentId ?? ''), Date.now(),
+      ),
+      // C5 — the threads whose block is in the trash. Read as a projection over
+      // what is already stored, never a second table.
+      'notes-comments-orphaned': () => ({
+        threads: notesOrphanedComments(notesAllBlocks(undefined), isLiveNoteBlock).map((entry) => ({
+          blockId: entry.block.id,
+          text: entry.block.text.value,
+          comments: entry.comments.map((comment) => ({
+            id: comment.id,
+            body: comment.body.value,
+            author: comment.author,
+            resolved: comment.resolved.value === true,
+            createdAtMs: comment.createdAt.physical,
+          })),
+        })),
+      }),
+
+      // ADR-029 F3 — templates. A template is a PAGE, so there is no template
+      // store: marking is a field on the block and instantiating is core's copy,
+      // which rewrites the references that point INSIDE the template and leaves
+      // the ones that point outside alone.
+      'notes-templates': () => ({
+        templates: notesListTemplates(undefined).map((block) => ({
+          id: block.id,
+          title: pageTitleOrDefault(block),
+          icon: block.icon?.value ?? null,
+          blocks: subtreeBlockIds(notesAllBlocks(undefined), block.id).length,
+        })),
+      }),
+      'notes-template-instantiate': (a) => {
+        const made = notesInstantiateTemplate(undefined, String(a.id ?? ''), {
+          ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : { parentId: null }),
+        }, Date.now());
+        // The SENTENCE comes from core, because core performed the rewrite and
+        // knows how many links moved. Re-deriving it here would let the desktop
+        // keep describing a rule the store had stopped implementing.
+        return { ...made, line: describeNoteInstantiation(made) };
+      },
+
+      // ADR-029 E1 — the gestures. Each one is a call into core, because the
+      // judgements they encode (does Backspace unstyle, outdent or merge; where
+      // does a split's tail go) are the ones that make two surfaces disagree
+      // when they live in a keydown handler.
+      'notes-split': (a) => notesSplit(undefined, String(a.id ?? ''), Number(a.caret ?? 0), Date.now()),
+      'notes-merge-back': (a) => notesMergeBack(undefined, String(a.id ?? ''), Date.now()),
+      'notes-duplicate': (a) => notesDuplicate(undefined, String(a.id ?? ''), Date.now()),
+      'notes-move-up': (a) => notesMoveUp(undefined, String(a.id ?? ''), Date.now()),
+      'notes-move-down': (a) => notesMoveDown(undefined, String(a.id ?? ''), Date.now()),
+      'notes-indent': (a) => notesIndent(undefined, String(a.id ?? ''), Date.now()),
+      'notes-outdent': (a) => notesOutdent(undefined, String(a.id ?? ''), Date.now()),
+
+      // E1 — the line becoming something else as it is typed. The renderer asks
+      // after each keystroke and applies whatever comes back through
+      // `notes-update`; it never decides what `# ` means.
+      'notes-input-rule': (a) => ({
+        transform: applyInputRule({
+          kind: (typeof a.kind === 'string' ? a.kind : 'paragraph') as NoteBlockKind,
+          text: String(a.text ?? ''),
+          caret: Number(a.caret ?? 0),
+          // The current level travels, or `# ` typed inside a level-1 heading
+          // looks like a change and eats the character.
+          ...(typeof a.level === 'number' ? { level: a.level } : {}),
+        }),
+      }),
+      'notes-slash-menu': (a) => ({
+        commands: searchSlashCatalog(String(a.query ?? ''), Number(a.limit ?? 12)),
+      }),
+
+      // E4 — trash and favourites, both projections over what is already stored
+      // (C5's tombstone and a stamped field). Neither is a second table.
+      'notes-trash': () => ({
+        entries: notesTrash(undefined).map((entry) => ({
+          id: entry.block.id,
+          kind: entry.block.kind.value,
+          title: pageTitleOrDefault(entry.block),
+          descendants: entry.descendants,
+          deletedAt: entry.deletedAt,
+          // The LINE comes from core, because "restoring this brings 12 blocks
+          // back with it" is the rule `deleteBlock` implements and re-deriving
+          // the sentence in a renderer would let one surface promise something
+          // the store does not do.
+          line: describeTrashEntry(entry, pageTitleOrDefault(entry.block)),
+        })),
+      }),
+      'notes-restore': (a) => ({ restored: notesRestore(undefined, String(a.id ?? ''), Date.now()) }),
+      'notes-favourites': () => ({
+        blocks: notesFavourites(undefined).map((block) => ({
+          id: block.id,
+          kind: block.kind.value,
+          title: pageTitleOrDefault(block),
+          icon: block.icon?.value ?? null,
+        })),
+      }),
+      'notes-move': (a) => notesMove(undefined, String(a.id ?? ''), {
+        ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
+        ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        ...(typeof a.before === 'string' ? { before: a.before } : {}),
+      }, Date.now()),
+      // B2's prevention half. The renderer takes the lock when a block gains
+      // focus and drops it on blur, so a block another device is typing in is
+      // read-only with an attribution rather than a conflict marker later.
+      'notes-begin-edit': (a) => notesBeginEditing(undefined, String(a.id ?? ''), Date.now()),
+      'notes-keep-edit': (a) => {
+        const state = readNotes(undefined);
+        return notesKeepEditing(undefined, String(a.id ?? ''), {
+          deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
+        }, Date.now());
+      },
+      'notes-end-edit': (a) => {
+        const state = readNotes(undefined);
+        return notesEndEditing(undefined, String(a.id ?? ''), {
+          deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
+        }, Date.now());
+      },
+      'notes-resolve': (a) => {
+        const oursAt = readNoteConflictClock(a.expected, 'oursAt');
+        const theirsAt = readNoteConflictClock(a.expected, 'theirsAt');
+        if (!oursAt || !theirsAt) return null;
+        return notesResolveConflict(
+          undefined, String(a.id ?? ''), String(a.field ?? ''),
+          a.keep === 'theirs' ? 'theirs' : 'ours', Date.now(), { oursAt, theirsAt },
+        );
+      },
+      // B5 — content AND references, because "the note where I wrote about
+      // BR-114" is as normal a question as "the note that says parser". Ranked
+      // in core so the desktop and any other client agree on what a match is;
+      // a second scoring implementation in the renderer would rank the same
+      // notes differently on two surfaces.
+      'notes-search': (a) => ({
+        hits: searchNotes(notesList(undefined), String(a.query ?? ''), { limit: 200 }),
+      }),
+      // A2 — what links here, computed from content. The renderer asks for one
+      // target at a time (when a block's menu opens) rather than for every
+      // block, because the all-blocks form is quadratic and answers a question
+      // nobody asked until they open the menu.
+      'notes-backlinks': (a) => ({ blockIds: blocksReferencing(notesList(undefined), String(a.uri ?? '')) }),
+
+      // ADR-029 E3 — databases. A database is a VIEW over pages that share a
+      // property schema, so there is no database store to talk to: every handler
+      // below reads the same blocks `notes-read` reads and writes through the
+      // same `updateBlock`. The filtering, sorting and grouping are computed in
+      // core rather than here for E1's reason — a saved view that hid different
+      // rows on two surfaces is indistinguishable from data having gone missing.
+      'notes-database-list': () => ({
+        databases: notesListDatabases(undefined).map((block) => {
+          const database = readDatabase(block);
+          return {
+            id: block.id,
+            title: database.title,
+            icon: block.icon?.value ?? null,
+            properties: database.schema.length,
+            views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+          };
+        }),
+      }),
+      'notes-database-read': (a) => {
+        const projection = notesReadDatabaseView(
+          undefined,
+          String(a.id ?? ''),
+          typeof a.viewId === 'string' ? a.viewId : undefined,
+        );
+        if (!projection) return { found: false };
+        const database = readDatabase(projection.database);
+        return {
+          found: true,
+          id: projection.database.id,
+          title: projection.title,
+          // Every view, so the renderer can offer the tabs without a second call.
+          views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+          view: projection.view,
+          kind: projection.kind,
+          properties: database.schema.map((def) => ({
+            ...def,
+            // A newer client's column arrives named, kept, and reported as one
+            // this build cannot compute rather than approximated. F2's formulas
+            // and rollups are NOT that case any more — they travel with their
+            // source and their configuration so the schema editor can show what
+            // the column actually does.
+            unsupported: database.unsupported.includes(def.id),
+            operators: operatorsFor(def),
+          })),
+          columns: projection.columns.map((def) => def.id),
+          rows: projection.rows.map((row) => ({
+            id: row.id,
+            title: row.title,
+            icon: row.icon,
+            cover: row.cover,
+            cells: row.cells.map((cell) => ({
+              property: cell.property.id,
+              value: cell.value,
+              display: cell.display,
+              unsupported: cell.unsupported,
+              // F2/F3 — the value was worked out, so the renderer draws it
+              // read-only; and when it could not be worked out, `error` is the
+              // sentence that goes IN the cell rather than in a notice strip.
+              computed: cell.computed,
+              ...(cell.error ? { error: cell.error } : {}),
+            })),
+          })),
+          // Row IDS, not rows: a multi-value grouping puts one row in several
+          // buckets on purpose (see `propertyGroupKeys`), and repeating the whole
+          // row per bucket would multiply the payload for no information.
+          groups: projection.groups.map((group) => ({
+            key: group.key,
+            label: group.label,
+            empty: group.empty,
+            rowIds: group.rows.map((row) => row.id),
+          })),
+          total: projection.total,
+          filteredOut: projection.filteredOut,
+          // Rules core could not apply, and the sentences for them. Reported
+          // rather than silently treated as matching everything or nothing —
+          // both of those lie about whether a filter ran.
+          skipped: projection.skipped,
+          notices: projection.notices,
+        };
+      },
+      'notes-database-create': (a) => {
+        const created = notesCreateDatabase(undefined, {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
+          ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        }, Date.now());
+        return { id: created.id };
+      },
+      'notes-database-add-property': (a) => notesAddProperty(undefined, String(a.id ?? ''), {
+        name: String(a.name ?? 'Property'),
+        type: String(a.type ?? 'text') as NotePropertyType,
+        ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+        // F2 — a formula column arrives WITH its expression and a rollup with
+        // its configuration, so it is never briefly a column that says it has
+        // not been set up.
+        ...(typeof a.formula === 'string' ? { formula: a.formula } : {}),
+        ...(a.rollup && typeof a.rollup === 'object' ? { rollup: a.rollup as NoteRollupSpec } : {}),
+      }, Date.now()),
+      'notes-database-update-property': (a) => notesUpdateProperty(
+        undefined, String(a.id ?? ''), String(a.propertyId ?? ''),
+        {
+          ...(typeof a.name === 'string' ? { name: a.name } : {}),
+          ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+          // The formula IS patchable where the type is not: nothing is stored
+          // under it, so rewriting it recomputes from the same data.
+          ...(typeof a.formula === 'string' ? { formula: a.formula } : {}),
+          ...(a.rollup && typeof a.rollup === 'object' ? { rollup: a.rollup as NoteRollupSpec } : {}),
+        },
+        Date.now(),
+      ),
+      /**
+       * F2 — the columns a rollup on this database could summarise.
+       *
+       * Derived from where the relation actually points (E5 lets it point at any
+       * mode), so the picker offers columns that exist rather than a guess every
+       * row would then report as unreadable.
+       */
+      'notes-rollup-targets': (a) => {
+        const found = notesRollupTargets(undefined, String(a.id ?? ''), String(a.relation ?? ''));
+        return found.ok
+          ? { ok: true, properties: found.value.properties, databases: found.value.databases }
+          : found;
+      },
+      'notes-database-remove-property': (a) => notesRemoveProperty(
+        undefined, String(a.id ?? ''), String(a.propertyId ?? ''), Date.now(),
+      ),
+      'notes-database-reorder-properties': (a) => notesReorderProperties(
+        undefined, String(a.id ?? ''),
+        Array.isArray(a.order) ? (a.order as string[]) : [],
+        Date.now(),
+      ),
+      'notes-database-add-row': (a) => {
+        const added = notesAddRow(undefined, String(a.id ?? ''), {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(a.values && typeof a.values === 'object'
+            ? { values: a.values as Record<string, unknown> }
+            : {}),
+          ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        }, Date.now());
+        return added.ok ? { ok: true, id: added.value.id } : added;
+      },
+      // One cell, through `updateBlock` — so the lease refuses it while another
+      // device is editing the row, and the outbox carries it in order.
+      'notes-database-set-value': (a) => {
+        const written = notesSetRowValue(
+          undefined, String(a.rowId ?? ''), String(a.propertyId ?? ''), a.value, Date.now(),
+        );
+        return written.ok ? { ok: true, id: written.value.id } : written;
+      },
+      'notes-database-remove-row': (a) => {
+        const removed = notesRemoveRow(undefined, String(a.rowId ?? ''), Date.now());
+        return removed.ok ? { ok: true, removed: removed.value } : removed;
+      },
+      'notes-database-save-view': (a) => notesSaveView(undefined, String(a.id ?? ''), {
+        ...(typeof a.viewId === 'string' ? { id: a.viewId } : {}),
+        ...(typeof a.name === 'string' ? { name: a.name } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteViewKind } : {}),
+        ...(Array.isArray(a.visible) ? { visible: a.visible as string[] } : {}),
+        ...(a.filter !== undefined ? { filter: a.filter as NoteDatabaseView['filter'] } : {}),
+        ...(a.sort !== undefined ? { sort: a.sort as NoteDatabaseView['sort'] } : {}),
+        ...(a.groupBy !== undefined ? { groupBy: a.groupBy as string | null } : {}),
+      }, Date.now()),
+      'notes-database-remove-view': (a) => notesRemoveView(
+        undefined, String(a.id ?? ''), String(a.viewId ?? ''), Date.now(),
+      ),
+      // What a property picker and a filter builder render from. Served rather
+      // than hardcoded in the renderer, so a surface can never offer an operator
+      // core would then report as skipped.
+      'notes-property-catalog': () => ({
+        types: NOTE_PROPERTY_TYPES.map((type) => ({
+          type,
+          operators: operatorsFor({ id: type, name: type, type }),
+          // F3 — a derived column cannot be typed into, and the renderer needs
+          // to know that from core rather than from a list of its own: a surface
+          // that decided for itself would offer an editor over a value core
+          // refuses to store, and the typing would vanish on blur.
+          derived: isDerivedPropertyType(type),
+        })),
+        viewKinds: NOTE_VIEW_KINDS,
+        // The function catalogue and the aggregates, so a formula editor and a
+        // rollup picker list what the evaluator actually implements.
+        functions: FORMULA_FUNCTIONS,
+        aggregates: NOTE_ROLLUP_AGGREGATES,
+      }),
+      /**
+       * ADR-029 D3 — a picture picked or pasted into a note, stored ONCE.
+       *
+       * Through `ingestAttachment`, which is the store this product already has;
+       * D3's "an image pasted into three notes is one object with three
+       * references" is the `dedupeBySha256` flag, and the notes scope is what it
+       * de-duplicates within. A second blob store beside the attachment records
+       * is exactly what D3 refuses.
+       *
+       * The block then holds `attachment:<id>` — see `noteImageRef.ts` for why
+       * that lives in the block's own text rather than in a new stamped field.
+       */
+      'notes-image-attach': async (a) => {
+        const dataBase64 = typeof a.dataBase64 === 'string' ? a.dataBase64 : '';
+        if (!dataBase64) return { ok: false, error: 'No picture was given.' };
+        try {
+          const record = await ingestAttachment({
+            workspaceRoot,
+            sessionKey: NOTE_ATTACHMENT_SESSION,
+            dedupeBySha256: true,
+            source: {
+              kind: 'bytes',
+              name: typeof a.name === 'string' && a.name ? a.name : 'pasted.png',
+              data: Buffer.from(dataBase64, 'base64'),
+            },
+          });
+          if (record.kind !== 'image') {
+            return { ok: false, error: `That file is a ${record.mimeType}, not a picture.` };
+          }
+          return { ok: true, ref: noteImageRef(record.id), id: record.id };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'That picture could not be stored.' };
+        }
+      },
+      /**
+       * D3 — a picture pasted as an ADDRESS, pulled into the store.
+       *
+       * The renderer's content policy is `img-src 'self' data:`, so a remote
+       * address can never be drawn; fetching it here is what turns a link
+       * somebody pasted into a picture the note actually holds. The fetch is
+       * core's guarded one, so the address checks, the redirect cap, the size
+       * cap and the timeout are the same ones `fetch_url` gets.
+       */
+      'notes-image-fetch': async (a) => {
+        const url = typeof a.url === 'string' ? a.url : '';
+        if (!url) return { ok: false, error: 'No address was given.' };
+        const fetched = await fetchNoteImage(url, { userAgent: getCliKnobs().webSearch.crawler.userAgent });
+        if (!fetched.ok) return { ok: false, error: fetched.detail };
+        try {
+          const record = await ingestAttachment({
+            workspaceRoot,
+            sessionKey: NOTE_ATTACHMENT_SESSION,
+            dedupeBySha256: true,
+            source: { kind: 'bytes', name: fetched.name, data: fetched.bytes },
+          });
+          return { ok: true, ref: noteImageRef(record.id), id: record.id };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'That picture could not be stored.' };
+        }
+      },
+      /**
+       * The bytes for one stored picture, as a `data:` URI.
+       *
+       * A missing record answers with a REASON rather than null. Notes are
+       * user-scoped (D1) and attachments are stored per workspace, so a note
+       * opened from a different checkout can legitimately hold a reference whose
+       * object is elsewhere — and the block says so in a sentence instead of
+       * drawing the browser's broken-image glyph.
+       */
+      'notes-image-read': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        const record = id ? getAttachment(workspaceRoot, id) : undefined;
+        if (!record) {
+          return { id, name: '', error: 'it was added from a different workspace, or it has been deleted.' };
+        }
+        try {
+          const bytes = fs.readFileSync(record.storedPath);
+          return {
+            id: record.id,
+            name: record.name,
+            dataUri: `data:${record.mimeType};base64,${bytes.toString('base64')}`,
+            ...(record.width === undefined ? {} : { width: record.width }),
+            ...(record.height === undefined ? {} : { height: record.height }),
+            byteSize: record.byteSize,
+          };
+        } catch {
+          return { id: record.id, name: record.name, error: 'its file could not be read from disk.' };
+        }
+      },
+      /**
+       * ADR-029 F3 + D3 — a file dropped into a `files` cell, stored ONCE.
+       *
+       * The same `ingestAttachment` call the image block uses, without the
+       * image check: a files column holds anything, and the block and the cell
+       * then name the same object with the same `attachment:<id>` spelling. Two
+       * ingest paths would be the second store D3 refuses, arrived at by
+       * copying rather than by deciding.
+       */
+      'notes-file-attach': async (a) => {
+        const dataBase64 = typeof a.dataBase64 === 'string' ? a.dataBase64 : '';
+        if (!dataBase64) return { ok: false, error: 'No file was given.' };
+        try {
+          const record = await ingestAttachment({
+            workspaceRoot,
+            sessionKey: NOTE_ATTACHMENT_SESSION,
+            dedupeBySha256: true,
+            source: {
+              kind: 'bytes',
+              name: typeof a.name === 'string' && a.name ? a.name : 'file',
+              data: Buffer.from(dataBase64, 'base64'),
+            },
+          });
+          return {
+            ok: true, ref: noteImageRef(record.id), id: record.id,
+            name: record.name, byteSize: record.byteSize, mimeType: record.mimeType,
+          };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'That file could not be stored.' };
+        }
+      },
+      /**
+       * The names behind a files cell's references.
+       *
+       * The cell stores ids, because D3 says the object is shared and a name
+       * belongs to the record rather than to the reference. A record this
+       * workspace does not have comes back MISSING with a reason instead of
+       * being dropped: notes are user-scoped (D1) and attachments are per
+       * workspace, so a note opened from a different checkout legitimately holds
+       * a reference whose bytes are elsewhere, and a silently shorter list would
+       * read as files somebody deleted.
+       */
+      'notes-file-describe': (a) => {
+        const ids = Array.isArray(a.ids) ? a.ids.map((id) => String(id)).slice(0, 64) : [];
+        return {
+          files: ids.map((id) => {
+            const record = getAttachment(workspaceRoot, id);
+            return record
+              ? { id, name: record.name, byteSize: record.byteSize, mimeType: record.mimeType, missing: false }
+              : { id, name: id, byteSize: 0, mimeType: '', missing: true };
+          }),
+        };
+      },
+      /**
+       * ADR-029 F3 — a bookmark's title, description and icon.
+       *
+       * Resolved on every read rather than stored on the block, for A3's reason
+       * applied to a web page: a cached title is a snapshot, and a snapshot goes
+       * quietly wrong when the page is rewritten. A failure comes back as DATA —
+       * the caller is drawing a card, and a link that cannot be previewed is
+       * still a link that works.
+       */
+      'notes-bookmark-preview': async (a) => {
+        const result = await fetchBookmarkPreview(String(a.url ?? ''), {
+          userAgent: getCliKnobs().webSearch.crawler.userAgent,
+        });
+        return result.ok
+          ? { ok: true, preview: result.preview }
+          : {
+            ok: false,
+            failure: {
+              url: result.url, host: result.host, reason: result.reason, detail: result.detail,
+            },
+          };
+      },
+
+      /**
+       * F3 — what a synced block currently shows.
+       *
+       * Resolved HOST-side because a mirror is an address and the thing it
+       * addresses is a block in the store, which the renderer does not hold:
+       * the source is usually on another page. What comes back is the source's
+       * OWN ids, so the editor the row draws writes to the one block — the
+       * mirror never gets a copy to keep in step, which is the whole design.
+       */
+      'notes-synced-read': (a) => {
+        const state = readNotes(undefined);
+        const all = Object.values(state.blocks);
+        const mirror = all.find((block) => block.id === String(a.id ?? ''));
+        if (!mirror) return { status: 'gone', uri: '', note: 'This block is not on this device.', rows: [] };
+
+        const result = readSyncedBlock(all, mirror);
+        const note = describeSyncedState(result);
+        const uri = 'uri' in result ? result.uri : '';
+        if (result.status !== 'ready') return { status: result.status, uri, note, rows: [] };
+
+        const now = Date.now();
+        const walked = walkNoteSubtree(all, result.source.id, result.blockIds.length);
+        const ordinals = numberedOrdinals(buildNoteTree(all).roots);
+        return {
+          status: 'ready',
+          uri,
+          note,
+          sourceId: result.source.id,
+          omittedLabel: result.omittedLabel ?? null,
+          rows: walked.rows.map((row) => ({
+            id: row.block.id,
+            depth: row.depth,
+            kind: row.block.kind.value,
+            text: row.block.text.value,
+            level: row.block.level?.value ?? null,
+            checked: row.block.checked?.value === true,
+            icon: row.block.icon?.value ?? null,
+            ordinal: ordinals.get(row.block.id) ?? null,
+            lockedBy: describeBlockLease(state.leases[row.block.id], state.deviceId, now),
+          })),
+        };
+      },
+
+      /**
+       * F3's "can I leave", answered with a file.
+       *
+       * The writers are core's, so a page exported from the dashboard is the
+       * same file. What comes back is TEXT plus the omissions, and the renderer
+       * saves it — the host does not choose a folder, because the shell's own
+       * download already asks the person where their files go.
+       */
+      'notes-export': (a) => {
+        const state = readNotes(undefined);
+        const format = a.format === 'csv' ? 'csv' : 'markdown';
+        const id = String(a.id ?? '');
+        // Core decides what a block can be written as, so the refusal here and
+        // the entries a menu offers cannot disagree about it.
+        const offered = exportFormatsFor(Object.values(state.blocks).find((block) => block.id === id));
+        if (!offered.includes(format)) {
+          return {
+            ok: false,
+            error: format === 'csv'
+              ? 'Only a database can be written as a spreadsheet. A page goes out as Markdown.'
+              : 'That page is not on this device.',
+          };
+        }
+        const written = exportNote(Object.values(state.blocks), id, format, {
+          nowMs: Date.now(),
+          deviceId: state.deviceId,
+          ...(typeof a.viewId === 'string' && a.viewId ? { viewId: a.viewId } : {}),
+        });
+        return written ? { ok: true, ...written } : { ok: false, error: 'That page could not be written out.' };
+      },
+
+      'notes-sync': async () => {
+        const brainUrl = getCliKnobs().brainUrl;
+        if (!brainUrl) {
+          // Local-only is a supported mode, not a failure: with no server the
+          // cache IS the truth, and solo is the normal mode rather than a
+          // degraded one.
+          return { pending: readNotes(undefined).outbox.operations.length, localOnly: true };
+        }
+        const state = readNotes(undefined);
+        const result = await syncNotesOnce(state, createNotesTransport({ baseUrl: brainUrl }), Date.now());
+        writeNotes(undefined, state);
+        return {
+          pending: state.outbox.operations.length,
+          pulled: result.pulled,
+          pushed: result.pushed,
+          offline: result.offline,
+          conflicted: result.conflicted,
+          syncState: describeNotesSync(result, state.outbox),
+          ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+        };
+      },
+
+      // ADR-029 C1 — the three verbs, over the SAME registry the agent's
+      // workspace_* tools call. A second path for the UI would drift from the
+      // agent's, and the drift shows up as one of them creating records the
+      // other's surface renders wrongly.
+      'workspace-resolve': async (a) => {
+        const uri = String(a.uri ?? '');
+        const resolution = await localWorkspaceRegistry().resolveUri(uri, localWorkspaceViewer({ workspaceRoot }));
+        if (isAnsweredElsewhere(resolution)) {
+          const remote = await askBrainToResolve('resolve', uri);
+          if (remote) return remote;
+        }
+        return { resolution, line: renderWorkspaceResolution(resolution) };
+      },
+      'workspace-describe': async (a) => {
+        const parsed = parseWorkspaceRef(a.uri);
+        // Parsed here rather than through `resolveUri`, because that would run
+        // the full resolve and the whole point of describe is the cheaper read.
+        if (!parsed.ok) return { line: 'a link that is not a valid reference' };
+        const viewer = localWorkspaceViewer({ workspaceRoot });
+        const registry = localWorkspaceRegistry();
+        const local = await registry.describe(parsed.ref, viewer);
+        if (isAnsweredElsewhere(local)) {
+          const remote = await askBrainToResolve('describe', String(a.uri));
+          if (remote) return { line: remote.line };
+        }
+        return { line: renderWorkspaceResolution(local) };
+      },
+      'workspace-modes': () => {
+        const registry = localWorkspaceRegistry();
+        return { modes: registry.modes(), creatable: registry.creatableModes() };
+      },
+      /**
+       * ADR-029 C2 row 6 — what a file declares, so a symbol can be PICKED.
+       *
+       * Typing the name would let someone cite a symbol that is not there, and
+       * that reference resolves as a tombstone which the person who typed the
+       * typo cannot tell apart from a function somebody removed. Offering the
+       * declarations the resolver itself recognises means the two agree by
+       * construction.
+       */
+      'code-symbols': (a) => {
+        const relPath = String(a.path ?? '').trim();
+        if (!relPath) return { symbols: [], error: 'No file was named.' };
+        const located = locateCodeFile(workspaceRoot, relPath);
+        if (located.status !== 'found' && located.status !== 'moved') {
+          return { symbols: [], path: relPath, error: `${relPath} could not be read here.` };
+        }
+        const read = readSourceForSymbols(located.absolute);
+        if (!read.ok) return { symbols: [], path: located.path, error: read.reason };
+        return { symbols: listCodeSymbols(read.source), path: located.path };
+      },
+      'workspace-create': async (a) => {
+        const from = typeof a.from === 'string' ? parseWorkspaceRef(a.from) : null;
+        if (from && !from.ok) return { error: `"from" is not a reference: ${from.detail}` };
+        const outcome = await localWorkspaceRegistry().create({
+          mode: String(a.mode ?? ''),
+          kind: String(a.kind ?? ''),
+          title: String(a.title ?? '').trim(),
+          ...(from?.ok ? { from: from.ref } : {}),
+          ...(a.fields && typeof a.fields === 'object' ? { fields: a.fields as Record<string, unknown> } : {}),
+        }, localWorkspaceViewer({ workspaceRoot }));
+        // A refusal comes back as data, not as a rejected promise: the caller is
+        // deciding whether to write a reference into a document and needs an
+        // answer it can branch on.
+        if (outcome.status === 'refused') return { error: outcome.detail, reason: outcome.reason };
+        return { status: outcome.status, uri: formatWorkspaceRef(outcome.ref), ref: outcome.ref };
+      },
+      'workspace-link': (a) => {
+        const from = parseWorkspaceRef(a.from);
+        const to = parseWorkspaceRef(a.to);
+        if (!from.ok) return { error: `"from" is not a reference: ${from.detail}` };
+        if (!to.ok) return { error: `"to" is not a reference: ${to.detail}` };
+        const outcome = linkWorkspaceRef({ workspaceRoot }, from.ref, to.ref);
+        return outcome.ok
+          ? { linked: true, alreadyLinked: outcome.alreadyLinked, to: formatWorkspaceRef(outcome.to) }
+          : { error: outcome.detail, reason: outcome.reason };
+      },
+
       'artifact-list': (a) => listArtifacts(workspaceRoot, withSessionScope(artifactFilterFromArgs(a), a, getActiveAgent().sessionKey)),
       'artifact-create': async (a) => {
         if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };
@@ -2389,6 +3864,39 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               blocked: e.source === 'workspace' && !isWorkspaceTrusted(workspaceRoot),
             })),
           },
+          // ADR-032 Q4 — this is the exact partition the active Agent reads,
+          // including inactive rows so a person can see what was retired or
+          // reverted and why. The audit log is already bounded in core.
+          learning: (() => {
+            const tenant = learnedTenantForAgent(getActiveAgent());
+            const tenantError = activeTenantBindingError();
+            const correction = humanCorrectionIngress.availability();
+            if (tenantError) return {
+              tenant,
+              items: [],
+              log: [],
+              error: tenantError,
+              correctionAllowed: false,
+              correctionBlockedReason: correction.reason ?? tenantError,
+            };
+            try {
+              return {
+                tenant,
+                items: listLearnedItems(tenant, { includeInactive: true }),
+                log: readLearningLog(tenant),
+                correctionAllowed: correction.allowed,
+                correctionBlockedReason: correction.reason,
+              };
+            } catch {
+              return {
+                tenant,
+                items: [],
+                log: [],
+                correctionAllowed: correction.allowed,
+                correctionBlockedReason: correction.reason,
+              };
+            }
+          })(),
         };
       },
       'account-model-catalog': () => refreshAccountModelCatalog(true),
@@ -2504,6 +4012,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         let strikes = goalStrikes.get(sk) ?? 0;
         if (lastTurnToolCalls > 0) strikes = 0;
         const decision = decideGoalContinuation(goal, { lastTurnToolCalls, lastGoalTransition, noToolStrikes: strikes });
+        // A40-2 goal supervisor — record the content-free continuation reason under
+        // this goal instance, so the Desktop host and the CLI share one history.
+        recordGoalContinuation(workspaceRoot, sk, { goalId: `${sk}:${goal.setAt}`, decision, at: new Date().toISOString() });
         if (decision.kind === 'continue') {
           tickGoalIteration(workspaceRoot, sk);
           strikes = decision.corrective ? strikes + 1 : 0;
@@ -2989,6 +4500,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'action:ext-set-enabled': async (args) => {
         const name = typeof args.name === 'string' ? args.name : '';
         if (!name) return { ok: false, error: 'No extension name.' };
+        revokeReviewedExecutionAuthority('workspace');
         setExtensionEnabled(name, args.enabled === true);
         await loadExtensions(workspaceRoot).catch(() => undefined);
         return { ok: true, name };
@@ -2996,6 +4508,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // EXTENSIONS — trust / untrust this workspace, then (re)load so workspace
       // extensions activate or deactivate immediately.
       'action:trust-workspace': async (args) => {
+        revokeReviewedExecutionAuthority('workspace');
         if (args.trusted === true) trustWorkspace(workspaceRoot);
         else untrustWorkspace(workspaceRoot);
         await loadExtensions(workspaceRoot).catch(() => undefined);
@@ -3543,7 +5056,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'servers:logs': (args) => ({ lines: devServers.tail(String(args.name ?? ''), 200) }),
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
-      'action:clear': () => { getActiveAgent().clearHistory(); return { ok: true }; },
+      'action:clear': async () => {
+        // Pin the viewed Agent across the await: a concurrent session switch
+        // must not drain one trajectory and clear another. `endSession` owns a
+        // strict timeout and is idempotent for this logical session.
+        const activeAgent = getActiveAgent();
+        await activeAgent.endSession();
+        activeAgent.clearHistory();
+        return { ok: true };
+      },
       // WS8 — rewind the conversation to the message at (epoch) `ts`. Blocked when
       // code was generated after that point (rewindTranscript → canRewindTo); the
       // renderer surfaces the reason as an in-app warning. On success the
@@ -3564,18 +5085,81 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { ok: true, kept: r.kept.length };
       },
       'action:compact': async () => getActiveAgent().compactHistory(),
+      'action:learning-correct': (args) => humanCorrectionIngress.record(args),
+      'action:learning-revert': async (args) => {
+        const tenantError = activeTenantBindingError();
+        if (tenantError) throw new Error(tenantError);
+        const tenant = learnedTenantForAgent(getActiveAgent());
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
+        const lifecycle = await revertLearnedItemLifecycle({
+          tenant,
+          id,
+          reason,
+          memory: {
+            archive: async ({ itemId, reason: archiveReason }) => {
+              // Protocol-level host capability: the model tool adapter cannot
+              // issue this custom MCP request.
+              const response = await mcpClient.callHostLearning({
+                operation: 'revert',
+                input: {
+                  itemId,
+                  reason: archiveReason,
+                },
+              });
+              const text = String(response.content[0]?.text ?? '');
+              if (response.isError) {
+                throw new Error(text || 'central learned-behaviour revert failed');
+              }
+              let parsed: { found?: boolean } | undefined;
+              try { parsed = text ? JSON.parse(text) as { found?: boolean } : undefined; } catch { /* fail below */ }
+              if (!parsed?.found) throw new Error('central learned-behaviour record was not found');
+            },
+          },
+        });
+        const complete = lifecycle.found && lifecycle.memory.status !== 'archive-pending';
+        return {
+          ok: lifecycle.found,
+          complete,
+          localStatus: lifecycle.localStatus,
+          memoryStatus: lifecycle.memory.status,
+          error: lifecycle.memory.error,
+        };
+      },
       'action:set-pref': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
         const SETTABLE = new Set(['delegationPolicy', 'autoChain', 'personality', 'personalityMode', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
         if (!SETTABLE.has(key)) throw new Error(`Preference "${key}" is not settable from the desktop.`);
+        if (
+          key === 'delegationPolicy'
+          && (readPreferences(workspaceRoot).delegationPolicy ?? 'auto') !== (args.value ?? 'auto')
+        ) {
+          revokeReviewedExecutionAuthority('workspace');
+        }
         return writePreferences(workspaceRoot, { [key]: args.value } as never);
       },
       'action:set-session-mode': (args) => {
         const parsed = desktopSessionModePatchFromArgs(args);
         if (parsed.error) throw new Error(parsed.error);
-        const sessionMode = setSessionMode(workspaceRoot, getActiveAgent().sessionKey, parsed.patch);
-        const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
-        const activePersonality = resolveActivePersonality(workspaceRoot, getActiveAgent().sessionKey);
+        const sessionKey = getActiveAgent().sessionKey;
+        const currentMode = resolveActiveMode(workspaceRoot, sessionKey);
+        const inheritedMode = resolveActiveMode(workspaceRoot);
+        const currentPersonality = resolveActivePersonality(workspaceRoot, sessionKey);
+        const inheritedPersonality = resolveActivePersonality(workspaceRoot);
+        const policyChanged = (
+          ('executionMode' in parsed.patch
+            && (parsed.patch.executionMode ?? inheritedMode.executionMode) !== currentMode.executionMode)
+          || ('reviewPolicy' in parsed.patch
+            && (parsed.patch.reviewPolicy ?? inheritedMode.reviewPolicy) !== currentMode.reviewPolicy)
+          || ('effort' in parsed.patch
+            && (parsed.patch.effort ?? inheritedMode.effort) !== currentMode.effort)
+          || ('personality' in parsed.patch
+            && (parsed.patch.personality ?? inheritedPersonality.style) !== currentPersonality.style)
+        );
+        if (policyChanged) revokeReviewedExecutionAuthority('active-session');
+        const sessionMode = setSessionMode(workspaceRoot, sessionKey, parsed.patch);
+        const activeMode = resolveActiveMode(workspaceRoot, sessionKey);
+        const activePersonality = resolveActivePersonality(workspaceRoot, sessionKey);
         if ('personality' in parsed.patch) getActiveAgent().refreshSystemPrompt();
         return {
           ok: true,
@@ -3587,16 +5171,32 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       'action:set-hook': (args) => {
         const id = typeof args.id === 'string' ? args.id : '';
-        return { ok: setHookEnabled(workspaceRoot, id, args.enabled === true) };
+        const enabled = args.enabled === true;
+        const current = readHooks(workspaceRoot).find((hook) => hook.id === id);
+        if (current && current.enabled !== enabled) revokeReviewedExecutionAuthority('workspace');
+        return { ok: setHookEnabled(workspaceRoot, id, enabled) };
       },
       'action:set-access': (args) => {
         const mode = args.mode;
         if (mode !== 'read' && mode !== 'write' && mode !== 'shell') throw new Error(`Unknown access mode "${String(mode)}".`);
-        getActiveAgent().setAccessMode(mode);
+        const activeAgent = getActiveAgent();
+        if (activeAgent.getAccessMode() !== mode) revokeReviewedExecutionAuthority('active-session');
+        activeAgent.setAccessMode(mode);
         return { ok: true, mode };
       },
       'action:reconnect-mcp': async (args) => {
         const id = typeof args.id === 'string' ? args.id : '';
+        const fresh = loadConfig();
+        const server = fresh.servers?.[id];
+        if (!server) return { ok: false, error: `No configured server named "${id}".` };
+        const isBrainRouter = !!server && isBrainRouterLearningProfile(id, server);
+        revokeReviewedExecutionAuthority('workspace');
+        if (isBrainRouter) {
+          fresh.activeServer = id;
+          saveConfig(fresh);
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+          return { ok: true };
+        }
         await mcpClient.reconnectOne(id);
         return { ok: true };
       },
@@ -3607,8 +5207,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const id = typeof args.id === 'string' ? args.id : '';
         if (!id) return { ok: false, error: 'No server id.' };
         const fresh = loadConfig();
+        const server = fresh.servers?.[id];
+        if (!server) return { ok: false, error: `No configured server named "${id}".` };
+        revokeReviewedExecutionAuthority('workspace');
         (fresh as { activeServer?: string }).activeServer = id;
         saveConfig(fresh);
+        if (server && isBrainRouterLearningProfile(id, server)) {
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+          return { ok: true, activeServer: id };
+        }
         try { await mcpClient.reconnectOne(id); } catch { /* offline brains surface in status */ }
         return { ok: true, activeServer: id };
       },
@@ -3636,20 +5243,35 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               ...(Object.keys(env).length ? { env } : {}) };
         const required = cfg.type === 'http' ? cfg.url : cfg.command;
         if (!required) return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
-        const fresh = loadConfig() as { servers?: Record<string, unknown> };
-        fresh.servers = fresh.servers ?? {};
-        if (fresh.servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
+        const fresh = loadConfig();
+        const servers = fresh.servers ?? {};
+        if (servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
+        revokeReviewedExecutionAuthority('workspace');
+        fresh.servers = servers;
         fresh.servers[id] = cfg;
         saveConfig(fresh as never);
+        if (isBrainRouterLearningProfile(id, cfg)) {
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+          return { ok: true, id };
+        }
         try { await mcpClient.connectOne(id, cfg as never, loadConfig().llm ?? getLlm(), 5_000); } catch { /* offline — config saved, connect on next boot */ }
         return { ok: true, id };
       },
       'action:remove-mcp': async (args) => {
         const id = String(args.id ?? '').trim();
         if (!id) return { ok: false, error: 'No server id.' };
+        const fresh = loadConfig();
+        const removed = fresh.servers?.[id];
+        if (!removed) return { ok: false, error: `No configured server named "${id}".` };
+        const isBrainRouter = !!removed && isBrainRouterLearningProfile(id, removed);
+        revokeReviewedExecutionAuthority('workspace');
         try { await mcpClient.disconnectOne(id); } catch { /* already gone */ }
-        const fresh = loadConfig() as { servers?: Record<string, unknown> };
         if (fresh.servers && fresh.servers[id]) { delete fresh.servers[id]; saveConfig(fresh as never); }
+        if (isBrainRouter) {
+          if (fresh.activeServer === id) fresh.activeServer = '';
+          saveConfig(fresh);
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+        }
         return { ok: true, id };
       },
       // ADR-016 C0 — sign in to a BrainRouter backend and point the active brain
@@ -3698,6 +5320,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const mcpUrl = `${baseUrl}/mcp`;
         const account = { url: baseUrl, mcpUrl, userId: data.userId ?? '', displayName: data.displayName ?? email, email: data.email ?? email };
         fresh.servers[brainId] = { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' };
+        (fresh as { activeServer?: string }).activeServer = brainId;
         fresh.cli = fresh.cli ?? {};
         fresh.cli.brainUrl = mcpUrl;
         // Account bearer + refresh credentials live only in Electron safeStorage.
@@ -3707,13 +5330,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // Credential persistence is the sign-in commit point. MCP reconnect and
         // model-catalog hydration are independent background work: neither may
         // keep the Account screen spinning or hide already-usable BYOK models.
-        void (async () => {
-          try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
-          try {
-            await mcpClient.connectOne(brainId, fresh.servers![brainId] as never, loadConfig().llm ?? getLlm(), 5_000);
-            await ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
-          } catch { /* normal offline degradation; reconnect remains best-effort */ }
-        })();
+        void rebindActiveAccountOrg(
+          fresh as Parameters<typeof saveConfig>[0],
+          { forceIdentity: true },
+        ).catch(() => { /* normal offline degradation; learning remains disabled */ });
         void refreshAccountModelCatalog(true);
         return { ok: true, account };
       },
@@ -3728,17 +5348,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         }
         if (fresh.cli) { delete fresh.cli.brainUrl; delete fresh.cli.account; }
         saveConfig(fresh as never);
-        void endBrainSession(mcpClient);
         _resetCliKnobsCache();
-        try { if (brainId) await mcpClient.disconnectOne(brainId); } catch { /* already gone */ }
-        try { if (brainId && fresh.servers?.[brainId]) await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
-        catch { /* embedded brain reconnects on next boot */ }
         if (secretBridge) {
           await Promise.allSettled([
             secretBridge.delete('account:access-token'),
             secretBridge.delete('account:refresh-token'),
           ]);
         }
+        await rebindActiveAccountOrg(
+          fresh as Parameters<typeof saveConfig>[0],
+          { forceIdentity: true },
+        );
         await refreshAccountModelCatalog(true);
         return { ok: true };
       },
@@ -4043,6 +5663,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const url = typeof args.url === 'string' ? args.url : '';
         if (url) {
           if (!/^https:\/\/[^\s'"]+$/.test(url)) return { ok: false, error: 'only https URLs are allowed' };
+          // Real-Electron qualification clicks this control to prove the host
+          // boundary is wired. A hermetic runner must not spawn an unrelated
+          // OS browser, so acknowledge the validated target without the side
+          // effect when the shared harness environment is present.
+          if (process.env.BRAINROUTER_ELECTRON_HARNESS === '1') {
+            return { ok: true, url, harness: true };
+          }
           void sh(isMac ? `open ${q(url)}` : isWin ? `start "" ${q(url)}` : `xdg-open ${q(url)}`);
           return { ok: true, url };
         }

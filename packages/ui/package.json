@@ -1,0 +1,52 @@
+{
+  "name": "@kinqs/brainrouter-ui",
+  "version": "0.4.20",
+  "private": true,
+  "description": "Browser-safe BrainRouter presentation components shared by the dashboard and desktop renderer.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./planner": {
+      "types": "./dist/planner/index.d.ts",
+      "default": "./dist/planner/index.js"
+    },
+    "./notes": {
+      "types": "./dist/notes/index.d.ts",
+      "default": "./dist/notes/index.js"
+    },
+    "./planner.css": "./dist/planner/planner.css",
+    "./notes.css": "./dist/notes/notes.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/copy-css.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
+  },
+  "peerDependencies": {
+    "react": "^18.3.1 || ^19.0.0",
+    "react-dom": "^18.3.1 || ^19.0.0"
+  },
+  "dependencies": {
+    "@kinqs/brainrouter-core": "^0.4.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/react-test-renderer": "^19.1.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-test-renderer": "19.2.6",
+    "typescript": "^5.5.4"
+  }
+}

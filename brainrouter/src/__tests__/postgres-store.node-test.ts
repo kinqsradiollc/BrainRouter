@@ -223,9 +223,12 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
     orgId: "org-pentest", forge: "github", installationId: "42", repo: "acme/app", prNumber: 17,
     headSha: "sha-1", prAuthor: "alice", triggeredByLogin: "alice",
   };
+  const SECRET_IN_SOURCE = "sk-live-abcdef0123456789ABCDEF";
   const finding = {
     file: "src/render.ts", line: 12, severity: "high",
     title: "[CWE-79] Unsanitized user input reaches the HTML response", cwe: "CWE-79",
+    codeExcerpt: `res.send('<div>' + req.query.q + '</div>'); // token ${SECRET_IN_SOURCE}`,
+    replacement: "res.send('<div>' + escapeHtml(req.query.q) + '</div>');",
   };
   const completeCoverage = {
     complete: true, totalParts: 1, reviewedParts: 1, failedParts: 0, unreviewedParts: 0, unrecordedFindings: 0,
@@ -254,6 +257,11 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.equal(lifecycle.rowCount, 1, "first review discovers one durable finding");
   assert.equal(lifecycle.rows[0].status, "open");
   assert.equal(lifecycle.rows[0].first_seen_review_id, firstReviewId);
+  // ADR-036 D1/D6 — the finding carries its own (redacted) code.
+  assert.ok(lifecycle.rows[0].code_excerpt, "the durable finding persists its code excerpt");
+  assert.ok(!String(lifecycle.rows[0].code_excerpt).includes(SECRET_IN_SOURCE), "the stored excerpt is redacted (D6) — no secret at rest");
+  assert.ok(String(lifecycle.rows[0].code_excerpt).includes("req.query.q"), "the non-secret reviewed lines are preserved");
+  assert.equal(lifecycle.rows[0].code_replacement, finding.replacement, "the proposed replacement is persisted with the finding");
   const contributorRows = await inspectQuery(
     "SELECT login, is_author, commit_count FROM review_pr_contributors WHERE org_id = $1 ORDER BY login",
     ["org-pentest"],
@@ -304,6 +312,10 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.equal(durableIssues.length, 1, "Issues reads one durable row instead of one row per commit");
   assert.equal(durableIssues[0].reviewId, firstReviewId);
   assert.equal(durableIssues[0].finding.status, "open");
+  // ADR-036 — listReviewFindingsForOrg surfaces the code to the console (still redacted).
+  assert.ok(durableIssues[0].finding.codeExcerpt, "the console read surfaces the finding's code excerpt");
+  assert.ok(!String(durableIssues[0].finding.codeExcerpt).includes(SECRET_IN_SOURCE), "the surfaced excerpt is redacted");
+  assert.equal(durableIssues[0].finding.replacement, finding.replacement, "the surfaced finding carries its proposed replacement");
   const lifecycleSummary = await store.getReviewLifecycleSummaryForOrg("org-pentest", "2026-07-17T00:00:00.000Z");
   assert.equal(lifecycleSummary.metrics.issuesFound, 1);
   assert.equal(lifecycleSummary.metrics.openIssues, 1);

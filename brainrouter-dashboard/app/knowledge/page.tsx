@@ -38,6 +38,7 @@ const KNOWLEDGE_AREAS: Record<Exclude<KnowledgeSection, "overview">, Array<{ hre
   ],
   profile: [
     { href: "/persona", title: "Agent profile", copy: "Stable working preferences and patterns that shape how BrainRouter responds.", action: "View the profile" },
+    { href: "/learned-behaviors", title: "Learned behavior", copy: "Inspect tenant-scoped behavior changes, their provenance, measured outcomes, and reversible lifecycle.", action: "Review learned behavior" },
     { href: "/blackboard", title: "Review queue", copy: "New knowledge waiting to be checked before it becomes part of the durable record.", action: "Review candidates" },
     { href: "/vault", title: "Export archive", copy: "A readable, version-friendly copy of durable knowledge for backup and review.", action: "Open the archive" },
   ],

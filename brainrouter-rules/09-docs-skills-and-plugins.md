@@ -106,6 +106,108 @@ lifecycle, memory, qa, ux). Discovery walks max 5 levels and skips
   path; a mismatched frontmatter name breaks listing and resolution.
 - **Evidence:** `brainrouter/src/registry.ts:61`, `brainrouter-cli/src/prompt/skillCatalog.ts:160`
 
+### 7a. The root `skills/` library is the only editable copy; packages ship generated ones
+
+Root `skills/` has two readers and both are deliberate: contributors (Claude Code
+and Codex read it while working here) and the product (`brainrouter/src/registry.ts`
+indexes `join(root, 'skills')` at runtime, and `resolver.ts` finds the repo root *by
+looking for* `skills/`). **Never move, rename, or shrink it.**
+
+Every package that ships skills carries a **generated** copy of the whole library —
+`brainrouter`, `packages/core`, `brainrouter-cli`. `scripts/bundle-content.mjs` does
+the copy; core and the CLI generate theirs during `npm run build` (their runtime
+resolves a package-local `skills/` relative to `dist/`, so the copy is a build
+output like `dist/` itself) and drop it again in `postpack`. Each generated
+directory is in that package's `.gitignore`, so a hand edit to a copy cannot be
+committed at all. Never add a per-package skill selection: a subset makes a
+workspace profile honest in one package and lying in another (ADR-031 D2b).
+
+Third-party material carries its licence **as a file beside it** —
+`skills/<category>/<name>/LICENSE`. The copy step generates each package's
+`THIRD-PARTY-NOTICES.md` from the licence files that actually landed in it plus the
+package's direct runtime dependencies, and the notice is listed in npm `files`.
+Never hand-write a notice entry: the generator failing loudly is what makes
+shipping licensed content without its notice impossible rather than discouraged.
+
+- **Why:** the hand-committed copies carried 13 of 54, so five skills the `design`
+  profile offers reached nobody, and byte-identical duplicates are byte-identical
+  right up until they are not.
+- **Evidence:** `scripts/bundle-content.mjs`, `brainrouter/scripts/prepack.mjs`,
+  `packages/core/src/tests/skills-bundling.test.ts`,
+  `brainrouter-cli/src/tests/bundledSkills.test.ts`,
+  `brainrouter-docs/decisions/ADR-031-a-design-skill-and-the-capability-it-belongs-to.md`
+
+### 7b. A design skill governs the USER'S project; this handbook governs BrainRouter
+
+`skills/design/hallmark` is a vendored design skill (MIT, from the `hallmark` npm
+package). It tells an agent how to build interfaces, and so does this repository —
+**two documents telling an agent how to write UI is how they drift apart**, so the
+boundary is fixed:
+
+- The skill governs work the agent does **on a user's own project**.
+- `brainrouter-rules/` governs work **on BrainRouter itself** — desktop, dashboard,
+  CLI — and wins wherever the two disagree. Our desktop is monochrome by deliberate
+  decision, so the skill's colour anchor, twenty-one themes, and custom-palette
+  branch do not apply to it.
+
+The boundary is stated in the skill's own frontmatter and its first body section,
+because a rules file the model never loads cannot resolve a conflict at generation
+time; a test asserts it is still there. Any future vendored skill that overlaps our
+own conventions states its boundary the same way.
+
+Placement follows the same rule as the rest: it is attached to the `frontend`
+**capability**, never a profile (`packages/core/src/workspace/capabilities.ts`
+`skillIds`, delivered through `profilePlugins.ts` `librarySkillIds`). A pack's
+`skillIds` are files it owns under `profile-plugins/<pack>/skills/`; its
+`librarySkillIds` are skills it merely activates from the shipped library. Vendored
+skills go in the second list — putting one in a pack would recreate the second
+editable copy this whole section exists to prevent.
+
+The capability activates for the **engineer** persona and the **designer** persona.
+Gating it on the engineer alone made ADR-031 §1's `design` row dead code — the design
+profile's persona is `designer`, so the capability could be enabled and never resolve
+while onboarding went on offering it. A test goes through `resolveWorkspaceCapabilities`
+rather than passing `activeCapabilities` in by hand, because passing it in is what hid
+this.
+
+- **Why:** engineering is deliberately one profile (`profiles.ts:14-20`, with a test
+  forbidding a `frontend`/`backend` profile), so specialism attaches to capabilities.
+- **Evidence:** `skills/design/hallmark/SKILL.md`,
+  `packages/core/src/workspace/capabilities.ts`,
+  `packages/core/src/workspace/profilePlugins.ts`,
+  `packages/core/src/tests/frontend-design-skill.test.ts`
+
+### 7c. `design.md` IS BrainRouter's design artifact — there is not a second format
+
+ADR-031 D5 says the skill's `study` verb "produces a `design.md`, and we already have
+a place for it … these should be decided together rather than producing two formats
+for one purpose." **This is that decision, made:**
+
+- The FORMAT is the skill's, defined at
+  `skills/design/hallmark/references/design-md.md`. Nothing in BrainRouter defines a
+  competing schema — the one nobody wrote a generator for is the one that would rot.
+- The LOCATION is `design.md` at the workspace root, then `.brainrouter/design.md`,
+  then `docs/design.md`; first match wins
+  (`packages/core/src/workspace/designArtifact.ts` `DESIGN_ARTIFACT_PATHS`).
+- The SEAM is `readWorkspaceDesignArtifact` → `resolveWorkspaceCapabilities`'s
+  `designArtifact` input → a prompt block the `frontend` capability contributes. The
+  reader touches disk; the resolver never does, so "which capabilities are active"
+  cannot depend on the filesystem at the moment somebody asked.
+- It reaches the model as **data**: neutralised per line, fenced, bounded, and
+  introduced as a description of the product rather than as instructions. A repository
+  can be someone else's — the same position ADR-029 C4 takes about note content.
+
+Do not add a `design.json`, a manifest field holding design tokens, or a second reader.
+If the format needs to change, change the skill's reference and this one convention.
+
+- **Why:** the capability's prompt block told the agent to "discover and follow the
+  workspace design artifact" for a release with nothing behind the sentence — an offer
+  the product could not honour (ADR-029 F1).
+- **Evidence:** `packages/core/src/workspace/designArtifact.ts`,
+  `packages/core/src/workspace/capabilities.ts` (`designArtifact`),
+  `packages/core/src/agent/workspaceCapabilityState.ts`,
+  `packages/core/src/tests/frontend-design-skill.test.ts`
+
 ### 8. SKILL.md frontmatter must stay regex-parseable — no full YAML
 
 All frontmatter (SKILL.md, agent files, plugin `.local.md`) is parsed by small
@@ -234,13 +336,24 @@ Orchestration-profile JSON resolves first-match-wins from workspace-local
 assets. Definitions never deep-merge. A higher-precedence file claims its ID
 even when invalid, so a malformed override produces an unavailable diagnostic
 and direct-primary fallback rather than silently activating a lower source.
+Workspace-to-plan identity then resolves in this exact order: a valid exact
+definition; an unavailable exact claim, which fails closed to direct; a declared
+work-shape alias; otherwise direct. Alias targets are loaded only from the
+bundled package definition. A workspace or plugin override at the target ID must
+never hijack another workspace profile's alias. CLI and Desktop onboarding bind
+the selection-catalog fingerprint and the selected profile's effective plan,
+source, and workspace/plan identities into one opaque review token. Both hosts
+rebuild these sources immediately before writing and reject any changed token,
+including a valid replacement that would otherwise keep every selected ID valid.
 Every source uses the same bounded, no-follow parser and exact role, skill,
 signal, and output-contract reference catalog. Diagnostics disclose safe source
 provenance and collisions without absolute paths or file contents.
 
 - **Evidence:** `packages/core/src/orchestration/profiles/orchestrationProfileSources.ts`,
   `packages/core/src/orchestration/profiles/orchestrationProfileDefinitionFile.ts`,
-  `packages/core/src/tests/orchestration-profile-sources.test.ts`
+  `packages/core/src/workspace/orchestrationPlanIdentity.ts`,
+  `packages/core/src/tests/orchestration-profile-sources.test.ts`,
+  `packages/core/src/tests/orchestration-plan-identity.test.ts`
 
 ---
 
@@ -336,6 +449,11 @@ or extension state. A missing manifest is an exact no-op. Capability plugins
 such as frontend and backend require task-time capability activation; merely
 adding their ID to the manifest pack list cannot activate them. Explicit skill
 disables win over profile, capability, and individual enable contributions.
+Library-backed domain profile packs derive their stable ownership ID from the
+workspace preset; their starter skills remain explicit reviewed manifest
+selections, while package-plugin packs remain owned by their inspected package
+asset. Never alias a domain pack to its reusable orchestration-plan profile:
+work-shape reuse must not change skill authority.
 
 CLI catalog adapters insert selected package roots after workspace-authored
 roots and before ordinary plugin/bundled roots. They apply the same ambient
@@ -359,7 +477,7 @@ workspace-local same-name skill keeps normal local precedence. Full explicit
 reads retain frontmatter so the existing skill tool-policy parser remains
 authoritative.
 
-- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/workspace/skillToolAdapter.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `packages/core/src/tests/workspace-skill-tool-adapter.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
+- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/workspace/skillToolAdapter.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `packages/core/src/tests/workspace-skill-tool-adapter.test.ts`, `packages/core/src/tests/workspace-profile-onboarding-matrix.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
 
 ### 15c. Reviewed workspace pickers consume the Core selection catalog
 

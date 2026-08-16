@@ -1,6 +1,12 @@
+/**
+ * Mutable state shared by one interactive chat mount. Extraction keeps input,
+ * turn, and teardown helpers coherent; the context is never shared across
+ * mounts, and its Agent and federation handle represent the same session.
+ */
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { InputQueue } from '../../../runtime/input/inputQueue.js';
+import type { RunAgentTurnOptions } from '../../commands/_context.js';
 import type { ChatController } from '../ChatApp.js';
 import type { createReadlineShim } from './readlineShim.js';
 
@@ -29,6 +35,7 @@ export interface RunChatContext {
   readonly inputQueue: InputQueue;
   readonly notifiedCompletions: Set<string>;
   readonly detectGitHubPR: (cwd: string) => string | null;
+  readonly federation: import('../../../runtime/federation/federationRegistration.js').FederationHandle | null;
 
   // --- mutable turn/session flags (were closure `let`s) ---
   isProcessing: boolean;
@@ -67,7 +74,10 @@ export interface RunChatContext {
   maybeResumeOnChildComplete: () => void;
   handleQueueCommand: (args: string[]) => void;
   drainInputQueue: () => void;
-  runChatTurn: (rawInput: string) => Promise<void>;
+  runChatTurn: (
+    rawInput: string,
+    options?: RunAgentTurnOptions,
+  ) => Promise<void>;
   hasLiveActors: () => boolean;
   tickChildRefresh: () => void;
   ensureChildRefreshTimer: () => void;

@@ -19,18 +19,28 @@ import { createComputerUseBridge, createSecretBridge, git, type ParentPortLike }
 // `queries` object). host.ts assembles the HostContext bag below and folds
 // buildQueries(ctx) into createHostCore({ queries }).
 import { buildQueries } from './host/queries.js';
+import { createAuthenticatedHumanCorrectionIngress } from './host/humanCorrectionIngress.js';
+import {
+  initialDesktopLearningBinding,
+  isBrainRouterLearningProfile,
+  resolveDesktopLearningBinding,
+  type DesktopLearningIdentityConfig,
+} from './host/learningIdentity.js';
 import { PtyRegistry } from './host/pty.js';
 import { HostedAgentManager } from './host/hostedAgents.js';
 import { FanoutManager } from './host/fanoutManager.js';
 import { RemoteWorktreeManager } from './host/sshRemote.js';
 import { MobileRelayServer } from './host/mobileRelayServer.js';
 import { createRemoteAccessClient } from './host/remoteAccessWiring.js';
-import { ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
+import { endBrainSession, ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
+import { requestDesktopHeldConfirmation } from './host/heldMessageConfirmation.js';
+import { DesktopSessionMessaging } from './host/sessionMessaging.js';
 import {
   fetchAccountModelCatalog,
   emptyAccountModelCatalog,
   resolveBrainRouterAccountApi,
   resolveBrainRouterAccountBaseUrl,
+  withAccountOrgId,
   type BrainRouterAccountContext,
   type DesktopAccountModelCatalog,
 } from './accountIntegration.js';
@@ -65,7 +75,7 @@ import {
   registerModelReasoningCapabilities,
   refreshLmStudioCache,
 } from '@kinqs/brainrouter-core/provider';
-import { McpClientPool } from '@kinqs/brainrouter-core/mcp';
+import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
 import {
   loadTranscript,
   transcriptExists,
@@ -88,7 +98,13 @@ import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspac
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning, buildReviewInstructionBlock } from '@kinqs/brainrouter-core/review';
+import {
+  buildReviewInstructionBlockForDiff,
+  readBoundedReviewSourceText,
+  runLocalReviewOrchestration,
+  UNTRUSTED_REVIEW_EVIDENCE_RULE,
+  type LocalReviewOrchestrationResult,
+} from '@kinqs/brainrouter-core/review';
 import {
   hashDiff,
   reviewGate,
@@ -98,6 +114,7 @@ import {
   type Severity,
 } from '@kinqs/brainrouter-core/review';
 import { getLatestReview, saveReview } from '@kinqs/brainrouter-core/review';
+import { recordHumanCorrection } from '@kinqs/brainrouter-core/learning';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
@@ -325,10 +342,28 @@ async function main(): Promise<void> {
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
   // semantics as the CLI's non-strict mode).
-  const config = loadConfig();
-  const accountConfig = config as typeof config & {
-    cli?: { account?: { url?: string; jwt?: string; refreshToken?: string } } & Record<string, unknown>;
+  let config = loadConfig();
+  let accountConfig = config as typeof config & {
+    cli?: { account?: {
+      url?: string;
+      jwt?: string;
+      refreshToken?: string;
+      userId?: string;
+      orgId?: string;
+    } } & Record<string, unknown>;
   };
+  // ADR-032 D8 — repair a stale/missing org header before the first MCP
+  // connection. The config can predate org-aware transport; the local learned
+  // tenant already reads this account field, so boot must make central match.
+  const bootOrgId = String(accountConfig.cli?.account?.orgId ?? '').trim();
+  let boundBrainOrgId = bootOrgId;
+  const synchronizedBootConfig = withAccountOrgId(config, bootOrgId);
+  if (synchronizedBootConfig.changed) {
+    config = synchronizedBootConfig.next as typeof config;
+    accountConfig = config as typeof accountConfig;
+    saveConfig(config);
+    _resetCliKnobsCache();
+  }
   let accountAccessToken = await secretBridge?.get('account:access-token').catch(() => undefined);
   // One-time migration from the former plaintext config fields. A credential is
   // removed only after Electron main confirms OS-protected storage succeeded.
@@ -357,10 +392,39 @@ async function main(): Promise<void> {
     // The secure access token is normally a short-lived JWT and may expire while
     // the desktop stays open; it remains a fallback for profiles without a key.
     const apiKey = configured?.apiKey ?? accountAccessToken;
+    const account = (fresh as { cli?: { account?: { orgId?: unknown } } }).cli?.account;
+    const orgId = typeof account?.orgId === 'string' ? account.orgId.trim() : '';
     return baseUrl && apiKey
-      ? { baseUrl, apiKey, orgId: '' }
+      ? { baseUrl, apiKey, orgId }
       : null;
   };
+  const desktopLearningIdentityConfig = (
+    candidate: ReturnType<typeof loadConfig>,
+  ): DesktopLearningIdentityConfig => {
+    const account = (candidate as {
+      cli?: { account?: { userId?: unknown; orgId?: unknown } };
+    }).cli?.account;
+    const userId = typeof account?.userId === 'string' ? account.userId.trim() : '';
+    const orgId = typeof account?.orgId === 'string' ? account.orgId.trim() : '';
+    const servers = candidate.servers ?? {};
+    const selectedServers = Object.fromEntries(
+      selectMcpServerIds(servers, candidate.activeServer)
+        .map((id) => [id, servers[id]]),
+    );
+    return {
+      servers: selectedServers,
+      ...(userId ? { expectedUserId: userId } : {}),
+      ...(orgId ? { expectedOrgId: orgId } : {}),
+    };
+  };
+  // An authenticated profile never inherits config.json user tenancy. It
+  // starts in an isolated, disabled partition until the custom host channel
+  // returns the identity pinned by the server session.
+  let learningBinding = initialDesktopLearningBinding(desktopLearningIdentityConfig(config));
+  const learnedTenant = (): { userId: string; orgId: string | null } => ({
+    userId: learningBinding.tenant.userId,
+    orgId: learningBinding.tenant.orgId ?? null,
+  });
   // Synchronous, no-network read of the last-known managed catalog — lets the
   // config snapshot return instantly (BYOK/router models render immediately) while
   // the real refresh runs in the background.
@@ -409,20 +473,43 @@ async function main(): Promise<void> {
   };
   let llm: LLMConfig = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
   const mcpClient = new McpClientPool();
+  let sessionMessaging: DesktopSessionMessaging | undefined;
+  const resolveLearningIdentity = async (
+    candidate: ReturnType<typeof loadConfig> = loadConfig(),
+  ): Promise<typeof learningBinding> => {
+    const resolved = await resolveDesktopLearningBinding({
+      config: desktopLearningIdentityConfig(candidate),
+      mcpClient,
+    });
+    learningBinding = resolved;
+    if (resolved.source === 'server' && resolved.enabled) {
+      // With no explicit org header the backend pins its default org. The
+      // custom identity result is the authoritative transport binding.
+      boundBrainOrgId = resolved.tenant.orgId ?? '';
+    } else if (resolved.source === 'local') {
+      boundBrainOrgId = '';
+    }
+    return resolved;
+  };
   // PERF — do NOT block boot on MCP connect. The renderer gates its account/model
   // queries on the host's first event, and connectAll waits for the SLOWEST
   // configured server (5s cap, longer if one connects then stalls) — so awaiting
   // it here made account loading slow on every launch. Connect in the background;
   // local tools work immediately, remote tools light up as servers come online,
   // and the brain-dependent boot steps run once the pool is ready.
-  void mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 })
+  const mcpReady = mcpClient.connectAll(
+    desktopLearningIdentityConfig(config).servers,
+    llm,
+    { timeoutMs: 5_000 },
+  )
     .then(() => {
       mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
-      // FED — register this desktop as an active session for the signed-in user, so it
-      // appears on the Account page + dashboard "Devices & sessions" (heartbeats itself).
-      void ensureBrainSession(mcpClient, workspaceRoot);
     })
-    .catch(() => { /* offline-mode: local tools only, same as the CLI */ });
+    .catch(() => { /* offline-mode: local tools only, same as the CLI */ })
+    // Resolve even after an offline connect attempt: hosted profiles remain in
+    // their isolated disabled partition, while no-profile installs stay local.
+    .then(() => resolveLearningIdentity(config));
+  void mcpReady;
 
   // REMOTE-BRAIN Phase 3d — call a brain Atlas tool via the MCP pool, parsing its
   // JSON text result. Best-effort: null on any failure so the local artifact path
@@ -453,6 +540,8 @@ async function main(): Promise<void> {
     sessionKey: string,
     e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest },
   ): void => send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: e });
+  const emitInteractionResolvedFor = (sessionKey: string, id: string): void =>
+    send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: { kind: 'interaction-resolved', id } });
   // EXTENSIONS — activate code-level extensions before the first turn (workspace
   // tier gated on project trust). Best-effort; never blocks the host boot.
   await loadExtensions(workspaceRoot).catch(() => undefined);
@@ -460,6 +549,8 @@ async function main(): Promise<void> {
   agent = new Agent(mcpClient, llm, {
     workspaceRoot,
     launchCwd: workspaceRoot,
+    learnedTenant: learnedTenant(),
+    learningEnabled: learningBinding.enabled,
     interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
     computerUsePort: computerUseBridge,
     browserControlPort: browserPortFor(() => agent.sessionKey),
@@ -470,6 +561,38 @@ async function main(): Promise<void> {
   // onActiveAgentChange; every read-only query below reports THIS agent so the
   // ring/tokens/recap/transcript track the chat on screen, not a background one.
   let activeAgent = agent;
+  const activeTenantBindingError = (): string | null => {
+    if (learningBinding.source === 'unresolved-authenticated-profile') {
+      return learningBinding.warning
+        ?? 'Learning is disabled until the authenticated BrainRouter identity is verified.';
+    }
+    const expectedUserId = learningBinding.tenant.userId;
+    const expectedOrgId = learningBinding.tenant.orgId ?? '';
+    const agentUserId = activeAgent.learnedTenant?.userId?.trim() || 'local';
+    const agentOrgId = activeAgent.learnedTenant?.orgId ?? '';
+    const hostTransportMatches = learningBinding.source !== 'server'
+      || expectedOrgId === boundBrainOrgId;
+    if (
+      expectedUserId === agentUserId
+      && expectedOrgId === agentOrgId
+      && activeAgent.learningEnabled === learningBinding.enabled
+      && hostTransportMatches
+    ) return null;
+    return 'The active account or organization is still being applied to this workspace. Wait for the switch to finish and try again.';
+  };
+  const humanCorrectionIngress = createAuthenticatedHumanCorrectionIngress({
+    readBinding: () => {
+      return {
+        authenticated: learningBinding.source === 'server' && learningBinding.enabled,
+        accountUserId: learningBinding.tenant.userId,
+        accountOrgId: learningBinding.tenant.orgId,
+        tenant: activeAgent.learnedTenant ?? { userId: 'local', orgId: null },
+        sessionKey: activeAgent.sessionKey,
+        bindingError: activeTenantBindingError(),
+      };
+    },
+    record: recordHumanCorrection,
+  });
   const loadGlobalLlm = (): LLMConfig => {
     const fresh = loadConfig();
     llm = fresh.llm ?? llm;
@@ -540,6 +663,8 @@ async function main(): Promise<void> {
     a = new Agent(mcpClient, llmForSession(sessionKey), {
       workspaceRoot,
       launchCwd: workspaceRoot,
+      learnedTenant: learnedTenant(),
+      learningEnabled: learningBinding.enabled,
       interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
       computerUsePort: computerUseBridge,
       browserControlPort: browserPortFor(() => a.sessionKey),
@@ -556,12 +681,31 @@ async function main(): Promise<void> {
   //    verify findings AND ingests an untrusted diff + repo-controlled REVIEW.md,
   //    so `fetch_url`/`web_search` are denied to close the read-a-secret →
   //    exfiltrate-over-the-network surface. A local-diff review never needs the web.
-  const spawnReviewer = (sessionKey?: string): AgentLike => {
+  const spawnReviewer = (
+    sessionKey?: string,
+    reflectionSystemPrompt?: string,
+    maxModelCallsPerTurn = 2,
+  ): AgentLike => {
+    const reflection = Boolean(reflectionSystemPrompt);
     const a = new Agent(mcpClient, llmForSession('review'), {
       workspaceRoot,
       launchCwd: workspaceRoot,
+      learnedTenant: learnedTenant(),
+      learningEnabled: learningBinding.enabled,
+      silent: true,
+      enableRecall: false,
+      reviewSourceSafety: true,
+      maxModelCallsPerTurn,
+      maxLlmReconnectsPerCall: 0,
+      roleOverlay: reflectionSystemPrompt ?? UNTRUSTED_REVIEW_EVIDENCE_RULE,
       interactionPort: { confirm: async () => false, choice: async () => null },
-      disallowedTools: ['fetch_url', 'web_search'],
+      authorityToolCeiling: {
+        // LSP may follow workspace config/imports outside the checkout or load
+        // plugins. Reviewer evidence stays on canonically-confined file tools.
+        local: reflection ? [] : ['read_file', 'list_dir', 'grep_search', 'glob_files'],
+        mcp: [],
+      },
+      disallowedTools: ['fetch_url', 'web_search', 'mcp_call'],
     });
     // A STABLE per-task `review:<id>` key (filtered from the picker by
     // isInternalSessionKey) so the reviewer's turn transcript is durably
@@ -578,6 +722,8 @@ async function main(): Promise<void> {
     const a = new Agent(mcpClient, llmForSession(sessionKey), {
       workspaceRoot,
       launchCwd: workspaceRoot,
+      learnedTenant: learnedTenant(),
+      learningEnabled: learningBinding.enabled,
       interactionPort: { confirm: async () => false, choice: async () => null },
     });
     a.sessionKey = sessionKey;
@@ -877,17 +1023,60 @@ async function main(): Promise<void> {
 
   // Review v2 helpers (shared by the review-* queries + the commit/push gate).
   const isoNow = (): string => new Date().toISOString();
+  const reviewGit = (
+    args: string[],
+    options: { maxBuffer: number; allowDifference?: boolean },
+  ): Promise<string> => new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: options.maxBuffer,
+    }, (error, stdout, stderr) => {
+      const code = (error as (Error & { code?: number | string }) | null)?.code;
+      if (!error || (options.allowDifference && code === 1)) {
+        resolve(String(stdout ?? ''));
+        return;
+      }
+      reject(new Error(String(stderr ?? '').trim() || error.message || 'git command failed'));
+    });
+  });
   const collectWorkingDiff = async (): Promise<{ diff: string; files: string[] }> => {
-    const changed = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).split('\n').filter(Boolean).slice(0, 30);
-    const files = changed.map((l) => l.slice(3).trim());
-    let diff = '';
-    for (const f of files) {
-      if (diff.length > 60_000) break;
-      let d = await git(['diff', 'HEAD', '--', f], workspaceRoot, { maxBuffer: 4_000_000 });
-      if (!d.trim()) d = await git(['diff', '--no-index', '--', '/dev/null', f], workspaceRoot, { maxBuffer: 4_000_000 });
-      diff += `\n# ${f}\n${d.slice(0, 12_000)}`;
+    // Review the complete tracked diff, then append every untracked file as a
+    // real no-index diff. The previous first-30-files / 60K global truncation
+    // made the omitted tail indistinguishable from clean coverage.
+    const repository = await reviewGit(['rev-parse', '--is-inside-work-tree'], { maxBuffer: 64 * 1024 });
+    if (repository.trim() !== 'true') throw new Error('The workspace is not a Git worktree.');
+    let baseRef = 'HEAD';
+    try {
+      await reviewGit(['rev-parse', '--verify', 'HEAD'], { maxBuffer: 64 * 1024 });
+    } catch {
+      baseRef = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'; // Git's canonical empty tree
     }
-    return { diff, files };
+    const [trackedDiff, trackedNames, untrackedNames] = await Promise.all([
+      reviewGit(['diff', '--binary', baseRef, '--', '.'], { maxBuffer: 128 * 1024 * 1024 }),
+      reviewGit(['diff', '--name-only', '-z', baseRef, '--', '.'], { maxBuffer: 8 * 1024 * 1024 }),
+      reviewGit(['ls-files', '--others', '--exclude-standard', '-z', '--', '.'], { maxBuffer: 8 * 1024 * 1024 }),
+    ]);
+    const tracked = trackedNames.split('\0').filter((value) => value.length > 0);
+    const untracked = untrackedNames.split('\0').filter((value) => value.length > 0);
+    const files = [...new Set([...tracked, ...untracked])];
+    const additions = new Array<string>(untracked.length);
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(8, untracked.length) }, async () => {
+      for (;;) {
+        const index = cursor++;
+        if (index >= untracked.length) return;
+        const file = untracked[index];
+        const value = await reviewGit(
+          ['diff', '--binary', '--no-index', '--', '/dev/null', file],
+          { maxBuffer: 128 * 1024 * 1024, allowDifference: true },
+        );
+        if (!value.trim()) throw new Error(`Git returned no diff for untracked file ${file}.`);
+        additions[index] = value;
+      }
+    }));
+    return { diff: [trackedDiff, ...additions].filter(Boolean).join('\n'), files };
   };
   // Map the model's free-form severities onto the v2 scale.
   const SEV_MAP: Record<string, Severity> = { security: 'critical', critical: 'critical', bug: 'high', high: 'high', perf: 'medium', medium: 'medium', style: 'low', nit: 'low', low: 'low', info: 'info' };
@@ -919,23 +1108,70 @@ async function main(): Promise<void> {
     let atlasGraph = readAtlasGraph(workspaceRoot);
     try { atlasGraph = carryForwardSummaries(buildBaseGraph(workspaceRoot), atlasGraph); } catch { /* keep the stored graph as-is if a rebuild isn't possible */ }
     const changeCtx = buildAtlasChangeContext(atlasGraph, files);
-    // REVIEW.md (if present) is injected FIRST as the repo owner's highest-priority
-    // review policy — it overrides the default contract (severity calibration,
-    // skip rules, nit caps, repo-specific checks). Empty string when absent.
-    const reviewInstr = buildReviewInstructionBlock(workspaceRoot);
-    const prompt = `${reviewInstr}You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
-    // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
-    // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
-    // findings) does NOT pollute the task's CURATED transcript — runReviewTask
-    // writes clean, human-readable progress entries to the task key instead.
-    const reviewer = spawnReviewer(ctx?.reviewerKey ? `${ctx.reviewerKey}:raw` : undefined);
+    // REVIEW.md (if present) is surfaced only as fenced, non-authoritative
+    // repository evidence. Checkout prose cannot override the review contract.
+    const reviewInstr = buildReviewInstructionBlockForDiff(workspaceRoot, diff);
     const noop = (): void => {};
     const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop } as never;
-    let answer = '';
-    try { answer = await (reviewer as { runTurn(p: string, c: unknown): Promise<string> }).runTurn(prompt, cb); }
-    catch (err) { phase('failed', err instanceof Error ? err.message : String(err)); const r: ReviewRun = { ...base, status: 'failed', summary: `Review failed: ${err instanceof Error ? err.message : String(err)}` }; saveReview(workspaceRoot, r); return { ...r, files: files.length }; }
-    phase('findings', 'parsing reviewer output');
-    const findings: ReviewFinding[] = parseReviewFindings(answer).map((f, i) => ({
+    // Feed graph relationships between changed paths into the deterministic
+    // bundler. Edges may JOIN files already in the diff; they can never widen
+    // review scope to a path named by untrusted content.
+    const changed = new Set(files);
+    const nodePath = new Map((atlasGraph?.nodes ?? []).map((node) => [node.id, node.filePath]));
+    const graphEdges: Array<[string, string]> = [];
+    const graphEdgeKeys = new Set<string>();
+    for (const edge of atlasGraph?.edges ?? []) {
+      const left = nodePath.get(edge.source);
+      const right = nodePath.get(edge.target);
+      if (!left || !right || left === right || !changed.has(left) || !changed.has(right)) continue;
+      const pair = [left, right].sort() as [string, string];
+      const key = `${pair[0]}\u0000${pair[1]}`;
+      if (graphEdgeKeys.has(key)) continue;
+      graphEdgeKeys.add(key);
+      graphEdges.push(pair);
+    }
+
+    let local: LocalReviewOrchestrationResult;
+    try {
+      local = await runLocalReviewOrchestration({
+        diff,
+        reviewInstructions: reviewInstr,
+        changeContext: changeCtx,
+        relatedPaths: graphEdges,
+        concurrency: 4,
+        maxBundleChars: 18_000,
+        maxBundles: 40,
+        sourceTextForPath: (path) => {
+          const source = readBoundedReviewSourceText(workspaceRoot, path);
+          return source && !source.truncated ? source.text : null;
+        },
+        onBundleSettled: (outcome) => phase('analyzing', `${outcome.bundleId}: ${outcome.ok ? 'reviewed' : 'unavailable'}`),
+        createTurn: (turnContext) => {
+          const suffix = turnContext.phase === 'reflection'
+            ? 'reflection'
+            : turnContext.bundle.id;
+          const reviewer = spawnReviewer(
+            ctx?.reviewerKey ? `${ctx.reviewerKey}:raw:${suffix}` : undefined,
+            turnContext.phase === 'reflection' ? turnContext.systemPrompt : undefined,
+            turnContext.modelCallLimit,
+          );
+          return {
+            // `preplanned` — this turn IS the review. Diff text frequently
+            // matches delivery signals and must not be replanned as a write run.
+            run: (prompt) => reviewer.runTurn(prompt, cb, { preplanned: true }),
+            interrupt: () => reviewer.requestInterrupt?.(),
+          };
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      phase('failed', message);
+      const r: ReviewRun = { ...base, status: 'failed', summary: `Review failed: ${message}` };
+      saveReview(workspaceRoot, r);
+      return { ...r, files: files.length };
+    }
+    phase('findings', 'positioning and reflecting on findings');
+    const findings: ReviewFinding[] = local.review.findings.map((f, i) => ({
       id: `f${i}_${Date.now().toString(36)}`, file: f.file, line: f.line ?? undefined, endLine: f.endLine ?? undefined,
       severity: SEV_MAP[String(f.severity ?? '').toLowerCase()] ?? 'medium',
       confidence: f.confidence ?? 70, summary: f.summary,
@@ -943,31 +1179,48 @@ async function main(): Promise<void> {
       patch: f.patch, status: 'open', canApply: !!f.patch, source: 'ai-review',
       preExisting: f.preExisting || undefined,
     }));
-    // Strip the model's <think> reasoning so it never shows as the summary; when
-    // there are no findings the empty-state covers it, so leave the summary blank.
-    const visible = stripReasoning(answer).split('```')[0].trim();
-    const summary = findings.length === 0 ? '' : (visible.slice(0, 400) || `${findings.length} finding(s) across ${files.length} file(s).`);
-    const run: ReviewRun = { ...base, summary, findings };
+    const reflectionUnavailable = local.review.reflection.required
+      && !local.review.reflection.reflected;
+    const incomplete = local.review.failedBundles > 0
+      || local.review.skippedBundles > 0
+      || local.review.canceled
+      || local.plan.deferredPaths.length > 0
+      || reflectionUnavailable;
+    const missing = local.review.failedBundles
+      + local.review.skippedBundles
+      + local.plan.deferredPaths.length
+      + (reflectionUnavailable ? 1 : 0);
+    const summary = incomplete
+      ? `Review incomplete: ${local.review.reviewedBundles}/${local.plan.bundles.length} bundle(s) reviewed; ${missing} review phase/file unit(s) unavailable.`
+      : findings.length === 0
+        ? `No issues found across ${files.length} file(s) and ${local.plan.bundles.length} review bundle(s).`
+        : `${findings.length} finding(s) across ${files.length} file(s); ${local.review.reflection.reflected ? 'reflection complete' : 'reflection not required'}.`;
+    const run: ReviewRun = { ...base, status: incomplete ? 'failed' : 'completed', summary, findings };
     saveReview(workspaceRoot, run);
-    // ATLAS-UNDERSTANDING — persist the change explainer + comprehension quiz the
-    // reviewer produced in the SAME call ($0 extra) together with the free Atlas
-    // blast-radius context as a durable "Understanding" artifact. It is a SINGLE
+    // ATLAS-UNDERSTANDING — persist the deterministic change explainer together
+    // with the positioned review findings as a durable "Understanding" artifact.
+    // It is a SINGLE
     // artifact per workspace, UPDATED (new version) each review rather than piling
     // up a stale copy per run — so it always reflects the current changes, older
     // versions live in its history, and a provenance header records exactly what it
     // describes (date · files · diff hash). Best-effort — never blocks the review.
-    if (visible.length > 40) {
+    if (changeCtx || findings.length > 0 || incomplete) {
       try {
         const UNDERSTANDING_PATH = '.brainrouter/understanding/working-changes.md';
         const header = `> As of ${isoNow().slice(0, 10)} · ${files.length} changed file${files.length === 1 ? '' : 's'} · diff \`${base.diffHash.slice(0, 12)}\`. Regenerated on each review; older versions are in this artifact's history.`;
-        const doc = [header, changeCtx, visible].filter(Boolean).join('\n\n');
+        const findingLines = incomplete
+          ? `## Review coverage\n${summary}`
+          : findings.length
+            ? ['## Findings', ...findings.map((finding) => `- **${finding.severity}** \`${finding.file}${finding.line ? `:${finding.line}` : ''}\` — ${finding.summary}`)].join('\n')
+            : '## Findings\nNo issues found.';
+        const doc = [header, changeCtx, findingLines].filter(Boolean).join('\n\n');
         const title = `Understanding — working changes (${files.length} file${files.length === 1 ? '' : 's'})`;
         const existing = Object.values(readArtifactsAll(workspaceRoot)).find((a) => a.path === UNDERSTANDING_PATH);
         if (existing) updateArtifact(workspaceRoot, existing.id, { content: doc, title, status: 'draft' });
         else createArtifact(workspaceRoot, { kind: 'markdown-report', title, content: doc, format: 'markdown', status: 'draft', path: UNDERSTANDING_PATH });
       } catch { /* the artifact is a bonus; the review still stands */ }
     }
-    phase('completed', `${findings.length} finding(s) across ${files.length} file(s)`);
+    phase(incomplete ? 'failed' : 'completed', summary);
     return { ...run, files: files.length };
   };
   // §2 (workflow gaps) — Review/Re-run review as a VISIBLE durable task. Creates
@@ -1001,9 +1254,11 @@ async function main(): Promise<void> {
         const label = REVIEW_PHASE_LABELS[p];
         if (label) seedReviewTranscript('assistant', n ? `${label} (${n})` : label);
       } });
-      seedReviewTranscript('assistant', run.findings.length === 0
-        ? `✅ Review complete — no issues found across ${run.files} file(s).`
-        : `✅ Review complete — ${run.findings.length} finding(s) across ${run.files} file(s). See the Review panel for details.`);
+      seedReviewTranscript('assistant', run.status === 'failed'
+        ? `❌ ${run.summary}`
+        : run.findings.length === 0
+          ? `✅ Review complete — no issues found across ${run.files} file(s).`
+          : `✅ Review complete — ${run.findings.length} finding(s) across ${run.files} file(s). See the Review panel for details.`);
     } catch (err) {
       seedReviewTranscript('assistant', `❌ Review failed: ${err instanceof Error ? err.message : String(err)}`);
       const failed = updateBackgroundTask(workspaceRoot, task.id, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
@@ -1164,15 +1419,154 @@ async function main(): Promise<void> {
   const devServers = createDevServerRegistry(workspaceRoot);
   const browser = createBrowserHost(workspaceRoot, devServers);
 
+  const allBrainServerIds = (candidate: ReturnType<typeof loadConfig>): string[] =>
+    Object.entries(candidate.servers ?? {})
+      .filter(([id, server]) => isBrainRouterLearningProfile(id, server))
+      .map(([id]) => id);
+  const brainServerIds = (candidate: ReturnType<typeof loadConfig>): string[] => {
+    const selected = new Set(selectMcpServerIds(candidate.servers ?? {}, candidate.activeServer));
+    return allBrainServerIds(candidate).filter((id) => selected.has(id));
+  };
+  let core!: ReturnType<typeof createHostCore>;
+  const rebindActiveAccountOrg = async (
+    next: ReturnType<typeof loadConfig>,
+    options: { forceIdentity?: boolean } = {},
+  ): Promise<boolean> => {
+    const targetAccount = (next as { cli?: { account?: { orgId?: unknown } } }).cli?.account;
+    const targetOrgId = typeof targetAccount?.orgId === 'string' ? targetAccount.orgId.trim() : '';
+    const activeOrgId = activeAgent.learnedTenant?.orgId ?? null;
+    const identityAlreadyVerified = learningBinding.source === 'server'
+      && learningBinding.enabled
+      && learningBinding.tenant.orgId === targetOrgId;
+    if (
+      !options.forceIdentity
+      && targetOrgId
+      && boundBrainOrgId === targetOrgId
+      && activeOrgId === targetOrgId
+      && identityAlreadyVerified
+    ) {
+      const prepared = withAccountOrgId(loadConfig(), targetOrgId);
+      if (prepared.changed) {
+        saveConfig(prepared.next as ReturnType<typeof loadConfig>);
+        _resetCliKnobsCache();
+        config = prepared.next as ReturnType<typeof loadConfig>;
+      }
+      return prepared.changed;
+    }
+    await core.rebindTenant(async (sessionKey) => {
+      // Boot connection and its session registration must settle before we
+      // replace transport state, otherwise its late continuation could restore
+      // the previous org after this switch completes.
+      await mcpReady;
+      const previous = loadConfig();
+      // Every live workspace host receives the org switch. Rebase the tenant
+      // patch on the latest config at the actual drain boundary so a slower
+      // host cannot overwrite an unrelated setting saved by a faster host.
+      const prepared = withAccountOrgId(previous, targetOrgId);
+      const reboundConfig = prepared.next as ReturnType<typeof loadConfig>;
+      const previousBrainIds = allBrainServerIds(previous);
+      const nextBrainIds = brainServerIds(reboundConfig);
+      mcpClient.stopReconnectSupervisor();
+      try {
+        await endBrainSession(mcpClient);
+        for (const id of new Set([...previousBrainIds, ...nextBrainIds])) {
+          try { await mcpClient.disconnectOne(id); } catch { /* client is already removed before index refresh */ }
+        }
+
+        if (prepared.changed) saveConfig(reboundConfig);
+        _resetCliKnobsCache();
+        config = reboundConfig;
+        accountModelCatalog = null;
+        accountModelCatalogAt = 0;
+        modelsCacheByKey.delete('');
+        // From this point onward every saved/reconnectable BrainRouter profile
+        // carries targetOrgId. A failed network connection is offline, not an
+        // old-tenant connection, so the replacement Agent remains safe.
+        boundBrainOrgId = targetOrgId;
+        learningBinding = initialDesktopLearningBinding(desktopLearningIdentityConfig(reboundConfig));
+
+        for (const id of nextBrainIds) {
+          const server = reboundConfig.servers?.[id];
+          if (!server) continue;
+          try {
+            // Connection failures are represented as a failed pool status and
+            // do not throw. An unexpected index-refresh error is treated the
+            // same way: remove that client so the replacement stays offline
+            // instead of retaining an ambiguous central tenant.
+            await mcpClient.connectOne(id, server, loadGlobalLlm(), 5_000);
+          } catch {
+            try { await mcpClient.disconnectOne(id); } catch { /* offline is the fail-closed state */ }
+          }
+        }
+        if (nextBrainIds.length) await sessionMessaging?.refreshRemote();
+        await resolveLearningIdentity(reboundConfig);
+      } catch (error) {
+        // The only expected throw above is persistence (connectOne records
+        // network failures in status). Rebind transport to whichever config
+        // actually survived, then let hostCore install its fallback Agent and
+        // report the failed requested switch. This makes rollback operational,
+        // not merely non-leaking.
+        const surviving = loadConfig();
+        const survivingAccount = (surviving as { cli?: { account?: { orgId?: unknown } } }).cli?.account;
+        const survivingOrgId = typeof survivingAccount?.orgId === 'string'
+          ? survivingAccount.orgId.trim()
+          : '';
+        const repaired = withAccountOrgId(surviving, survivingOrgId).next as ReturnType<typeof loadConfig>;
+        const survivingBrainIds = brainServerIds(repaired);
+        for (const id of new Set([...previousBrainIds, ...nextBrainIds, ...survivingBrainIds])) {
+          try { await mcpClient.disconnectOne(id); } catch { /* continue to the repaired profile */ }
+        }
+        config = surviving;
+        boundBrainOrgId = survivingOrgId;
+        for (const id of survivingBrainIds) {
+          const server = repaired.servers?.[id];
+          if (!server) continue;
+          try { await mcpClient.connectOne(id, server, loadGlobalLlm(), 5_000); } catch {
+            try { await mcpClient.disconnectOne(id); } catch { /* offline remains tenant-safe */ }
+          }
+        }
+        if (survivingBrainIds.length) await sessionMessaging?.refreshRemote();
+        await resolveLearningIdentity(repaired);
+        throw error;
+      } finally {
+        mcpClient.startReconnectSupervisor();
+      }
+      // `spawnAgent` reads only the verified custom-channel binding. It runs
+      // after the matching transport is installed (or with learning disabled
+      // when identity cannot be proven).
+      return spawnAgent(sessionKey);
+    });
+    return true;
+  };
+
+  sessionMessaging = new DesktopSessionMessaging({
+    workspaceRoot,
+    mcp: mcpClient,
+    getActiveAgent: () => activeAgent,
+    deliverPeer: (message, sender) => core.deliverPeerMessage(message, sender),
+    confirmHeld: (record) => requestDesktopHeldConfirmation(broker, record, {
+      emitRequest: emitPortFor,
+      emitResolved: emitInteractionResolvedFor,
+    }),
+    onNotice: (sessionKey, message) => send({
+      seq: ++portSeq,
+      ts: Date.now(),
+      sessionKey,
+      event: { kind: 'notice', level: 'warn', message },
+    }),
+  });
+
   const ctx: HostContext = {
     browser,
     devServers,
     workspaceRoot, wsGit, fileListCache, listWorkspaceFilesCached, send,
     computerUseBridge, secretBridge, config,
     getLlm: () => llm, setLlm: (next) => { llm = next; },
-    mcpClient, callBrainAtlas, broker, emitPortFor, agent,
+    mcpClient, sessionMessaging, callBrainAtlas, broker, emitPortFor, agent,
     getActiveAgent: () => activeAgent,
     loadGlobalLlm, llmForSession, resolveProviderLlm, refreshAccountModelCatalog, peekAccountModelCatalog, syncActiveSessionLlm,
+    revokeReviewedExecutionAuthority: (scope) => core.revokeReviewedExecutionAuthority(scope),
+    rebindActiveAccountOrg, activeTenantBindingError, humanCorrectionIngress,
     spawnAgent, spawnReviewer, spawnTaskAgent, activeMemorySessionKey,
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
@@ -1192,10 +1586,17 @@ async function main(): Promise<void> {
     SEV_MAP,
   };
 
-  const core = createHostCore({
+  core = createHostCore({
     agent,
     spawnAgent,
-    onActiveAgentChange: (a) => { activeAgent = a as unknown as typeof agent; },
+    onActiveAgentChange: (a) => {
+      activeAgent = a as unknown as typeof agent;
+      void sessionMessaging?.activate(activeAgent);
+    },
+    onSessionActivityChange: (sessionKey, state) => sessionMessaging?.setActivity(sessionKey, state),
+    onSessionTitle: (sessionKey, title, source) => sessionMessaging?.setTitle(sessionKey, title, source),
+    onPeerSteerApplied: (sessionKey, steering) => sessionMessaging?.onPeerApplied(sessionKey, steering.id),
+    onPeerSteerExpired: (sessionKey, steering) => sessionMessaging?.onPeerExpired(sessionKey, steering.id),
     send: send as never,
     // Verification scoping — observe each turn's tool stream to track its
     // build/test/lint commands as durable `verification` background tasks.
@@ -1227,6 +1628,12 @@ async function main(): Promise<void> {
     // chat — used to rebuild the agent on a session switch.
     resolveSessionLlm: (sessionKey) => llmForSession(sessionKey),
     validateTurn: async (sessionKey) => {
+      const tenantError = activeTenantBindingError();
+      // Identity discovery may finish after a turn begins. The Agent is already
+      // learning-disabled in that boot state, so ordinary model work remains
+      // usable while all ADR-032 retrieval/correction/checkpoint paths stay off.
+      // A verified binding mismatch still blocks the complete turn boundary.
+      if (tenantError && learningBinding.source !== 'unresolved-authenticated-profile') return tenantError;
       const runtime = llmForSession(sessionKey);
       const sessionEffort = getSessionMode(workspaceRoot, sessionKey).effort;
       const configuredEffort = (loadConfig() as { cli?: { effort?: unknown } }).cli?.effort;
@@ -1257,7 +1664,7 @@ async function main(): Promise<void> {
       modelsCacheByKey.delete('');
     },
     queries: buildQueries(ctx),
-    onShutdown: () => {
+    onShutdown: async () => {
       clearInterval(connectorSchedulerTimer);
       clearTimeout(connectorSchedulerBootTimer);
       stopWorkspaceWatcher();
@@ -1268,10 +1675,28 @@ async function main(): Promise<void> {
       browser.dispose();
       browserControlBridge?.dispose();
       devServers.disposeAll();
-      void mcpClient.close?.();
+      if (sessionMessaging) await sessionMessaging.close();
+      else await endBrainSession(mcpClient);
+      await mcpClient.close?.();
       process.exit(0);
     },
   });
+
+  // Local registration is independent of Brain connectivity and starts as soon
+  // as the Agent/core pair exists. The background MCP result only refreshes the
+  // remote registration and immediately polls the durable inbox.
+  void sessionMessaging.start(activeAgent);
+  void mcpReady.then(() => sessionMessaging?.refreshRemote()).catch(() => {});
+
+  // Apply the background boot result at hostCore's serialized idle boundary.
+  // If a turn is already running, bindLearning waits for its finalization and
+  // mutates only learning fields; it never replaces the Agent or its history.
+  void mcpReady
+    .then((resolved) => core.bindLearning({
+      userId: resolved.tenant.userId,
+      orgId: resolved.tenant.orgId ?? null,
+    }, resolved.enabled))
+    .catch(() => { /* shutting down or an older Agent without the binding seam */ });
 
   if (port) port.on('message', (e) => {
     if (computerUseBridge?.handleMessage(e.data)) return;

@@ -4,6 +4,12 @@ A reading guide to 0.4.19, written for someone who wants to understand the syste
 re-derive it from 25 pull requests. The full reasoning is in
 [ADR-027](ADR-027-compounding-debt-graph-execution-and-workbench-modernization.md); this is the map.
 
+> **Correction of record (2026-08-13):** ADR-028 retired the unreachable second
+> turn engine and `cli.executionEngine`. ADR-040 keeps that deletion: BrainRouter
+> has one bounded turn engine, with graph-shaped profile plans and explicit
+> durable workflows around it. The execution diagram and §2 below describe the
+> current architecture; the rest remains a historical guide to 0.4.19.
+
 ---
 
 ## The one idea
@@ -48,8 +54,8 @@ rather than event count, and measuring **comprehension** rather than velocity.
                     └───────────────┬─────────────────────────┘
                                     │  artifacts, provenance
                     ┌───────────────▼─────────────────────────┐
-   EXECUTION   ───▶ │ Turn loop  ◀──cli.executionEngine──▶  Graph │
-                    │  (D2) both ship; you choose per workspace│
+   EXECUTION   ───▶ │ One bounded turn engine                 │
+                    │ direct turn · profile plan · workflow   │
                     └───────────────┬─────────────────────────┘
                                     │  work products
                     ┌───────────────▼─────────────────────────┐
@@ -64,7 +70,7 @@ rather than event count, and measuring **comprehension** rather than velocity.
                     └─────────────────────────────────────────┘
 
    Underneath all of it: job leases, retention, tenancy (D11, D12)
-   Around all of it:     16 workspace profiles (D3), agent-callable control layer (D6)
+   Around all of it:     17 workspace profiles (D3), agent-callable control layer (D6)
 ```
 
 ---
@@ -97,28 +103,24 @@ picture it never received. Degradation is explicit: reroute to a vision-capable 
 
 Audio is deliberately absent: BrainRouter transcribes speech itself before any chat model sees it.
 
-### 2. Execution: both engines, your choice
+### 2. Execution: one runtime, graph-shaped orchestration
 
-`cli.executionEngine` selects `loop` (default) or `graph`.
+`cli.executionEngine` and the second graph turn engine were retired after the
+reachability audit proved that no production path selected them. `Agent.runTurn`
+is the one bounded model/tool engine in both hosts.
 
-They are good at different things. The **loop** suits open-ended conversational work where the next
-step genuinely depends on what the model just said. The **graph** suits work with a known shape that
-must survive interruption — review pipelines, migrations, anything where "resume exactly once, after
-the effect that already happened" matters.
+Graphs remain real, but at the orchestration layers where their state can be
+truthful: a profile plan is a validated stage graph around the owning turn;
+durable phase plans and saved workflow graphs are explicitly launched runtimes;
+agent nodes execute the same bounded turn engine as children. ADR-040 records the
+target policy: Core chooses the smallest eligible topology, while CLI and Desktop
+project one event-derived execution map rather than choosing different engines.
 
-Three rules make the graph trustworthy:
-
-- **State is folded before the checkpoint is taken.** Checkpointing between dispatching an effect
-  and recording its result would resume into a world where the effect happened and the state denies
-  it — undetectable downstream.
-- **Resume re-enters at the *successor*,** not the interrupting node. Its work is already folded in;
-  re-running it repeats the very effect the interrupt was probably asking about.
-- **A side-effecting node without an idempotency key is rejected at definition time,** because one
-  that forgets its key is indistinguishable from a safe one until a resume duplicates its effect in
-  production.
-
-Anything other than an explicit `graph` resolves to `loop` — a typo must not change how every turn
-runs.
+The first implementation slice keeps domain authority honest across all 17
+profiles: `workspaceProfileId` remains the reviewed domain identity and
+`planProfileId` names only the reusable work shape. Valid exact definitions win,
+declared bundled aliases are host-resolved, and an invalid exact claim falls back
+direct instead of being hidden by an alias.
 
 ### 3. Review: two gates with different jobs, plus stacking
 

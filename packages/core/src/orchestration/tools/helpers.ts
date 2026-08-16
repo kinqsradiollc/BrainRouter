@@ -25,6 +25,26 @@ export function clampAccess(parent: AccessMode, requested: AccessMode): AccessMo
 }
 
 /**
+ * ADR-040 A40-3 — read a graph `agent` node's DECLARED role/access. A saved graph
+ * is untrusted config, so an `access` that is not exactly one of the three modes
+ * is DROPPED (fail-closed to the role's default rather than misread as a grant),
+ * and the returned access is only a REQUEST: `spawn.ts` still clamps it to the
+ * parent's access via `clampAccess`, so a node can never grant itself more than
+ * the launch already holds.
+ */
+export function resolveGraphAgentAccess(
+  node: { data?: Record<string, unknown> } | undefined,
+): { role?: string; access?: AccessMode } {
+  const data = node?.data ?? {};
+  const rawRole = data.role;
+  const role = typeof rawRole === 'string' && rawRole.trim() ? rawRole.trim() : undefined;
+  const rawAccess = data.access;
+  const access: AccessMode | undefined =
+    rawAccess === 'read' || rawAccess === 'write' || rawAccess === 'shell' ? rawAccess : undefined;
+  return { ...(role ? { role } : {}), ...(access ? { access } : {}) };
+}
+
+/**
  * Build the parent-visible preview of an offloaded child output. The naive
  * `slice(0, N)` form hid the conclusion when children wrote long reports;
  * here we prefer an explicit summary section (the role overlays nudge each

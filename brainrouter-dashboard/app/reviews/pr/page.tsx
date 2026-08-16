@@ -18,6 +18,7 @@ import {
   type ReviewRunLens,
 } from "../reviewPresentation";
 import { ReviewRunCard } from "./ReviewRunCard";
+import { ReviewCodeFrame } from "../../../components/ReviewCodeFrame";
 
 function lensName(lens: ReviewJob["lens"]): string {
   if (lens === "security") return "Security review";
@@ -61,6 +62,7 @@ function ReviewFindingsCard({ review }: { review: ReviewJob }) {
               </div>
               <div className="settings-row__sub">{finding.file}{finding.line ? `:${finding.line}` : ""}{finding.cwe ? ` · ${finding.cwe}` : ""}{finding.preExisting ? " · Pre-existing" : ""}</div>
               {finding.summary && finding.summary !== finding.title && <p>{finding.summary}</p>}
+              <ReviewCodeFrame finding={finding} />
             </article>
           ))}
         </div>

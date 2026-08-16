@@ -13,6 +13,8 @@ import type {
   ProfileStageDelegationOutput,
 } from '../runtime/profileStageController.js';
 import type { ChildExecutionReceipt } from '@kinqs/brainrouter-agent-protocol';
+import type { ExecutionIntentRecord } from '@kinqs/brainrouter-types/agent';
+import type { ReviewedExecutionPolicySnapshot } from '../execution/policySnapshot.js';
 
 export interface ProfileStageRuntimeController {
   invoke(args: Record<string, unknown>): Promise<string>;
@@ -33,6 +35,36 @@ export interface ProfileStageRuntimeController {
 export interface OrchestrationContext {
   workspaceRoot: string;
   parentSessionKey: string;
+  /** Stable owner of this orchestration call within the current Agent turn. */
+  turnExecutionId?: string;
+  /**
+   * Present only after the live Agent consumed an opaque explicit-launch
+   * capability. Serializable metadata is audit context, never proof by itself.
+   */
+  executionLaunch?: {
+    runId: string;
+    parentExecutionId: string;
+    record: ExecutionIntentRecord;
+    /** Process-local executor authority; never serialize this context field. */
+    dispatchReceipt: unknown;
+    /** Agent-owned live policy fence installed only after receipt consumption. */
+    assertAuthorityCurrent?: () => void;
+  };
+  /**
+   * Process-local live lease inherited by descendants of a reviewed durable
+   * execution. Unlike `executionLaunch`, this carries no one-shot dispatch
+   * receipt or serializable audit metadata; it only lets nested agents fail
+   * closed after the owning user, workspace, session, or policy is revoked.
+   */
+  executionAuthorityGuard?: () => void;
+  /** Exact parent instruction snapshot bound to the reviewed execution. */
+  executionInstructionSummary?: string | null;
+  /** Content-free hash of the exact MCP catalog reviewed for this execution. */
+  executionMcpInventoryFingerprint?: string;
+  /** Parent checkout that owns reviewed manifest, role, hook, and preference policy. */
+  executionPolicyWorkspaceRoot?: string;
+  /** Immutable manifest, role, hook, and delegation policy captured at review. */
+  executionPolicySnapshot?: ReviewedExecutionPolicySnapshot;
   /**
    * Parent agent's access mode. Child agents may not exceed this — a `read`
    * parent cannot spawn a `shell` child, even if the LLM passes `access:'shell'`

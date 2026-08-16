@@ -21,7 +21,10 @@ import {
 } from '../../exec/policy/permissionRules.js';
 import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
-import { registryToolAllowed } from '../../tool/registry/registry.js';
+import {
+  registryToolAllowed,
+  WORKER_THREAD_TOOLS,
+} from '../../tool/registry/registry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { planExecutionBlockReason } from '../../task/planPhases.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -40,6 +43,8 @@ export interface ToolAuthorizationInput {
   skillAllowsTool(name: string): boolean;
   workspaceAllowsLocalTool(name: string): boolean;
   workspaceAllowsMcpTool(tool: unknown): boolean;
+  /** Dispatch-time copy of the complete hard surface; schema hiding alone is never authority. */
+  hardSurfaceAllowsTool(name: string, isLocal: boolean, descriptor?: unknown): boolean;
   requiredSkillActivation: RequiredSkillActivation;
   loadedRequiredSkills: ReadonlySet<string>;
   attemptedRequiredSkills: ReadonlySet<string>;
@@ -49,7 +54,33 @@ export interface ToolAuthorizationInput {
    * Notification acceptance decays sharply with repetition.
    */
   warnedRequiredSkills?: Set<string>;
+  /** Exact consumed PhasePlan intent supplies its own bounded execution plan. */
+  trustedExecutionLaunch?: boolean;
+  /** Side-effect-free policy recheck after an async hook/approval boundary. */
+  revalidation?: boolean;
   trace: { traceId: string; spanId: string };
+}
+
+/** These RPCs carry server-pinned identity or mutate the learned lifecycle.
+ * They are called by trusted host code directly through the MCP client and are
+ * intentionally absent from the model inventory. A guessed prefixed name must
+ * still be refused here because the pool's legacy resolver accepts names that
+ * were never advertised. */
+const HOST_ONLY_MCP_RAW_TOOLS = [
+  'memory_learning_identity',
+  'memory_learned_lifecycle',
+  'memory_learned_revert',
+  'memory_learned_sync',
+  'memory_record_learned',
+] as const;
+
+export function isHostOnlyMcpModelDispatch(name: string, descriptor?: unknown): boolean {
+  const rawName = descriptor && typeof descriptor === 'object'
+    ? String((descriptor as { __rawName?: unknown }).__rawName ?? '')
+    : '';
+  return HOST_ONLY_MCP_RAW_TOOLS.some((raw) => (
+    name === raw || name.endsWith(`_${raw}`) || rawName === raw
+  ));
 }
 
 export function authorizeToolCall(input: ToolAuthorizationInput): void {
@@ -77,6 +108,21 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
     throw new Error(reason);
   };
 
+  if (!isLocal && isHostOnlyMcpModelDispatch(name, input.mcpTool)) {
+    deny(`Tool "${diagnosticName}" denied: host-only learned-memory RPCs cannot be model-dispatched.`);
+  }
+
+  if (
+    isLocal
+    && WORKER_THREAD_TOOLS.has(name)
+    && agent.inheritedExecutionAuthorityGuard() !== undefined
+    && agent.executionIntentTurnToolName() === null
+  ) {
+    deny(
+      `Tool "${diagnosticName}" denied: detached worker lifecycle tools are unavailable inside inherited reviewed execution.`,
+    );
+  }
+
   if (name !== 'reconcile_steer' && !input.skillAllowsTool(name)) {
     deny(
       `Tool "${diagnosticName}" denied by the active skill allowed-tools policy.`,
@@ -99,13 +145,36 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
     );
   }
 
+  // The exact dispatch ceiling is the final name-level intersection after the
+  // more specific skill/workspace checks above. Keeping it before permissions,
+  // approval, hooks, and adapters still prevents every side effect, while
+  // preserving the actionable policy reason for ordinary denied calls.
+  if (name !== 'reconcile_steer' && !input.hardSurfaceAllowsTool(name, isLocal, input.mcpTool)) {
+    deny(
+      `Tool "${diagnosticName}" denied: it is outside the active capability, role, delegated-authority, availability, or user tool ceiling.`,
+    );
+  }
+
   const knobs = getCliKnobs();
-  const ruleDecision = evaluatePermissionRules(
-    knobs.permissions,
-    name,
-    primaryArgText(name, args),
-    { workspace: agent.workspaceRoot },
-  );
+  const permissionNames = [name];
+  if (!isLocal && input.mcpTool && typeof input.mcpTool === 'object') {
+    const rawName = String((input.mcpTool as { __rawName?: unknown }).__rawName ?? '').trim();
+    if (rawName && rawName !== name) permissionNames.push(rawName);
+  }
+  let ruleDecision: 'allow' | 'deny' | null = null;
+  for (const permissionName of permissionNames) {
+    const decision = evaluatePermissionRules(
+      knobs.permissions,
+      permissionName,
+      primaryArgText(permissionName, args),
+      { workspace: agent.workspaceRoot },
+    );
+    if (decision === 'deny') {
+      ruleDecision = 'deny';
+      break;
+    }
+    if (decision === 'allow') ruleDecision = 'allow';
+  }
   if (ruleDecision === 'deny') {
     deny(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
   }
@@ -195,7 +264,7 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
       const unwarned = input.warnedRequiredSkills
         ? unresolved.filter((id) => !input.warnedRequiredSkills!.has(id))
         : unresolved;
-      if (unwarned.length > 0) {
+      if (unwarned.length > 0 && !input.revalidation) {
         for (const id of unwarned) input.warnedRequiredSkills?.add(id);
         callbacks.onNotice?.({
           level: 'warn',
@@ -220,7 +289,7 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
           commandWritesFiles(String(args?.command ?? ''))
         )
       );
-    if (planningRequired && phaseGatedMutation) {
+    if (planningRequired && phaseGatedMutation && !input.trustedExecutionLaunch) {
       const plan = readPlan(agent.workspaceRoot, agent.sessionKey);
       const planBlock = planExecutionBlockReason(
         plan.phases ?? [],
@@ -239,7 +308,7 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
     policy.decision = 'allow';
     policy.reason = 'cli.permissions allow rule';
   }
-  if (policy.mutating) {
+  if (policy.mutating && !input.revalidation) {
     agent.policyAudit.push({
       tool: name,
       action: policy.action,

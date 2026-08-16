@@ -141,6 +141,66 @@ describe('TypeScriptAssuranceIndexAdapter', () => {
     expect(adapter.resolve(result.receipt.indexRef)).toBeNull();
   });
 
+  it('resolves workspace package export aliases to exact source modules', async () => {
+    const checkout = await fixture({
+      'apps/consumer/src/useReview.ts': [
+        "import { reviewThing } from '@example/shared';",
+        'export function useReview() { return reviewThing(); }',
+      ].join('\n'),
+      'packages/shared/package.json': JSON.stringify({
+        name: '@example/shared',
+        exports: {
+          '.': {
+            types: './dist/index.d.ts',
+            default: './dist/index.js',
+          },
+        },
+      }),
+      'packages/shared/src/index.ts': "export * from './review/index.js';\n",
+      'packages/shared/src/review/index.ts': 'export function reviewThing() { return true; }\n',
+    });
+    const adapter = new TypeScriptAssuranceIndexAdapter({ checkouts: resolver(checkout) });
+
+    const result = await adapter.update(input());
+    const graph = adapter.resolve(result.receipt.indexRef)!;
+    const edges = graph.relationships.map((edge) => ({
+      relationship: edge.relationship,
+      from: graph.symbols.find((symbol) => symbol.id === edge.fromSymbolId)?.name,
+      to: graph.symbols.find((symbol) => symbol.id === edge.toSymbolId)?.name,
+      toPath: graph.symbols.find((symbol) => symbol.id === edge.toSymbolId)?.location.path,
+    }));
+    expect(edges).toEqual(expect.arrayContaining([
+      {
+        relationship: 'imports',
+        from: 'reviewThing',
+        to: 'reviewThing',
+        toPath: 'packages/shared/src/review/index.ts',
+      },
+      {
+        relationship: 'calls',
+        from: 'useReview',
+        to: 'reviewThing',
+        toPath: 'packages/shared/src/review/index.ts',
+      },
+    ]));
+  });
+
+  it('retains tsconfig-proven source and generated output path relationships', async () => {
+    const checkout = await fixture({
+      'desktop/tsconfig.electron.json': JSON.stringify({
+        compilerOptions: { rootDir: 'electron', outDir: 'dist-electron' },
+      }),
+      'desktop/electron/host.ts': 'export const host = true;\n',
+      'desktop/dist-electron/host.js': 'export const host = true;\n',
+    });
+    const adapter = new TypeScriptAssuranceIndexAdapter({ checkouts: resolver(checkout) });
+
+    const result = await adapter.update(input());
+    expect(adapter.resolve(result.receipt.indexRef)?.pathRelationships).toEqual([
+      ['desktop/electron/host.ts', 'desktop/dist-electron/host.js'],
+    ]);
+  });
+
   it('reports unsupported, oversized, unreadable, and parse-failed source coverage', async () => {
     const checkout = await fixture({
       'README.md': '# unsupported\n',

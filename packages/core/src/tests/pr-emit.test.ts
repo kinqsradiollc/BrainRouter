@@ -171,6 +171,20 @@ test('emitPrFromPatch opens a DRAFT PR on a unique branch and returns its url/nu
   assert.ok(!calls.some((c) => c.cmd === 'git' && c.args[0] === 'worktree' && c.args[1] === 'add' && !c.args.includes('-b')));
 });
 
+test('ADR-028 A7 — the build-loop emit opens ONE pull request and never a stack', () => {
+  // The emit lays down one squashed patch on one throwaway branch, so there is
+  // no second layer for a stack to hold. It states that route rather than
+  // asking a router for an answer it could not carry out: a `gh stack submit`
+  // here would register one pull request while calling it a chain.
+  const calls: Call[] = [];
+  const res = emitPrFromPatch({ ...baseInput, patchPath: writePatch() }, makeRunner(happyHandler(), calls));
+  assert.equal(res.ok, true);
+  assert.ok(!calls.some((c) => c.cmd === 'gh' && c.args[0] === 'stack'), 'no gh stack subcommand runs');
+  assert.ok(calls.some((c) => c.cmd === 'gh' && c.args[0] === 'pr' && c.args[1] === 'create'));
+  // One branch pushed, so one pull request. Two pushes would mean layers.
+  assert.equal(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push').length, 1);
+});
+
 test('emitPrFromPatch can open a ready (non-draft) PR when draft:false', () => {
   const calls: Call[] = [];
   emitPrFromPatch({ ...baseInput, patchPath: writePatch(), draft: false }, makeRunner(happyHandler(), calls));
