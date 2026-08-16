@@ -1027,5 +1027,24 @@ export const BUILTIN_TOOL_SPECS = [
       },
       required: ['reason'],
     },
-  }
+  },
+  {
+    name: 'worktree_list',
+    description: 'List the git worktrees of the CURRENT repository as structured data: path, branch (or detached), locked/prunable flags, a best-effort dirty flag, which entry is the current workspace, and which you have already entered. Only same-repository worktrees appear. Run this before worktree_enter.',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'worktree_enter',
+    description: 'Attach an existing git worktree of THIS repository so its files resolve for read and edit. Pass a worktree path or a branch name (from worktree_list). Non-destructive and reversible: it widens the workspace without moving the primary root, and it only accepts worktrees git already lists (same repository, same objects). Refuses a worktree whose directory is gone (prunable) with a pointer to `git worktree prune`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'A worktree path or a branch name shown by worktree_list.' }
+      },
+      required: ['target']
+    }
+  },
 ];
