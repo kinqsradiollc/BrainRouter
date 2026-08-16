@@ -21,6 +21,7 @@ test('A40-1 turn telemetry separates workspace and plan profile identity', () =>
     },
     taskSignalIds: ['citation-review', 'evidence-collection'],
     source: 'bundled',
+    adaptive: { strategyId: 'citation-review', source: 'adaptive', eligible: true, defaultsGated: true },
   } as unknown as ActiveTurnOrchestrationResolution;
 
   assert.deepEqual(orchestrationTurnSpanAttributes(resolution), {
@@ -29,6 +30,8 @@ test('A40-1 turn telemetry separates workspace and plan profile identity', () =>
     orchestration_profile_id: 'research',
     orchestration_strategy_id: 'citation-review',
     orchestration_selection_source: 'deterministic',
+    orchestration_defaults_gated: true,
+    orchestration_adaptive_source: 'adaptive',
     orchestration_stage_count: 2,
     orchestration_signal_ids: 'citation-review,evidence-collection',
     orchestration_source: 'bundled',

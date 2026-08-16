@@ -12,6 +12,16 @@ import {
   resolveWorkspaceOrchestrationPlan,
   type ResolvedWorkspaceOrchestrationPlan,
 } from '../orchestration/profiles/orchestrationProfileResolver.js';
+// ADR-040 A40-8 — the adaptive-selection eligibility, safe baseline, and the
+// corpus gate. Wired here at the live root-turn seam so the gate is a runtime
+// INVARIANT and its state is surfaced, not merely a constant in an unwired file.
+import {
+  adaptiveEligibility,
+  adaptiveDiagnostics,
+  assertCorpusGateHonored,
+  type AdaptiveDiagnostics,
+  type AdaptiveEligibilityInput,
+} from '../orchestration/execution/adaptiveActivation.js';
 import { detectOrchestrationTaskSignals } from '../orchestration/profiles/taskSignals.js';
 import { readPreferences } from '../session/preferences/preferencesStore.js';
 import { loadWorkspaceManifest, type WorkspaceManifest } from './manifest.js';
@@ -26,6 +36,42 @@ export interface ActiveTurnOrchestrationResolution {
   plan: ResolvedWorkspaceOrchestrationPlan;
   taskSignalIds: string[];
   source: string;
+  /**
+   * ADR-040 A40-8 — adaptive-selection eligibility + the corpus gate for this
+   * turn. `defaultsGated` is surfaced (never inferred), and the finalizer below
+   * enforces that while it is true no selection may move a system default.
+   */
+  adaptive: AdaptiveDiagnostics;
+}
+
+/**
+ * ADR-040 A40-8 — attach the adaptive diagnostics and enforce the corpus gate.
+ *
+ * The gate guards CHANGING a system default, not honoring workspace config. The
+ * resolver only ever selects a workspace-defined, signal-matched strategy (or an
+ * explicit/fallback one), so this invariant holds today — asserting it makes the
+ * gate live rather than a constant that a future change could quietly outgrow.
+ */
+function withAdaptive(
+  plan: ResolvedWorkspaceOrchestrationPlan,
+  taskSignalIds: string[],
+  source: string,
+  eligibilityInput: AdaptiveEligibilityInput,
+): ActiveTurnOrchestrationResolution {
+  const eligibility = adaptiveEligibility(eligibilityInput);
+  const isFallback = plan.selectionSource === 'fallback';
+  const adaptive = adaptiveDiagnostics({
+    eligibility,
+    explicitStrategyId: eligibilityInput.explicitStrategyId,
+    selectedStrategyId: isFallback ? null : plan.strategyId,
+    fallbackReason: isFallback && eligibility.eligible ? 'resolver-fallback' : undefined,
+  });
+  // A40-8 — enforce the corpus gate as a live invariant on the resolved plan.
+  assertCorpusGateHonored({
+    selectionSource: plan.selectionSource,
+    matchedSignalCount: plan.matchedSignalIds.length,
+  });
+  return { plan, taskSignalIds, source, adaptive };
 }
 
 /**
@@ -55,18 +101,16 @@ export function resolveActiveTurnOrchestration(input: {
   preplanned?: boolean;
 }): ActiveTurnOrchestrationResolution {
   if (input.preplanned === true) {
-    return {
-      plan: resolveWorkspaceOrchestrationPlan(emptyInput()),
-      taskSignalIds: [],
-      source: 'preplanned',
-    };
+    return withAdaptive(
+      resolveWorkspaceOrchestrationPlan(emptyInput()), [], 'preplanned',
+      { topLevel: true, hasDefinition: false },
+    );
   }
   if ((input.parentDepth ?? 0) > 0) {
-    return {
-      plan: resolveWorkspaceOrchestrationPlan(emptyInput()),
-      taskSignalIds: [],
-      source: 'nested-agent',
-    };
+    return withAdaptive(
+      resolveWorkspaceOrchestrationPlan(emptyInput()), [], 'nested-agent',
+      { topLevel: false, hasDefinition: false },
+    );
   }
   const manifest = loadWorkspaceManifest(input.workspaceRoot);
   const inferred = manifest ? null : inferWorkspaceOrchestrationDefault(input.workspaceRoot);
@@ -76,11 +120,10 @@ export function resolveActiveTurnOrchestration(input: {
   const selection: Pick<WorkspaceManifest, 'profile' | 'orchestration'> | null = manifest
     ?? (inferred ? { profile: inferred.profile, orchestration: inferred.orchestration } : null);
   if (!selection) {
-    return {
-      plan: resolveWorkspaceOrchestrationPlan(emptyInput()),
-      taskSignalIds: [],
-      source: 'none',
-    };
+    return withAdaptive(
+      resolveWorkspaceOrchestrationPlan(emptyInput()), [], 'none',
+      { topLevel: true, hasDefinition: false },
+    );
   }
 
   const sources = buildWorkspaceOnboardingSources(input.workspaceRoot);
@@ -124,15 +167,17 @@ export function resolveActiveTurnOrchestration(input: {
   });
 
   if (!identity.definition) {
-    return { plan, taskSignalIds, source: 'unavailable' };
+    return withAdaptive(plan, taskSignalIds, 'unavailable',
+      { topLevel: true, hasDefinition: false, mode: selection.orchestration.mode });
   }
-  return {
+  return withAdaptive(
     plan,
     taskSignalIds,
     // Telemetry must never present an inferred default as a reviewed workspace
     // choice the user actually made.
-    source: manifest ? identity.source?.provenance ?? 'unavailable' : 'inferred-default',
-  };
+    manifest ? identity.source?.provenance ?? 'unavailable' : 'inferred-default',
+    { topLevel: true, hasDefinition: true, mode: selection.orchestration.mode },
+  );
 }
 
 const inferredDefaults = new Map<string, InferredWorkspaceOrchestrationDefault | null>();

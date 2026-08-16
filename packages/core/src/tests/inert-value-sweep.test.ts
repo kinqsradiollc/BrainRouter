@@ -221,16 +221,6 @@ const KNOWN_UNWIRED = new Map<string, string>([
     + 'counter-metric gate, verifier precedence and arbitration.',
   ],
   [
-    'orchestration/execution/adaptiveActivation.ts',
-    'ADR-040 A40-8. Eligibility, the direct safe baseline, and diagnostics for '
-    + 'adaptive profile selection. It lands unwired ON PURPOSE: A40-8 forbids '
-    + 'changing any profile default until fresh/elliptical/contextless '
-    + 'conversation corpora pass, and those corpora do not exist. Wiring it into '
-    + 'the turn path before that gate would be how a default quietly moves. '
-    + 'execution-adaptive-activation.test.ts pins the gate SHUT, so flipping '
-    + 'DEFAULTS_ARE_CORPUS_GATED without corpus results fails loudly.',
-  ],
-  [
     'orchestration/execution/publicRuns.ts',
     'ADR-040 A40-9. The curated public surface for run views, and it IS reached: '
     + "brainrouter-cli/src/cli/commands/runs/index.ts imports it as "
@@ -613,10 +603,13 @@ function deadExports(): string[] {
  * until A40-9 and A40-10 render the map. Named, attributed, and it falls when
  * they land. A40-9 then took it 280 → 279 by giving the run views a real
  * consumer: the ratchet falling, which is the direction it is for. A40-8 raised
- * it 279 → 281 for `adaptiveActivation.ts`, which is unwired DELIBERATELY —
- * wiring it before its corpus gate is how a profile default moves without
- * anyone deciding to move it. Two slots, named, and they fall when the corpora
- * exist and the gate is opened on purpose. A40-11 raised it 281 → 285 for
+ * it 279 → 281 for `adaptiveActivation.ts`, then GATE-WIRED by A40-8's completion, taking it
+ * 282 → 280: the module is now imported at the live root-turn seam
+ * (`activeTurnOrchestration.ts`), so its eligibility, diagnostics and the
+ * `DEFAULTS_ARE_CORPUS_GATED` gate run per turn as a real INVARIANT — inertly,
+ * because the resolver only honors workspace config, so no default moves.
+ * Wiring the gate is not opening it: the corpus gate stays SHUT and the suite
+ * still pins it there. A40-11 raised it 281 → 285 for
  * `optimizationSubgraph.ts`: the governance vocabulary lands before the callers
  * that migrate the Engineering build loop onto it, which is the sequence that
  * row asks for — generalise first, migrate second, with the old path retained
@@ -636,7 +629,7 @@ function deadExports(): string[] {
  * gained a production caller: `readRunDetail` reduces a run's retained event journal
  * so `/runs <id>` rebuilds the map from disk instead of reporting `unavailable`.
  */
-const DEAD_EXPORT_CEILING = 282;
+const DEAD_EXPORT_CEILING = 280;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
