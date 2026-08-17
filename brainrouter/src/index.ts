@@ -91,7 +91,7 @@ import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/r
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
 import { GatewayProviderService } from './services/gateway/providerPool.js';
 import { bindGatewayDataPlane } from './services/gateway/server.js';
-import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
+import { securityHeaders, corsMiddleware, resolveCorsAllowlist, corsCredentialsBootError } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
@@ -265,6 +265,13 @@ if (USE_HTTP) {
   }
   if (USING_FALLBACK_JWT_SECRET) {
     console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
+  }
+  // ADR-037 D3 — a `*` CORS origin combined with credentials would hand an
+  // authenticated session to every origin. Refuse it at boot, loudly.
+  const corsBootErr = corsCredentialsBootError(resolveCorsAllowlist());
+  if (corsBootErr) {
+    console.error(`[BrainRouter] FATAL: ${corsBootErr}`);
+    throw new Error(corsBootErr);
   }
 
   // Metrics — Prometheus text (default) or JSON (`?format=json` / Accept: json).

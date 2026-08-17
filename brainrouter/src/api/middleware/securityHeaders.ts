@@ -39,6 +39,22 @@ export function resolveCorsAllowlist(env: NodeJS.ProcessEnv = process.env): stri
   return raw.split(",").map((o) => o.trim()).filter(Boolean);
 }
 
+/**
+ * ADR-037 D3 — `*` must never combine with credentials. corsMiddleware sets
+ * Access-Control-Allow-Credentials on every reflected origin, so a `*` allowlist
+ * hands an authenticated session to every site on the internet (latent today
+ * with bearer tokens; live the moment the session becomes a cookie). Refuse it
+ * at boot, loudly, rather than serve it. Returns an error message, or null when
+ * the allowlist is safe. A wildcard origin is compatible with anonymous APIs and
+ * with nothing else.
+ */
+export function corsCredentialsBootError(allowlist: string[] = resolveCorsAllowlist()): string | null {
+  if (allowlist.includes("*")) {
+    return "BRAINROUTER_CORS_ORIGIN='*' combines a wildcard origin with credentialed CORS (Access-Control-Allow-Credentials: true), which would hand an authenticated session to every origin. Set BRAINROUTER_CORS_ORIGIN to an explicit comma-separated allowlist (e.g. https://app.example.com).";
+  }
+  return null;
+}
+
 /** A local dev origin: http(s)://localhost or 127.0.0.1 on any port. */
 const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
 
