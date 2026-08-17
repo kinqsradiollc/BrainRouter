@@ -16,7 +16,7 @@ import type { UpstreamTargetPolicy } from "@kinqs/brainrouter-core/provider";
 type CoreProvider = {
   findProviderByEndpoint?: (endpoint: string) => { id?: string } | undefined;
   isLmStudioEndpoint?: (endpoint: string) => boolean;
-  fetchLmStudioModels?: (endpoint: string) => Promise<Array<{ id: string; reasoning?: boolean }> | null>;
+  fetchLmStudioModels?: (endpoint: string, fetchImpl?: (url: string, init: RequestInit) => Promise<Response>) => Promise<Array<{ id: string; reasoning?: boolean }> | null>;
   inferModelReasoningCapabilities?: (raw: unknown) => { supportsReasoning?: boolean } | undefined;
   LOCAL_PLACEHOLDER_KEY?: string;
 };
@@ -71,7 +71,12 @@ export async function probeModels(baseUrl: string, apiKey: string, kind: string 
 
   // LM Studio native enrichment — chat only (it drops embedding-type models).
   if (chat && c.isLmStudioEndpoint?.(baseUrl) && c.fetchLmStudioModels) {
-    const lm = await c.fetchLmStudioModels(baseUrl).catch(() => null);
+    // ADR-039 — the LM Studio native enrichment is the "fourth path": route it
+    // through the same DNS-pinned upstream policy as the GET /models, embeddings,
+    // and rerank probes so a BYOK baseUrl cannot SSRF loopback/RFC1918/metadata.
+    const lm = await c
+      .fetchLmStudioModels(baseUrl, (url, init) => fetchUpstreamWithPolicy(url, init, policy))
+      .catch(() => null);
     if (lm && lm.length) {
       return lm.map((m) => ({ id: m.id, reasoning: !!m.reasoning })).filter((m) => m.id);
     }
