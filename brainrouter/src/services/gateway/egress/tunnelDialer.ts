@@ -12,6 +12,12 @@ export interface TunnelDialerOptions {
    * breaks the TLS record MAC and the request fails closed.
    */
   readonly tls?: Pick<ConnectionOptions, 'ca' | 'checkServerIdentity'>;
+  /**
+   * Aborts the tunnel attempt. S4's fallback ladder passes a per-connect signal so
+   * a timed-out tunnel is torn down (the byte duplex closed) rather than left
+   * dangling when the request drops to server egress (ADR-043 D4).
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -40,8 +46,12 @@ export function createTunnelConnector(
       );
       return;
     }
+    if (options.signal?.aborted) {
+      callback(new Error('egress tunnel connect aborted'), null);
+      return;
+    }
     transport
-      .open(dialTargetFromValidated(target))
+      .open(dialTargetFromValidated(target), options.signal ? { signal: options.signal } : undefined)
       .then((duplex) => {
         const tlsSocket = tlsConnect({
           socket: duplex,
@@ -49,9 +59,13 @@ export function createTunnelConnector(
           ALPNProtocols: ['http/1.1'],
           ...(options.tls ?? {}),
         });
+        const onAbort = (): void => {
+          tlsSocket.destroy(new Error('egress tunnel connect aborted'));
+        };
         const detach = (): void => {
           tlsSocket.removeListener('secureConnect', onSecure);
           tlsSocket.removeListener('error', onError);
+          options.signal?.removeEventListener('abort', onAbort);
         };
         const onSecure = (): void => {
           detach();
@@ -63,6 +77,11 @@ export function createTunnelConnector(
         };
         tlsSocket.once('secureConnect', onSecure);
         tlsSocket.once('error', onError);
+        // If the fallback ladder already timed out and aborted, tear the tunnel down
+        // now; the resulting 'error' reaches onError, whose callback the ladder
+        // ignores (it has settled) — this only frees the duplex.
+        if (options.signal?.aborted) onAbort();
+        else options.signal?.addEventListener('abort', onAbort, { once: true });
       })
       .catch((err: unknown) => {
         callback(err instanceof Error ? err : new Error(String(err)), null);
