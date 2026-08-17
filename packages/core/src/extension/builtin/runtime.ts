@@ -1143,40 +1143,6 @@ export async function invokeBuiltinToolRuntime(
           return `web_search failed: ${err?.message ?? err}`;
         }
       }
-      case 'list_mcp_resources': {
-        const client = this.mcpClient as any;
-        if (typeof client.listResources !== 'function') {
-          throw new Error('MCP resources are not supported by the active MCP client.');
-        }
-        const result = await client.listResources({
-          cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
-          server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
-        }, { signal: this.turnAbort?.signal });
-        return JSON.stringify(result, null, 2);
-      }
-      case 'list_mcp_resource_templates': {
-        const client = this.mcpClient as any;
-        if (typeof client.listResourceTemplates !== 'function') {
-          throw new Error('MCP resource templates are not supported by the active MCP client.');
-        }
-        const result = await client.listResourceTemplates({
-          cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
-          server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
-        }, { signal: this.turnAbort?.signal });
-        return JSON.stringify(result, null, 2);
-      }
-      case 'read_mcp_resource': {
-        const client = this.mcpClient as any;
-        if (typeof client.readResource !== 'function') {
-          throw new Error('MCP resource reads are not supported by the active MCP client.');
-        }
-        const server = String(args.server ?? '').trim();
-        const uri = String(args.uri ?? '').trim();
-        if (!server) throw new Error('read_mcp_resource requires a server.');
-        if (!uri) throw new Error('read_mcp_resource requires a uri.');
-        const result = await client.readResource({ server, uri }, { signal: this.turnAbort?.signal });
-        return JSON.stringify(result, null, 2);
-      }
       case 'mcp_call': {
         const target = String(args.name ?? '').trim();
         if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');

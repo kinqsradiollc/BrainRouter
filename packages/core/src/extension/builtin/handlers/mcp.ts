@@ -43,4 +43,41 @@ export const mcpHandlers: Record<string, BuiltinToolHandler> = {
     }
     return JSON.stringify({ totalTools: tools.length, servers: byServer }, null, 2);
   },
+
+  list_mcp_resources: async ({ args, host }) => {
+    const client = host.mcpClient as any;
+    if (typeof client.listResources !== 'function') {
+      throw new Error('MCP resources are not supported by the active MCP client.');
+    }
+    const result = await client.listResources({
+      cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
+      server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
+    }, { signal: host.turnAbort?.signal });
+    return JSON.stringify(result, null, 2);
+  },
+
+  list_mcp_resource_templates: async ({ args, host }) => {
+    const client = host.mcpClient as any;
+    if (typeof client.listResourceTemplates !== 'function') {
+      throw new Error('MCP resource templates are not supported by the active MCP client.');
+    }
+    const result = await client.listResourceTemplates({
+      cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
+      server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
+    }, { signal: host.turnAbort?.signal });
+    return JSON.stringify(result, null, 2);
+  },
+
+  read_mcp_resource: async ({ args, host }) => {
+    const client = host.mcpClient as any;
+    if (typeof client.readResource !== 'function') {
+      throw new Error('MCP resource reads are not supported by the active MCP client.');
+    }
+    const server = String(args.server ?? '').trim();
+    const uri = String(args.uri ?? '').trim();
+    if (!server) throw new Error('read_mcp_resource requires a server.');
+    if (!uri) throw new Error('read_mcp_resource requires a uri.');
+    const result = await client.readResource({ server, uri }, { signal: host.turnAbort?.signal });
+    return JSON.stringify(result, null, 2);
+  },
 };
