@@ -36,6 +36,7 @@ import { browserUseAvailableFor, type BrowserControlPort } from '../browser/cont
 import type { FilesystemPort } from './fs/filesystemPort.js';
 import type { SubprocessPort } from './subprocess/subprocessPort.js';
 import type { ShellPort } from './shell/shellPort.js';
+import { type ExecutionWorld, resolveExecutionPorts } from '../runtime/executionWorld.js';
 import type { IAgent } from './iagent.js';
 import {
   appendTranscriptEntry,
@@ -706,6 +707,14 @@ export interface AgentOptions {
    * port that runs the command in a container/remote.
    */
   shellPort?: ShellPort;
+  /**
+   * ADR-041 D10 — an execution world binds all three capability ports as one
+   * coherent set (filesystem + shell + subprocess). Omitted ⇒ the local defaults.
+   * When present, it supplies any port not given explicitly above; an explicit
+   * per-port option still wins. Point the world at a container/remote and every
+   * tool follows in one gesture.
+   */
+  executionWorld?: ExecutionWorld;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
   browserControlPort?: BrowserControlPort;
   /** Desktop-only access to native terminals already opened by the user. */
@@ -1280,6 +1289,8 @@ export class Agent implements IAgent {
   public filesystemPort?: FilesystemPort;
   public subprocessPort?: SubprocessPort;
   public shellPort?: ShellPort;
+  /** ADR-041 D10 — the execution world these ports were resolved from, if any. */
+  public executionWorld?: ExecutionWorld;
   public browserControlPort?: BrowserControlPort;
   public terminalUsePort?: AgentOptions['terminalUsePort'];
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
@@ -1349,9 +1360,14 @@ export class Agent implements IAgent {
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
-    this.filesystemPort = options.filesystemPort;
-    this.subprocessPort = options.subprocessPort;
-    this.shellPort = options.shellPort;
+    // ADR-041 D10 — an execution world supplies any port not given explicitly; an
+    // explicit per-port option wins. No world + no port ⇒ every field undefined,
+    // so the tool runtime uses its local node*Port default (byte-identical to D3).
+    this.executionWorld = options.executionWorld;
+    const resolvedPorts = resolveExecutionPorts(options);
+    this.filesystemPort = resolvedPorts.filesystemPort;
+    this.subprocessPort = resolvedPorts.subprocessPort;
+    this.shellPort = resolvedPorts.shellPort;
     this.browserControlPort = options.browserControlPort;
     this.terminalUsePort = options.terminalUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;

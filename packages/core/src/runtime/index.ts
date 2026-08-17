@@ -2,6 +2,7 @@
 // runs. Consumers import `@kinqs/brainrouter-core/runtime`; the file layout
 // stays an internal detail.
 export * from './runtimeTypes.js';
+export * from './executionWorld.js';
 export * from './registry.js';
 export * from './backends/process.js';
 export * from './backends/worktree.js';
