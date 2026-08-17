@@ -249,7 +249,13 @@ authRouter.post("/refresh", async (req, res) => {
   setRefreshCookie(res, newRefresh);
   const refreshCsrf = newCsrfToken();
   setCsrfCookie(res, refreshCsrf);
-  res.json({ jwt: createJwt(user), refreshToken: newRefresh, csrfToken: refreshCsrf });
+  // ADR-037 B4 — the cookie carries the refresh token, so a cookie-based session
+  // (the dashboard) gets NO token in the response body: an XSS cannot read a
+  // refresh token that is never sent to script. A legacy body-token caller (the
+  // SDK's programmatic refresh) still receives it so it can rotate.
+  const refreshBody: Record<string, unknown> = { jwt: createJwt(user), csrfToken: refreshCsrf };
+  if (!cookieRefresh) refreshBody.refreshToken = newRefresh;
+  res.json(refreshBody);
 });
 
 authRouter.post("/signout", async (req, res) => {

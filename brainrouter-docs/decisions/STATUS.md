@@ -28,7 +28,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 034 | Messages that arrive | ✅ Implemented (3 exports to wire/delete) | 0.4.20 |
 | 035 | A meeting you cannot lose | ✅ Implemented | 0.4.20 |
 | 036 | The finding carries its code | ✅ Implemented | 0.4.20 |
-| **037** | **Credentials the page cannot read** | **🟡 Backend shipped; dashboard cutover remaining** | **0.4.21** |
+| **037** | **Credentials the page cannot read** | **✅ Implemented (live-QA the §5 test)** | **0.4.21** |
 | 038 | A planner worth opening | ✅ Implemented | main |
 | 039 | The half of security a model cannot see (taint) | 📝 Proposed (needs licensing decision) | — |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
@@ -38,7 +38,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 
 ## In flight / next
 
-- **ADR-037** — the credentials-hardening program. **Shipped to `release/0.4.21`:** B1 revocable refresh-session store, B2 boot-refusal of `*`+credentials, B3 the `br_refresh` cookie + CSRF Origin guard + double-submit (server-side, accepted alongside body+bearer), D-1 planner identity from `/api/auth/me`. **Remaining (needs the running stack for §5's acceptance test):** D-2 flip the dashboard transport to the cookie (with the CSRF-on-reload fix — a readable `br_csrf` double-submit cookie), D-3 delete the localStorage accessors + show-once the API key, B4 make the cookie the sole transport.
+- **ADR-037** — the credentials-hardening program is **complete** (all 8 slices shipped to `release/0.4.21`): B1 revocable sessions, B2 boot-guard, B3 cookie+CSRF, D-1 identity, D-2 cookie transport (+ readable `br_csrf` double-submit cookie that survives reload), D-3 API key + tokens out of localStorage into memory, B4 cookie-path `/refresh` returns no body token. The dashboard now persists no credential to storage. Owner step: run §5's live acceptance test on the running stack.
 - **Partial → finish:** ADR-032 and ADR-033 shipped partial to 0.4.20 and have room to complete.
 - **Proposed, awaiting an owner call:** ADR-039 (taint analysis — needs the this-repo-only vs customer-facing licensing decision), ADR-041 (plug-and-play runtime — large, being drafted), ADR-043 (edge egress — depends on 041's seams; its S1 gateway rate-shaper is an independent carve-out worth doing).
 
