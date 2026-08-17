@@ -7,6 +7,8 @@ import {
   corsMiddleware,
   securityHeaders,
   corsCredentialsBootError,
+  csrfOriginGuard,
+  readCookie,
 } from "../api/middleware/securityHeaders.js";
 
 describe("API-HEADERS-CORS — resolveCorsAllowlist", () => {
@@ -129,5 +131,52 @@ describe("API-HEADERS-CORS — corsCredentialsBootError (ADR-037 D3)", () => {
   it("allows an explicit allowlist", () => {
     expect(corsCredentialsBootError(["https://app.example.com"])).toBeNull();
     expect(corsCredentialsBootError(["http://localhost:3000"])).toBeNull();
+  });
+});
+
+describe("API-HEADERS-CORS — readCookie", () => {
+  it("extracts a named cookie from the raw header, decoding, else undefined", () => {
+    expect(readCookie({ headers: { cookie: "a=1; br_refresh=tok%20en; b=2" } }, "br_refresh")).toBe("tok en");
+    expect(readCookie({ headers: { cookie: "a=1" } }, "br_refresh")).toBeUndefined();
+    expect(readCookie({ headers: {} }, "br_refresh")).toBeUndefined();
+  });
+});
+
+describe("API-HEADERS-CSRF — csrfOriginGuard (ADR-037 D2)", () => {
+  let server: ReturnType<express.Express["listen"]> | undefined;
+  afterEach(async () => {
+    if (server) await new Promise<void>((r) => server!.close(() => r()));
+    server = undefined;
+  });
+  async function start(): Promise<string> {
+    const app = express();
+    app.use(csrfOriginGuard(["https://app.test"], { production: true }));
+    app.post("/x", (_req, res) => res.json({ ok: true }));
+    app.get("/x", (_req, res) => res.json({ ok: true }));
+    await new Promise<void>((r) => { server = app.listen(0, () => r()); });
+    const { port } = server!.address() as AddressInfo;
+    return `http://127.0.0.1:${port}`;
+  }
+  it("refuses a cookie-session POST with a disallowed / missing Origin", async () => {
+    const base = await start();
+    const bad = await fetch(`${base}/x`, { method: "POST", headers: { Cookie: "br_refresh=t", Origin: "https://evil.test" } });
+    expect(bad.status).toBe(403);
+    const none = await fetch(`${base}/x`, { method: "POST", headers: { Cookie: "br_refresh=t" } });
+    expect(none.status).toBe(403);
+  });
+  it("allows a cookie-session POST from an allowlisted Origin", async () => {
+    const base = await start();
+    const ok = await fetch(`${base}/x`, { method: "POST", headers: { Cookie: "br_refresh=t", Origin: "https://app.test" } });
+    expect(ok.status).toBe(200);
+  });
+  it("passes bearer / no-cookie callers through regardless of Origin (desktop, MCP)", async () => {
+    const base = await start();
+    const bearer = await fetch(`${base}/x`, { method: "POST", headers: { Authorization: "Bearer k", Origin: "https://evil.test" } });
+    expect(bearer.status).toBe(200);
+  });
+  it("never gates non-state-changing methods, even with a cookie + bad origin", async () => {
+    const base = await start();
+    const get = await fetch(`${base}/x`, { headers: { Cookie: "br_refresh=t", Origin: "https://evil.test" } });
+    expect(get.status).toBe(200);
   });
 });

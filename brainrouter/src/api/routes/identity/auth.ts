@@ -1,9 +1,10 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { memoryEngine } from "../../../memory/engine.js";
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from "../../auth/crypto.js";
 import { JWT_SECRET, requireJwt, type AuthedRequest } from "../../middleware/auth.js";
+import { readCookie } from "../../middleware/securityHeaders.js";
 import { sendError } from "../../../contracts/http.js";
 import { generateToken, hashToken, expiryFrom } from "../../../tenancy/tokens.js";
 import { sendVerificationEmail, sendPasswordResetEmail } from "../../../services/email/emailFlows.js";
@@ -40,6 +41,30 @@ function createRefreshToken(userId: string) {
 /** ADR-037 B1 — when a refresh session expires, mirroring the token's own TTL. */
 function refreshExpiresAt(): Date {
   return new Date(Date.now() + (Number.isFinite(refreshExpiry) ? refreshExpiry : 2592000) * 1000);
+}
+
+/** ADR-037 B3 — the double-submit CSRF token: a short signed value the page
+ *  reads from the login/refresh body and echoes in X-BrainRouter-Csrf. An
+ *  attacker who can only MAKE cross-site requests cannot read it. */
+function createCsrfToken(userId: string) {
+  return signJwt({ userId, type: "csrf" }, JWT_SECRET, Number.isFinite(jwtExpiry) ? jwtExpiry : 3600);
+}
+
+/** ADR-037 D1 — the refresh token as an httpOnly cookie the page cannot read.
+ *  Secure + SameSite=None (cross-origin), scoped to the auth endpoints. `secure`
+ *  is hard-coded true (D6): a flag that weakens the cookie in dev is a flag that
+ *  gets set in production; Secure cookies work on http://localhost already. */
+function setRefreshCookie(res: Response, raw: string): void {
+  res.cookie("br_refresh", raw, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    path: "/api/auth",
+    maxAge: (Number.isFinite(refreshExpiry) ? refreshExpiry : 2592000) * 1000,
+  });
+}
+function clearRefreshCookie(res: Response): void {
+  res.clearCookie("br_refresh", { httpOnly: true, secure: true, sameSite: "none", path: "/api/auth" });
 }
 
 async function userIdFromEmail(email: string): Promise<string> {
@@ -85,7 +110,8 @@ authRouter.post("/signin", async (req, res) => {
   const refreshToken = createRefreshToken(user.userId);
   // ADR-037 B1 — record the session so it is revocable and reuse-detectable.
   try { await issueRefreshSession({ store: memoryEngine.refreshSessions, userId: user.userId, rawToken: refreshToken, expiresAt: refreshExpiresAt() }); } catch { /* best-effort: never block signin on the session store */ }
-  res.json({ jwt, refreshToken, userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName, apiKey: user.apiKey });
+  setRefreshCookie(res, refreshToken);
+  res.json({ jwt, refreshToken, csrfToken: createCsrfToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName, apiKey: user.apiKey });
 });
 
 authRouter.post("/signup", async (req, res) => {
@@ -142,14 +168,18 @@ authRouter.post("/signup", async (req, res) => {
     const jwt = createJwt(user);
     const refreshToken = createRefreshToken(user.userId);
     try { await issueRefreshSession({ store: memoryEngine.refreshSessions, userId: user.userId, rawToken: refreshToken, expiresAt: refreshExpiresAt() }); } catch { /* best-effort */ }
-    res.status(201).json({ jwt, refreshToken, userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
+    setRefreshCookie(res, refreshToken);
+    res.status(201).json({ jwt, refreshToken, csrfToken: createCsrfToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
   } catch (error: any) {
     sendError(res, 400, error?.message ?? "Failed to create user");
   }
 });
 
 authRouter.post("/refresh", async (req, res) => {
-  const refreshToken = String(req.body?.refreshToken ?? "");
+  // ADR-037 B3 — prefer the httpOnly cookie; fall back to the body token (still
+  // accepted until B4). On the cookie path, require the double-submit CSRF token.
+  const cookieRefresh = readCookie(req, "br_refresh");
+  const refreshToken = String(cookieRefresh ?? req.body?.refreshToken ?? "");
   if (!refreshToken) {
     sendError(res, 400, "refreshToken is required");
     return;
@@ -158,6 +188,14 @@ authRouter.post("/refresh", async (req, res) => {
   if (!payload || payload.type !== "refresh" || typeof payload.userId !== "string") {
     sendError(res, 401, "Invalid or expired refresh token");
     return;
+  }
+  if (cookieRefresh) {
+    const csrf = String(req.headers["x-brainrouter-csrf"] ?? "");
+    const csrfPayload = verifyJwt(csrf, JWT_SECRET);
+    if (!csrfPayload || csrfPayload.type !== "csrf" || csrfPayload.userId !== payload.userId) {
+      sendError(res, 403, "Missing or invalid CSRF token.");
+      return;
+    }
   }
   const user = await memoryEngine.getUserById(payload.userId);
   if (!user || user.status === "disabled") {
@@ -192,7 +230,8 @@ authRouter.post("/refresh", async (req, res) => {
   // successor session under the id we rotated onto.
   const newRefresh = createRefreshToken(user.userId);
   try { await issueRefreshSession({ store: memoryEngine.refreshSessions, id: successorId, userId: user.userId, rawToken: newRefresh, expiresAt: refreshExpiresAt() }); } catch { /* best-effort */ }
-  res.json({ jwt: createJwt(user), refreshToken: newRefresh });
+  setRefreshCookie(res, newRefresh);
+  res.json({ jwt: createJwt(user), refreshToken: newRefresh, csrfToken: createCsrfToken(user.userId) });
 });
 
 authRouter.post("/signout", async (req, res) => {
@@ -206,6 +245,7 @@ authRouter.post("/signout", async (req, res) => {
       try { await revokeAllSessions(memoryEngine.refreshSessions, payload.userId, "user signed out"); } catch { /* best-effort */ }
     }
   }
+  clearRefreshCookie(res);
   res.json({ success: true });
 });
 
