@@ -5,6 +5,7 @@ import type { ValidatedUpstreamTarget } from '@kinqs/brainrouter-core/provider';
 import { directDialer } from '../upstreamPolicy.js';
 import type { EgressTunnelTransport, EgressDialTarget } from './tunnelTransport.js';
 import { createFallbackConnector, selectEdgeDialer, type EdgeDialerSelectionInput } from './edgeDialerSelection.js';
+import { createTunnelConnector } from './tunnelDialer.js';
 
 type Connector = buildConnector.connector;
 
@@ -86,13 +87,13 @@ describe('selectEdgeDialer — the honoured tunnel branch', () => {
 
 describe('createFallbackConnector — the D4 ladder', () => {
   const opts = {} as Parameters<Connector>[0];
-  const primarySocket = { id: 'primary' } as never;
+  const primarySocket = { id: 'primary', destroy: vi.fn() } as never;
   const fallbackSocket = { id: 'fallback' } as never;
 
   it('returns the primary socket and never touches the fallback on success', () => {
     const fallback = vi.fn<Parameters<Connector>, void>((_o, cb) => cb(null, fallbackSocket));
     const onFallback = vi.fn<[Error], void>();
-    const connector = createFallbackConnector((_o, cb) => cb(null, primarySocket), fallback, onFallback);
+    const connector = createFallbackConnector((_o, cb) => cb(null, primarySocket), fallback, { onFallback });
     const seen = vi.fn();
     connector(opts, (err, socket) => seen(err, socket));
     expect(seen).toHaveBeenCalledWith(null, primarySocket);
@@ -106,7 +107,7 @@ describe('createFallbackConnector — the D4 ladder', () => {
     const connector = createFallbackConnector(
       (_o, cb) => cb(boom, null),
       (_o, cb) => cb(null, fallbackSocket),
-      onFallback,
+      { onFallback },
     );
     const seen = vi.fn();
     connector(opts, (err, socket) => seen(err, socket));
@@ -117,14 +118,8 @@ describe('createFallbackConnector — the D4 ladder', () => {
 
   it('treats a primary that yields no socket as a failure and falls back', () => {
     const onFallback = vi.fn<[Error], void>();
-    // A connector that violates undici's union (null,null) — createFallbackConnector
-    // must still treat "no error, no socket" as a failure, so we force the shape.
     const noSocketPrimary: Connector = (_o, cb) => (cb as unknown as (e: null, s: null) => void)(null, null);
-    const connector = createFallbackConnector(
-      noSocketPrimary,
-      (_o, cb) => cb(null, fallbackSocket),
-      onFallback,
-    );
+    const connector = createFallbackConnector(noSocketPrimary, (_o, cb) => cb(null, fallbackSocket), { onFallback });
     const seen = vi.fn();
     connector(opts, (err, socket) => seen(err, socket));
     expect(seen).toHaveBeenCalledWith(null, fallbackSocket);
@@ -140,5 +135,89 @@ describe('createFallbackConnector — the D4 ladder', () => {
     const seen = vi.fn();
     connector(opts, (err, socket) => seen(err, socket));
     expect(seen).toHaveBeenCalledWith(fallbackErr, null);
+  });
+
+  // Finding 1 (medium): a HUNG tunnel — neither resolves nor rejects — must still
+  // fall back. The connector's own timeout is the only bound (undici does not apply
+  // connectTimeout to a function connector).
+  it('falls back and fires onTimeout when the primary never calls back (hung edge)', () => {
+    vi.useFakeTimers();
+    try {
+      const onTimeout = vi.fn();
+      const onFallback = vi.fn<[Error], void>();
+      const hungPrimary: Connector = () => {
+        /* accepts the connect but never calls back — a black-holing edge */
+      };
+      const connector = createFallbackConnector(hungPrimary, (_o, cb) => cb(null, fallbackSocket), {
+        onFallback,
+        onTimeout,
+        timeoutMs: 1_000,
+      });
+      const seen = vi.fn();
+      connector(opts, (err, socket) => seen(err, socket));
+      expect(seen).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1_000);
+      expect(onTimeout).toHaveBeenCalledOnce();
+      expect(onFallback).toHaveBeenCalledOnce();
+      expect(seen).toHaveBeenCalledWith(null, fallbackSocket);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Finding 2 (low): a throwing telemetry hook must NOT suppress the fallback.
+  it('still falls back when onFallback throws', () => {
+    const onFallback = vi.fn<[Error], void>(() => {
+      throw new Error('metrics label missing');
+    });
+    const connector = createFallbackConnector(
+      (_o, cb) => cb(new Error('tunnel down'), null),
+      (_o, cb) => cb(null, fallbackSocket),
+      { onFallback },
+    );
+    const seen = vi.fn();
+    expect(() => connector(opts, (err, socket) => seen(err, socket))).not.toThrow();
+    expect(seen).toHaveBeenCalledWith(null, fallbackSocket);
+  });
+
+  // A tunnel socket that arrives AFTER we timed out and fell back must be destroyed,
+  // and the caller's callback must not be invoked twice.
+  it('destroys a late tunnel socket that arrives after the fallback, without a double callback', () => {
+    vi.useFakeTimers();
+    try {
+      let latePrimaryCb: ((e: Error | null, s: unknown) => void) | undefined;
+      const latePrimary: Connector = (_o, cb) => {
+        latePrimaryCb = cb as never;
+      };
+      const connector = createFallbackConnector(latePrimary, (_o, cb) => cb(null, fallbackSocket), { timeoutMs: 500 });
+      const seen = vi.fn();
+      connector(opts, (err, socket) => seen(err, socket));
+      vi.advanceTimersByTime(500); // timeout → fallback
+      expect(seen).toHaveBeenCalledTimes(1);
+      expect(seen).toHaveBeenCalledWith(null, fallbackSocket);
+      // The tunnel finally connects, too late:
+      const orphan = { id: 'late', destroy: vi.fn() };
+      latePrimaryCb?.(null, orphan);
+      expect(orphan.destroy).toHaveBeenCalledOnce();
+      expect(seen).toHaveBeenCalledTimes(1); // no second delivery
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('createTunnelConnector — signal support (S4a fix)', () => {
+  it('refuses immediately and never opens the transport when the signal is already aborted', () => {
+    const controller = new AbortController();
+    controller.abort();
+    const transport = { open: vi.fn() };
+    const target = { url: new URL('https://api.example.com'), hostname: 'api.example.com' } as never;
+    const connector = createTunnelConnector(transport as never, target, { signal: controller.signal });
+    const seen = vi.fn();
+    connector({} as Parameters<Connector>[0], (err, socket) => seen(err, socket));
+    expect(transport.open).not.toHaveBeenCalled();
+    expect(seen).toHaveBeenCalledOnce();
+    expect(seen.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(seen.mock.calls[0][1]).toBeNull();
   });
 });
