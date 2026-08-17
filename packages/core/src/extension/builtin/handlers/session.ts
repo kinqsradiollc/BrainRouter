@@ -7,6 +7,8 @@ import { reconcileSteeringReceipt, type SteeringClassification } from '../../../
 import { getCurrentWorkflow } from '../../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../../workflow/run/workflowRun.js';
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../../session/transcript/chapterMarks.js';
+import { blockGoal, completeGoal } from '../../../goal/store/goalStore.js';
+import { readPlan } from '../../../task/taskStore.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const sessionHandlers: Record<string, BuiltinToolHandler> = {
@@ -57,5 +59,43 @@ export const sessionHandlers: Record<string, BuiltinToolHandler> = {
     });
     const { done, total } = summarizeRun(run);
     return `Workflow "${slug}": step "${step}" → ${status} (${done}/${total} done, run ${run.status}).`;
+  },
+
+  goal_complete: async ({ args, host }) => {
+    const proof = String(args.proof ?? '').trim();
+    if (!proof) throw new Error('goal_complete requires a non-empty proof.');
+    // Plan-honesty guard: refuse to mark the goal complete while the active plan
+    // still has pending / in_progress items. The model built that plan as its own
+    // contract — declaring done while items remain open is misleading.
+    const plan = readPlan(host.workspaceRoot, host.sessionKey);
+    const open = plan.items.filter((i) => i.status !== 'completed');
+    if (open.length > 0) {
+      const open_summary = open
+        .map((i) => `  - [${i.status === 'in_progress' ? '⏳' : '☐'}] ${i.step}`)
+        .join('\n');
+      throw new Error(
+        `goal_complete refused: the active plan still has ${open.length} incomplete item(s):\n${open_summary}\n\n` +
+        `Do ONE of:\n` +
+        `  1. Finish the remaining work, then call update_plan to mark those items completed.\n` +
+        `  2. If you decided to drop them, call update_plan FIRST and mark them completed with a brief explanation (the plan is your honest record — leaving items pending while declaring done is misleading).\n` +
+        `  3. Call goal_blocked instead if no defensible path remains.\n\n` +
+        `Then retry goal_complete in the same response as the user-visible prose summary.`
+      );
+    }
+    const goal = completeGoal(host.workspaceRoot, host.sessionKey, proof);
+    if (!goal) return 'No active goal to complete.';
+    host.lastGoalTransition = 'complete';
+    return `Goal marked complete. Proof: ${proof}`;
+  },
+
+  goal_blocked: async ({ args, host }) => {
+    const reason = String(args.reason ?? '').trim();
+    if (!reason) throw new Error('goal_blocked requires a non-empty reason.');
+    const needed = String(args.needed ?? '').trim();
+    const note = needed ? `${reason} (needed: ${needed})` : reason;
+    const goal = blockGoal(host.workspaceRoot, host.sessionKey, note);
+    if (!goal) return 'No active goal to block.';
+    host.lastGoalTransition = 'blocked';
+    return `Goal marked blocked. Reason: ${note}`;
   },
 };

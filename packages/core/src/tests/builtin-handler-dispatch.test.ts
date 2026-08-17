@@ -210,3 +210,26 @@ test('D8 Phase 10 — mark_chapter dispatches through the registry', async () =>
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mark_chapter', {}), /requires a non-empty title/);
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mark_chapter', { title: 'x'.repeat(61) }), /under 60 chars/);
 });
+
+// ADR-041 D8 Phase 11 — goal_complete + goal_blocked (session-state writers;
+// grow host by the mutable lastGoalTransition field).
+test('D8 Phase 11 — goal_complete + goal_blocked dispatch through the registry', async () => {
+  assert.ok(builtinToolHandler('goal_complete'), 'goal_complete has a registered handler');
+  assert.ok(builtinToolHandler('goal_blocked'), 'goal_blocked has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-goal-'));
+  try {
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'g11', lastGoalTransition: undefined };
+    // No active goal (fresh workspace, empty plan) → the deterministic no-goal messages.
+    const gc = await invokeBuiltinToolRuntime.call(host, 'goal_complete', { proof: 'all done' });
+    assert.match(gc, /No active goal to complete/);
+    const gb = await invokeBuiltinToolRuntime.call(host, 'goal_blocked', { reason: 'stuck' });
+    assert.match(gb, /No active goal to block/);
+    // No goal to transition → the mutable field stays undefined.
+    assert.equal(host.lastGoalTransition, undefined);
+    // Validation.
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'goal_complete', {}), /requires a non-empty proof/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'goal_blocked', {}), /requires a non-empty reason/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
