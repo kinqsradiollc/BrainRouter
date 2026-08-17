@@ -41,6 +41,8 @@ export interface BuiltinToolHost {
   readonly mcpClient: McpClientWrapper;
   /** The current turn's abort controller (null between turns) — agent.ts:1156. (D8 Phase 12) */
   readonly turnAbort: AbortController | null;
+  /** The local pentest proxy admin endpoint/token — agent.ts:1216. (D8 Phase 13: pentest reads) */
+  pentestProxyControl(): { apiUrl: string; token?: string } | undefined;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

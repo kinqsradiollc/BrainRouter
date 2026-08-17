@@ -253,3 +253,18 @@ test('D8 Phase 12 — MCP resource reads dispatch through the registry', async (
   const bare: any = { silent: false, agentDepth: 0, tier: 'chat', mcpClient: {}, turnAbort: null };
   await assert.rejects(() => invokeBuiltinToolRuntime.call(bare, 'list_mcp_resources', {}), /not supported/);
 });
+
+// ADR-041 D8 Phase 13 — pentest/proxy reads (grow host by pentestProxyControl()).
+test('D8 Phase 13 — pentest reads dispatch through the registry', async () => {
+  for (const n of ['list_requests', 'view_request', 'repeat_request', 'list_sitemap', 'scope_rules']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', pentestProxyControl: () => undefined };
+  // Deterministic validation / scope-guard paths — these reject BEFORE touching the proxy.
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'view_request', {}), /requires an id/);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'repeat_request', {}), /requires an id/);
+  await assert.rejects(
+    () => invokeBuiltinToolRuntime.call(host, 'repeat_request', { id: 'r1', mutation: { host: 'evil.example' } }),
+    /must not change the target host/,
+  );
+});
