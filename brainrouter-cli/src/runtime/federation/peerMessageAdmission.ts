@@ -4,7 +4,7 @@
  * hold/decline state, and dismissal stays non-terminal for later recovery.
  */
 
-import type { Agent, SessionMessageRecipientAuthority } from '@kinqs/brainrouter-core/agent';
+import type { IAgent, SessionMessageRecipientAuthority } from '@kinqs/brainrouter-core/agent';
 import {
   admitSessionMessage,
   approveHeldSessionMessage,
@@ -20,11 +20,11 @@ import {
 } from '@kinqs/brainrouter-core/session';
 import type { InboundPeerMessageState } from './federationRegistration.js';
 
-const queuedDeliveryIds = new WeakMap<Agent, Set<string>>();
-const approvalPrompts = new WeakMap<Agent, Map<string, Promise<InboundPeerMessageState>>>();
+const queuedDeliveryIds = new WeakMap<IAgent, Set<string>>();
+const approvalPrompts = new WeakMap<IAgent, Map<string, Promise<InboundPeerMessageState>>>();
 
 export async function admitPeerMessageForAgent(
-  agent: Agent,
+  agent: IAgent,
   message: LocalSessionMessage,
   senderDetails: PeerSessionSenderDetails,
 ): Promise<InboundPeerMessageState> {
@@ -82,7 +82,7 @@ function isSessionInputQueueFull(error: unknown): boolean {
  * record remains held until a later explicit approval or decline.
  */
 export function requestHeldPeerMessageApproval(
-  agent: Agent,
+  agent: IAgent,
   participantSessionKey: string,
   messageId: string,
 ): Promise<InboundPeerMessageState> {
@@ -100,7 +100,7 @@ export function requestHeldPeerMessageApproval(
 }
 
 async function requestHeldPeerMessageApprovalOnce(
-  agent: Agent,
+  agent: IAgent,
   participantSessionKey: string,
   messageId: string,
 ): Promise<InboundPeerMessageState> {
@@ -160,7 +160,7 @@ async function requestHeldPeerMessageApprovalOnce(
 
 /** Apply an already-explicit CLI approval without presenting a second prompt. */
 export function approveHeldPeerMessageForAgent(
-  agent: Agent,
+  agent: IAgent,
   participantSessionKey: string,
   messageId: string,
 ): InboundPeerMessageState {
@@ -192,7 +192,7 @@ export interface DeferredPeerSteeringResult {
  * cleared so they cannot leak into unrelated history.
  */
 export function deferPendingSteeringForSessionSwitch(
-  agent: Agent,
+  agent: IAgent,
   participantSessionKey: string,
 ): DeferredPeerSteeringResult {
   const pending = agent.consumePendingSteering();
@@ -240,7 +240,7 @@ export function deferPendingSteeringForSessionSwitch(
 
 /** Retry durable approvals only when their exact logical participant resumes. */
 export function recoverApprovedPeerMessagesForAgent(
-  agent: Agent,
+  agent: IAgent,
   participantSessionKey: string,
 ): number {
   let recovered = 0;
@@ -266,7 +266,7 @@ export function recoverApprovedPeerMessagesForAgent(
   return recovered;
 }
 
-function queuePeerInputOnce(agent: Agent, input: PeerSessionSteeringInput): void {
+function queuePeerInputOnce(agent: IAgent, input: PeerSessionSteeringInput): void {
   let queued = queuedDeliveryIds.get(agent);
   if (!queued) {
     queued = new Set();
@@ -285,7 +285,7 @@ function queuePeerInputOnce(agent: Agent, input: PeerSessionSteeringInput): void
 
 /** Mark only a previously approved held row after Agent confirms safe-boundary application. */
 export function markApprovedPeerMessageApplied(
-  agent: Agent,
+  agent: IAgent,
   participantSessionKey: string,
   messageId: string,
 ): void {
@@ -299,11 +299,11 @@ export function markApprovedPeerMessageApplied(
 
 /** Release the process-local delivery guard after Core expires at the actual
  * safe boundary. The durable row is already terminal and must not requeue. */
-export function forgetExpiredPeerMessageForAgent(agent: Agent, messageId: string): void {
+export function forgetExpiredPeerMessageForAgent(agent: IAgent, messageId: string): void {
   queuedDeliveryIds.get(agent)?.delete(messageId);
 }
 
-export function authorityForAgent(agent: Agent): SessionMessageRecipientAuthority {
+export function authorityForAgent(agent: IAgent): SessionMessageRecipientAuthority {
   if (agent.getAccessMode() !== 'read') return {};
   return {
     workspaceFiles: 'denied',
