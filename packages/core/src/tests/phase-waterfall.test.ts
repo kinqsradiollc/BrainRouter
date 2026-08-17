@@ -139,3 +139,27 @@ test('a throwing hot-path handler propagates (provider-call is not advisory)', a
   ];
   await assert.rejects(() => runPhaseWaterfall(handlers, ctx, async () => 'x'), /hook boom/);
 });
+
+test('a handler that delegates then swallows the operation error leaves ran=false, not a false success', async () => {
+  // A contract violation (the module documents that a throw must propagate), but
+  // the dispatcher must degrade to a refusal, not report {ran:true, result:undefined}.
+  let opRan = false;
+  const handlers = [
+    contrib('ext-swallow', {
+      before: async (_c, next) => {
+        try {
+          await next();
+        } catch {
+          /* swallow — the operation's failure must not read as success */
+        }
+      },
+    }),
+  ];
+  const out = await runPhaseWaterfall(handlers, ctx, async () => {
+    opRan = true;
+    throw new Error('operation failed');
+  });
+  assert.equal(opRan, true, 'the operation ran');
+  assert.equal(out.ran, false, 'a swallowed failure is not a successful run');
+  assert.equal(out.result, undefined);
+});
