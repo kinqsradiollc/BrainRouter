@@ -55,9 +55,13 @@ export async function runPhaseWaterfall<R>(
   let refusedBy: string | undefined;
 
   // Innermost link: the operation itself. Reached only when every handler delegates.
+  // `ran` flips only AFTER the operation resolves: if it throws — or a
+  // contract-violating handler calls next() and then swallows that throw — `ran`
+  // stays false, so the caller sees a refusal (a clear error) rather than a false
+  // success with an undefined result.
   let chain: () => Promise<void> = async () => {
-    ran = true;
     result = await operation();
+    ran = true;
   };
 
   for (let i = handlers.length - 1; i >= 0; i -= 1) {

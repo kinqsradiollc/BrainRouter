@@ -31,6 +31,8 @@ import {
 } from '../transport/llmTransport.js';
 import { recoverAgentProviderRoute } from './providerRecovery.js';
 import { ReviewProviderRequestBudgetExceededError } from './modelRequestBudget.js';
+import { runPhaseWaterfall } from './phaseWaterfall.js';
+import { phaseHookContributions } from '../../extension/registry.js';
 
 export interface ModelPhaseResponse {
   content: string;
@@ -39,9 +41,23 @@ export interface ModelPhaseResponse {
   finishReason?: string;
 }
 
+/**
+ * ADR-041 D4b.2 — thrown when a `provider-call` phase hook refuses (returns
+ * without calling next()). NOT a server/connectivity error, so
+ * `invokeLlmResilient` rethrows it without retrying; `invokeModelPhase` converts
+ * it to a `provider-refused` terminal that closes a durable zero-step turn.
+ */
+export class ProviderCallRefusedError extends Error {
+  constructor(readonly refusedBy: string) {
+    super(`Provider call refused by extension "${refusedBy}" (provider-call phase).`);
+    this.name = 'ProviderCallRefusedError';
+  }
+}
+
 export type ModelInvocationResult =
   | { kind: 'response'; response: ModelPhaseResponse }
-  | { kind: 'interrupted'; note: string };
+  | { kind: 'interrupted'; note: string }
+  | { kind: 'provider-refused'; refusedBy: string };
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -97,51 +113,82 @@ export async function invokeModelPhase(
     const requestBudget = agent.reviewSourceSafety
       ? { beforeProviderRequest: () => agent.reserveModelProviderRequest() }
       : {};
-    if (streamRequested) {
-      let started = false;
-      try {
-        const final = await callOpenAIStream(
-          agent.llmConfig,
-          requestMessages,
-          allTools,
-          { effort, signal: agent.turnAbort?.signal, ...requestBudget },
-          {
-            onTextDelta: (text) => {
-              if (!started) {
-                started = true;
-                callbacks.onAssistantTurnStart?.();
-              }
-              callbacks.onAssistantDelta?.(text);
+    const dispatch = async (): Promise<ModelPhaseResponse> => {
+      if (streamRequested) {
+        let started = false;
+        try {
+          const final = await callOpenAIStream(
+            agent.llmConfig,
+            requestMessages,
+            allTools,
+            { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+            {
+              onTextDelta: (text) => {
+                if (!started) {
+                  started = true;
+                  callbacks.onAssistantTurnStart?.();
+                }
+                callbacks.onAssistantDelta?.(text);
+              },
+              onReasoningDelta: (text) => callbacks.onReasoningDelta?.(text),
             },
-            onReasoningDelta: (text) => callbacks.onReasoningDelta?.(text),
-          },
-        );
-        if (started) callbacks.onAssistantTurnEnd?.(final.content);
-        return {
-          content: final.content,
-          toolCalls: final.toolCalls,
-          usage: final.usage,
-          finishReason: final.finishReason,
-        };
-      } catch (streamError: any) {
-        if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
-        if (streamError instanceof ReviewProviderRequestBudgetExceededError) throw streamError;
-        if (started) {
-          streamError.brainrouterStreamStarted = true;
-          callbacks.onAssistantTurnEnd?.('');
-          throw streamError;
+          );
+          if (started) callbacks.onAssistantTurnEnd?.(final.content);
+          return {
+            content: final.content,
+            toolCalls: final.toolCalls,
+            usage: final.usage,
+            finishReason: final.finishReason,
+          };
+        } catch (streamError: any) {
+          if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
+          if (streamError instanceof ReviewProviderRequestBudgetExceededError) throw streamError;
+          if (started) {
+            streamError.brainrouterStreamStarted = true;
+            callbacks.onAssistantTurnEnd?.('');
+            throw streamError;
+          }
+          callbacks.onStatusUpdate(
+            `Streaming failed (${String(streamError?.message ?? streamError).slice(0, 120)}) — falling back to non-streaming.`,
+          );
         }
-        callbacks.onStatusUpdate(
-          `Streaming failed (${String(streamError?.message ?? streamError).slice(0, 120)}) — falling back to non-streaming.`,
-        );
       }
-    }
-    return callOpenAI(
-      agent.llmConfig,
-      requestMessages,
-      allTools,
-      { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+      return callOpenAI(
+        agent.llmConfig,
+        requestMessages,
+        allTools,
+        { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+      );
+    };
+    // ADR-041 D4b.2 — the provider-call waterfall. Gated on hookEnforceActive so
+    // safeMode / reviewSourceSafety isolate a bad hook. No hooks ⇒ dispatch runs
+    // directly (byte-identical). Registered hooks wrap the model dispatch: each
+    // may pass through, or refuse to call next() and reject the call outright.
+    const providerHooks = agent.hookEnforceActive()
+      ? phaseHookContributions('provider-call')
+      : [];
+    if (providerHooks.length === 0) return dispatch();
+    const requestSnapshot = JSON.stringify(requestMessages);
+    const outcome = await runPhaseWaterfall(
+      providerHooks,
+      { phase: 'provider-call', workspaceRoot: agent.workspaceRoot, sessionKey: agent.sessionKey },
+      async () => {
+        // ADR-041 D4 logged invariant: after the hooks' pre-code and before the
+        // model request is sent, the in-flight request array must be untouched —
+        // a hook injects model-visible context via the transcript/history, never
+        // by mutating `requestMessages` in place, or fork/resume/replay would lie.
+        if (JSON.stringify(requestMessages) !== requestSnapshot) {
+          throw new Error(
+            'ADR-041 D4 logged-invariant violation (provider-call): a phase hook '
+            + 'mutated the in-flight request message array. Inject context via '
+            + 'history/transcript, not by mutating messages in place.',
+          );
+        }
+        return dispatch();
+      },
     );
+    if (!outcome.ran) throw new ProviderCallRefusedError(outcome.refusedBy ?? 'a phase hook');
+    return outcome.result!;
   };
 
   const maxReconnects = Math.max(
@@ -206,6 +253,13 @@ export async function invokeModelPhase(
       agent.recordTranscript(interruptMessage);
       callbacks.onStatusUpdate('Interrupted');
       return { kind: 'interrupted', note: '⏹ Turn interrupted by user.' };
+    }
+
+    // ADR-041 D4b.2 — a provider-call hook refused; it is non-retryable, so it
+    // propagated here. Close the turn as a zero-step attempt (the terminal in
+    // runTurn records it to the transcript), never a retryable provider failure.
+    if (error instanceof ProviderCallRefusedError) {
+      return { kind: 'provider-refused', refusedBy: error.refusedBy };
     }
 
     const message = String(error?.message ?? error);
