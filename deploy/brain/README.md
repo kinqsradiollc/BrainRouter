@@ -60,6 +60,7 @@ derived from the embedder automatically. `.env` holds only infra + secrets:
 | `BRAINROUTER_ADMIN_PASSWORD` / `_EMAIL` | seed the first admin on first boot (its API key prints once) |
 | `BRAINROUTER_METRICS=on` | expose Prometheus `/metrics` |
 | `BRAINROUTER_CORS_ORIGIN` | comma-separated browser origins allowed to call the API |
+| `BRAINROUTER_UPSTREAM_ALLOWLIST` | comma-separated **exact origins** for LOCAL provider backends (e.g. `http://127.0.0.1:11434,http://127.0.0.1:1234`). ADR-039: the server refuses provider endpoints that resolve to loopback / RFC1918 / cloud-metadata by default (an SSRF guard on the model probe **and** the memory-pipeline embeddings / rerank / cognition calls). A self-hosted deployment running a local embedder / reranker / LLM must name it here, or those calls fail with `UpstreamPolicyError`. Cloud provider endpoints (HTTPS, public) need nothing. |
 | `BRAINROUTER_PGVECTOR_INDEX` / `_LISTS` / `_HNSW_*` | optional ANN index tuning |
 
 ## Notes

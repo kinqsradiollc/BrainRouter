@@ -130,10 +130,13 @@ export async function retryExternalCall<T>(
 export async function fetchWithExternalRetry(
   input: string | URL | Request,
   init: RequestInit,
-  options: ExternalApiRetryOptions
+  options: ExternalApiRetryOptions,
+  // ADR-039 — callers dialing an org-configured endpoint inject an SSRF-checked
+  // transport; defaults to global fetch so trusted-URL callers are unchanged.
+  fetchImpl: (input: string | URL | Request, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<Response> {
   return retryExternalCall(async () => {
-    const response = await fetch(input, init);
+    const response = await fetchImpl(input, init);
     if (response.ok) {
       return response;
     }
