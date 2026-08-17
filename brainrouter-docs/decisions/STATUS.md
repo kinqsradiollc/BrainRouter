@@ -30,7 +30,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 036 | The finding carries its code | ✅ Implemented | 0.4.20 |
 | **037** | **Credentials the page cannot read** | **✅ Implemented (live-QA the §5 test)** | **0.4.21** |
 | 038 | A planner worth opening | ✅ Implemented | main |
-| 039 | The half of security a model cannot see (taint) | 🟡 Accepted (this-repo-only); phased build | — |
+| 039 | The half of security a model cannot see (taint) | 🟡 Cited vulns fixed (ReDoS + probe SSRF, 0.4.21); engine = own track | 0.4.21 |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
 | 041 | Plug-and-play runtime | 🟡 A41-6 shipped (composite store type); rest = concurrent session's epic | 0.4.21 |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
@@ -42,6 +42,6 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 - **Partial → finish:** ADR-032 and ADR-033 shipped partial to 0.4.20 and have room to complete.
 - **ADR-041 (plug-and-play runtime):** its lowest-risk standalone seam **A41-6** shipped to `release/0.4.21` — `IMemoryStoreComposite` typed the memory-engine `store` field and removed 15 `as unknown as *Store` casts (pure type-level). The remaining 16 slices (IAgent / ProviderRegistry / execution-worlds / services-as-profiles) are a multi-release epic being drafted by a concurrent session — left to that owner to avoid a design collision.
 - **ADR-043 (edge egress):** **S1 + S1b** shipped to `release/0.4.21` — the gateway rate-shaper now does both reactive Retry-After parking *and* proactive per-key concurrency/rpm reservation (release-in-`finally`), with injectable budgets. **S2–S5 genuinely depend on ADR-041's `ProviderDialer`/`ProviderDefinition` seams** and are deferred until those land.
-- **ADR-039 (taint analysis):** scope resolved to this-repo-only. Implementation is explicitly "its own track, not a single slice" — a flow/taint engine (exact-SHA checkout + DB-build stage + owned source/sink/barrier pack + review-pipeline port), multi-week. No clean sub-slice; awaiting a dedicated track.
+- **ADR-039 (taint analysis):** scope resolved to this-repo-only. The general flow/taint **engine** is explicitly "its own track, not a single slice" (exact-SHA checkout + DB-build stage + owned source/sink/barrier pack + review-pipeline port), multi-week — awaiting a dedicated track. As a down payment, the **concrete vulnerabilities the ADR cites as evidence** were found + verified (a 9-agent hunt, node-tested exploits) and fixed: the "quadratic regex ~23s per PR comment" ReDoS (#1413) and the "guard on three paths of four" LM Studio probe SSRF (#1414). Three additional runtime provider SSRFs (embed/rerank/memory-chat) are real but their fail-closed fix would break self-hosted local backends without an allowlist — flagged for an owner ops-policy call, not shipped blind.
 
 Legend: ✅ Implemented · 🟡 Partial / in progress · 📝 Proposed
