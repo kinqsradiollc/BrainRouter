@@ -11,7 +11,6 @@ import chalk from 'chalk';
 import { NoTTYError } from '../../agent/support/prompter.js';
 import { runHooks } from '../../hooks/hooksStore.js';
 import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
-import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 import { formatWorkspaceRef, parseWorkspaceRef } from '../../workspace/references/index.js';
 import {
   buildLocalWorkspaceRegistry, fenceWorkspaceResolutions, linkWorkspaceRef, localWorkspaceViewer,
@@ -103,7 +102,7 @@ const nodeShellPort: ShellPort = { runShell, startBackgroundShell };
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
 import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
-import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
+import { isWorkItemType, isWorkItemPriority } from '@kinqs/brainrouter-types';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
  *  WebContentsView). Typed loosely so the runtime pulls in no desktop imports. */
@@ -1561,41 +1560,6 @@ export async function invokeBuiltinToolRuntime(
         const summary = `${executiveSummary}\n\n## Methodology\n${methodology}\n\n## Technical analysis\n${technicalAnalysis}\n\n## Recommendations\n${recommendations}\n\n## Limitations\n${limitations}`;
         saveReview(this.workspaceRoot, { ...run, status: 'completed', updatedAt: new Date().toISOString(), summary });
         return JSON.stringify({ completed: true, findings: run.findings.length, sarif: '.brainrouter/findings.sarif' });
-      }
-      case 'artifact_write': {
-        // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING
-        // artifact (a new version, editedBy 'agent') — this is how a later turn
-        // or a sub-agent targets the same artifact across sessions. Without `id`
-        // it creates one. Content edits are versioned by the store (§AV-1).
-        const content = typeof args.content === 'string' ? args.content : '';
-        if (!content.trim() && !args.id) {
-          throw new Error('artifact_write: `content` is required when creating a new artifact.');
-        }
-        const format: ArtifactFormat = isArtifactFormat(args.format) ? args.format : 'markdown';
-        const id = typeof args.id === 'string' && args.id.trim() ? args.id.trim() : '';
-        if (id) {
-          if (!getArtifact(this.workspaceRoot, id)) throw new Error(`artifact_write: no artifact "${id}" to update.`);
-          const patch: Record<string, unknown> = { content, format };
-          if (typeof args.title === 'string' && args.title.trim()) patch.title = args.title.trim();
-          if (typeof args.summary === 'string') patch.summary = args.summary;
-          if (typeof args.language === 'string' && args.language.trim()) patch.language = args.language.trim();
-          const updated = updateArtifact(this.workspaceRoot, id, patch, { editedBy: 'agent', note: typeof args.note === 'string' ? args.note : undefined });
-          if (!updated) throw new Error(`artifact_write: failed to update "${id}".`);
-          await this.captureArtifactToMemory(updated);
-          return `Updated artifact ${updated.id} → v${updated.currentVersion} (${updated.kind}, ${updated.format}): ${updated.title}`;
-        }
-        const title = typeof args.title === 'string' ? args.title.trim() : '';
-        if (!title) throw new Error('artifact_write: `title` is required when creating a new artifact.');
-        const kind: ArtifactKind = isArtifactKind(args.kind) ? args.kind : 'markdown-report';
-        const created = createArtifact(this.workspaceRoot, {
-          kind, title, format, content,
-          language: typeof args.language === 'string' ? args.language : undefined,
-          summary: typeof args.summary === 'string' ? args.summary : undefined,
-          sessionKey: this.sessionKey,
-          editedBy: 'agent',
-        });
-        await this.captureArtifactToMemory(created);
-        return `Created artifact ${created.id} (v1, ${created.kind}, ${created.format}): ${created.title}. Update it later with artifact_write({ id: "${created.id}", content }).`;
       }
       case 'ask_user_choice': {
         // PARITY — accept either the single-question fields or a batched

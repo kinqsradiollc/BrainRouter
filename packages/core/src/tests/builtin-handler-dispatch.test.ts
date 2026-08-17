@@ -297,3 +297,22 @@ test('D8 Phase 15 — worktree_list dispatches through the registry', async () =
   assert.equal(parsed.primaryRoot, process.cwd());
   assert.ok(Array.isArray(parsed.worktrees), 'returns a structured worktree listing');
 });
+
+// ADR-041 D8 Phase 16 — artifact_write (session-scoped write; grows host by captureArtifactToMemory).
+test('D8 Phase 16 — artifact_write dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('artifact_write'), 'artifact_write has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-artifact-'));
+  try {
+    let captured = 0;
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'a16', captureArtifactToMemory: async () => { captured += 1; } };
+    const out = await invokeBuiltinToolRuntime.call(host, 'artifact_write', { title: 'My Report', content: '# Hello' });
+    assert.match(out, /Created artifact/);
+    assert.equal(captured, 1, 'the created artifact was captured into memory');
+    // content present but no title on create → the title-required guard.
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'artifact_write', { content: 'x' }), /is required when creating a new artifact/);
+    // updating an unknown id → the not-found guard.
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'artifact_write', { id: 'nope', content: 'x' }), /no artifact "nope"/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
