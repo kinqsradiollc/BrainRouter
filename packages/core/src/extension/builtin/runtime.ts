@@ -104,6 +104,7 @@ import { truncateFullRead } from '../../agent/fs/readTruncation.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
+import { nodeFilesystemPort, type FilesystemPort } from '../../agent/fs/filesystemPort.js';
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
 import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
@@ -648,11 +649,14 @@ export async function invokeBuiltinToolRuntime(
         // wrote — keep the read ledger accurate so a follow-up edit is allowed.
         this.filesReadThisSession.add(resolved);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
+        // ADR-041 D3 — filesystem side effects go through the injected capability
+        // port (default `nodeFilesystemPort` = the previous inline `node:fs`).
+        const fsPort: FilesystemPort = this.filesystemPort ?? nodeFilesystemPort;
         const dir = path.dirname(resolved);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
+        if (!(await fsPort.exists(dir))) {
+          await fsPort.mkdirp(dir);
         }
-        fs.writeFileSync(resolved, args.content, 'utf8');
+        await fsPort.writeFile(resolved, args.content);
         const writeNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
         const reindexNotice = await this.maybeReindexSource(resolved, args.content);
         return `Successfully wrote file: ${args.path}` + writeNotice + reindexNotice;

@@ -33,6 +33,7 @@ import type {
   ExecutionIntentSource,
 } from '@kinqs/brainrouter-types/agent';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
+import type { FilesystemPort } from './fs/filesystemPort.js';
 import {
   appendTranscriptEntry,
   isInternalSessionKey,
@@ -683,6 +684,12 @@ export interface AgentOptions {
   interactionPort?: InteractionPort;
   /** Desktop-only native computer control capability. Omitted in CLI/headless runtimes. */
   computerUsePort?: ComputerUsePort;
+  /**
+   * ADR-041 D3 — filesystem capability for the builtin tool runtime. Omitted ⇒
+   * the local `nodeFilesystemPort` (byte-identical to the previous inline
+   * `node:fs` calls). An execution world (D10) injects a container/remote port.
+   */
+  filesystemPort?: FilesystemPort;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
   browserControlPort?: BrowserControlPort;
   /** Desktop-only access to native terminals already opened by the user. */
@@ -1254,6 +1261,7 @@ export class Agent {
   public confirmToolApproval?: AgentOptions['confirmToolApproval'];
   public interactionPort?: AgentOptions['interactionPort'];
   public computerUsePort?: ComputerUsePort;
+  public filesystemPort?: FilesystemPort;
   public browserControlPort?: BrowserControlPort;
   public terminalUsePort?: AgentOptions['terminalUsePort'];
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
@@ -1323,6 +1331,7 @@ export class Agent {
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
+    this.filesystemPort = options.filesystemPort;
     this.browserControlPort = options.browserControlPort;
     this.terminalUsePort = options.terminalUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
