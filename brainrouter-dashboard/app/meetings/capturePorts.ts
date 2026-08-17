@@ -28,7 +28,8 @@ import { meetingRecorderOptions, type MeetingCaptureEscrow } from "@kinqs/brainr
 
 import { authFetch } from "../../lib/adminApi";
 import { BASE_URL } from "../../lib/client";
-import { getApiKey, getJwt } from "../../lib/client-auth";
+import { getApiKey } from "../../lib/client-auth";
+import { getAccessToken } from "../../lib/client";
 import { browserCaptureLocks } from "../../lib/meetings/captureLock";
 import { createSttTranscriber, DEFAULT_CAPTURE_MIME_TYPE } from "../../lib/meetings/captureQueue";
 import { openCaptureStream } from "../../lib/meetings/captureStream";
@@ -117,12 +118,12 @@ export function browserCapturePorts(page: PageBridge): CaptureSurfacePorts {
     // credential this tab holds NOW, not the one it held at mount.
     describeEndpoint: () => describeMeetingTranscriptionEndpoint({
       baseUrl: BASE_URL,
-      token: getJwt() || getApiKey() || "",
+      token: getAccessToken() || getApiKey() || "",
       orgId: page.activeOrgId(),
     }),
     openStream: (request) => openCaptureStream({
       baseUrl: BASE_URL,
-      token: getJwt() || getApiKey() || "",
+      token: getAccessToken() || getApiKey() || "",
       // The recording's OWN workspace, frozen at Record. Not `page.activeOrgId()`
       // — the switcher can move mid-meeting, and this is a request made on a
       // tenant's behalf.
@@ -136,7 +137,7 @@ export function browserCapturePorts(page: PageBridge): CaptureSurfacePorts {
     }),
     createTranscriber: (language) => createSttTranscriber({
       baseUrl: BASE_URL,
-      token: getJwt() || getApiKey() || "",
+      token: getAccessToken() || getApiKey() || "",
       ...(language ? { language } : {}),
     }),
     // ADR-035 D11 — the escrow. Every call carries the workspace explicitly: a
@@ -178,7 +179,7 @@ export function browserCapturePorts(page: PageBridge): CaptureSurfacePorts {
     }),
     /** D8 — the import path, which really can be handed an hour of audio in one piece. */
     async transcribeFile(blob, language) {
-      const token = getJwt() || getApiKey() || "";
+      const token = getAccessToken() || getApiKey() || "";
       const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
         method: "POST",
         headers: { "Content-Type": blob.type || DEFAULT_CAPTURE_MIME_TYPE, ...(token ? { Authorization: `Bearer ${token}` } : {}) },

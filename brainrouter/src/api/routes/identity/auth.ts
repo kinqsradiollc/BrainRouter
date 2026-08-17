@@ -43,11 +43,23 @@ function refreshExpiresAt(): Date {
   return new Date(Date.now() + (Number.isFinite(refreshExpiry) ? refreshExpiry : 2592000) * 1000);
 }
 
-/** ADR-037 B3 — the double-submit CSRF token: a short signed value the page
- *  reads from the login/refresh body and echoes in X-BrainRouter-Csrf. An
- *  attacker who can only MAKE cross-site requests cannot read it. */
-function createCsrfToken(userId: string) {
-  return signJwt({ userId, type: "csrf" }, JWT_SECRET, Number.isFinite(jwtExpiry) ? jwtExpiry : 3600);
+/** ADR-037 B3/D-2 — the double-submit CSRF token. A random value set as a
+ *  READABLE br_csrf cookie AND returned in the body: the page echoes it in
+ *  X-BrainRouter-Csrf, and /refresh checks header === cookie. A cross-site
+ *  attacker's request carries the ambient cookie but cannot READ it to set the
+ *  matching header (same-origin policy). Using a readable cookie (not a value
+ *  held only in memory) is what lets the token survive a page reload — the
+ *  in-memory-only design could not bootstrap /refresh after a refresh. */
+function newCsrfToken(): string {
+  return randomBytes(24).toString("hex");
+}
+function setCsrfCookie(res: Response, token: string): void {
+  // Not httpOnly (the page must read it to echo it); Secure + SameSite=None so
+  // it rides cross-origin requests but is unreadable to any other origin.
+  res.cookie("br_csrf", token, { httpOnly: false, secure: true, sameSite: "none", path: "/" });
+}
+function clearCsrfCookie(res: Response): void {
+  res.clearCookie("br_csrf", { secure: true, sameSite: "none", path: "/" });
 }
 
 /** ADR-037 D1 — the refresh token as an httpOnly cookie the page cannot read.
@@ -111,7 +123,9 @@ authRouter.post("/signin", async (req, res) => {
   // ADR-037 B1 — record the session so it is revocable and reuse-detectable.
   try { await issueRefreshSession({ store: memoryEngine.refreshSessions, userId: user.userId, rawToken: refreshToken, expiresAt: refreshExpiresAt() }); } catch { /* best-effort: never block signin on the session store */ }
   setRefreshCookie(res, refreshToken);
-  res.json({ jwt, refreshToken, csrfToken: createCsrfToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName, apiKey: user.apiKey });
+  const signinCsrf = newCsrfToken();
+  setCsrfCookie(res, signinCsrf);
+  res.json({ jwt, refreshToken, csrfToken: signinCsrf, userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName, apiKey: user.apiKey });
 });
 
 authRouter.post("/signup", async (req, res) => {
@@ -169,7 +183,9 @@ authRouter.post("/signup", async (req, res) => {
     const refreshToken = createRefreshToken(user.userId);
     try { await issueRefreshSession({ store: memoryEngine.refreshSessions, userId: user.userId, rawToken: refreshToken, expiresAt: refreshExpiresAt() }); } catch { /* best-effort */ }
     setRefreshCookie(res, refreshToken);
-    res.status(201).json({ jwt, refreshToken, csrfToken: createCsrfToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
+    const signupCsrf = newCsrfToken();
+    setCsrfCookie(res, signupCsrf);
+    res.status(201).json({ jwt, refreshToken, csrfToken: signupCsrf, userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
   } catch (error: any) {
     sendError(res, 400, error?.message ?? "Failed to create user");
   }
@@ -190,10 +206,10 @@ authRouter.post("/refresh", async (req, res) => {
     return;
   }
   if (cookieRefresh) {
-    const csrf = String(req.headers["x-brainrouter-csrf"] ?? "");
-    const csrfPayload = verifyJwt(csrf, JWT_SECRET);
-    if (!csrfPayload || csrfPayload.type !== "csrf" || csrfPayload.userId !== payload.userId) {
-      sendError(res, 403, "Missing or invalid CSRF token.");
+    const headerCsrf = String(req.headers["x-brainrouter-csrf"] ?? "");
+    const cookieCsrf = readCookie(req, "br_csrf");
+    if (!cookieCsrf || headerCsrf !== cookieCsrf) {
+      sendError(res, 403, "Missing or mismatched CSRF token.");
       return;
     }
   }
@@ -231,7 +247,9 @@ authRouter.post("/refresh", async (req, res) => {
   const newRefresh = createRefreshToken(user.userId);
   try { await issueRefreshSession({ store: memoryEngine.refreshSessions, id: successorId, userId: user.userId, rawToken: newRefresh, expiresAt: refreshExpiresAt() }); } catch { /* best-effort */ }
   setRefreshCookie(res, newRefresh);
-  res.json({ jwt: createJwt(user), refreshToken: newRefresh, csrfToken: createCsrfToken(user.userId) });
+  const refreshCsrf = newCsrfToken();
+  setCsrfCookie(res, refreshCsrf);
+  res.json({ jwt: createJwt(user), refreshToken: newRefresh, csrfToken: refreshCsrf });
 });
 
 authRouter.post("/signout", async (req, res) => {
@@ -246,6 +264,7 @@ authRouter.post("/signout", async (req, res) => {
     }
   }
   clearRefreshCookie(res);
+  clearCsrfCookie(res);
   res.json({ success: true });
 });
 

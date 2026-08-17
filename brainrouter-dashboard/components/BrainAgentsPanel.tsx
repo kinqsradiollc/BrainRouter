@@ -12,7 +12,8 @@
 import { useEffect, useState } from "react";
 import type { BrainAgentStatus } from "@kinqs/brainrouter-types";
 import { BASE_URL } from "../lib/client";
-import { getApiKey, getJwt } from "../lib/client-auth";
+import { getApiKey } from "../lib/client-auth";
+import { getAccessToken } from "../lib/client";
 import { PremiumCard } from "./PremiumCard";
 import { useIsMobile } from "../lib/useIsMobile";
 
@@ -54,8 +55,9 @@ export function BrainAgentsPanel() {
     let alive = true;
     const load = async () => {
       try {
-        const token = getJwt() || getApiKey();
+        const token = getAccessToken() || getApiKey();
         const res = await fetch(`${BASE_URL}/api/brain/agents`, {
+          credentials: "include",
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
