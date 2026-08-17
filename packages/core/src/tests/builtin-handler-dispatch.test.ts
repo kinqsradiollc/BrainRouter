@@ -137,3 +137,17 @@ test('D8 Phase 5 — track_query dispatches through the registry', async () => {
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 6 — read_worker_summary (read-only, workspaceRoot only).
+test('D8 Phase 6 — read_worker_summary dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('read_worker_summary'), 'read_worker_summary has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-worker-'));
+  try {
+    const withWs = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 's' };
+    const out = await invokeBuiltinToolRuntime.call(withWs, 'read_worker_summary', { id: 'nope' });
+    assert.match(out, /No worker "nope"/, 'returns the exact former no-worker message');
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(withWs, 'read_worker_summary', {}), /requires an id/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
