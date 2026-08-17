@@ -268,3 +268,21 @@ test('D8 Phase 13 — pentest reads dispatch through the registry', async () => 
     /must not change the target host/,
   );
 });
+
+// ADR-041 D8 Phase 14 — update_plan (session-state write; grows host by maybeAutoApprovePlan).
+test('D8 Phase 14 — update_plan dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('update_plan'), 'update_plan has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-plan-'));
+  try {
+    let approved = 0;
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'p14', maybeAutoApprovePlan: () => { approved += 1; } };
+    const out = await invokeBuiltinToolRuntime.call(host, 'update_plan', {
+      plan: [{ step: 'do a thing', status: 'pending' }],
+      explanation: 'initial plan',
+    });
+    assert.ok(typeof out === 'string' && out.length > 0, 'returns a formatted plan');
+    assert.equal(approved, 1, 'auto-approval recorded via the host method');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

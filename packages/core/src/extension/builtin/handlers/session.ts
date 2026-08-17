@@ -8,7 +8,8 @@ import { getCurrentWorkflow } from '../../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../../workflow/run/workflowRun.js';
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../../session/transcript/chapterMarks.js';
 import { blockGoal, completeGoal } from '../../../goal/store/goalStore.js';
-import { readPlan } from '../../../task/taskStore.js';
+import { readPlan, updatePlan, formatPlan } from '../../../task/taskStore.js';
+import { applySteeringPlanRevision } from '../../../task/steeringReceiptStore.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const sessionHandlers: Record<string, BuiltinToolHandler> = {
@@ -97,5 +98,26 @@ export const sessionHandlers: Record<string, BuiltinToolHandler> = {
     if (!goal) return 'No active goal to block.';
     host.lastGoalTransition = 'blocked';
     return `Goal marked blocked. Reason: ${note}`;
+  },
+
+  update_plan: async ({ args, host }) => {
+    const state = updatePlan(host.workspaceRoot, {
+      explanation: args.explanation,
+      ...(Array.isArray(args.phases)
+        ? { phases: args.phases }
+        : { plan: args.plan }),
+    }, host.sessionKey);
+    if (typeof args.steeringReceiptId === 'string' && args.steeringReceiptId.trim()) {
+      applySteeringPlanRevision(
+        host.workspaceRoot,
+        host.sessionKey,
+        args.steeringReceiptId.trim(),
+        state,
+      );
+    }
+    // Auto mode has no approval prompt — record an auto-approval into the
+    // plan history when this establishes a new plan version.
+    host.maybeAutoApprovePlan(state);
+    return formatPlan(state);
   },
 };

@@ -47,10 +47,6 @@ import { resolveActiveMode, setSessionMode } from '../../session/state/sessionMo
 import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
 import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
 import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.js';
-import { formatPlan, updatePlan } from '../../task/taskStore.js';
-import {
-  applySteeringPlanRevision,
-} from '../../task/steeringReceiptStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { parseTrackQuery } from '../../track/query/index.js';
@@ -1389,26 +1385,6 @@ export async function invokeBuiltinToolRuntime(
           }
           return result + patchNotice + patchReindex;
         }
-      }
-      case 'update_plan': {
-        const state = updatePlan(this.workspaceRoot, {
-          explanation: args.explanation,
-          ...(Array.isArray(args.phases)
-            ? { phases: args.phases }
-            : { plan: args.plan }),
-        }, this.sessionKey);
-        if (typeof args.steeringReceiptId === 'string' && args.steeringReceiptId.trim()) {
-          applySteeringPlanRevision(
-            this.workspaceRoot,
-            this.sessionKey,
-            args.steeringReceiptId.trim(),
-            state,
-          );
-        }
-        // Auto mode has no approval prompt — record an auto-approval into the
-        // plan history when this establishes a new plan version.
-        this.maybeAutoApprovePlan(state);
-        return formatPlan(state);
       }
       case 'track_update': {
         const action = String(args.action ?? '');
