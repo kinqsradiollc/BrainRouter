@@ -43,3 +43,26 @@ test('ADR-041 D1: replace swaps; dispose is idempotent; entries merge', () => {
   h.dispose(); h.dispose();
   assert.equal(r.has('b'), false);
 });
+
+test('ADR-041 D1: setExtensionProviders makes extension providers live to routing', () => {
+  const r = new ProviderRegistry([def('builtin-a', 'A')]);
+  assert.equal(r.get('ext-x'), undefined);
+  r.setExtensionProviders([def('ext-x', 'X'), def('ext-y', 'Y')]);
+  assert.equal(r.get('ext-x')?.label, 'X');
+  assert.equal(r.has('ext-y'), true);
+  assert.equal(r.hasBuiltin('ext-x'), false);         // an extension is not a builtin
+  // wholesale replace: dropping ext-y removes it
+  r.setExtensionProviders([def('ext-x', 'X')]);
+  assert.equal(r.has('ext-y'), false);
+  assert.equal(r.get('ext-x')?.label, 'X');
+});
+
+test('ADR-041 D1: a builtin id wins over an extension of the same id; explicit register wins over both', () => {
+  const r = new ProviderRegistry([def('shared', 'builtin')]);
+  r.setExtensionProviders([def('shared', 'extension')]);
+  assert.equal(r.get('shared')?.label, 'builtin');    // builtin authoritative over extension
+  const h = r.register(def('shared', 'runtime'));
+  assert.equal(r.get('shared')?.label, 'runtime');    // explicit runtime override wins
+  h.dispose();
+  assert.equal(r.get('shared')?.label, 'builtin');    // back to builtin, extension still shadowed
+});
