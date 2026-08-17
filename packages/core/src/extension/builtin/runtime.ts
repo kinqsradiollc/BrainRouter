@@ -82,7 +82,6 @@ import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
 import { applyNotebookEdit } from '../../agent/fs/notebookEdit.js';
 import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
-import { truncateFullRead } from '../../agent/fs/readTruncation.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope } from '../../agent/fs/workspaceFs.js';
@@ -481,46 +480,6 @@ export async function invokeBuiltinToolRuntime(
           to: formatWorkspaceRef(outcome.to),
           alreadyLinked: outcome.alreadyLinked,
         });
-      }
-      case 'read_file': {
-        const resolved = resolveHere(args.path);
-        if (!(await fsPort.exists(resolved))) {
-          throw new Error(`File not found: ${args.path}`);
-        }
-        if (this.reviewSourceSafety) {
-          assertSafeReviewerFilesystemPath(this.workspaceRoot, resolved, args.path);
-        }
-        // Bound the bytes pulled into memory. Previously this read the WHOLE file
-        // (truncation only trimmed the RETURNED string), so a multi-GB file would
-        // be fully buffered before any cap applied. Read at most READ_FILE_MAX_BYTES;
-        // the full-read path truncates the visible output further via truncateFullRead.
-        const READ_FILE_MAX_BYTES = 16 * 1024 * 1024;
-        const { content } = await fsPort.readFileBounded(resolved, READ_FILE_MAX_BYTES);
-        this.filesReadThisSession.add(resolved); // CC-P6.4 — read-before-edit ledger
-        // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
-        // reads stay snappy, and guarded so a rejection never escapes.
-        if (!this.reviewSourceSafety) {
-          void this.maybeReindexSource(resolved, content).catch(() => {});
-        }
-        const visibleContent = this.reviewSourceSafety ? redactReviewSourceText(content) : content;
-        const startLine = args.startLine ? Number(args.startLine) : 1;
-        const endLine = args.endLine ? Number(args.endLine) : undefined;
-
-        if (startLine === 1 && endLine === undefined) {
-          // CC-P7.3 — cap an unbounded full-file read so a huge file can't blow
-          // the context window; the model gets an explicit reread affordance.
-          return truncateFullRead(visibleContent, String(args.path)).text;
-        }
-
-        const lines = visibleContent.split('\n');
-        const endIdx = endLine !== undefined ? Math.min(endLine, lines.length) : lines.length;
-        const startIdx = Math.max(1, Math.min(startLine, lines.length));
-        
-        if (startIdx > endIdx) {
-          return '';
-        }
-        
-        return lines.slice(startIdx - 1, endIdx).join('\n');
       }
       case 'write_file': {
         readOnlyGuard(args.path);

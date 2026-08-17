@@ -341,3 +341,28 @@ test('D8 Phase 18 — list_dir / grep_search / glob_files dispatch through the r
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 19 — read_file (heaviest read; grows host by filesReadThisSession + maybeReindexSource).
+test('D8 Phase 19 — read_file dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('read_file'), 'read_file has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-readfile-'));
+  try {
+    fs.writeFileSync(path.join(ws, 'f.txt'), 'line1\nline2\nline3');
+    const read = new Set<string>();
+    let reindexed = 0;
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, reviewSourceSafety: false,
+      filesReadThisSession: read,
+      maybeReindexSource: async () => { reindexed += 1; return ''; },
+    };
+    const full = await invokeBuiltinToolRuntime.call(host, 'read_file', { path: 'f.txt' });
+    assert.match(full, /line1/);
+    assert.equal(read.size, 1, 'recorded in the read-before-edit ledger');
+    assert.equal(reindexed, 1, 'fired the fire-and-forget reindex');
+    const slice = await invokeBuiltinToolRuntime.call(host, 'read_file', { path: 'f.txt', startLine: 2, endLine: 2 });
+    assert.equal(slice.trim(), 'line2');
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'read_file', { path: 'nope.txt' }), /File not found/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
