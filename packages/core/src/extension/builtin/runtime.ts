@@ -77,7 +77,7 @@ import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
-import { isSensitiveReviewSourcePath, redactReviewSourceText } from '../../review/sourceSafety.js';
+import { isSensitiveReviewSourcePath, redactReviewSourceText, isSafeReviewerFilesystemPath, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
 import { applyNotebookEdit } from '../../agent/fs/notebookEdit.js';
@@ -243,34 +243,6 @@ export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: stri
 }
 
 /** Reviewer reads never follow aliases: policy is evaluated on lexical and canonical paths. */
-function isSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string): boolean {
-  const root = fs.realpathSync(workspaceRoot);
-  const lexical = path.resolve(resolvedPath);
-  const lexicalRelative = path.relative(root, lexical).replaceAll('\\', '/');
-  const instructionFile = path.basename(lexicalRelative).toLowerCase();
-  // A changed instruction file is part of the fenced diff being reviewed, not
-  // an authority source that may govern its own review.
-  if (['agent.md', 'agents.md', 'claude.md', '.cursorrules', 'codex.md'].includes(instructionFile)) {
-    return false;
-  }
-  if (isSensitiveReviewSourcePath(lexicalRelative)) return false;
-  try {
-    const canonical = fs.realpathSync(lexical);
-    // Deny both a file symlink and any symlinked directory component. Besides
-    // preventing a benign alias to `.env`, this keeps reviewer scope explainable.
-    if (canonical !== lexical) return false;
-    const canonicalRelative = path.relative(root, canonical).replaceAll('\\', '/');
-    return !isSensitiveReviewSourcePath(canonicalRelative);
-  } catch {
-    return false;
-  }
-}
-
-function assertSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string, requestedPath: unknown): void {
-  if (!isSafeReviewerFilesystemPath(workspaceRoot, resolvedPath)) {
-    throw new Error(`Review source policy denied credential-bearing, mutable-instruction, or symlinked path: ${String(requestedPath)}`);
-  }
-}
 
 export async function invokeBuiltinToolRuntime(
   this: any,
