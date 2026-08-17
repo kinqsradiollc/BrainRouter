@@ -180,3 +180,20 @@ test('D8 Phase 8 — research_note dispatches through the registry', async () =>
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 9 — reconcile_steer + workflow_progress (session/workflow-state
+// writers, zero host growth).
+test('D8 Phase 9 — reconcile_steer + workflow_progress dispatch through the registry', async () => {
+  assert.ok(builtinToolHandler('reconcile_steer'), 'reconcile_steer has a registered handler');
+  assert.ok(builtinToolHandler('workflow_progress'), 'workflow_progress has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-sess-'));
+  try {
+    const host = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 's9' };
+    // A fresh workspace has no bound workflow → the deterministic no-workflow message,
+    // proving the tool routes through the registry (not the deleted switch case).
+    const wf = await invokeBuiltinToolRuntime.call(host, 'workflow_progress', { step: 'x', status: 'done' });
+    assert.match(wf, /No active workflow/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

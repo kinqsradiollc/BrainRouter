@@ -52,8 +52,6 @@ import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.
 import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
 import {
   applySteeringPlanRevision,
-  reconcileSteeringReceipt,
-  type SteeringClassification,
 } from '../../task/steeringReceiptStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
@@ -88,8 +86,6 @@ import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { isSensitiveReviewSourcePath, redactReviewSourceText } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
-import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
-import { advanceRunStep, summarizeRun } from '../../workflow/run/workflowRun.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
 import { applyNotebookEdit } from '../../agent/fs/notebookEdit.js';
 import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
@@ -1440,23 +1436,6 @@ export async function invokeBuiltinToolRuntime(
           return result + patchNotice + patchReindex;
         }
       }
-      case 'reconcile_steer': {
-        const receipt = reconcileSteeringReceipt(this.workspaceRoot, this.sessionKey, {
-          receiptId: String(args.receiptId ?? ''),
-          classification: String(args.classification ?? '') as SteeringClassification,
-          summary: String(args.summary ?? ''),
-          affectedRequirementIds: Array.isArray(args.affectedRequirementIds)
-            ? args.affectedRequirementIds.map(String)
-            : [],
-          affectedTaskIds: Array.isArray(args.affectedTaskIds)
-            ? args.affectedTaskIds.map(String)
-            : [],
-          affectedPhaseIds: Array.isArray(args.affectedPhaseIds)
-            ? args.affectedPhaseIds.map(String)
-            : [],
-        });
-        return JSON.stringify(receipt, null, 2);
-      }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
           explanation: args.explanation,
@@ -1733,25 +1712,6 @@ export async function invokeBuiltinToolRuntime(
         });
         await this.captureArtifactToMemory(created);
         return `Created artifact ${created.id} (v1, ${created.kind}, ${created.format}): ${created.title}. Update it later with artifact_write({ id: "${created.id}", content }).`;
-      }
-      case 'workflow_progress': {
-        const slug = getCurrentWorkflow(this.workspaceRoot, this.sessionKey);
-        if (!slug) {
-          return 'No active workflow — nothing to track. (Bind one with /review, /simplify, /feature-dev, /spec, or /implement-plan.)';
-        }
-        const step = String(args.step ?? '').trim();
-        const status = String(args.status ?? '').trim() as 'running' | 'done' | 'failed' | 'skipped';
-        if (!step) throw new Error('workflow_progress requires a non-empty `step` id.');
-        if (!['running', 'done', 'failed', 'skipped'].includes(status)) {
-          throw new Error(`workflow_progress: status must be running|done|failed|skipped (got "${status}").`);
-        }
-        const run = advanceRunStep(this.workspaceRoot, slug, step, status, {
-          note: args.note ? String(args.note) : undefined,
-          sessionKey: this.sessionKey,
-          pid: process.pid,
-        });
-        const { done, total } = summarizeRun(run);
-        return `Workflow "${slug}": step "${step}" → ${status} (${done}/${total} done, run ${run.status}).`;
       }
       case 'ask_user_choice': {
         // PARITY — accept either the single-question fields or a batched
