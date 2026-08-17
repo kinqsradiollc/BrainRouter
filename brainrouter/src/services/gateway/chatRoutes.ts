@@ -42,6 +42,33 @@ import {
   responsesTokenUsage,
   type GatewayTokenUsage,
 } from './usage.js';
+import { RateShaper } from './rateShaper.js';
+
+// ADR-043 S1 (D5) — the gateway rate-shaper. Records an upstream 429's
+// Retry-After so a burst stops hammering a key the provider already refused (the
+// review-bot free-tier wedge), and fast-fails requests to a parked key with the
+// hint. Generous per-key budgets: it only shapes extreme bursts. Fail-open — a
+// key with no state is never blocked. (The concurrency/rpm queue in the module
+// is ready for S1b; this slice wires the safe Retry-After parking.)
+const gatewayShaper = new RateShaper({ maxConcurrentPerKey: 64, rpmPerKey: 600, maxQueuePerKey: 256 });
+const shaperKeyFor = (orgId: string, endpoint: string): string => `${orgId}\u0000${endpoint}`;
+function shaperFastFail(res: ExpressResponse, key: string): boolean {
+  const parkedMs = gatewayShaper.parkedFor(key);
+  if (parkedMs <= 0) return false;
+  res.setHeader('retry-after', String(Math.ceil(parkedMs / 1000)));
+  sendOpenAiError(res, 429, {
+    message: 'The upstream provider is rate limited; retry after the indicated delay.',
+    type: 'rate_limit_error',
+    param: null,
+    code: 'upstream_rate_limited',
+  });
+  return true;
+}
+function shaperNoteUpstream429(key: string, upstream: Response): void {
+  const retryAfter = upstream.headers.get('retry-after');
+  const seconds = retryAfter && /^\d{1,6}$/.test(retryAfter) ? Number(retryAfter) : 5;
+  gatewayShaper.noteRetryAfter(key, seconds);
+}
 
 export interface GatewayDataPlaneService {
   listModels(auth: GatewayAuthContext): Promise<ProviderModelRecord[]>;
@@ -517,6 +544,10 @@ export function registerGatewayDataPlane(
       if (resolved.provider.apiKey) {
         headers.set('authorization', `Bearer ${resolved.provider.apiKey}`);
       }
+      // ADR-043 S1 — if this org+endpoint key is parked by a prior upstream
+      // Retry-After, fail fast with the hint instead of hammering it.
+      const shaperKey = shaperKeyFor(audit.auth.orgId, resolved.provider.endpoint);
+      if (shaperFastFail(res, shaperKey)) { audit.status = 429; return; }
       phase = 'upstream';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'chat-completions'),
@@ -529,6 +560,7 @@ export function registerGatewayDataPlane(
         options.upstream,
       );
       if (!upstream.ok) {
+        if (upstream.status === 429) shaperNoteUpstream429(shaperKey, upstream);
         audit.status = await sendUpstreamError(res, upstream);
         return;
       }
@@ -629,6 +661,10 @@ export function registerGatewayDataPlane(
       if (resolved.provider.apiKey) {
         headers.set('authorization', `Bearer ${resolved.provider.apiKey}`);
       }
+      // ADR-043 S1 — if this org+endpoint key is parked by a prior upstream
+      // Retry-After, fail fast with the hint instead of hammering it.
+      const shaperKey = shaperKeyFor(audit.auth.orgId, resolved.provider.endpoint);
+      if (shaperFastFail(res, shaperKey)) { audit.status = 429; return; }
       phase = 'upstream';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'responses'),
@@ -641,6 +677,7 @@ export function registerGatewayDataPlane(
         options.upstream,
       );
       if (!upstream.ok) {
+        if (upstream.status === 429) shaperNoteUpstream429(shaperKey, upstream);
         audit.status = await sendUpstreamError(res, upstream);
         return;
       }

@@ -1,6 +1,6 @@
 # ADR-043 — Egress at the user's edge: per-user provider IPs without the credential ever leaving the server
 
-**Status:** PROPOSED
+**Status:** Accepted — S1 implemented (2026-08-17, `release/0.4.21`); S2–S5 gated on ADR-041. **S1 (D5): the gateway rate-shaper** — per-upstream-key concurrency + rpm token-bucket + Retry-After backoff + bounded fair-share queue (`services/gateway/rateShaper.ts`, keyed for per-org sharding), wired into `chatRoutes` fail-open: an upstream 429's Retry-After parks the key so a burst stops hammering a provider that already refused (the review-bot free-tier wedge), and requests to a parked key fast-fail with the hint. The concurrency/rpm queue primitive is built + tested and ready to enable (S1b). **S2 (ProviderDialer seam), S3 (tunnel over the relay), S4 (consent/telemetry/fallback), S5 (vendable-token path) depend on ADR-041's `EdgeDialer`/ProviderDefinition seams** and are deferred until 041 lands.
 
 **Builds on:** the provider gateway (`brainrouter/src/services/gateway/`), the remote-relay WSS edge
 (`brainrouter/src/services/remoteRelay/`), org BYOK, ADR-041 (capability seams / execution worlds).
