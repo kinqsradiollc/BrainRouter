@@ -46,6 +46,8 @@ export interface BuiltinToolHost {
   pentestProxyControl(): { apiUrl: string; token?: string } | undefined;
   /** Record an auto-approval into plan history when a new plan version lands — agent.ts:3014. (D8 Phase 14: update_plan) */
   maybeAutoApprovePlan(state: PlanState): void;
+  /** Worktrees attached to this agent's scope (read-only view) — agent.ts:939. (D8 Phase 15: worktree_list) */
+  readonly attachedRoots: readonly string[];
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
