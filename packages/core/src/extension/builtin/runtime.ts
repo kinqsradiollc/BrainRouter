@@ -39,7 +39,6 @@ import { enforceTaskBudget } from '../../provider/budget.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js';
-import { searchMcpCatalog } from '../../mcp/discovery/discovery.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
 import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
@@ -1213,30 +1212,6 @@ export async function invokeBuiltinToolRuntime(
         const result = await client.readResource({ server, uri }, { signal: this.turnAbort?.signal });
         return JSON.stringify(result, null, 2);
       }
-      case 'mcp_search': {
-        const query = String(args.query ?? '').trim();
-        if (!query) throw new Error('mcp_search requires a non-empty `query`.');
-        const maxResults = Math.max(1, Math.min(25, Number(args.maxResults ?? 8)));
-        const tools = await this.visibleMcpToolList();
-        const matches = searchMcpCatalog(tools, query, maxResults);
-        return JSON.stringify({ query, count: matches.length, tools: matches }, null, 2);
-      }
-      case 'mcp_describe': {
-        const names: string[] = Array.isArray(args.names)
-          ? args.names.map((n: any) => String(n))
-          : args.name != null ? [String(args.name)] : [];
-        if (names.length === 0) throw new Error('mcp_describe requires `name` or `names`.');
-        const out: Array<Record<string, unknown>> = [];
-        for (const target of names) {
-          const tool = await this.findVisibleMcpTool(target);
-          if (!tool) {
-            out.push({ name: target, error: 'not found or not an available MCP tool' });
-            continue;
-          }
-          out.push({ name: String(tool.name), description: tool.description ?? '', inputSchema: tool.inputSchema ?? {} });
-        }
-        return JSON.stringify(out, null, 2);
-      }
       case 'mcp_call': {
         const target = String(args.name ?? '').trim();
         if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
@@ -1265,15 +1240,6 @@ export async function invokeBuiltinToolRuntime(
         this.assertInheritedExecutionAuthorityCurrent();
         const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
         return extractToolText(mcpRes);
-      }
-      case 'mcp_refresh_catalog': {
-        const tools = await this.visibleMcpToolList();
-        const byServer: Record<string, number> = {};
-        for (const t of tools) {
-          const server = String(t?.__serverId ?? this.serverIdFromMcpToolName(String(t?.name ?? '')) ?? 'unknown');
-          byServer[server] = (byServer[server] ?? 0) + 1;
-        }
-        return JSON.stringify({ totalTools: tools.length, servers: byServer }, null, 2);
       }
       case 'lsp': {
         // CLI-19 — semantic navigation via a language server.
