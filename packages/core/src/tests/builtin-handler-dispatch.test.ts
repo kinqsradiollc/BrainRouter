@@ -122,3 +122,18 @@ test('D8 Phase 4 — connector_list dispatches through the registry', async () =
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 5 — track_query (read-only, workspaceRoot only).
+test('D8 Phase 5 — track_query dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('track_query'), 'track_query has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-track-'));
+  try {
+    const withWs = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 's' };
+    const list = JSON.parse(await invokeBuiltinToolRuntime.call(withWs, 'track_query', {}));
+    assert.ok(Array.isArray(list), 'the default list action returns an array');
+    const board = JSON.parse(await invokeBuiltinToolRuntime.call(withWs, 'track_query', { action: 'board' }));
+    assert.ok(board.project && Array.isArray(board.columns), 'board action returns project + columns');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
