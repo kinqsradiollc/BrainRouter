@@ -77,7 +77,7 @@ import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
-import { isSensitiveReviewSourcePath, redactReviewSourceText, isSafeReviewerFilesystemPath, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
+import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
 import { applyNotebookEdit } from '../../agent/fs/notebookEdit.js';
@@ -85,7 +85,7 @@ import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAc
 import { truncateFullRead } from '../../agent/fs/readTruncation.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
-import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
+import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope } from '../../agent/fs/workspaceFs.js';
 import { nodeFilesystemPort, type FilesystemPort } from '../../agent/fs/filesystemPort.js';
 import type { SubprocessPort } from '../../agent/subprocess/subprocessPort.js';
 import type { ShellPort } from '../../agent/shell/shellPort.js';
@@ -621,64 +621,6 @@ export async function invokeBuiltinToolRuntime(
         const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
         const editReindex = await this.maybeReindexSource(resolved, updated);
         return `Successfully edited ${args.path}` + editNotice + editReindex;
-      }
-      case 'list_dir': {
-        const targetDir = resolveHere(args.path || '.');
-        if (!(await fsPort.exists(targetDir)) || !(await fsPort.stat(targetDir)).isDirectory) {
-          throw new Error(`Directory not found: ${args.path || '.'}`);
-        }
-        if (this.reviewSourceSafety) {
-          assertSafeReviewerFilesystemPath(this.workspaceRoot, targetDir, args.path || '.');
-        }
-        const items = await fsPort.readDir(targetDir);
-        const list = (await Promise.all(items.map(async item => {
-          const full = path.join(targetDir, item);
-          if (this.reviewSourceSafety && !isSafeReviewerFilesystemPath(this.workspaceRoot, full)) {
-            return null;
-          }
-          const stat = await fsPort.stat(full);
-          return {
-            name: item,
-            type: stat.isDirectory ? 'directory' : 'file',
-            size: stat.isFile ? stat.size : undefined,
-          };
-        }))).filter((e): e is NonNullable<typeof e> => e !== null);
-        return JSON.stringify(list, null, 2);
-      }
-      case 'grep_search': {
-        const wsRoot = fs.realpathSync(this.workspaceRoot);
-        const root = resolveHere(args.path || '.');
-        if (this.reviewSourceSafety) {
-          assertSafeReviewerFilesystemPath(wsRoot, root, args.path || '.');
-        }
-        const query = String(args.query ?? '');
-        if (!query) throw new Error('Missing parameter "query" for grep_search.');
-        // grepSearch: regex match (not literal `includes`) + accepts a file OR a
-        // directory (the old inline version crashed with ENOTDIR on a file path).
-        const hits = grepSearch(
-          query,
-          root,
-          wsRoot,
-          50,
-          this.reviewSourceSafety
-            ? (candidate) => isSafeReviewerFilesystemPath(wsRoot, path.resolve(wsRoot, candidate))
-            : undefined,
-        );
-        return this.reviewSourceSafety
-          ? redactReviewSourceText(JSON.stringify(hits, null, 2))
-          : JSON.stringify(hits, null, 2);
-      }
-      case 'glob_files': {
-        const pattern = args.pattern;
-        if (!pattern) {
-          throw new Error('Missing parameter "pattern" for glob_files.');
-        }
-        const reviewRoot = this.reviewSourceSafety ? fs.realpathSync(this.workspaceRoot) : this.workspaceRoot;
-        const matches = globFiles(pattern, this.workspaceRoot).filter((candidate) => (
-          !this.reviewSourceSafety
-          || isSafeReviewerFilesystemPath(reviewRoot, path.resolve(reviewRoot, candidate))
-        ));
-        return JSON.stringify(matches, null, 2);
       }
       case 'run_command': {
         const cmd = args.command;
