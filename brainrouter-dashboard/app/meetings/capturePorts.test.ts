@@ -17,6 +17,7 @@
  * constructed get handed back.
  */
 import assert from "node:assert/strict";
+import { setAccessToken } from "../../lib/client.js";
 import test from "node:test";
 
 import { browserCapturePorts, openBrowserMicrophone, type PageBridge } from "./capturePorts";
@@ -148,6 +149,7 @@ test("ADR-035 D10 — discovery goes to the gateway's own capability route, with
   // true. The token is read at CALL time because a JWT can be refreshed while a
   // meeting is being recorded.
   const calls: { url: string; init: RequestInit }[] = [];
+  setAccessToken("jwt-current");
   const ports = await withGlobals({ navigator: {} }, () => browserCapturePorts(bridge({ activeOrgId: () => "org-showing" })));
   const described = await withGlobals(
     {
@@ -201,6 +203,7 @@ test("ADR-035 D10 — the stream attaches under the RECORDING's workspace, not t
     close(): void {}
   }
 
+  setAccessToken("jwt-current");
   const ports = await withGlobals({ navigator: {} }, () => browserCapturePorts(bridge({ activeOrgId: () => "org-showing" })));
   const stream = await withGlobals(
     {

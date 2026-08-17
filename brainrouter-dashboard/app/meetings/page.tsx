@@ -82,7 +82,6 @@ import { InlineLoading } from "../../components/LoadingSpinner";
 import { adminApi, authFetch, type Team } from "../../lib/adminApi";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { BASE_URL } from "../../lib/client";
-import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
 import { captureHeldNote, CAPTURE_DISCARD_UNKNOWN } from "../../lib/meetings/captureLock";
 import { formatCaptureBytes } from "../../lib/meetings/storageBudget";

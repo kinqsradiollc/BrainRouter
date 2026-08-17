@@ -6,8 +6,8 @@
  * directly with the stored JWT (refreshing once on a 401) and the optional
  * `X-BrainRouter-Org` active-org header.
  */
-import { BASE_URL, refreshAccessToken } from "./client";
-import { getApiKey, getJwt } from "./client-auth";
+import { BASE_URL, refreshAccessToken, getAccessToken, getCsrfToken } from "./client";
+import { getApiKey } from "./client-auth";
 import type {
   ModelCapabilityProvenanceSource,
   ModelCatalogEnvelope,
@@ -37,6 +37,10 @@ async function sendAuthed(path: string, opts: FetchOpts, timeoutMs: number): Pro
   const doFetch = (token: string): Promise<Response> =>
     fetch(`${BASE_URL}${path}`, {
       method: opts.method ?? "GET",
+      // ADR-037 D-2 — send the httpOnly br_refresh + readable br_csrf cookies
+      // (only /api/auth/* reads them) alongside the in-memory access token; the
+      // CSRF token is echoed and is harmless on non-auth routes.
+      credentials: "include",
       // Never leave a dashboard panel (or the global auth bootstrap) spinning
       // on the browser's multi-minute socket timeout. Callers that own a
       // shorter cancellation policy can still provide their own signal.
@@ -44,12 +48,13 @@ async function sendAuthed(path: string, opts: FetchOpts, timeoutMs: number): Pro
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(getCsrfToken() ? { "X-BrainRouter-Csrf": getCsrfToken() as string } : {}),
         ...(opts.orgId ? { "X-BrainRouter-Org": opts.orgId } : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
 
-  const res = await doFetch(getJwt() || getApiKey() || "");
+  const res = await doFetch(getAccessToken() || getApiKey() || "");
   if (res.status !== 401) return res;
   const fresh = await refreshAccessToken();
   return fresh ? doFetch(fresh) : res;
