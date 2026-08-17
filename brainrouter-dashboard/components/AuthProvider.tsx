@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { getClient, getAccessToken, setAccessToken, refreshAccessToken } from "../lib/client";
-import { setApiKey, signOut, clearAll } from "../lib/client-auth";
+import { setApiKey, signOut, clearAll, setAuthedFlag } from "../lib/client-auth";
 import { authFetch } from "../lib/adminApi";
 import { STATIC_PRESENTATION } from "../lib/presentation";
 import { clearDashboardQueries } from "../lib/dashboardQuery";
@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Presentation mode: never hit the auth API — there is no session.
     if (STATIC_PRESENTATION) {
       setIsAuthenticated(false);
+      setAuthedFlag(false);
       setUser(null);
       setIsLoading(false);
       return;
@@ -67,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin: data.isAdmin,
       });
       setIsAuthenticated(true);
+      setAuthedFlag(true);
     } catch (err) {
       const status = typeof err === "object" && err !== null && "status" in err ? Number((err as { status?: number }).status) : 0;
       if (status === 401 || status === 403) {
@@ -74,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearAll();
         clearDashboardQueries();
         setIsAuthenticated(false);
+        setAuthedFlag(false);
         setUser(null);
       } else {
         // Network/timeout is transient — let individual pages surface a retry.
@@ -108,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearDashboardQueries();
     setUser(null);
     setIsAuthenticated(false);
+    setAuthedFlag(false);
   };
 
   useEffect(() => {
@@ -121,6 +125,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem("brainrouter_refresh");
         localStorage.setItem("brainrouter_cookie_migrated_v1", "1");
       }
+      // ADR-037 D4 — the API key must never sit in storage; purge any legacy copy.
+      localStorage.removeItem("brainrouter_api_key");
     } catch { /* ignore */ }
     fetchUser();
   }, []);
