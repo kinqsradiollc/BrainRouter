@@ -19,8 +19,10 @@ import type { FilesystemPort } from '../../../agent/fs/filesystemPort.js';
  * honest list of what builtins need from the Agent, replacing today's `this: any`.
  */
 export interface BuiltinToolHost {
-  /** Phantom marker; real fields are added per migration slice. */
-  readonly __builtinHost?: never;
+  /** Workspace root of the agent's primary scope — runtime.ts:301. (D8 Phase 2: research_brief) */
+  readonly workspaceRoot: string;
+  /** The agent's session key — runtime.ts. (D8 Phase 2: research_brief) */
+  readonly sessionKey: string;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
