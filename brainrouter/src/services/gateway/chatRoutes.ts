@@ -42,18 +42,21 @@ import {
   responsesTokenUsage,
   type GatewayTokenUsage,
 } from './usage.js';
-import { RateShaper } from './rateShaper.js';
+import { RateShaper, type AcquireResult } from './rateShaper.js';
 
 // ADR-043 S1 (D5) — the gateway rate-shaper. Records an upstream 429's
 // Retry-After so a burst stops hammering a key the provider already refused (the
 // review-bot free-tier wedge), and fast-fails requests to a parked key with the
-// hint. Generous per-key budgets: it only shapes extreme bursts. Fail-open — a
-// key with no state is never blocked. (The concurrency/rpm queue in the module
-// is ready for S1b; this slice wires the safe Retry-After parking.)
-const gatewayShaper = new RateShaper({ maxConcurrentPerKey: 64, rpmPerKey: 600, maxQueuePerKey: 256 });
+// hint. S1b additionally reserves a per-key slot before each dial so the
+// concurrency cap + rpm budget shape a burst BEFORE it stampedes the upstream.
+// Generous per-key budgets: they only shape extreme bursts. Fail-open — a key
+// with no state, and traffic under the budgets, is admitted with zero added latency.
+// Generous per-key defaults: they only shape extreme bursts. Overridable via
+// GatewayDataPlaneOptions.rateShaper (ops tuning + deterministic tests).
+const DEFAULT_SHAPER_BUDGET = { maxConcurrentPerKey: 64, rpmPerKey: 600, maxQueuePerKey: 256 } as const;
 const shaperKeyFor = (orgId: string, endpoint: string): string => `${orgId}\u0000${endpoint}`;
-function shaperFastFail(res: ExpressResponse, key: string): boolean {
-  const parkedMs = gatewayShaper.parkedFor(key);
+function shaperFastFail(shaper: RateShaper, res: ExpressResponse, key: string): boolean {
+  const parkedMs = shaper.parkedFor(key);
   if (parkedMs <= 0) return false;
   res.setHeader('retry-after', String(Math.ceil(parkedMs / 1000)));
   sendOpenAiError(res, 429, {
@@ -64,10 +67,28 @@ function shaperFastFail(res: ExpressResponse, key: string): boolean {
   });
   return true;
 }
-function shaperNoteUpstream429(key: string, upstream: Response): void {
+function shaperNoteUpstream429(shaper: RateShaper, key: string, upstream: Response): void {
   const retryAfter = upstream.headers.get('retry-after');
   const seconds = retryAfter && /^\d{1,6}$/.test(retryAfter) ? Number(retryAfter) : 5;
-  gatewayShaper.noteRetryAfter(key, seconds);
+  shaper.noteRetryAfter(key, seconds);
+}
+// ADR-043 S1b (D5) — proactive shaping: reserve a per-key slot before dialing so a
+// burst is bounded by the concurrency cap + rpm budget BEFORE it stampedes an
+// upstream (not only reactively after a 429 parks the key). Budgets are generous
+// and fail-open — a key under them is admitted with zero added latency. Returns a
+// one-shot `release` the caller MUST invoke in its finally, or null after sending
+// the 429 (concurrency / rpm / queue-full / a raced Retry-After park).
+function shaperAcquire(shaper: RateShaper, res: ExpressResponse, key: string): (() => void) | null {
+  const result: AcquireResult = shaper.tryAcquire(key);
+  if (result.ok) return result.release;
+  res.setHeader('retry-after', String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))));
+  sendOpenAiError(res, 429, {
+    message: 'This tenant is sending requests faster than the per-key budget; retry after the indicated delay.',
+    type: 'rate_limit_error',
+    param: null,
+    code: `gateway_${result.reason}`,
+  });
+  return null;
 }
 
 export interface GatewayDataPlaneService {
@@ -84,6 +105,8 @@ export interface GatewayDataPlaneService {
 
 export interface GatewayDataPlaneOptions {
   timeoutMs?: number;
+  /** ADR-043 S1 — override the per-key rate-shaper budgets (defaults in DEFAULT_SHAPER_BUDGET). */
+  rateShaper?: Partial<{ maxConcurrentPerKey: number; rpmPerKey: number; maxQueuePerKey: number }>;
   upstream?: SafeUpstreamFetchOptions;
 }
 
@@ -476,6 +499,9 @@ export function registerGatewayDataPlane(
   service: GatewayDataPlaneService,
   options: GatewayDataPlaneOptions = {},
 ): void {
+  // ADR-043 S1 — one shaper instance per data-plane registration, keyed per
+  // org+endpoint. Budgets default to DEFAULT_SHAPER_BUDGET; tests/ops override.
+  const shaper = new RateShaper({ ...DEFAULT_SHAPER_BUDGET, ...options.rateShaper });
   app.get('/v1/models', async (_req: Request, res: ExpressResponse) => {
     try {
       const models = await service.listModels(authContext(res));
@@ -506,6 +532,8 @@ export function registerGatewayDataPlane(
     const id = requestId(res);
     let phase: 'policy' | 'upstream' = 'policy';
     let audit: GatewayAuditState | null = null;
+    // ADR-043 S1b — a reserved shaper slot, released in `finally` on every exit path.
+    let releaseShaperSlot: (() => void) | null = null;
     try {
       const parsed = parseChatRequest(req.body);
       const auth = authContext(res);
@@ -547,7 +575,9 @@ export function registerGatewayDataPlane(
       // ADR-043 S1 — if this org+endpoint key is parked by a prior upstream
       // Retry-After, fail fast with the hint instead of hammering it.
       const shaperKey = shaperKeyFor(audit.auth.orgId, resolved.provider.endpoint);
-      if (shaperFastFail(res, shaperKey)) { audit.status = 429; return; }
+      if (shaperFastFail(shaper, res, shaperKey)) { audit.status = 429; return; }
+      releaseShaperSlot = shaperAcquire(shaper, res, shaperKey);
+      if (!releaseShaperSlot) { audit.status = 429; return; }
       phase = 'upstream';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'chat-completions'),
@@ -560,7 +590,7 @@ export function registerGatewayDataPlane(
         options.upstream,
       );
       if (!upstream.ok) {
-        if (upstream.status === 429) shaperNoteUpstream429(shaperKey, upstream);
+        if (upstream.status === 429) shaperNoteUpstream429(shaper, shaperKey, upstream);
         audit.status = await sendUpstreamError(res, upstream);
         return;
       }
@@ -604,6 +634,7 @@ export function registerGatewayDataPlane(
       const status = sendCaughtError(res, error, phase);
       if (audit) audit.status = status;
     } finally {
+      if (releaseShaperSlot) releaseShaperSlot();
       lifetime.cleanup();
       await finalizeAccounting(service, id, audit);
     }
@@ -616,6 +647,8 @@ export function registerGatewayDataPlane(
     const id = requestId(res);
     let phase: 'policy' | 'upstream' = 'policy';
     let audit: GatewayAuditState | null = null;
+    // ADR-043 S1b — a reserved shaper slot, released in `finally` on every exit path.
+    let releaseShaperSlot: (() => void) | null = null;
     try {
       const parsed = parseResponsesRequest(req.body);
       const auth = authContext(res);
@@ -664,7 +697,9 @@ export function registerGatewayDataPlane(
       // ADR-043 S1 — if this org+endpoint key is parked by a prior upstream
       // Retry-After, fail fast with the hint instead of hammering it.
       const shaperKey = shaperKeyFor(audit.auth.orgId, resolved.provider.endpoint);
-      if (shaperFastFail(res, shaperKey)) { audit.status = 429; return; }
+      if (shaperFastFail(shaper, res, shaperKey)) { audit.status = 429; return; }
+      releaseShaperSlot = shaperAcquire(shaper, res, shaperKey);
+      if (!releaseShaperSlot) { audit.status = 429; return; }
       phase = 'upstream';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'responses'),
@@ -677,7 +712,7 @@ export function registerGatewayDataPlane(
         options.upstream,
       );
       if (!upstream.ok) {
-        if (upstream.status === 429) shaperNoteUpstream429(shaperKey, upstream);
+        if (upstream.status === 429) shaperNoteUpstream429(shaper, shaperKey, upstream);
         audit.status = await sendUpstreamError(res, upstream);
         return;
       }
@@ -722,6 +757,7 @@ export function registerGatewayDataPlane(
       const status = sendCaughtError(res, error, phase);
       if (audit) audit.status = status;
     } finally {
+      if (releaseShaperSlot) releaseShaperSlot();
       lifetime.cleanup();
       await finalizeAccounting(service, id, audit);
     }
