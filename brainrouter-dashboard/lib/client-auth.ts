@@ -4,30 +4,11 @@ const JWT_KEY = "brainrouter_jwt";
 const REFRESH_KEY = "brainrouter_refresh";
 const API_KEY = "brainrouter_api_key";
 
-function safeDecodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-function notExpired(token: string | null | undefined): boolean {
-  if (!token) return false;
-  const payload = safeDecodeJwtPayload(token);
-  if (!payload) return false;
-  const exp = typeof payload.exp === "number" ? payload.exp : 0;
-  return exp > Math.floor(Date.now() / 1000);
-}
-
 // Access token — ALWAYS localStorage so the session is shared across tabs and
 // survives a browser restart. The refresh token transparently renews it.
 export function getJwt(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(JWT_KEY) ?? sessionStorage.getItem(JWT_KEY);
+  // ADR-037 D1 — the access token lives in memory (lib/client), never storage.
+  return null;
 }
 
 export function setJwt(token: string, _rememberMe = true): void {
@@ -43,8 +24,9 @@ export function clearJwt(): void {
 }
 
 export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFRESH_KEY);
+  // ADR-037 D1 — the refresh token is an httpOnly br_refresh cookie the page
+  // cannot read. Nothing to return.
+  return null;
 }
 
 export function setRefreshToken(token: string): void {
@@ -57,19 +39,20 @@ export function clearRefreshToken(): void {
   localStorage.removeItem(REFRESH_KEY);
 }
 
+// ADR-037 D4 — the API key is the worst credential (it never expires). It lives
+// in MEMORY only: shown once at login/rotate for the user to copy, never
+// persisted to storage where a script could read it after the fact.
+let apiKeyInMemory = "";
 export function getApiKey(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(API_KEY) ?? "";
+  return apiKeyInMemory;
 }
 
 export function setApiKey(key: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(API_KEY, key);
+  apiKeyInMemory = key;
 }
 
 export function clearApiKey(): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(API_KEY);
+  apiKeyInMemory = "";
 }
 
 export function clearAll(): void {
@@ -78,12 +61,14 @@ export function clearAll(): void {
   clearApiKey();
 }
 
-/** Authenticated if the access token is still valid OR a refresh token can mint
- *  a new one (so an expired access token alone doesn't bounce the user to login). */
-export function isAuthenticated(): boolean {
-  if (notExpired(getJwt())) return true;
-  return notExpired(getRefreshToken());
-}
+// ADR-037 D-2 — authentication is a cookie session, resolved asynchronously by
+// AuthProvider (httpOnly cookie → /refresh → /me). It maintains this flag so the
+// remaining synchronous callers (page effects) can read the current state
+// without decoding a browser token.
+let authedFlag = false;
+export function setAuthedFlag(value: boolean): void { authedFlag = value; }
+/** The current session state, as last resolved by AuthProvider. */
+export function isAuthenticated(): boolean { return authedFlag; }
 
 export function signOut(): void {
   clearAll();
