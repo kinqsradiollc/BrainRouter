@@ -240,3 +240,36 @@ export function prepareReviewDiffSource(value: string): PreparedReviewDiffSource
     redacted,
   };
 }
+
+// ADR-041 D8 — reviewer-path filesystem safety, consolidated here from runtime.ts
+// so the migrated read-only fs handlers (list_dir/grep_search/glob_files/read_file)
+// share ONE definition with the review path checks.
+export function isSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string): boolean {
+  const root = fs.realpathSync(workspaceRoot);
+  const lexical = path.resolve(resolvedPath);
+  const lexicalRelative = path.relative(root, lexical).replaceAll('\\', '/');
+  const instructionFile = path.basename(lexicalRelative).toLowerCase();
+  // A changed instruction file is part of the fenced diff being reviewed, not
+  // an authority source that may govern its own review.
+  if (['agent.md', 'agents.md', 'claude.md', '.cursorrules', 'codex.md'].includes(instructionFile)) {
+    return false;
+  }
+  if (isSensitiveReviewSourcePath(lexicalRelative)) return false;
+  try {
+    const canonical = fs.realpathSync(lexical);
+    // Deny both a file symlink and any symlinked directory component. Besides
+    // preventing a benign alias to `.env`, this keeps reviewer scope explainable.
+    if (canonical !== lexical) return false;
+    const canonicalRelative = path.relative(root, canonical).replaceAll('\\', '/');
+    return !isSensitiveReviewSourcePath(canonicalRelative);
+  } catch {
+    return false;
+  }
+}
+
+export function assertSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string, requestedPath: unknown): void {
+  if (!isSafeReviewerFilesystemPath(workspaceRoot, resolvedPath)) {
+    throw new Error(`Review source policy denied credential-bearing, mutable-instruction, or symlinked path: ${String(requestedPath)}`);
+  }
+}
+
