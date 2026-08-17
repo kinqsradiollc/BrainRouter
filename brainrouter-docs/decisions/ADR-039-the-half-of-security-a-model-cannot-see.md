@@ -1,6 +1,6 @@
 # ADR-039 — The half of security a model cannot see
 
-**Status:** PROPOSED — for owner review. Verified still unimplemented 2026-08-16: no flow-analysis engine, barrier/source/sink model pack, database-build stage, or path-carrying evidence exists, and the D8 licence question is open; the SARIF export and pentest agent are the model-side half the ADR already counts as covered (the pentest sandbox provisions scratch space for semgrep/trivy as agent-invocable tools — `review/pentestSandbox.ts:49` — which is tool availability, not this ADR's engine pipeline).
+**Status:** Accepted — scoped **this-repo-only** (2026-08-17). The D8 blocker (this-repo-only vs customer-facing) is resolved to the conservative scope: BrainRouter runs the flow/taint analysis on its OWN repository as a review input, with **no customer-facing offering** — so there is no third-party licensing exposure and the build is unblocked. (Expanding to a customer-facing product later would reopen D8 and need a licensing review; that is explicitly out of scope now.) Implementation is a phased program (flow-analysis engine against the exact-SHA checkout with its own DB-build stage, an owned barrier/source/sink model pack, and integration into the review pipeline) — sized as its own track, not a single slice.
 **Depends on:** ADR-033 (review that finds things, and says where), ADR-036 (the finding carries its
 code), ADR-025 (assurance programs), ADR-032 (an agent that gets better and cannot get worse).
 

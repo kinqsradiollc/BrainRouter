@@ -30,9 +30,9 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 036 | The finding carries its code | ✅ Implemented | 0.4.20 |
 | **037** | **Credentials the page cannot read** | **✅ Implemented (live-QA the §5 test)** | **0.4.21** |
 | 038 | A planner worth opening | ✅ Implemented | main |
-| 039 | The half of security a model cannot see (taint) | 📝 Proposed (needs licensing decision) | — |
+| 039 | The half of security a model cannot see (taint) | 🟡 Accepted (this-repo-only); phased build | — |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
-| 041 | Plug-and-play runtime | 📝 Proposed (draft in progress) | — |
+| 041 | Plug-and-play runtime | 📝 Proposed — concurrent session's draft; multi-release epic | — |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | 043 | Egress at the user's edge | 🟡 S1 shipped; S2–S5 gated on 041 | 0.4.21 |
 
