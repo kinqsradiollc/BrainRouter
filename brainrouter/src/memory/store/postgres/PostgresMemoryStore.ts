@@ -190,6 +190,7 @@ import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import * as connectorCfg from "./queries/connectorConfigQueries.js";
 import * as pentestTargets from "./queries/pentestTargetQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
+import type { IMemoryStoreComposite } from "../composite.js";
 import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
 import type { ProviderStore } from "../../../providers/store.js";
@@ -257,7 +258,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, ModelPolicyStore, RemoteAccessStore, IntegrationStore, ConnectorStore {
+export class PostgresMemoryStore implements IMemoryStoreComposite {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
