@@ -109,3 +109,16 @@ test('D8 Phase 3 — MCP read tools dispatch through host methods', async () => 
   await assert.rejects(() => invokeBuiltinToolRuntime.call(mcpHost, 'mcp_search', {}), /non-empty/);
   await assert.rejects(() => invokeBuiltinToolRuntime.call(mcpHost, 'mcp_describe', {}), /requires `name`/);
 });
+
+// ADR-041 D8 Phase 4 — connector_list (read-only, workspaceRoot; no new host field).
+test('D8 Phase 4 — connector_list dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('connector_list'), 'connector_list has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-conn-'));
+  try {
+    const withWs = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 's' };
+    const out = JSON.parse(await invokeBuiltinToolRuntime.call(withWs, 'connector_list', {}));
+    assert.ok(Array.isArray(out), 'connector_list returns an array (empty when none configured)');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

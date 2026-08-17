@@ -21,7 +21,7 @@ import {
 // here because the internal capability runtime is its only consumer.
 const MAX_COMPUTER_ACTIONS_PER_TURN = 20;
 import {
-  listConnectors, runConnectorCheckpointCore, exportConnectorDocumentsForMemory,
+  runConnectorCheckpointCore, exportConnectorDocumentsForMemory,
   githubTokenClient, defaultEnvTokenResolver,
   type McpConnectorClient, type McpConnectorResource,
 } from '../../connectors/index.js';
@@ -1658,21 +1658,6 @@ export async function invokeBuiltinToolRuntime(
           return `Completed ${sprint.name} (velocity: ${velocity}).`;
         }
         return `Unknown track_update action "${action}". Use create · transition · comment · link · sprint-create · assign-sprint · batch-transition · sprint-start · sprint-complete.`;
-      }
-      case 'connector_list': {
-        const source = typeof args.source === 'string' && args.source.trim() ? args.source.trim() : undefined;
-        const status = typeof args.status === 'string' && args.status.trim() ? args.status.trim() : undefined;
-        const connectors = listConnectors(this.workspaceRoot, {
-          source: source as never,
-          status: status as never,
-        }).map((connector) => ({
-          id: connector.id,
-          source: connector.source,
-          status: connector.status,
-          lastRunAt: connector.lastRunAt ?? null,
-          lastError: connector.lastError ?? null,
-        }));
-        return JSON.stringify(connectors, null, 2);
       }
       case 'connector_run': {
         const connectorId = typeof args.connectorId === 'string' ? args.connectorId.trim() : '';
