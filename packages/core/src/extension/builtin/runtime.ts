@@ -42,8 +42,6 @@ import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
 import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
-import { summarizeLedger } from '../../research/evidenceLedger.js';
-import { appendEvidence } from '../../research/researchStore.js';
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../session/transcript/chapterMarks.js';
 import { acknowledgeCompletions } from '../../session/completion/completionInbox.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
@@ -1149,33 +1147,6 @@ export async function invokeBuiltinToolRuntime(
         } catch (err: any) {
           return `web_search failed: ${err?.message ?? err}`;
         }
-      }
-      case 'research_note': {
-        const claim = String(args.claim ?? '').trim();
-        if (!claim) throw new Error('research_note requires a non-empty `claim`.');
-        const sources = Array.isArray(args.sources) ? args.sources.map((s: any) => String(s)) : [];
-        const sourceRecords = Array.isArray(args.sourceRecords)
-          ? args.sourceRecords.filter((source: any) => source && typeof source === 'object').map((source: any) => ({
-            url: String(source.url ?? ''),
-            ...(typeof source.title === 'string' ? { title: source.title } : {}),
-            ...(typeof source.publisher === 'string' ? { publisher: source.publisher } : {}),
-            ...(Array.isArray(source.authors) ? { authors: source.authors.map((author: any) => String(author)) } : {}),
-            ...(typeof source.publishedDate === 'string' ? { publishedDate: source.publishedDate } : {}),
-            ...(typeof source.accessedAt === 'string' ? { accessedAt: source.accessedAt } : {}),
-            ...(typeof source.evidence === 'string' ? { evidence: source.evidence } : {}),
-            ...(typeof source.limitations === 'string' ? { limitations: source.limitations } : {}),
-          }))
-          : [];
-        const stance = ['support', 'refute', 'unclear'].includes(String(args.stance))
-          ? (String(args.stance) as 'support' | 'refute' | 'unclear')
-          : undefined;
-        const confidence = ['high', 'medium', 'low'].includes(String(args.confidence))
-          ? (String(args.confidence) as 'high' | 'medium' | 'low')
-          : undefined;
-        const note = typeof args.note === 'string' ? args.note : undefined;
-        const ledger = appendEvidence(this.workspaceRoot, this.sessionKey, { claim, sources, sourceRecords, stance, confidence, note });
-        const s = summarizeLedger(ledger);
-        return `Recorded. Ledger: ${s.total} finding${s.total === 1 ? '' : 's'} (${s.corroborated} corroborated, ${s.conflicting} conflicting, ${s.singleSource} single-source).`;
       }
       case 'list_mcp_resources': {
         const client = this.mcpClient as any;

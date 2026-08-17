@@ -166,3 +166,17 @@ test('D8 Phase 7 — extract_result dispatches through the registry', async () =
   assert.match(missing, /not found or expired/, 'unknown ref returns the former not-found message');
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'extract_result', {}), /requires a resultRef/);
 });
+
+// ADR-041 D8 Phase 8 — research_note (session-state write, zero host growth).
+test('D8 Phase 8 — research_note dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('research_note'), 'research_note has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-note-'));
+  try {
+    const host = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 's8' };
+    const out = await invokeBuiltinToolRuntime.call(host, 'research_note', { claim: 'the sky is blue', sources: ['http://a'] });
+    assert.match(out, /Recorded\. Ledger: 1 finding/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'research_note', {}), /requires a non-empty/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
