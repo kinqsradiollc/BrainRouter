@@ -8,6 +8,7 @@
  * tier-ladder-only entries.
  */
 import type { ProviderDefinition } from './definition.js';
+import { ProviderRegistry } from './providerRegistry.js';
 import { openai } from './openai/index.js';
 import { anthropic } from './anthropic/index.js';
 import { gemini } from './gemini/index.js';
@@ -58,9 +59,7 @@ export function providersForKind(kind: 'chat' | 'embedding' | 'reranker'): Provi
 }
 
 /** id → definition, for O(1) lookup (catalog merge, tier ladders, …). */
-export const PROVIDER_REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Map(
-  BUILTIN_PROVIDERS.map((p) => [p.id, p]),
-);
+export const PROVIDER_REGISTRY = new ProviderRegistry(BUILTIN_PROVIDERS);
 
 /**
  * Normalize an OpenAI-compatible endpoint to a comparable BASE: drop a trailing
