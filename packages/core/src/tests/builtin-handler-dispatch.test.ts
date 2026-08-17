@@ -62,3 +62,18 @@ test('D8 — migrated planner tools behave byte-for-byte as before (round-trip +
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 2 — research_brief, the first tool migrated with a non-empty
+// BuiltinToolHost (workspaceRoot + sessionKey read via ctx.host).
+test('D8 Phase 2 — research_brief dispatches through a workspaceRoot/sessionKey host', async () => {
+  assert.ok(builtinToolHandler('research_brief'), 'research_brief has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-research-'));
+  try {
+    const withWs = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'test-session' };
+    // With no ledger recorded yet, the handler returns the exact string the case did.
+    const brief = await invokeBuiltinToolRuntime.call(withWs, 'research_brief', {});
+    assert.match(brief, /No research ledger yet — record evidence with research_note first\./);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

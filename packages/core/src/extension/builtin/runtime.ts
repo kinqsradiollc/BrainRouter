@@ -43,8 +43,8 @@ import { searchMcpCatalog } from '../../mcp/discovery/discovery.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
 import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
-import { summarizeLedger, formatBrief } from '../../research/evidenceLedger.js';
-import { appendEvidence, setQuestion, readLedger } from '../../research/researchStore.js';
+import { summarizeLedger } from '../../research/evidenceLedger.js';
+import { appendEvidence } from '../../research/researchStore.js';
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../session/transcript/chapterMarks.js';
 import { acknowledgeCompletions } from '../../session/completion/completionInbox.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
@@ -1178,14 +1178,6 @@ export async function invokeBuiltinToolRuntime(
         const ledger = appendEvidence(this.workspaceRoot, this.sessionKey, { claim, sources, sourceRecords, stance, confidence, note });
         const s = summarizeLedger(ledger);
         return `Recorded. Ledger: ${s.total} finding${s.total === 1 ? '' : 's'} (${s.corroborated} corroborated, ${s.conflicting} conflicting, ${s.singleSource} single-source).`;
-      }
-      case 'research_brief': {
-        if (typeof args.question === 'string' && args.question.trim()) {
-          setQuestion(this.workspaceRoot, this.sessionKey, args.question);
-        }
-        const ledger = readLedger(this.workspaceRoot, this.sessionKey);
-        if (!ledger) return 'No research ledger yet — record evidence with research_note first.';
-        return formatBrief(ledger);
       }
       case 'list_mcp_resources': {
         const client = this.mcpClient as any;
