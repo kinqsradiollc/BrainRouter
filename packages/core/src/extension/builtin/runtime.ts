@@ -1,13 +1,10 @@
 // Internal implementation port for required core capability extensions.
 // Public/user/workspace extensions never receive this runtime object.
 import fs from 'node:fs';
-import {
-  todayView as plannerToday,
-  findItems as plannerFind,
-  addItem as plannerAddItem,
-  updateItem as plannerUpdateItem,
-  scheduleBlock as plannerScheduleBlock,
-} from '../../planner/index.js';
+// ADR-041 D8 — the builtin-tool handler registry. Importing the barrel runs each
+// migrated tool's registration side effect; `builtinToolHandler` is consulted at
+// the top of the switch so a migrated tool dispatches by lookup, not a case.
+import { builtinToolHandler } from './handlers/index.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
@@ -325,6 +322,21 @@ export async function invokeBuiltinToolRuntime(
     // port (default `nodeFilesystemPort` = the previous inline `node:fs`), so an
     // execution world (D10) can back them with container/remote I/O.
     const fsPort: FilesystemPort = this.filesystemPort ?? nodeFilesystemPort;
+    // ADR-041 D8 — strangler dispatch: a migrated tool resolves to a registered
+    // handler and returns here; everything else falls through to the switch below
+    // unchanged. As tools migrate, the switch shrinks one case at a time.
+    const migratedHandler = builtinToolHandler(name);
+    if (migratedHandler) {
+      return migratedHandler({
+        args,
+        invokedName: name,
+        host: this,
+        resolveHere,
+        readOnlyGuard,
+        fsPort,
+        authorizeMcpTarget,
+      });
+    }
     switch (name) {
       // ADR-042 D3 — worktrees the agent can enter. `worktree_list` is the
       // structured, agent-facing inventory; `worktree_enter` attaches a listed
@@ -453,65 +465,6 @@ export async function invokeBuiltinToolRuntime(
         if (typeof this.detachWorktree === 'function') this.detachWorktree(match.path);
         try { clearWorktreeOwner(this.workspaceRoot, match.path); } catch { /* best-effort */ }
         return JSON.stringify({ removed: true, path: match.path, branch: match.branch });
-      }
-      // ADR-028 D6 — the planner. User-scoped, so no workspace is threaded.
-      case 'planner_today': {
-        const date = typeof args.date === 'string' ? args.date : new Date().toISOString().slice(0, 10);
-        const view = plannerToday(undefined, { date, nowMs: Date.now() });
-        return JSON.stringify({
-          // Bounded and summarised, never the whole list: fifty low-signal
-          // lines make the model worse at the five that matter.
-          items: view.items.slice(0, 10).map((i) => ({
-            id: i.id, title: i.title.value, dueDate: i.dueDate?.value ?? null,
-            source: i.source ?? null,
-          })),
-          more: Math.max(0, view.items.length - 10),
-          nextBlock: view.scheduled[0] ?? view.unscheduled[0] ?? null,
-          carriedOver: view.stalled.length,
-          conflicts: view.conflicts.length,
-          staleSources: view.staleSources,
-          drift: view.drift.description,
-          syncState: view.syncState,
-        }, null, 2);
-      }
-      case 'planner_find': {
-        const hits = plannerFind(undefined, String(args.query ?? ''));
-        return JSON.stringify({
-          items: hits.slice(0, 20).map((i) => ({
-            id: i.id, title: i.title.value, completed: i.completed?.value === true,
-          })),
-        }, null, 2);
-      }
-      case 'planner_add': {
-        const title = String(args.title ?? '').trim();
-        if (!title) throw new Error('A title is required.');
-        const item = plannerAddItem(undefined, {
-          title,
-          ...(typeof args.notes === 'string' ? { notes: args.notes } : {}),
-          ...(typeof args.dueDate === 'string' ? { dueDate: args.dueDate } : {}),
-        }, Date.now());
-        return JSON.stringify({ id: item.id, title: item.title.value });
-      }
-      case 'planner_schedule': {
-        const itemId = String(args.itemId ?? '');
-        const minutes = Number(args.estimateMinutes);
-        if (!itemId) throw new Error('An item id is required.');
-        if (!Number.isFinite(minutes) || minutes <= 0) throw new Error('A positive estimate is required.');
-        const block = plannerScheduleBlock(undefined, {
-          itemId, estimateMinutes: minutes,
-          ...(typeof args.scheduledFor === 'string' ? { scheduledFor: args.scheduledFor } : {}),
-        }, Date.now());
-        return JSON.stringify({ id: block.id, itemId: block.itemId, estimateMinutes: block.estimateMinutes });
-      }
-      case 'planner_complete': {
-        // The tool exists, but the JUDGEMENT is the user's. The spec tells the
-        // model never to infer this; the runtime cannot enforce intent, so the
-        // refusal lives where the model reads it.
-        const itemId = String(args.itemId ?? '');
-        if (!itemId) throw new Error('An item id is required.');
-        const updated = plannerUpdateItem(undefined, itemId, { completed: true }, Date.now());
-        if (!updated) throw new Error(`No planner item ${itemId}.`);
-        return JSON.stringify({ id: updated.id, completed: true });
       }
       // ADR-029 C3 — the same verbs the UI calls, over the same registry.
       case 'workspace_resolve': {
