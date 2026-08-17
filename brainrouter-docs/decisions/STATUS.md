@@ -34,7 +34,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
 | 041 | Plug-and-play runtime | 📝 Proposed (draft in progress) | — |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
-| 043 | Egress at the user's edge | 📝 Proposed (depends on 041) | — |
+| 043 | Egress at the user's edge | 🟡 S1 shipped; S2–S5 gated on 041 | 0.4.21 |
 
 ## In flight / next
 
