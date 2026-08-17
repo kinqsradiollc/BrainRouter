@@ -30,6 +30,10 @@ export interface ProviderRegistryHandle {
 export class ProviderRegistry {
   readonly #builtins: Map<string, ProviderDefinition>;
   readonly #dynamic = new Map<string, ProviderDefinition>();
+  // ADR-041 D1 — providers contributed by loaded extensions, synced wholesale
+  // from the extension host's active set (see setExtensionProviders). A builtin id
+  // still wins over an extension of the same id, matching the catalog rule.
+  #extensions = new Map<string, ProviderDefinition>();
 
   constructor(builtins: readonly ProviderDefinition[]) {
     this.#builtins = new Map(builtins.map((p) => [p.id, p]));
@@ -37,11 +41,11 @@ export class ProviderRegistry {
 
   /** Runtime registrations win over a builtin of the same id (the swap case). */
   get(id: string): ProviderDefinition | undefined {
-    return this.#dynamic.get(id) ?? this.#builtins.get(id);
+    return this.#dynamic.get(id) ?? this.#builtins.get(id) ?? this.#extensions.get(id);
   }
 
   has(id: string): boolean {
-    return this.#dynamic.has(id) || this.#builtins.has(id);
+    return this.#dynamic.has(id) || this.#builtins.has(id) || this.#extensions.has(id);
   }
 
   /** True only for a compiled-in builtin — NOT a runtime registration. */
@@ -84,8 +88,19 @@ export class ProviderRegistry {
     this.#dynamic.set(def.id, def);
   }
 
+  /**
+   * ADR-041 D1 — replace the extension-contributed set wholesale. Called by the
+   * extension host after a load/reload commit so extension providers become live
+   * to routing get()/has() (they were catalog-only before). A builtin id still
+   * wins; explicit runtime register()/replace() still wins over both.
+   */
+  setExtensionProviders(defs: readonly ProviderDefinition[]): void {
+    this.#extensions = new Map(defs.map((d) => [d.id, d]));
+  }
+
   #merged(): Map<string, ProviderDefinition> {
-    const out = new Map(this.#builtins);
+    const out = new Map(this.#extensions);
+    for (const [id, def] of this.#builtins) out.set(id, def);
     for (const [id, def] of this.#dynamic) out.set(id, def);
     return out;
   }

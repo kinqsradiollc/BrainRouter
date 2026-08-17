@@ -2,6 +2,7 @@
 import type { LocalToolExecutor } from '../tool/registry/executors.js';
 import type { LocalToolEntry } from '../tool/registry/registry.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
+import { PROVIDER_REGISTRY } from '../provider/providers/index.js';
 import type { HookEvent } from '../hooks/hooksStore.js';
 
 export interface ExtensionHookContext { event: HookEvent; tool?: string; args?: Record<string, unknown>; workspaceRoot: string }
@@ -27,6 +28,12 @@ const target = () => staging ?? active;
 const markActiveMutation = (state: ContributionState): void => {
   if (state === active) activeGeneration += 1;
 };
+// ADR-041 D1 — mirror the ACTIVE extension providers into the live ProviderRegistry
+// so routing get()/has() resolves them (not just the catalog). Called whenever the
+// active set becomes authoritative (direct register, or a reload commit/abort).
+const syncExtensionProviders = (): void => {
+  PROVIDER_REGISTRY.setExtensionProviders(active.providers.map((p) => p.def));
+};
 
 export function beginExtensionReload(): void {
   if (staging) throw new Error('An extension reload is already in progress.');
@@ -37,8 +44,9 @@ export function commitExtensionReload(): void {
   active = staging;
   staging = null;
   activeGeneration += 1;
+  syncExtensionProviders();
 }
-export function abortExtensionReload(): void { staging = null; }
+export function abortExtensionReload(): void { staging = null; syncExtensionProviders(); }
 
 export function registerExtensionTool(entry: LocalToolEntry, executor: LocalToolExecutor, from: string, options: { required?: boolean } = {}): void {
   const state = target();
@@ -52,6 +60,7 @@ export function registerExtensionTool(entry: LocalToolEntry, executor: LocalTool
 }
 export function registerExtensionProvider(def: ProviderDefinition, from: string): void {
   const state = target(); const idx = state.providers.findIndex((item) => item.def.id === def.id); if (idx >= 0) state.providers.splice(idx, 1); state.providers.push({ def, from }); markActiveMutation(state);
+  if (state === active) syncExtensionProviders(); // reload path syncs on commit
 }
 export function registerExtensionHook(handler: ExtensionHookHandler, from: string): void {
   const state = target(); state.hooks.push({ handler, from }); markActiveMutation(state);
