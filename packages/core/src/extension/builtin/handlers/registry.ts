@@ -34,6 +34,8 @@ export interface BuiltinToolHost {
   readonly resultCache: ResultCache;
   /** Persist a transcript entry (chapter markers, etc.) — agent.ts:3548. (D8 Phase 10: mark_chapter) */
   recordTranscript(message: any): void;
+  /** The last goal transition this turn — MUTABLE; the runTurn guard reads it — agent.ts:3167. (D8 Phase 11: goal_complete/blocked) */
+  lastGoalTransition: 'complete' | 'blocked' | undefined;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

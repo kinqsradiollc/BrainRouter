@@ -38,7 +38,7 @@ import { callOpenAI } from '../../agent/transport/llmTransport.js';
 import { enforceTaskBudget } from '../../provider/budget.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
-import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js';
+import { readGoal } from '../../goal/store/goalStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
 import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
@@ -48,7 +48,7 @@ import { resolveActiveMode, setSessionMode } from '../../session/state/sessionMo
 import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
 import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
 import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.js';
-import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
+import { formatPlan, updatePlan } from '../../task/taskStore.js';
 import {
   applySteeringPlanRevision,
 } from '../../task/steeringReceiptStore.js';
@@ -1835,47 +1835,6 @@ export async function invokeBuiltinToolRuntime(
           answers[key] = await askOne(spec);
         }
         return JSON.stringify({ answers });
-      }
-      case 'goal_complete': {
-        const proof = String(args.proof ?? '').trim();
-        if (!proof) throw new Error('goal_complete requires a non-empty proof.');
-        // Plan-honesty guard: refuse to mark the goal complete while the
-        // active plan still has pending / in_progress items. The model
-        // built that plan as its own contract — declaring done while items
-        // remain open is misleading (this is the exact bug the user hit
-        // when /goal analyze fired with 3 of 4 plan items still ☐). The
-        // model must either finish the work, explicitly mark dropped
-        // items completed via update_plan (creating an audit trail), or
-        // switch to goal_blocked.
-        const plan = readPlan(this.workspaceRoot, this.sessionKey);
-        const open = plan.items.filter((i) => i.status !== 'completed');
-        if (open.length > 0) {
-          const open_summary = open
-            .map((i) => `  - [${i.status === 'in_progress' ? '⏳' : '☐'}] ${i.step}`)
-            .join('\n');
-          throw new Error(
-            `goal_complete refused: the active plan still has ${open.length} incomplete item(s):\n${open_summary}\n\n` +
-            `Do ONE of:\n` +
-            `  1. Finish the remaining work, then call update_plan to mark those items completed.\n` +
-            `  2. If you decided to drop them, call update_plan FIRST and mark them completed with a brief explanation (the plan is your honest record — leaving items pending while declaring done is misleading).\n` +
-            `  3. Call goal_blocked instead if no defensible path remains.\n\n` +
-            `Then retry goal_complete in the same response as the user-visible prose summary.`
-          );
-        }
-        const goal = completeGoal(this.workspaceRoot, this.sessionKey, proof);
-        if (!goal) return 'No active goal to complete.';
-        this.lastGoalTransition = 'complete';
-        return `Goal marked complete. Proof: ${proof}`;
-      }
-      case 'goal_blocked': {
-        const reason = String(args.reason ?? '').trim();
-        if (!reason) throw new Error('goal_blocked requires a non-empty reason.');
-        const needed = String(args.needed ?? '').trim();
-        const note = needed ? `${reason} (needed: ${needed})` : reason;
-        const goal = blockGoal(this.workspaceRoot, this.sessionKey, note);
-        if (!goal) return 'No active goal to block.';
-        this.lastGoalTransition = 'blocked';
-        return `Goal marked blocked. Reason: ${note}`;
       }
       default:
         throw new Error(`Unknown local tool: ${name}`);
