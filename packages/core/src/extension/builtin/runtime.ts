@@ -105,6 +105,12 @@ import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
 import { nodeFilesystemPort, type FilesystemPort } from '../../agent/fs/filesystemPort.js';
+import type { SubprocessPort } from '../../agent/subprocess/subprocessPort.js';
+
+// ADR-041 D3 — default subprocess port: wraps `spawnWorkerThread` verbatim, so
+// the local worker-spawn path is byte-identical. An execution world (D10) injects
+// a port that spawns the worker in a container/remote.
+const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
 import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
@@ -1357,7 +1363,9 @@ export async function invokeBuiltinToolRuntime(
         }
         const goal = String(args.goal ?? '').trim();
         if (!goal) throw new Error('spawn_worker_thread requires a goal.');
-        const worker = spawnWorkerThread(this.mcpClient, this.llmConfig, {
+        // ADR-041 D3 — spawn via the injected subprocess port (default wraps
+        // spawnWorkerThread; an execution world can spawn in a container/remote).
+        const worker = (this.subprocessPort ?? nodeSubprocessPort).spawnWorker(this.mcpClient, this.llmConfig, {
           workspaceRoot: this.workspaceRoot,
           launchCwd: this.launchCwd,
           role: String(args.role ?? 'worker'),

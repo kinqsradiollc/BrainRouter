@@ -34,6 +34,7 @@ import type {
 } from '@kinqs/brainrouter-types/agent';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import type { FilesystemPort } from './fs/filesystemPort.js';
+import type { SubprocessPort } from './subprocess/subprocessPort.js';
 import {
   appendTranscriptEntry,
   isInternalSessionKey,
@@ -690,6 +691,12 @@ export interface AgentOptions {
    * `node:fs` calls). An execution world (D10) injects a container/remote port.
    */
   filesystemPort?: FilesystemPort;
+  /**
+   * ADR-041 D3 — subprocess/worker-spawn capability. Omitted ⇒ the local default
+   * that wraps `spawnWorkerThread` (byte-identical). An execution world (D10)
+   * injects a port that spawns the worker in a container/remote.
+   */
+  subprocessPort?: SubprocessPort;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
   browserControlPort?: BrowserControlPort;
   /** Desktop-only access to native terminals already opened by the user. */
@@ -1262,6 +1269,7 @@ export class Agent {
   public interactionPort?: AgentOptions['interactionPort'];
   public computerUsePort?: ComputerUsePort;
   public filesystemPort?: FilesystemPort;
+  public subprocessPort?: SubprocessPort;
   public browserControlPort?: BrowserControlPort;
   public terminalUsePort?: AgentOptions['terminalUsePort'];
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
@@ -1332,6 +1340,7 @@ export class Agent {
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
     this.filesystemPort = options.filesystemPort;
+    this.subprocessPort = options.subprocessPort;
     this.browserControlPort = options.browserControlPort;
     this.terminalUsePort = options.terminalUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
