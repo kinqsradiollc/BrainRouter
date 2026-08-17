@@ -52,7 +52,7 @@ function buildProviderCatalog(): ProviderEntry[] {
   const seen = new Set(out.map((p) => p.id));
   for (const p of extensionProviders()) {
     if (!p.pickerVisible || !p.label || !p.hint || !p.envKey) continue;
-    if (PROVIDER_REGISTRY.has(p.id) || seen.has(p.id)) continue;
+    if (PROVIDER_REGISTRY.hasBuiltin(p.id) || seen.has(p.id)) continue;
     out.push({ id: p.id, label: p.label, hint: p.hint, endpoint: p.endpoint, envKey: p.envKey, local: p.local, models: [], defaultApiKey: p.defaultApiKey });
     seen.add(p.id);
   }
@@ -60,7 +60,7 @@ function buildProviderCatalog(): ProviderEntry[] {
   //    id wins (skip), so the code modules stay authoritative.
   const cfg = loadProvidersConfig();
   for (const [id, entry] of Object.entries(cfg.providers)) {
-    if (entry.pickerVisible !== true || PROVIDER_REGISTRY.has(id) || seen.has(id)) continue;
+    if (entry.pickerVisible !== true || PROVIDER_REGISTRY.hasBuiltin(id) || seen.has(id)) continue;
     if (!entry.label || !entry.hint || !entry.endpoint || !entry.envKey) continue;
     out.push({ id, label: entry.label, hint: entry.hint, endpoint: entry.endpoint, envKey: entry.envKey, local: entry.local === true, models: entry.models ?? [], defaultModel: entry.defaultModel });
     seen.add(id);
