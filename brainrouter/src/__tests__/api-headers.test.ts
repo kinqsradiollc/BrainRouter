@@ -6,6 +6,7 @@ import {
   isOriginAllowed,
   corsMiddleware,
   securityHeaders,
+  corsCredentialsBootError,
 } from "../api/middleware/securityHeaders.js";
 
 describe("API-HEADERS-CORS — resolveCorsAllowlist", () => {
@@ -114,5 +115,19 @@ describe("API-HEADERS-CORS — middleware integration", () => {
     const res = await fetch(`${base}/x`);
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
+  });
+});
+
+describe("API-HEADERS-CORS — corsCredentialsBootError (ADR-037 D3)", () => {
+  it("refuses a wildcard origin combined with credentials", () => {
+    const err = corsCredentialsBootError(["*"]);
+    expect(err).toBeTruthy();
+    expect(String(err)).toContain("BRAINROUTER_CORS_ORIGIN");
+    // even when a real origin is also listed, the wildcard is the hole.
+    expect(corsCredentialsBootError(["https://app.example.com", "*"])).toBeTruthy();
+  });
+  it("allows an explicit allowlist", () => {
+    expect(corsCredentialsBootError(["https://app.example.com"])).toBeNull();
+    expect(corsCredentialsBootError(["http://localhost:3000"])).toBeNull();
   });
 });
