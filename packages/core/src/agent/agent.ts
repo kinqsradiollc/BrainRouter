@@ -35,6 +35,7 @@ import type {
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import type { FilesystemPort } from './fs/filesystemPort.js';
 import type { SubprocessPort } from './subprocess/subprocessPort.js';
+import type { ShellPort } from './shell/shellPort.js';
 import {
   appendTranscriptEntry,
   isInternalSessionKey,
@@ -697,6 +698,13 @@ export interface AgentOptions {
    * injects a port that spawns the worker in a container/remote.
    */
   subprocessPort?: SubprocessPort;
+  /**
+   * ADR-041 D3 — shell-exec capability (bare exec only; approval/sandbox stay in
+   * the tool). Omitted ⇒ the local default wrapping `runShell` /
+   * `startBackgroundShell` (byte-identical). An execution world (D10) injects a
+   * port that runs the command in a container/remote.
+   */
+  shellPort?: ShellPort;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
   browserControlPort?: BrowserControlPort;
   /** Desktop-only access to native terminals already opened by the user. */
@@ -1270,6 +1278,7 @@ export class Agent {
   public computerUsePort?: ComputerUsePort;
   public filesystemPort?: FilesystemPort;
   public subprocessPort?: SubprocessPort;
+  public shellPort?: ShellPort;
   public browserControlPort?: BrowserControlPort;
   public terminalUsePort?: AgentOptions['terminalUsePort'];
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
@@ -1341,6 +1350,7 @@ export class Agent {
     this.computerUsePort = options.computerUsePort;
     this.filesystemPort = options.filesystemPort;
     this.subprocessPort = options.subprocessPort;
+    this.shellPort = options.shellPort;
     this.browserControlPort = options.browserControlPort;
     this.terminalUsePort = options.terminalUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;

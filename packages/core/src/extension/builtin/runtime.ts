@@ -106,11 +106,17 @@ import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js'
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
 import { nodeFilesystemPort, type FilesystemPort } from '../../agent/fs/filesystemPort.js';
 import type { SubprocessPort } from '../../agent/subprocess/subprocessPort.js';
+import type { ShellPort } from '../../agent/shell/shellPort.js';
 
 // ADR-041 D3 — default subprocess port: wraps `spawnWorkerThread` verbatim, so
 // the local worker-spawn path is byte-identical. An execution world (D10) injects
 // a port that spawns the worker in a container/remote.
 const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
+
+// ADR-041 D3 — default shell port: wraps runShell / startBackgroundShell verbatim,
+// so the local exec path is byte-identical. An execution world (D10) injects a
+// port that runs the command in a container/remote.
+const nodeShellPort: ShellPort = { runShell, startBackgroundShell };
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
 import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
@@ -973,7 +979,7 @@ export async function invokeBuiltinToolRuntime(
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
-          const bg = startBackgroundShell({ command: cmd, cwd: cwdOverride ?? this.launchCwd, workspaceRoot: this.workspaceRoot });
+          const bg = (this.shellPort ?? nodeShellPort).startBackgroundShell({ command: cmd, cwd: cwdOverride ?? this.launchCwd, workspaceRoot: this.workspaceRoot });
           return JSON.stringify({
             id: bg.id,
             status: bg.status,
@@ -998,7 +1004,9 @@ export async function invokeBuiltinToolRuntime(
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
         this.assertInheritedExecutionAuthorityCurrent();
-        const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
+        // ADR-041 D3 — the bare exec runs through the injected shell port; the
+        // sandbox config was already resolved (approval/policy/guards) above.
+        const result = await (this.shellPort ?? nodeShellPort).runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         // WS5 — remember commits WE authored this session, so a later
         // `git commit --amend` of one of them is allowed (vs. amending a
         // pre-existing/user commit, which the guard blocks).
