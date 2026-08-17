@@ -22,6 +22,7 @@ import type { ModeStats } from "./bench/regression.js";
 import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
+import type { IMemoryStoreComposite } from "./store/composite.js";
 import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore, ProjectStore, AdminConsoleStore } from "../tenancy/store.js";
 import type { RefreshSessionStore } from "../api/routes/identity/refreshSessions.js";
 import type { ProviderStore } from "../providers/store.js";
@@ -57,7 +58,7 @@ import fs from "node:fs";
 import type { CognitiveRecord, MemoryEvidence, MemoryImport, MemoryOperation, MemoryStatus, MemoryType, SourceChunk, SourceDocument, UserRecord, BlackboardItem, BlackboardItemInput, BlackboardStatus, MemoryTreeNode, MemoryTreeKind, RelatedChunkHit } from "@kinqs/brainrouter-types";
 
 export class MemoryEngine {
-  public readonly store: IMemoryStore;
+  public readonly store: IMemoryStoreComposite;
   /**
    * ADR-007 Phase 2 (step 3) — the awaited init lifecycle. The constructor can't
    * be async, so it kicks off `#initialize()` and stashes the promise here.
@@ -110,7 +111,10 @@ export class MemoryEngine {
     // PostgresMemoryStore from BRAINROUTER_DATABASE_URL / DATABASE_URL. SQLite is
     // gone, so a connection string is REQUIRED when no store is injected.
     if (store) {
-      this.store = store;
+      // The only memory store is PostgresMemoryStore (SQLite is gone), and every
+      // injector (prod + tests) passes one, so narrowing the shared IMemoryStore
+      // param to the composite is sound. This is the ONE cast that used to be 15.
+      this.store = store as IMemoryStoreComposite;
     } else {
       const url = pgUrlFromEnv();
       if (!url) {
@@ -218,9 +222,10 @@ export class MemoryEngine {
    * live. Never throws.
    */
   public async ping(): Promise<boolean> {
-    const s = this.store as unknown as { ping?: () => Promise<boolean> };
-    if (typeof s.ping !== "function") return true;
-    try { return await s.ping(); } catch { return false; }
+    // Defensive: the composite guarantees `ping`, but a future injected fake might
+    // not carry it — treat an absent probe as live and never throw.
+    if (typeof this.store.ping !== "function") return true;
+    try { return await this.store.ping(); } catch { return false; }
   }
 
   public async close(): Promise<void> {
@@ -432,21 +437,22 @@ export class MemoryEngine {
   /**
    * ADR-010 P1 — the org/membership surface. The backend always runs on
    * `PostgresMemoryStore` (SQLite removed, ADR-007), which implements
-   * `TenancyStore` alongside `IMemoryStore`; the shared `IMemoryStore` type has
-   * no org concept, so this is the one localized cast that exposes it.
+   * `TenancyStore` alongside `IMemoryStore`; the store field is typed as
+   * `IMemoryStoreComposite` (ADR-041 A41-6), so this getter just narrows the
+   * return type — no cast (it used to be `as unknown as TenancyStore`).
    */
   public get tenancy(): TenancyStore {
-    return this.store as unknown as TenancyStore;
+    return this.store;
   }
 
   /** ADR-014 P-B2 — email/auth store: SMTP settings, verification tokens, invites. */
   public get emailAuth(): EmailAuthStore {
-    return this.store as unknown as EmailAuthStore;
+    return this.store;
   }
 
   /** ADR-037 B1 — revocable refresh-session store (issue / rotate / revoke). */
   public get refreshSessions(): RefreshSessionStore {
-    return (this.store as unknown as { refreshSessionStore(): RefreshSessionStore }).refreshSessionStore();
+    return this.store.refreshSessionStore();
   }
 
   /**
@@ -476,58 +482,57 @@ export class MemoryEngine {
 
   /** The active embedding dimension (0 if unbuilt) — for the embedder-swap guard. */
   public getEmbeddingDimensions(): number {
-    const s = this.store as unknown as { getVecDimensions?: () => number };
-    return typeof s.getVecDimensions === "function" ? s.getVecDimensions() : 0;
+    return typeof this.store.getVecDimensions === "function" ? this.store.getVecDimensions() : 0;
   }
 
   /** ADR-014 P-C — team consensus persona store. */
   public get orgPersona(): OrgPersonaStore {
-    return this.store as unknown as OrgPersonaStore;
+    return this.store;
   }
 
   /** ADR-014 P-D — artifact/memory sharing store. */
   public get sharing(): MemorySharingStore {
-    return this.store as unknown as MemorySharingStore;
+    return this.store;
   }
 
   /** ADR-014 P-E — projects + per-project access control store. */
   public get projects(): ProjectStore {
-    return this.store as unknown as ProjectStore;
+    return this.store;
   }
 
   /** Project-scoped knowledge persistence and exact access queries. */
   public get knowledge(): KnowledgeDocumentStore {
-    return this.store as unknown as KnowledgeDocumentStore;
+    return this.store;
   }
 
   /** ADR-014 P-F — admin console + audit trail store. */
   public get adminConsole(): AdminConsoleStore {
-    return this.store as unknown as AdminConsoleStore;
+    return this.store;
   }
 
   /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */
   public get providers(): ProviderStore {
-    return this.store as unknown as ProviderStore;
+    return this.store;
   }
 
   /** Organization-scoped server-managed model catalog and policy store. */
   public get models(): ModelPolicyStore {
-    return this.store as unknown as ModelPolicyStore;
+    return this.store;
   }
 
   /** Tenant-scoped remote device identities, rotating sessions, grants, and audit. */
   public get remote(): RemoteAccessStore {
-    return this.store as unknown as RemoteAccessStore;
+    return this.store;
   }
 
   /** ADR-010 P6 — org-scoped external integrations (GitHub App, …). */
   public get integrations(): IntegrationStore {
-    return this.store as unknown as IntegrationStore;
+    return this.store;
   }
 
   /** ADR-016 C2 — per-user connectors + sealed OAuth tokens (server-side). */
   public get connectors(): ConnectorStore {
-    return this.store as unknown as ConnectorStore;
+    return this.store;
   }
 
   /**
