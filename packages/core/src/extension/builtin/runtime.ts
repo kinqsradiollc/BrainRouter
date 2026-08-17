@@ -1527,49 +1527,6 @@ export async function invokeBuiltinToolRuntime(
         this.maybeAutoApprovePlan(state);
         return formatPlan(state);
       }
-      case 'track_query': {
-        const action = String(args.action ?? 'list');
-        if (action === 'board') {
-          const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
-          const items = trackListWorkItems(this.workspaceRoot);
-          const columns = project.workflowStates.map((s) => ({
-            state: s.name, id: s.id,
-            items: items.filter((w) => w.status === s.id).map((w) => ({ key: w.key, type: w.type, title: w.title, priority: w.priority, assignee: w.assignee })),
-          }));
-          return JSON.stringify({ project: { key: project.key, name: project.name }, columns }, null, 2);
-        }
-        if (action === 'get') {
-          const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
-          return item ? JSON.stringify(item, null, 2) : `No work item "${args.key}".`;
-        }
-        if (action === 'sprints') {
-          return JSON.stringify(trackListSprints(this.workspaceRoot), null, 2);
-        }
-        if (action === 'sprint-detail') {
-          const sprintId = String(args.sprintId ?? '');
-          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
-          if (!sprint) return `No sprint "${sprintId}".`;
-          return JSON.stringify({ sprint, items: trackListWorkItems(this.workspaceRoot, { sprintId }) }, null, 2);
-        }
-        if (action === 'velocity') {
-          const sprintId = typeof args.sprintId === 'string' ? args.sprintId : undefined;
-          if (sprintId) {
-            const velocity = trackSprintVelocity(this.workspaceRoot, sprintId);
-            return velocity === undefined ? `No sprint "${sprintId}".` : JSON.stringify({ sprintId, velocity });
-          }
-          return JSON.stringify(trackListSprints(this.workspaceRoot).map((sprint) => ({
-            sprintId: sprint.id,
-            velocity: trackSprintVelocity(this.workspaceRoot, sprint.id) ?? 0,
-          })), null, 2);
-        }
-        const items = trackListWorkItems(this.workspaceRoot, {
-          status: typeof args.status === 'string' ? args.status : undefined,
-          type: isWorkItemType(args.type) ? args.type : undefined,
-          assignee: typeof args.assignee === 'string' ? args.assignee : undefined,
-          text: typeof args.text === 'string' ? args.text : undefined,
-        });
-        return JSON.stringify(items.map((w) => ({ key: w.key, type: w.type, status: w.status, statusCategory: w.statusCategory, priority: w.priority, title: w.title, assignee: w.assignee })), null, 2);
-      }
       case 'track_update': {
         const action = String(args.action ?? '');
         if (action === 'create') {
