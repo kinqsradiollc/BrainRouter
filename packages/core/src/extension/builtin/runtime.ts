@@ -628,7 +628,7 @@ export async function invokeBuiltinToolRuntime(
         // CC-P6.4 — read-before-overwrite. Creating a NEW file is fine, but
         // overwriting an EXISTING one the agent hasn't read this session would
         // blow away content it never saw. Require a read_file first in that case.
-        if (fs.existsSync(resolved) && !this.filesReadThisSession.has(resolved)) {
+        if ((await fsPort.exists(resolved)) && !this.filesReadThisSession.has(resolved)) {
           throw new Error(`Read-before-overwrite: "${args.path}" already exists and you have not read it this session. read_file("${args.path}") first (then write_file replaces it intentionally), or use edit_file for a targeted change.`);
         }
         const parentDenial = await this.confirmSilentChildToolApproval({
@@ -658,7 +658,7 @@ export async function invokeBuiltinToolRuntime(
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
         if (!/\.ipynb$/i.test(resolved)) throw new Error('notebook_edit targets a .ipynb (Jupyter notebook) file.');
-        if (!fs.existsSync(resolved)) throw new Error(`Notebook not found: ${args.path}`);
+        if (!(await fsPort.exists(resolved))) throw new Error(`Notebook not found: ${args.path}`);
         const editMode = args.edit_mode === 'insert' || args.edit_mode === 'delete' ? args.edit_mode : 'replace';
         const cellIndex = args.cell_index === undefined || args.cell_index === null ? undefined : Number(args.cell_index);
         const cellType = args.cell_type === 'markdown' ? 'markdown' : args.cell_type === 'code' ? 'code' : undefined;
@@ -670,8 +670,8 @@ export async function invokeBuiltinToolRuntime(
         if (parentDenial) return parentDenial;
         this.assertInheritedExecutionAuthorityCurrent();
         this.captureFileSnapshot(resolved); // undo log for /rewind --files
-        const result = applyNotebookEdit(fs.readFileSync(resolved, 'utf8'), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
-        fs.writeFileSync(resolved, result.content, 'utf8');
+        const result = applyNotebookEdit(await fsPort.readFile(resolved), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
+        await fsPort.writeFile(resolved, result.content);
         this.filesReadThisSession.add(resolved);
         return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
       }
@@ -680,7 +680,7 @@ export async function invokeBuiltinToolRuntime(
         const resolved = resolveHere(args.path);
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
         if (ownErr) throw new Error(ownErr);
-        if (!fs.existsSync(resolved)) {
+        if (!(await fsPort.exists(resolved))) {
           throw new Error(`File not found: ${args.path}`);
         }
         // CC-P6.4 — read-before-edit. Editing a file the agent hasn't read this
@@ -689,7 +689,7 @@ export async function invokeBuiltinToolRuntime(
         if (!this.filesReadThisSession.has(resolved)) {
           throw new Error(`Read-before-edit: you must read_file("${args.path}") before editing it — you have not read this file this session. Read it first, then edit with targetContent that matches the current contents.`);
         }
-        const content = fs.readFileSync(resolved, 'utf8');
+        const content = await fsPort.readFile(resolved);
         const target = args.targetContent;
         const replacement = args.replacementContent;
 
@@ -715,7 +715,7 @@ export async function invokeBuiltinToolRuntime(
         if (parentDenial) return parentDenial;
         this.assertInheritedExecutionAuthorityCurrent();
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
-        fs.writeFileSync(resolved, updated, 'utf8');
+        await fsPort.writeFile(resolved, updated);
         const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
         const editReindex = await this.maybeReindexSource(resolved, updated);
         return `Successfully edited ${args.path}` + editNotice + editReindex;
