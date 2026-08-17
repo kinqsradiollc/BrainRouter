@@ -1,6 +1,6 @@
 # ADR-018 — Meetings: Local Capture, Server-Default Transcription & Summarization, Memory-Native Storage
 
-**Status:** Accepted (design; phased) · **M0 implementation started** on `feat/meetings-adr018`
+**Status:** Accepted — largely implemented (2026-08; verified 2026-08-17). The meetings product shipped: capture / server-default transcription+summarization / memory-native storage, with the desktop MeetingsView + MeetingTracksView + SharePopover surfaces. ADR-035 ("a meeting you cannot lose") depends on this foundation and completed the resilience layer (retention, chunk-level streaming, quota) into `release/0.4.20`. Remaining polish tracks under ADR-035's follow-ups; the core 018 decision is delivered.
 (committed, **not merged** — held until Codex's server-managed-models work lands) · **Extends** ADR-012
 (providers DB-only), ADR-010 (tenancy), ADR-016 (server-side connectors / desktop-as-client) ·
 **Aligns with** the approved spec `server-managed-models-remote-access-and-cve.md` (model gateway,

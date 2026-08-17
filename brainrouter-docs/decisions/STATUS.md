@@ -9,7 +9,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | ADR | Title | Status | Where |
 |----|-------|--------|-------|
 | 017 | Production flows: org/team + PR-security bot | ✅ Implemented | 0.4.20 |
-| 018 | Meetings: local capture, server transcription | 📝 Proposed (draft) | — |
+| 018 | Meetings: local capture, server transcription | ✅ Implemented (via ADR-035) | 0.4.20 |
 | 019 | Org/workspace switcher + Overview parity | ✅ Implemented | 0.4.17 |
 | 020 | Memory self-improvement loop | ✅ Implemented (P0–P3) | 0.4.18 |
 | 021 | Workspace onboarding + typed profiles | ✅ Implemented | 0.4.17 |
