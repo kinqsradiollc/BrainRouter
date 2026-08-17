@@ -86,7 +86,7 @@ import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
 import { parseGoogleHtml, googleSearchUrl } from '../../websearch/providers/google.js';
 import type { WebSearchResult } from '../../websearch/types.js';
-import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
+import { readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { isSensitiveReviewSourcePath, redactReviewSourceText } from '../../review/sourceSafety.js';
@@ -1308,13 +1308,6 @@ export async function invokeBuiltinToolRuntime(
         // A timeout leaves status 'running', so its completion still reports later.
         if (meta.status !== 'running') acknowledgeCompletions(this.sessionKey, [id]);
         return JSON.stringify({ id, status: meta.status, summary: readWorkerSummary(this.workspaceRoot, id) ?? null });
-      }
-      case 'read_worker_summary': {
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('read_worker_summary requires an id.');
-        const meta = readWorkerMeta(this.workspaceRoot, id);
-        if (!meta) return `No worker "${id}".`;
-        return readWorkerSummary(this.workspaceRoot, id) ?? `Worker ${id} (${meta.status}) has no summary yet.`;
       }
       case 'close_worker': {
         const id = String(args.id ?? '').trim();

@@ -6,9 +6,10 @@ import { plannerHandlers } from './planner.js';
 import { readOnlyHandlers } from './readOnly.js';
 import { mcpHandlers } from './mcp.js';
 import { trackHandlers } from './track.js';
+import { workerHandlers } from './worker.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 
