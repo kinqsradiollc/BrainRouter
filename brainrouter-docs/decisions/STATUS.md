@@ -30,7 +30,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 036 | The finding carries its code | ✅ Implemented | 0.4.20 |
 | **037** | **Credentials the page cannot read** | **✅ Implemented (live-QA the §5 test)** | **0.4.21** |
 | 038 | A planner worth opening | ✅ Implemented | main |
-| 039 | The half of security a model cannot see (taint) | 🟡 Cited vulns fixed (ReDoS + probe SSRF, 0.4.21); engine = own track | 0.4.21 |
+| 039 | The half of security a model cannot see (taint) | 🟡 All 6 concrete vulns fixed (2 ReDoS + 4 SSRF, 0.4.21); engine = own track | 0.4.21 |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
 | 041 | Plug-and-play runtime | 🟡 A41-6 shipped (composite store type); rest = concurrent session's epic | 0.4.21 |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
