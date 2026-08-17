@@ -5,8 +5,8 @@
 // before the larger read-only tier follows. Body is the former case verbatim
 // (`this.x` → `ctx.host.x`).
 
-import { formatBrief } from '../../../research/evidenceLedger.js';
-import { setQuestion, readLedger } from '../../../research/researchStore.js';
+import { formatBrief, summarizeLedger } from '../../../research/evidenceLedger.js';
+import { setQuestion, readLedger, appendEvidence } from '../../../research/researchStore.js';
 import { listConnectors } from '../../../connectors/index.js';
 import { runExtractResult } from '../../../tool/result/extractResult.js';
 import type { BuiltinToolHandler } from './registry.js';
@@ -19,6 +19,34 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
     const ledger = readLedger(host.workspaceRoot, host.sessionKey);
     if (!ledger) return 'No research ledger yet — record evidence with research_note first.';
     return formatBrief(ledger);
+  },
+
+  research_note: async ({ args, host }) => {
+    const claim = String(args.claim ?? '').trim();
+    if (!claim) throw new Error('research_note requires a non-empty `claim`.');
+    const sources = Array.isArray(args.sources) ? args.sources.map((s: any) => String(s)) : [];
+    const sourceRecords = Array.isArray(args.sourceRecords)
+      ? args.sourceRecords.filter((source: any) => source && typeof source === 'object').map((source: any) => ({
+        url: String(source.url ?? ''),
+        ...(typeof source.title === 'string' ? { title: source.title } : {}),
+        ...(typeof source.publisher === 'string' ? { publisher: source.publisher } : {}),
+        ...(Array.isArray(source.authors) ? { authors: source.authors.map((author: any) => String(author)) } : {}),
+        ...(typeof source.publishedDate === 'string' ? { publishedDate: source.publishedDate } : {}),
+        ...(typeof source.accessedAt === 'string' ? { accessedAt: source.accessedAt } : {}),
+        ...(typeof source.evidence === 'string' ? { evidence: source.evidence } : {}),
+        ...(typeof source.limitations === 'string' ? { limitations: source.limitations } : {}),
+      }))
+      : [];
+    const stance = ['support', 'refute', 'unclear'].includes(String(args.stance))
+      ? (String(args.stance) as 'support' | 'refute' | 'unclear')
+      : undefined;
+    const confidence = ['high', 'medium', 'low'].includes(String(args.confidence))
+      ? (String(args.confidence) as 'high' | 'medium' | 'low')
+      : undefined;
+    const note = typeof args.note === 'string' ? args.note : undefined;
+    const ledger = appendEvidence(host.workspaceRoot, host.sessionKey, { claim, sources, sourceRecords, stance, confidence, note });
+    const s = summarizeLedger(ledger);
+    return `Recorded. Ledger: ${s.total} finding${s.total === 1 ? '' : 's'} (${s.corroborated} corroborated, ${s.conflicting} conflicting, ${s.singleSource} single-source).`;
   },
 
   connector_list: async ({ args, host }) => {
