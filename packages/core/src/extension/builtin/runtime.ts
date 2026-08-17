@@ -32,7 +32,6 @@ import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permi
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
-import { proxyControl } from '../../review/pentestProxy.js';
 import { buildPentestDedupeMessages, findingKey, parsePentestDedupeDecision } from '../../review/reviewSynthesis.js';
 import { callOpenAI } from '../../agent/transport/llmTransport.js';
 import { enforceTaskBudget } from '../../provider/budget.js';
@@ -1607,32 +1606,6 @@ export async function invokeBuiltinToolRuntime(
         saveReview(this.workspaceRoot, { ...run, status: 'completed', updatedAt: new Date().toISOString(), summary });
         return JSON.stringify({ completed: true, findings: run.findings.length, sarif: '.brainrouter/findings.sarif' });
       }
-      case 'list_requests':
-        return JSON.stringify(await proxyControl('requests', { method: 'GET' }, this.pentestProxyControl()));
-      case 'view_request': {
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('view_request requires an id.');
-        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}`, { method: 'GET' }, this.pentestProxyControl()));
-      }
-      case 'repeat_request': {
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('repeat_request requires an id.');
-        // A replay may tweak headers/body/query but must NOT retarget the request
-        // to another host — that pivots outside the authorized scope. Reject any
-        // absolute url/host/authority in the mutation.
-        const mutation = (args.mutation && typeof args.mutation === 'object' && !Array.isArray(args.mutation)) ? args.mutation as Record<string, unknown> : null;
-        if (mutation && (['url', 'host', 'authority', 'origin'] as const).some((k) => k in mutation)) {
-          throw new Error('repeat_request mutation must not change the target host/url; only headers, body, or query may be altered.');
-        }
-        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}/repeat`, { method: 'POST', body: JSON.stringify({ mutation }) }, this.pentestProxyControl()));
-      }
-      case 'list_sitemap':
-        return JSON.stringify(await proxyControl('sitemap', { method: 'GET' }, this.pentestProxyControl()));
-      case 'scope_rules':
-        // Read-only from the agent. The authorized scope is pinned to the target
-        // origin at sandbox creation (BRAINROUTER_PENTEST_SCOPE); letting the
-        // model widen it would enable a pivot/SSRF to arbitrary hosts.
-        return JSON.stringify(await proxyControl('scope', { method: 'GET' }, this.pentestProxyControl()));
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING
         // artifact (a new version, editedBy 'agent') — this is how a later turn
