@@ -286,3 +286,14 @@ test('D8 Phase 14 — update_plan dispatches through the registry', async () => 
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 15 — worktree_list (read-only; grows host by attachedRoots).
+test('D8 Phase 15 — worktree_list dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('worktree_list'), 'worktree_list has a registered handler');
+  // Runs against the repo the tests live in (a real git worktree).
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: process.cwd(), attachedRoots: [] };
+  const out = await invokeBuiltinToolRuntime.call(host, 'worktree_list', {});
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.primaryRoot, process.cwd());
+  assert.ok(Array.isArray(parsed.worktrees), 'returns a structured worktree listing');
+});

@@ -328,26 +328,6 @@ export async function invokeBuiltinToolRuntime(
       // structured, agent-facing inventory; `worktree_enter` attaches a listed
       // same-repo worktree (D2 derivation) so its files resolve. Non-destructive
       // and reversible — unlike `/cd`, it widens scope without moving the anchor.
-      case 'worktree_list': {
-        const list = listWorktreesStructured(this.workspaceRoot, undefined, { withDirty: true });
-        const attached = new Set((this.attachedRoots ?? []).map((r: string) => path.resolve(r)));
-        return JSON.stringify({
-          primaryRoot: this.workspaceRoot,
-          worktrees: list.map((w) => ({
-            path: w.path,
-            branch: w.branch,
-            detached: w.detached || undefined,
-            bare: w.bare || undefined,
-            locked: w.locked || undefined,
-            lockedReason: w.lockedReason,
-            prunable: w.prunable || undefined,
-            prunableReason: w.prunableReason,
-            dirty: w.dirty,
-            current: w.isSelf || undefined,
-            attached: attached.has(path.resolve(w.path)) || undefined,
-          })),
-        }, null, 2);
-      }
       case 'worktree_enter': {
         if (this.reviewSourceSafety) {
           throw new Error('worktree_enter is disabled while reviewing untrusted source.');

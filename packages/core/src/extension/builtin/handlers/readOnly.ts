@@ -9,6 +9,8 @@ import { formatBrief, summarizeLedger } from '../../../research/evidenceLedger.j
 import { setQuestion, readLedger, appendEvidence } from '../../../research/researchStore.js';
 import { listConnectors } from '../../../connectors/index.js';
 import { runExtractResult } from '../../../tool/result/extractResult.js';
+import { listWorktreesStructured } from '../../../worktree/concurrentWorktrees.js';
+import path from 'node:path';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
@@ -77,5 +79,26 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
       host.resultCache,
     );
     return out.returned;
+  },
+
+  worktree_list: async ({ host }) => {
+    const list = listWorktreesStructured(host.workspaceRoot, undefined, { withDirty: true });
+    const attached = new Set((host.attachedRoots ?? []).map((r: string) => path.resolve(r)));
+    return JSON.stringify({
+      primaryRoot: host.workspaceRoot,
+      worktrees: list.map((w) => ({
+        path: w.path,
+        branch: w.branch,
+        detached: w.detached || undefined,
+        bare: w.bare || undefined,
+        locked: w.locked || undefined,
+        lockedReason: w.lockedReason,
+        prunable: w.prunable || undefined,
+        prunableReason: w.prunableReason,
+        dirty: w.dirty,
+        current: w.isSelf || undefined,
+        attached: attached.has(path.resolve(w.path)) || undefined,
+      })),
+    }, null, 2);
   },
 };
