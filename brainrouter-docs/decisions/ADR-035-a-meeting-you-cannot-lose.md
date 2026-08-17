@@ -1,6 +1,6 @@
 # ADR-035 — A meeting you cannot lose
 
-**Status:** ACCEPTED — owner-approved.
+**Status:** Accepted — implemented (owner-approved; shipped to `release/0.4.20`). Capture/transcribe/summarize as memory-native with the server as system of record: retention you can see and set (D6), chunk-level streaming that survives a dropped connection (D9–D11), and a quota the origin cannot lie about.
 
 **Implementation status (2026-08-12): COMPLETE. Every decision is built, and every acceptance this
 document asks for has been RUN.**
