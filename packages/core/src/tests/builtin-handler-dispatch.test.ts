@@ -233,3 +233,23 @@ test('D8 Phase 11 — goal_complete + goal_blocked dispatch through the registry
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 12 — MCP resource reads (grow host by mcpClient + turnAbort).
+test('D8 Phase 12 — MCP resource reads dispatch through the registry', async () => {
+  for (const n of ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const fakeClient = {
+    listResources: async (a: any) => ({ resources: ['r1'], echo: a }),
+    listResourceTemplates: async () => ({ templates: [] }),
+    readResource: async (a: any) => ({ contents: 'hello', uri: a.uri }),
+  };
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', mcpClient: fakeClient, turnAbort: null };
+  assert.match(await invokeBuiltinToolRuntime.call(host, 'list_mcp_resources', {}), /r1/);
+  assert.match(await invokeBuiltinToolRuntime.call(host, 'list_mcp_resource_templates', {}), /templates/);
+  assert.match(await invokeBuiltinToolRuntime.call(host, 'read_mcp_resource', { server: 's', uri: 'mcp://x' }), /hello/);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'read_mcp_resource', { server: 's' }), /requires a uri/);
+  // A client without resource methods → the exact former unsupported message.
+  const bare: any = { silent: false, agentDepth: 0, tier: 'chat', mcpClient: {}, turnAbort: null };
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(bare, 'list_mcp_resources', {}), /not supported/);
+});

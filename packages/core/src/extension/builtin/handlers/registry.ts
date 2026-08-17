@@ -11,6 +11,7 @@
 
 import type { FilesystemPort } from '../../../agent/fs/filesystemPort.js';
 import type { ResultCache } from '../../../util/result/resultHandoff.js';
+import type { McpClientPool as McpClientWrapper } from '../../../mcp/mcpPool.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -36,6 +37,10 @@ export interface BuiltinToolHost {
   recordTranscript(message: any): void;
   /** The last goal transition this turn — MUTABLE; the runTurn guard reads it — agent.ts:3167. (D8 Phase 11: goal_complete/blocked) */
   lastGoalTransition: 'complete' | 'blocked' | undefined;
+  /** The active MCP client pool — agent.ts:862. (D8 Phase 12: list/read MCP resources) */
+  readonly mcpClient: McpClientWrapper;
+  /** The current turn's abort controller (null between turns) — agent.ts:1156. (D8 Phase 12) */
+  readonly turnAbort: AbortController | null;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
