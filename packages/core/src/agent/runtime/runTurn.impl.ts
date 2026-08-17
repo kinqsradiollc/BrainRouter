@@ -46,7 +46,7 @@ import {
   registryEntry,
   registryToolAllowed,
 } from '../../tool/registry/registry.js';
-import { extensionToolOwner } from '../../extension/registry.js';
+import { extensionToolOwner, phaseHookContributions } from '../../extension/registry.js';
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
@@ -88,6 +88,7 @@ import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import { authorizeToolCall } from './toolAuthorizationPhase.js';
 import { invokeAuthorizedToolAdapter } from './toolAdapterInvocationPhase.js';
+import { runPhaseWaterfall } from './phaseWaterfall.js';
 import {
   executionLaunchRuntimeFor,
   type ExecutionLaunchAuthorization,
@@ -1634,46 +1635,67 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             });
             summary = `tool "${name}" hidden by budget`;
           } else {
-            const invocation = await invokeAuthorizedToolAdapter({
-              agent: this,
-              callbacks,
-              name,
-              args,
-              isLocal,
-              delegationLaunch: Boolean(delegationLaunch),
-              turnSessionKey,
-              mcpTool: mcpToolByName.get(name),
-              candidateNames: candidates,
-              loadedRequiredSkills,
-              spawnedChildIds: spawnedChildIdsThisTurn,
-              waitedChildIds: waitedChildIdsThisTurn,
-              executionLaunchAuthorization,
-              revalidateExecutionLaunch: executionLaunchAuthorization
-                ? () => {
-                  authorizeCurrentTool({
-                    trustedExecutionLaunch: true,
-                    revalidation: true,
-                  });
-                  executionLaunchRuntime.assertCurrent(executionLaunchAuthorization!);
-                }
-                : undefined,
-              rejectExecutionLaunch: executionLaunchAuthorization
-                ? () => executionLaunchRuntime.reject(executionLaunchAuthorization!)
-                : undefined,
-              authorizeNestedMcpTarget: (targetName, targetArgs, descriptor) => {
-                authorizeNamedTool(targetName, targetArgs, false, descriptor);
-                this.assertInheritedExecutionAuthorityCurrent();
-              },
-              buildOrchestrationContext,
-              refreshActiveSkillTools,
-              markChildOutputDelivered: () => {
-                lifecycleCoordinator.markChildOutputDelivered();
-              },
-            });
-            resultText = invocation.resultText;
-            isError = invocation.isError;
-            summary = invocation.summary;
-            runtimeUnavailable = invocation.runtimeUnavailable;
+            // ADR-041 D4b.2 — the tool-execution waterfall. Registered phase hooks
+            // form an ordered chain around the actual tool dispatch; each may pass
+            // through, or refuse to call next() and thereby reject the call. With no
+            // hooks registered (the default) this is byte-identical: an empty chain
+            // runs the operation exactly as before. Refusal is surfaced as a denial
+            // the model can adjust to, mirroring the pre-tool-hook block above.
+            const toolOutcome = await runPhaseWaterfall(
+              phaseHookContributions('tool-execution'),
+              { phase: 'tool-execution', workspaceRoot: this.workspaceRoot, sessionKey: this.sessionKey },
+              () => invokeAuthorizedToolAdapter({
+                agent: this,
+                callbacks,
+                name,
+                args,
+                isLocal,
+                delegationLaunch: Boolean(delegationLaunch),
+                turnSessionKey,
+                mcpTool: mcpToolByName.get(name),
+                candidateNames: candidates,
+                loadedRequiredSkills,
+                spawnedChildIds: spawnedChildIdsThisTurn,
+                waitedChildIds: waitedChildIdsThisTurn,
+                executionLaunchAuthorization,
+                revalidateExecutionLaunch: executionLaunchAuthorization
+                  ? () => {
+                    authorizeCurrentTool({
+                      trustedExecutionLaunch: true,
+                      revalidation: true,
+                    });
+                    executionLaunchRuntime.assertCurrent(executionLaunchAuthorization!);
+                  }
+                  : undefined,
+                rejectExecutionLaunch: executionLaunchAuthorization
+                  ? () => executionLaunchRuntime.reject(executionLaunchAuthorization!)
+                  : undefined,
+                authorizeNestedMcpTarget: (targetName, targetArgs, descriptor) => {
+                  authorizeNamedTool(targetName, targetArgs, false, descriptor);
+                  this.assertInheritedExecutionAuthorityCurrent();
+                },
+                buildOrchestrationContext,
+                refreshActiveSkillTools,
+                markChildOutputDelivered: () => {
+                  lifecycleCoordinator.markChildOutputDelivered();
+                },
+              }),
+            );
+            if (!toolOutcome.ran) {
+              isError = true;
+              resultText = formatDenialResult(
+                name,
+                'hook-blocked',
+                `Blocked by extension "${toolOutcome.refusedBy ?? 'phase hook'}" (tool-execution phase).`,
+              );
+              summary = `blocked by extension — adjust, do not retry`;
+            } else {
+              const invocation = toolOutcome.result!;
+              resultText = invocation.resultText;
+              isError = invocation.isError;
+              summary = invocation.summary;
+              runtimeUnavailable = invocation.runtimeUnavailable;
+            }
           }
         } catch (err: any) {
           if (executionLaunchAuthorization) {

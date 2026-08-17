@@ -98,6 +98,8 @@ export function extensionToolOwner(name: string): { extension: string; required:
 export function extensionProviders(): ProviderDefinition[] { return active.providers.map((provider) => provider.def); }
 export function extensionHookHandlers(event: HookEvent): ExtensionHookHandler[] { return active.hooks.filter((hook) => hook.handler.event === event).map((hook) => hook.handler); }
 export function phaseHookHandlers(phase: AgentPhaseName): PhaseHookHandler[] { return active.phaseHooks.filter((hook) => hook.phase === phase).map((hook) => hook.handler); }
+/** Phase hooks with their registering extension id — for waterfall dispatch that reports which handler refused. */
+export function phaseHookContributions(phase: AgentPhaseName): { handler: PhaseHookHandler; from: string }[] { return active.phaseHooks.filter((hook) => hook.phase === phase).map((hook) => ({ handler: hook.handler, from: hook.from })); }
 export function extensionPanels(): PanelContribution[] { return active.panels.map((panel) => panel.panel); }
 export function extensionPanel(id: string): PanelContribution | undefined { return active.panels.find((panel) => panel.panel.id === id)?.panel; }
 export function extensionContributionSummary(): { tools: string[]; providers: string[]; hooks: number; panels: string[] } {
