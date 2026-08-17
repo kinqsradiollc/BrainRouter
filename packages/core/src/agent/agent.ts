@@ -36,6 +36,7 @@ import { browserUseAvailableFor, type BrowserControlPort } from '../browser/cont
 import type { FilesystemPort } from './fs/filesystemPort.js';
 import type { SubprocessPort } from './subprocess/subprocessPort.js';
 import type { ShellPort } from './shell/shellPort.js';
+import type { IAgent } from './iagent.js';
 import {
   appendTranscriptEntry,
   isInternalSessionKey,
@@ -848,7 +849,7 @@ function canonicalExecutionAuthorityJson(value: unknown): string {
 }
 
 
-export class Agent {
+export class Agent implements IAgent {
   public mcpClient: McpClientWrapper;
   public llmConfig: LLMConfig;
   /** CLI-REINDEX — per-path stat signature of the last reindex, so unchanged
