@@ -1642,7 +1642,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // runs the operation exactly as before. Refusal is surfaced as a denial
             // the model can adjust to, mirroring the pre-tool-hook block above.
             const toolOutcome = await runPhaseWaterfall(
-              phaseHookContributions('tool-execution'),
+              // Gate on hookEnforceActive() so safeMode (and reviewSourceSafety)
+              // isolates a bad tool-execution hook exactly as it disables the
+              // sibling pre-tool hook — otherwise safeMode, the documented remedy
+              // for a misbehaving extension, could not switch this waterfall off.
+              // Disabled ⇒ empty chain ⇒ the operation runs unchanged.
+              this.hookEnforceActive() ? phaseHookContributions('tool-execution') : [],
               { phase: 'tool-execution', workspaceRoot: this.workspaceRoot, sessionKey: this.sessionKey },
               () => invokeAuthorizedToolAdapter({
                 agent: this,
@@ -1682,6 +1687,29 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               }),
             );
             if (!toolOutcome.ran) {
+              // A tool-execution hook refused (returned without next()); the tool
+              // never dispatched. A durable launch (run_workflow*) already consumed
+              // its one-shot execution intent at authorize() BEFORE the waterfall, so
+              // the refusal must reject that lease and terminate the reviewed turn —
+              // exactly as the throw path (catch below) and every other durable-launch
+              // denial do. Without this the reviewed turn keeps looping under a live
+              // lease instead of returning the terminal "did not proceed".
+              if (executionLaunchAuthorization) {
+                executionLaunchRuntime.reject(executionLaunchAuthorization);
+              } else if (durableLaunch) {
+                executionLaunchRuntime.rejectPending();
+              }
+              if (durableLaunch) {
+                reviewedTurnTerminallyDenied = true;
+                refreshActiveSkillTools();
+              }
+              // The tool was counted (/context, /usage) before the waterfall on the
+              // assumption it would dispatch; a refusal means it did not, so undo it.
+              this.toolCallCounts.set(name, Math.max(0, (this.toolCallCounts.get(name) ?? 1) - 1));
+              const refusedServerId = this.serverIdFromMcpToolName(name);
+              if (refusedServerId) {
+                this.mcpServerCallCounts.set(refusedServerId, Math.max(0, (this.mcpServerCallCounts.get(refusedServerId) ?? 1) - 1));
+              }
               isError = true;
               resultText = formatDenialResult(
                 name,
