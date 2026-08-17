@@ -14,6 +14,7 @@ import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
+import { phaseHookHandlers } from '../../extension/registry.js';
 import { scheduleLearningCheckpoint } from './learningPhase.js';
 
 interface TurnSpan {
@@ -197,6 +198,21 @@ export async function finalizeTurnPhase(
       charsSaved: shrinkResult.charsSaved,
       tokensSaved: shrinkResult.tokensSaved,
     });
+  }
+
+  // ADR-041 D4b — fire turn-end phase hooks (afterPhase('turn-end')). Serial
+  // notification, not a waterfall: advisory, so a throwing hook never fails the
+  // turn. The logged invariant holds — a hook adds model-visible context only via
+  // agent.recordTranscript, never by mutating an in-flight message array.
+  for (const phaseHook of phaseHookHandlers('turn-end')) {
+    try {
+      await phaseHook.after?.(
+        { phase: 'turn-end', workspaceRoot: agent.workspaceRoot, sessionKey: agent.sessionKey },
+        () => {},
+      );
+    } catch {
+      /* turn-end phase hooks are advisory */
+    }
   }
 
   return finalAnswer;

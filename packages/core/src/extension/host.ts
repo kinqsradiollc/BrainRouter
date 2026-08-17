@@ -14,8 +14,11 @@ import {
   registerExtensionTool,
   registerExtensionProvider,
   registerExtensionHook,
+  registerExtensionPhaseHook,
   registerExtensionPanel,
   type ExtensionHookHandler,
+  type AgentPhaseName,
+  type PhaseHookHandler,
   type PanelContribution,
 } from './registry.js';
 import { registerBuiltinCapability } from './builtin/capabilities.js';
@@ -57,6 +60,8 @@ export interface ExtensionHost {
   registerProvider(def: ProviderDefinition): void;
   /** Attach a typed lifecycle handler (in-process analogue of a shell hook). */
   registerHook(handler: ExtensionHookHandler): void;
+  /** ADR-041 D4b — attach an agent phase hook (turn-start/provider-call/tool-execution/turn-end). */
+  registerPhaseHook(phase: AgentPhaseName, handler: PhaseHookHandler): void;
   /** Contribute a serializable UI panel descriptor the desktop renderer maps to a view. */
   registerPanel(descriptor: PanelContribution): void;
   /** Structured logger scoped to the extension name. */
@@ -125,6 +130,7 @@ export function createExtensionHost(
     },
     registerProvider: (def) => registerExtensionProvider(def, name),
     registerHook: (handler) => registerExtensionHook(handler, name),
+    registerPhaseHook: (phase, handler) => registerExtensionPhaseHook(phase, handler, name),
     registerPanel: (descriptor) => registerExtensionPanel(descriptor, name),
   };
   // The public host never contains this port. Arbitrary user/workspace code can

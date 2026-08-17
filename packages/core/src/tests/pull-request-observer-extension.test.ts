@@ -91,6 +91,7 @@ test('pull-request observer registers one privileged, audited read tool', async 
     registerTool: (definition) => tools.set(definition.name, definition),
     registerProvider: () => {},
     registerHook: () => {},
+    registerPhaseHook: () => {},
     registerPanel: () => {},
   };
 
