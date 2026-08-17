@@ -7,20 +7,36 @@ import type { HookEvent } from '../hooks/hooksStore.js';
 
 export interface ExtensionHookContext { event: HookEvent; tool?: string; args?: Record<string, unknown>; workspaceRoot: string }
 export interface ExtensionHookHandler { event: HookEvent; match?: string; handle(ctx: ExtensionHookContext): Promise<'deny' | void> | 'deny' | void }
+
+// ADR-041 D4b — agent phase hooks. An extension observes/steps the turn loop at
+// named phases. `turn-start` / `turn-end` are serial notifications (no `next`);
+// the hot-path phases (`provider-call`, `tool-execution`) are waterfalls whose
+// handlers receive a `next` continuation (wired in a follow-up). The logged
+// invariant (ADR-041 D4): a handler injecting model-visible context appends a
+// transcript entry — it never mutates an in-flight message array.
+export type AgentPhaseName = 'turn-start' | 'provider-call' | 'tool-execution' | 'turn-end';
+export type PhaseNext = () => Promise<void> | void;
+export interface PhaseHookContext { phase: AgentPhaseName; workspaceRoot: string; sessionKey: string }
+export interface PhaseHookHandler {
+  before?(ctx: PhaseHookContext, next: PhaseNext): Promise<void> | void;
+  after?(ctx: PhaseHookContext, next: PhaseNext): Promise<void> | void;
+}
 export interface PanelContribution { id: string; title: string; icon?: string; componentKey?: string; url?: string }
 
 interface ToolContribution { entry: LocalToolEntry; executor: LocalToolExecutor; from: string; required: boolean }
 interface ProviderContribution { def: ProviderDefinition; from: string }
 interface HookContribution { handler: ExtensionHookHandler; from: string }
+interface PhaseHookContribution { phase: AgentPhaseName; handler: PhaseHookHandler; from: string }
 interface PanelContributionEntry { panel: PanelContribution; from: string }
 interface ContributionState {
   tools: ToolContribution[];
   providers: ProviderContribution[];
   hooks: HookContribution[];
+  phaseHooks: PhaseHookContribution[];
   panels: PanelContributionEntry[];
 }
 
-const emptyState = (): ContributionState => ({ tools: [], providers: [], hooks: [], panels: [] });
+const emptyState = (): ContributionState => ({ tools: [], providers: [], hooks: [], phaseHooks: [], panels: [] });
 let active = emptyState();
 let staging: ContributionState | null = null;
 let activeGeneration = 0;
@@ -65,6 +81,9 @@ export function registerExtensionProvider(def: ProviderDefinition, from: string)
 export function registerExtensionHook(handler: ExtensionHookHandler, from: string): void {
   const state = target(); state.hooks.push({ handler, from }); markActiveMutation(state);
 }
+export function registerExtensionPhaseHook(phase: AgentPhaseName, handler: PhaseHookHandler, from: string): void {
+  const state = target(); state.phaseHooks.push({ phase, handler, from }); markActiveMutation(state);
+}
 export function registerExtensionPanel(panel: PanelContribution, from: string): void {
   const state = target(); const idx = state.panels.findIndex((item) => item.panel.id === panel.id); if (idx >= 0) state.panels.splice(idx, 1); state.panels.push({ panel, from }); markActiveMutation(state);
 }
@@ -78,6 +97,7 @@ export function extensionToolOwner(name: string): { extension: string; required:
 }
 export function extensionProviders(): ProviderDefinition[] { return active.providers.map((provider) => provider.def); }
 export function extensionHookHandlers(event: HookEvent): ExtensionHookHandler[] { return active.hooks.filter((hook) => hook.handler.event === event).map((hook) => hook.handler); }
+export function phaseHookHandlers(phase: AgentPhaseName): PhaseHookHandler[] { return active.phaseHooks.filter((hook) => hook.phase === phase).map((hook) => hook.handler); }
 export function extensionPanels(): PanelContribution[] { return active.panels.map((panel) => panel.panel); }
 export function extensionPanel(id: string): PanelContribution | undefined { return active.panels.find((panel) => panel.panel.id === id)?.panel; }
 export function extensionContributionSummary(): { tools: string[]; providers: string[]; hooks: number; panels: string[] } {

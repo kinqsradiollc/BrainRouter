@@ -24,6 +24,7 @@ function makeHost(workspaceRoot = '/tmp/browser-extension'): Harness {
       registerTool: (def) => tools.set(def.name, def),
       registerProvider: () => {},
       registerHook: () => {},
+      registerPhaseHook: () => {},
       registerPanel: () => {},
     },
   };

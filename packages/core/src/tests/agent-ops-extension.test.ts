@@ -37,6 +37,7 @@ function makeHost(workspaceRoot: string): Harness {
     registerTool: (def) => tools.set(def.name, def),
     registerProvider: () => {},
     registerHook: () => {},
+    registerPhaseHook: () => {},
     registerPanel: () => {},
   };
   return { tools, host };
