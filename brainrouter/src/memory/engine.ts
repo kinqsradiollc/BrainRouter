@@ -23,6 +23,7 @@ import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore, ProjectStore, AdminConsoleStore } from "../tenancy/store.js";
+import type { RefreshSessionStore } from "../api/routes/identity/refreshSessions.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { ModelPolicyStore } from "../providers/modelPolicyStore.js";
 import type { RemoteAccessStore } from "../remote/store.js";
@@ -441,6 +442,11 @@ export class MemoryEngine {
   /** ADR-014 P-B2 — email/auth store: SMTP settings, verification tokens, invites. */
   public get emailAuth(): EmailAuthStore {
     return this.store as unknown as EmailAuthStore;
+  }
+
+  /** ADR-037 B1 — revocable refresh-session store (issue / rotate / revoke). */
+  public get refreshSessions(): RefreshSessionStore {
+    return (this.store as unknown as { refreshSessionStore(): RefreshSessionStore }).refreshSessionStore();
   }
 
   /**
