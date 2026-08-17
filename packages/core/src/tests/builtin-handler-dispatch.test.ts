@@ -10,6 +10,7 @@ import {
   builtinToolHandler,
   registeredHandlerNames,
 } from '../extension/builtin/handlers/index.js';
+import { ResultCache } from '../util/result/resultHandoff.js';
 
 const PLANNER = ['planner_today', 'planner_find', 'planner_add', 'planner_schedule', 'planner_complete'];
 
@@ -150,4 +151,18 @@ test('D8 Phase 6 — read_worker_summary dispatches through the registry', async
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
+});
+
+
+// ADR-041 D8 Phase 7 — extract_result (read-only; grows the host by resultCache).
+test('D8 Phase 7 — extract_result dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('extract_result'), 'extract_result has a registered handler');
+  const cache = new ResultCache(60_000, 10);
+  cache.put('r-1', 'alpha beta gamma\ndelta epsilon zeta');
+  const host = { silent: false, agentDepth: 0, tier: 'chat', resultCache: cache };
+  const head = await invokeBuiltinToolRuntime.call(host, 'extract_result', { resultRef: 'r-1' });
+  assert.match(head, /alpha beta gamma/, 'returns the cached result head');
+  const missing = await invokeBuiltinToolRuntime.call(host, 'extract_result', { resultRef: 'nope' });
+  assert.match(missing, /not found or expired/, 'unknown ref returns the former not-found message');
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'extract_result', {}), /requires a resultRef/);
 });

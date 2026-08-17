@@ -59,7 +59,6 @@ import {
 } from '../../task/steeringReceiptStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
-import { runExtractResult } from '../../tool/result/extractResult.js';
 import { parseTrackQuery } from '../../track/query/index.js';
 import {
   ensureProject as trackEnsureProject,
@@ -1262,19 +1261,6 @@ export async function invokeBuiltinToolRuntime(
           servers: getCliKnobs().lspServers,
         });
         return this.reviewSourceSafety ? redactReviewSourceText(result) : result;
-      }
-      case 'extract_result': {
-        const resultRef = String(args.resultRef ?? '').trim();
-        if (!resultRef) throw new Error('extract_result requires a resultRef.');
-        const out = runExtractResult(
-          {
-            resultRef,
-            query: typeof args.query === 'string' ? args.query : undefined,
-            maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
-          },
-          this.resultCache,
-        );
-        return out.returned;
       }
       case 'spawn_worker_thread': {
         if (!canSpawnWorker(this.agentDepth)) {

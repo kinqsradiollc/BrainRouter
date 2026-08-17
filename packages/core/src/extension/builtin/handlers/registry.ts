@@ -10,6 +10,7 @@
 // a registry lookup and D8's shared guarded pipeline fronts every call.
 
 import type { FilesystemPort } from '../../../agent/fs/filesystemPort.js';
+import type { ResultCache } from '../../../util/result/resultHandoff.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -29,6 +30,8 @@ export interface BuiltinToolHost {
   findVisibleMcpTool(target: string): Promise<any | undefined>;
   /** Map an `mcp_<server>_<tool>` name to its server id — agent.ts:2439. (D8 Phase 3: mcp_refresh_catalog) */
   serverIdFromMcpToolName(name: string): string | undefined;
+  /** The offloaded-result cache for extract_result — agent.ts:1040. (D8 Phase 7: extract_result) */
+  readonly resultCache: ResultCache;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

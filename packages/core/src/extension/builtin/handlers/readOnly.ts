@@ -8,6 +8,7 @@
 import { formatBrief } from '../../../research/evidenceLedger.js';
 import { setQuestion, readLedger } from '../../../research/researchStore.js';
 import { listConnectors } from '../../../connectors/index.js';
+import { runExtractResult } from '../../../tool/result/extractResult.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
@@ -34,5 +35,19 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
       lastError: connector.lastError ?? null,
     }));
     return JSON.stringify(connectors, null, 2);
+  },
+
+  extract_result: async ({ args, host }) => {
+    const resultRef = String(args.resultRef ?? '').trim();
+    if (!resultRef) throw new Error('extract_result requires a resultRef.');
+    const out = runExtractResult(
+      {
+        resultRef,
+        query: typeof args.query === 'string' ? args.query : undefined,
+        maxChars: typeof args.maxChars === 'number' ? args.maxChars : undefined,
+      },
+      host.resultCache,
+    );
+    return out.returned;
   },
 };
