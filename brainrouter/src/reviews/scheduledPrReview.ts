@@ -229,7 +229,7 @@ export async function runScheduledPrReview(
     }
   };
   const deps = await reviewDependencies(ctx, lens, input.orgId, deepReviewPolicy, {
-    assuranceReady: async ({ policy, headSha, checkout }) => {
+    assuranceReady: async ({ policy, headSha, checkout, codeqlPaths }) => {
       if (!ctx.jobId) return;
       const maxDiffChars = deps.maxDiffChars ?? 60_000;
       assurance.current = await startDiffReviewAssurance({
@@ -249,6 +249,9 @@ export async function runScheduledPrReview(
           checkout,
           maxDiffChars,
           isCancellationRequested,
+          // ADR-039 S2 — thread the CodeQL taint-path provider (GitHub PRs) so
+          // its source→sink paths augment the impact assembler's candidates.
+          ...(codeqlPaths ? { codeqlPaths } : {}),
         }),
         ...(deepReviewPolicy ? {
           deepReview: {

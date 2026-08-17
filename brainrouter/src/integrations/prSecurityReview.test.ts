@@ -325,6 +325,9 @@ describe("PR security review executor (ADR-017 D5)", () => {
           expect(() => identity.checkout.takeAuthorizationHeader()).toThrow(
             /already been consumed/,
           );
+          // ADR-039 S2 — a GitHub PR review emits the CodeQL taint-path provider
+          // so its source→sink paths augment the review candidates.
+          expect(typeof identity.codeqlPaths).toBe("function");
           pullReadsAtReady = routes.calls.filter((call) => call === "GET /repos/o/r/pulls/7").length;
         },
       }),
