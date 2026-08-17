@@ -3,7 +3,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   resolveExecutionPorts,
-  LOCAL_EXECUTION_WORLD,
   type ExecutionWorld,
 } from "../runtime/executionWorld.js";
 import type { FilesystemPort } from "../agent/fs/filesystemPort.js";
@@ -51,6 +50,6 @@ test("explicit ports resolve with no world", () => {
   assert.equal(resolved.subprocessPort, undefined);
 });
 
-test("the default world is named 'local'", () => {
-  assert.equal(LOCAL_EXECUTION_WORLD, "local");
+test("a world carries its own name for introspection", () => {
+  assert.equal(world.name, "container");
 });

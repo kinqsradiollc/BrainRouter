@@ -21,16 +21,13 @@ import type { FilesystemPort } from "../agent/fs/filesystemPort.js";
 import type { ShellPort } from "../agent/shell/shellPort.js";
 import type { SubprocessPort } from "../agent/subprocess/subprocessPort.js";
 
-/** The name of the default world that wraps the local node implementations. */
-export const LOCAL_EXECUTION_WORLD = "local";
-
 /**
  * A coherent binding of the three capability ports, selected as one unit. Swapping
  * the world moves everything that executes — `run_command`, background shells,
  * workers — in a single gesture, with no per-tool forks.
  */
 export interface ExecutionWorld {
-  /** Stable identifier for introspection (D11 composition dump). e.g. `local`. */
+  /** Stable identifier for introspection (D11 composition dump), e.g. `local` for the default. */
   readonly name: string;
   readonly filesystem: FilesystemPort;
   readonly shell: ShellPort;
