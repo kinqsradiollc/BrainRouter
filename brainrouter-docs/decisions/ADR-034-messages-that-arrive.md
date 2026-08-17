@@ -1,6 +1,6 @@
 # ADR-034 — Messages that arrive
 
-**Status:** ACCEPTED — owner-approved on 2026-08-11.
+**Status:** Accepted — implemented (owner-approved 2026-08-11; shipped to `release/0.4.20`). Exact-key session-to-session steering: Brain-offline loopback + durable, tenant-pinned delivery, with a recipient trust gate and application only at a safe turn boundary. Follow-up: three PlannerOps/messaging exports are wired-or-deleted per ADR-034's own rule (tracked separately).
 
 **Target:** `release/0.4.20`.
 

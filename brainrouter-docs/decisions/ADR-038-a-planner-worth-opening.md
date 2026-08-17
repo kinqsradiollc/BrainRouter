@@ -1,6 +1,6 @@
 # ADR-038 — A planner worth opening
 
-**Status:** ACCEPTED — 2026-08-11.
+**Status:** Accepted — implemented (2026-08-11; verified in code 2026-08-17). Shipped to `main`: `@kinqs/brainrouter-ui` (packages/ui) holds the shared planner/notes surfaces, both the dashboard and desktop consume it (the notes page collapsed to 64 lines), `packages/core/src/planner/presentation.ts` de-duplicates the owned-field set, and D3 `setDueDate` is wired at `PlannerSurface.tsx`. Delivered across PRs #1337/#1339/#1344 plus the D3 + §4-relaxation follow-ups. The only open thread is documentary (§4's note that the "no sync-semantics change" constraint was relaxed to fit the implementation).
 
 **Implementation status (2026-08-12): COMPLETE, after a repair round that mattered more than the
 build.**
