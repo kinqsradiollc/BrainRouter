@@ -7,6 +7,7 @@
 
 import { formatBrief } from '../../../research/evidenceLedger.js';
 import { setQuestion, readLedger } from '../../../research/researchStore.js';
+import { listConnectors } from '../../../connectors/index.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
@@ -17,5 +18,21 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
     const ledger = readLedger(host.workspaceRoot, host.sessionKey);
     if (!ledger) return 'No research ledger yet — record evidence with research_note first.';
     return formatBrief(ledger);
+  },
+
+  connector_list: async ({ args, host }) => {
+    const source = typeof args.source === 'string' && args.source.trim() ? args.source.trim() : undefined;
+    const status = typeof args.status === 'string' && args.status.trim() ? args.status.trim() : undefined;
+    const connectors = listConnectors(host.workspaceRoot, {
+      source: source as never,
+      status: status as never,
+    }).map((connector) => ({
+      id: connector.id,
+      source: connector.source,
+      status: connector.status,
+      lastRunAt: connector.lastRunAt ?? null,
+      lastError: connector.lastError ?? null,
+    }));
+    return JSON.stringify(connectors, null, 2);
   },
 };
