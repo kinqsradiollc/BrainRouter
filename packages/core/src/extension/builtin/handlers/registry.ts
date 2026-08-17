@@ -12,6 +12,7 @@
 import type { FilesystemPort } from '../../../agent/fs/filesystemPort.js';
 import type { ResultCache } from '../../../util/result/resultHandoff.js';
 import type { McpClientPool as McpClientWrapper } from '../../../mcp/mcpPool.js';
+import type { PlanState } from '../../../task/taskStore.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -43,6 +44,8 @@ export interface BuiltinToolHost {
   readonly turnAbort: AbortController | null;
   /** The local pentest proxy admin endpoint/token — agent.ts:1216. (D8 Phase 13: pentest reads) */
   pentestProxyControl(): { apiUrl: string; token?: string } | undefined;
+  /** Record an auto-approval into plan history when a new plan version lands — agent.ts:3014. (D8 Phase 14: update_plan) */
+  maybeAutoApprovePlan(state: PlanState): void;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
