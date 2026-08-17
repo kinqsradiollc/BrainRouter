@@ -17,6 +17,7 @@
 import type { LLMToolSchema } from "@kinqs/brainrouter-types";
 import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire } from "../../providers/wireFormat.js";
 import { fetchWithExternalRetry } from "../../memory/util/retry.js";
+import { policyBoundFetch } from "../../providers/policyFetch.js";
 import { requestTimeoutSignal } from "../../memory/util/request-timeout.js";
 import { systemProviderOrgId } from "../../providers/runtime.js";
 import { extractChatCompletionText } from "../../memory/llm/llm-response.js";
@@ -280,7 +281,7 @@ class ModelGateway {
       headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
       body: JSON.stringify(body),
       signal: requestTimeoutSignal(timeoutMs ?? 120_000),
-    }, { label: `[${tag}] gateway chat`, ...(retry ?? {}) });
+    }, { label: `[${tag}] gateway chat`, ...(retry ?? {}) }, policyBoundFetch());
 
     let res = await doFetch();
     if (res.status === 400) {

@@ -1,6 +1,12 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { modelGateway } from "../services/modelGateway/modelGateway.js";
 
+// ADR-039 — the memory-pipeline dispatch now validates the target through the
+// upstream policy (DNS resolve). Mock DNS so fake test hosts resolve to a PUBLIC IP
+// (policy admits public, refuses internal — see policyFetch.test.ts).
+vi.mock("node:dns/promises", () => ({ lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) }));
+
+
 function mockResponse(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,

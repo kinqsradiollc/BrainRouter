@@ -1,5 +1,6 @@
 import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
+import { policyBoundFetch } from "../../providers/policyFetch.js";
 import { acquireRerankerSlot, acquireRerankerSlotOrNull } from "../llm/llm-semaphore.js";
 import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
 import { resolveRerankUrl } from "../../providers/wireFormat.js";
@@ -230,7 +231,7 @@ export class RerankerService {
         signal: requestTimeoutSignal(this.timeoutMs),
       }, {
         label: "Reranker API",
-      });
+      }, policyBoundFetch());
 
       if (!res.ok) {
         const err = await res.text().catch(() => "(no body)");

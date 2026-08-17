@@ -21,6 +21,12 @@ const { resolveProviderConfigMock } = vi.hoisted(() => ({
 }));
 vi.mock("../../providers/resolver.js", () => ({ resolveProviderConfig: resolveProviderConfigMock }));
 
+// ADR-039 — the memory-pipeline dispatch now validates the target through the
+// upstream policy (DNS resolve). Mock DNS so fake test hosts resolve to a PUBLIC IP
+// (policy admits public, refuses internal — see policyFetch.test.ts).
+vi.mock("node:dns/promises", () => ({ lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) }));
+
+
 import { MemoryEngine } from "../../memory/engine.js";
 
 /** Minimal engine facade: modelRunner() only reads emailAuth settings; configureRunner reads providers. */
