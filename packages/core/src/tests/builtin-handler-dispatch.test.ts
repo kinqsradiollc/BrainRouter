@@ -77,3 +77,35 @@ test('D8 Phase 2 — research_brief dispatches through a workspaceRoot/sessionKe
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 3 — the MCP read tools, migrated with host METHODS.
+test('D8 Phase 3 — MCP read tools dispatch through host methods', async () => {
+  for (const n of ['mcp_search', 'mcp_describe', 'mcp_refresh_catalog']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const mcpHost = {
+    silent: false, agentDepth: 0, tier: 'chat',
+    visibleMcpToolList: async () => [
+      { name: 'srv_toolA', description: 'A', __serverId: 'srv' },
+      { name: 'srv_toolB', description: 'B', __serverId: 'srv' },
+    ],
+    findVisibleMcpTool: async (t: string) =>
+      t === 'srv_toolA' ? { name: 'srv_toolA', description: 'A', inputSchema: {} } : undefined,
+    serverIdFromMcpToolName: () => 'srv',
+  };
+  const search = JSON.parse(await invokeBuiltinToolRuntime.call(mcpHost, 'mcp_search', { query: 'toolA' }));
+  assert.equal(search.query, 'toolA');
+  assert.ok(Array.isArray(search.tools));
+
+  const described = JSON.parse(await invokeBuiltinToolRuntime.call(mcpHost, 'mcp_describe', { name: 'srv_toolA' }));
+  assert.equal(described[0].name, 'srv_toolA');
+  const missing = JSON.parse(await invokeBuiltinToolRuntime.call(mcpHost, 'mcp_describe', { name: 'nope' }));
+  assert.match(missing[0].error, /not found/);
+
+  const refreshed = JSON.parse(await invokeBuiltinToolRuntime.call(mcpHost, 'mcp_refresh_catalog', {}));
+  assert.equal(refreshed.totalTools, 2);
+  assert.equal(refreshed.servers.srv, 2);
+
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(mcpHost, 'mcp_search', {}), /non-empty/);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(mcpHost, 'mcp_describe', {}), /requires `name`/);
+});

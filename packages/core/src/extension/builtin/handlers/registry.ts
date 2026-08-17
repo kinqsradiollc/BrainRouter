@@ -23,6 +23,12 @@ export interface BuiltinToolHost {
   readonly workspaceRoot: string;
   /** The agent's session key — runtime.ts. (D8 Phase 2: research_brief) */
   readonly sessionKey: string;
+  /** The MCP tools visible to this agent — agent.ts:2505. (D8 Phase 3: mcp_search/describe/refresh_catalog) */
+  visibleMcpToolList(): Promise<any[]>;
+  /** Resolve a visible MCP tool by name — agent.ts:2555. (D8 Phase 3: mcp_describe) */
+  findVisibleMcpTool(target: string): Promise<any | undefined>;
+  /** Map an `mcp_<server>_<tool>` name to its server id — agent.ts:2439. (D8 Phase 3: mcp_refresh_catalog) */
+  serverIdFromMcpToolName(name: string): string | undefined;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

@@ -4,9 +4,10 @@
 import { registerBuiltinHandler } from './registry.js';
 import { plannerHandlers } from './planner.js';
 import { readOnlyHandlers } from './readOnly.js';
+import { mcpHandlers } from './mcp.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 
