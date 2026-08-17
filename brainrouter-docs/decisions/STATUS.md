@@ -32,7 +32,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 038 | A planner worth opening | ✅ Implemented | main |
 | 039 | The half of security a model cannot see (taint) | 🟡 6 vulns fixed; **S2 CODE-COMPLETE** — CodeQL SARIF→review-candidate pipeline wired end-to-end (#1434/#1436/#1437/#1438), pending a live-run confirm (owner, like §5); S1 corpus + S3–S6 remain | 0.4.21 |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
-| 041 | Plug-and-play runtime | 🟡 A41-6 + D1 + **D3 capability ports COMPLETE** (Filesystem/Subprocess/Shell all injectable, #1428–#1441); D4/D8/D10 + ExtensionHost registration remain | 0.4.21 |
+| 041 | Plug-and-play runtime | 🟡 A41-6 + D1 + **D3 ports COMPLETE** (#1428–#1441); **D4 substantially built** — IAgent seam (#1443) + phase-hook mechanism & turn-end firing (#1444); D4b.2 (provider/tool waterfalls + logged-invariant assertion), D8, D10, ExtensionHost port-registration remain | 0.4.21 |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | 043 | Egress at the user's edge | 🟡 S1 + S1b + EdgeDialer seam + egress ProviderDefinition fields (#1426) shipped; S3a tunnel dialer shipped dark (#1432); S3b–S5 building | 0.4.21 |
 
