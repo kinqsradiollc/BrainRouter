@@ -13,6 +13,7 @@ import type { FilesystemPort } from '../../../agent/fs/filesystemPort.js';
 import type { ResultCache } from '../../../util/result/resultHandoff.js';
 import type { McpClientPool as McpClientWrapper } from '../../../mcp/mcpPool.js';
 import type { PlanState } from '../../../task/taskStore.js';
+import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -48,6 +49,8 @@ export interface BuiltinToolHost {
   maybeAutoApprovePlan(state: PlanState): void;
   /** Worktrees attached to this agent's scope (read-only view) — agent.ts:939. (D8 Phase 15: worktree_list) */
   readonly attachedRoots: readonly string[];
+  /** Persist an artifact into session memory — agent.ts:2389. (D8 Phase 16: artifact_write) */
+  captureArtifactToMemory(record: ArtifactRecord): Promise<void>;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
