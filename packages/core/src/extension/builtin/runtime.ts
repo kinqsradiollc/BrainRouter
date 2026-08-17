@@ -42,7 +42,6 @@ import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
 import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
-import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../session/transcript/chapterMarks.js';
 import { acknowledgeCompletions } from '../../session/completion/completionInbox.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode, setSessionMode } from '../../session/state/sessionModeStore.js';
@@ -1267,16 +1266,6 @@ export async function invokeBuiltinToolRuntime(
         if (!id) throw new Error('close_worker requires an id.');
         const meta = closeWorker(this.workspaceRoot, id);
         return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
-      }
-      case 'mark_chapter': {
-        // CC-P12.3 — persist a chapter marker into the session transcript.
-        const title = String(args.title ?? '').trim();
-        if (!title) throw new Error('mark_chapter requires a non-empty title.');
-        if (title.length > 60) throw new Error('mark_chapter title must be under 60 chars.');
-        const summary = typeof args.summary === 'string' && args.summary.trim() ? args.summary.trim() : undefined;
-        const marker = { role: 'system', name: CHAPTER_ENTRY_NAME, content: chapterEntryContent(title, summary) };
-        this.recordTranscript(marker);
-        return JSON.stringify({ marked: true, title, note: 'Chapter recorded — the user can browse with /chapters.' });
       }
       case 'switch_model': {
         if (this.inheritedExecutionAuthorityGuard()) {

@@ -32,6 +32,8 @@ export interface BuiltinToolHost {
   serverIdFromMcpToolName(name: string): string | undefined;
   /** The offloaded-result cache for extract_result — agent.ts:1040. (D8 Phase 7: extract_result) */
   readonly resultCache: ResultCache;
+  /** Persist a transcript entry (chapter markers, etc.) — agent.ts:3548. (D8 Phase 10: mark_chapter) */
+  recordTranscript(message: any): void;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
