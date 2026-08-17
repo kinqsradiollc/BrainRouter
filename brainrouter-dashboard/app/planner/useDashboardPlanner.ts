@@ -24,7 +24,7 @@ import type {
 } from "@kinqs/brainrouter-ui/planner";
 
 import { authFetch } from "../../lib/adminApi";
-import { getJwt } from "../../lib/client-auth";
+import { useAuth } from "../../components/AuthProvider";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { ATTEMPTS_BEFORE_SURFACING, describeSyncState } from "@kinqs/brainrouter-ui/planner";
 import {
@@ -113,20 +113,6 @@ function nextStamp(): PlannerWireHlc {
   return clock;
 }
 
-function authSubject(): string {
-  const token = getJwt();
-  if (!token) return "local";
-  const encoded = token.split(".")[1];
-  if (!encoded) return "local";
-  try {
-    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))) as { sub?: unknown };
-    return typeof payload.sub === "string" ? payload.sub.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) : "local";
-  } catch {
-    return "local";
-  }
-}
-
 function operationKey(): string {
   return crypto.randomUUID();
 }
@@ -145,8 +131,13 @@ function sourceAge(fetchedAt: string): string {
 
 export function useDashboardPlanner(): DashboardPlannerState {
   const { activeOrgId, loading: orgLoading, error: orgError } = useActiveOrg();
+  const { user } = useAuth();
   const scopeReady = !orgLoading && !orgError && activeOrgId.length > 0;
-  const storageKey = plannerOutboxStorageKey(activeOrgId || "unbound", authSubject());
+  // ADR-037 D-1 — scope the outbox by the server-authenticated identity
+  // (AuthProvider hydrates it from GET /api/auth/me), not by decoding a browser
+  // token. Falls back to "local" until the identity resolves.
+  const authorSubject = (user?.userId ?? "local").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  const storageKey = plannerOutboxStorageKey(activeOrgId || "unbound", authorSubject);
   const [rawItems, setRawItems] = useState<ApiPlannerItem[]>([]);
   const [rawBlocks, setRawBlocks] = useState<ApiPlannerBlock[]>([]);
   const [outbox, setOutbox] = useState<DashboardPlannerOperation[]>([]);
