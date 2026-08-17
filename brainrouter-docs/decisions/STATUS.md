@@ -30,7 +30,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 036 | The finding carries its code | ✅ Implemented | 0.4.20 |
 | **037** | **Credentials the page cannot read** | **✅ Implemented (live-QA the §5 test)** | **0.4.21** |
 | 038 | A planner worth opening | ✅ Implemented | main |
-| 039 | The half of security a model cannot see (taint) | 🟡 6 concrete vulns fixed (#1413/#1414/#1416); scanner already RUNS (CodeQL default setup, 243 alerts); engine track = **consume** its SARIF via the already-wired D1/D2/D6 seam (not build-from-scratch) | 0.4.21 |
+| 039 | The half of security a model cannot see (taint) | 🟡 6 vulns fixed; **S2 CODE-COMPLETE** — CodeQL SARIF→review-candidate pipeline wired end-to-end (#1434/#1436/#1437/#1438), pending a live-run confirm (owner, like §5); S1 corpus + S3–S6 remain | 0.4.21 |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
 | 041 | Plug-and-play runtime | 🟡 A41-6 + D1 + D3 FilesystemPort COMPLETE (#1428/#1429/#1431); D3 Shell/Subprocess ports + D4/D8/D10 in progress | 0.4.21 |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
