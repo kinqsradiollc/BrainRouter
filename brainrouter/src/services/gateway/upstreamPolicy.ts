@@ -19,6 +19,17 @@ export type UpstreamDispatcherFactory = (
   target: ValidatedUpstreamTarget,
 ) => UpstreamDispatcherHandle;
 
+/**
+ * ADR-043 S2 (D6) — the EdgeDialer seam. "How the server reaches an upstream" is
+ * this dispatcher factory: today it always dials DIRECTLY, building a per-request
+ * DNS-pinned undici dispatcher (see `directDialer`). Naming the seam lets a future
+ * egress mechanism — a tunnel over the user's edge (S3), a regional worker — be a
+ * different `EdgeDialer` plugged into `SafeUpstreamFetchOptions.dispatcherFactory`,
+ * with the direct dialer as the default. This slice only NAMES the seam and its
+ * default; nothing selects a non-default dialer, so every request is byte-identical.
+ */
+export type EdgeDialer = UpstreamDispatcherFactory;
+
 export interface SafeUpstreamFetchOptions extends UpstreamTargetPolicy {
   fetchImpl?: UpstreamFetch;
   dispatcherFactory?: UpstreamDispatcherFactory;
@@ -43,6 +54,9 @@ export function createPinnedUndiciDispatcher(
     close: () => dispatcher.close(),
   };
 }
+
+/** The default {@link EdgeDialer}: the server dials the upstream itself, DNS-pinned. */
+export const directDialer: EdgeDialer = createPinnedUndiciDispatcher;
 
 function closeGracefully(handle: UpstreamDispatcherHandle): void {
   try {
@@ -100,7 +114,7 @@ export async function fetchUpstreamWithPolicy(
   options: SafeUpstreamFetchOptions = {},
 ): Promise<Response> {
   const fetchImpl = options.fetchImpl ?? defaultFetch;
-  const dispatcherFactory = options.dispatcherFactory ?? createPinnedUndiciDispatcher;
+  const dispatcherFactory = options.dispatcherFactory ?? directDialer;
   const limit = redirectLimit(options.maxRedirects);
   let requestInit: UpstreamFetchInit = { ...init };
   let nextInput = input;
