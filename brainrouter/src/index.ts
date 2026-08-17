@@ -91,7 +91,7 @@ import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/r
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
 import { GatewayProviderService } from './services/gateway/providerPool.js';
 import { bindGatewayDataPlane } from './services/gateway/server.js';
-import { securityHeaders, corsMiddleware, resolveCorsAllowlist, corsCredentialsBootError } from './api/middleware/securityHeaders.js';
+import { securityHeaders, corsMiddleware, resolveCorsAllowlist, corsCredentialsBootError, csrfOriginGuard } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
@@ -245,6 +245,10 @@ if (USE_HTTP) {
   // In dev, any localhost origin is allowed so the dashboard "just works"; in
   // production only BRAINROUTER_CORS_ORIGIN is reflected.
   app.use(corsMiddleware(resolveCorsAllowlist(), { production: IS_PRODUCTION }));
+  // ADR-037 D2 — CSRF Origin guard for cookie-session requests. Inert until
+  // the dashboard flips to cookie transport (B3 ships before D-2); bearer /
+  // no-cookie callers pass through unchanged.
+  app.use(csrfOriginGuard(resolveCorsAllowlist(), { production: IS_PRODUCTION }));
 
   // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
