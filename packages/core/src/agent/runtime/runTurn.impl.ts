@@ -1027,6 +1027,20 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const invocation = await invokeModelPhase(this, callbacks, allTools);
       assertReviewedTurnCurrent();
       if (invocation.kind === 'interrupted') return invocation.note;
+      if (invocation.kind === 'provider-refused') {
+        // ADR-041 D4b.2 — a provider-call phase hook refused the model call; no
+        // response was produced. Close a durable zero-step turn (bare return, no
+        // finalizeTurnPhase, so a refused call is not counted in usage/telemetry),
+        // recording the attempt to the transcript like the interrupt terminal.
+        const refusalMessage = {
+          role: 'system',
+          content: `The provider call was blocked by extension "${invocation.refusedBy}" (provider-call phase); no model response was produced. The turn closed with zero steps.`,
+        };
+        this.chatHistory.push(refusalMessage);
+        this.recordTranscript(refusalMessage);
+        callbacks.onStatusUpdate(`Provider call blocked by extension "${invocation.refusedBy}" — turn closed.`);
+        return `⛔ Provider call blocked by extension "${invocation.refusedBy}" (provider-call phase).`;
+      }
       const response = invocation.response;
       // 0.3.9 item 13 — model-tier self-escalation. When the response
       // starts with `<<<NEEDS_HIGH>>>` (with or without `:reason`), the

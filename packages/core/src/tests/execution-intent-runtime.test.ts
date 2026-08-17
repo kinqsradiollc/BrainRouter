@@ -923,3 +923,48 @@ test('ADR-041 D4b.2 — a tool-execution phase-hook refusal of a reviewed durabl
     }
   });
 });
+
+// ADR-041 D4b.2 — a provider-call phase hook that REFUSES (never calls next())
+// rejects the model call outright; the turn closes with zero steps and records
+// the attempt, rather than producing a model response.
+test('ADR-041 D4b.2 — a provider-call phase-hook refusal closes the turn with zero steps', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    // The model WOULD answer — strategy JSON for the classification pass, a plain
+    // message otherwise — but the provider-call hook refuses the main call first.
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { tools?: unknown[] };
+      const content = (body.tools ?? []).length === 0
+        ? '{"strategy":"answer-direct","reasoning":"direct","subtasks":[]}'
+        : 'model answer';
+      return new Response(JSON.stringify({
+        choices: [{ message: { content } }],
+        usage: { prompt_tokens: 5, completion_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    resetExtensionContributions();
+    let hookFired = 0;
+    registerExtensionPhaseHook('provider-call', {
+      before: () => { hookFired += 1; /* refuse: never call next() */ },
+    }, 'test-refuse');
+    try {
+      const agent = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, { workspaceRoot: workspace, launchCwd: workspace });
+      const answer = await withDeadline(
+        agent.runTurn('hello', CALLBACKS),
+        20_000,
+        'a provider-call hook refusal did not terminate the turn',
+      );
+      assert.ok(hookFired >= 1, 'the provider-call phase hook fired on the model call');
+      assert.match(
+        answer,
+        /blocked by extension.*provider-call/i,
+        'the turn returned the provider-refused terminal, not a model response',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetExtensionContributions();
+    }
+  });
+});
