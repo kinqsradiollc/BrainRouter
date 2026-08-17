@@ -86,7 +86,21 @@ export function detectTaskIntent(query: string): MemoryTaskIntent {
   return "build";
 }
 
+// ADR-039 — this path regex backtracks quadratically on a long unbroken run of
+// its character-class members (a ~75k-char '.'/'-'/'_' run in an attacker-
+// controlled recall query stalls the shared brain ~23s). A file path never spans
+// whitespace, so a match can never cross a whitespace boundary: scanning each
+// whitespace token, and skipping any absurdly long one, is match-identical for
+// real input while bounding total work to O(text length).
+const FILE_PATH_HINT_RE = /(?:[\w.-]+\/)+[\w.-]+\.\w+|[\w.-]+\.(?:ts|tsx|js|jsx|json|md|sql|py|go|rs)/g;
+const MAX_HINT_TOKEN_LEN = 512;
+
 export function extractFilePathHints(text: string): string[] {
-  const matches = text.match(/(?:[\w.-]+\/)+[\w.-]+\.\w+|[\w.-]+\.(?:ts|tsx|js|jsx|json|md|sql|py|go|rs)/g) ?? [];
-  return [...new Set(matches.map((m) => m.replace(/^["'`]|["'`]$/g, "")))];
+  const out = new Set<string>();
+  for (const token of text.split(/\s+/)) {
+    if (!token || token.length > MAX_HINT_TOKEN_LEN) continue;
+    const matches = token.match(FILE_PATH_HINT_RE);
+    if (matches) for (const m of matches) out.add(m.replace(/^["'`]|["'`]$/g, ""));
+  }
+  return [...out];
 }

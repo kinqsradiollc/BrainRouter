@@ -39,11 +39,27 @@ export function resolveRecallMode(): RecallMode {
  * memory might have history on." Counts file paths, identifier-shaped
  * tokens, and mid-sentence proper nouns.
  */
+// ADR-039 — the file-path regex backtracks quadratically on a long unbroken run
+// of its class members (an attacker-controlled prompt/comment body of ~75k such
+// chars stalls the shared brain ~23s). Paths never span whitespace, so scanning
+// each whitespace token and skipping any absurdly long one is match-identical for
+// real input while bounding total work to O(text length).
+const BRIEFING_PATH_RE = /[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,8}(?![A-Za-z])|(?:[\w-]+\/){1,}[\w.-]+/g;
+const MAX_HINT_TOKEN_LEN = 512;
+function boundedPathMatches(text: string): string[] {
+  const out: string[] = [];
+  for (const token of text.split(/\s+/)) {
+    if (!token || token.length > MAX_HINT_TOKEN_LEN) continue;
+    const matches = token.match(BRIEFING_PATH_RE);
+    if (matches) out.push(...matches);
+  }
+  return out;
+}
+
 export function countEntityTokens(text: string): number {
   if (!text) return 0;
   let count = 0;
-  const pathMatches = text.match(/[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,8}(?![A-Za-z])|(?:[\w-]+\/){1,}[\w.-]+/g);
-  if (pathMatches) count += pathMatches.length;
+  count += boundedPathMatches(text).length;
   const identMatches = text.match(/\b(?:[a-z]+[A-Z][A-Za-z0-9]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+|[a-z]+_[a-z][\w]+)\b/g);
   if (identMatches) count += identMatches.length;
   const sentences = text.split(/[.!?]\s+/);
@@ -58,7 +74,7 @@ export function countEntityTokens(text: string): number {
 }
 
 export function extractFilePathHints(text: string): string[] {
-  const matches = text.match(/[A-Za-z0-9_./\\-]+\.[A-Za-z]{1,8}(?![A-Za-z])|(?:[\w-]+\/){1,}[\w.-]+/g) ?? [];
+  const matches = boundedPathMatches(text);
   return Array.from(new Set(matches.map((m) => m.replace(/^["'`]|["'`]$/g, '')))).slice(0, 5);
 }
 
