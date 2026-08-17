@@ -1216,9 +1216,17 @@ function createPlannerApi(sharedFixture) {
   async function handlePaused(session, event) {
     const url = new URL(event.request.url);
     const method = event.request.method;
+    // ADR-037 D-2 — the dashboard sends every API call with `credentials: 'include'`
+    // (to carry the br_refresh + br_csrf cookies). A browser REJECTS a wildcard
+    // `Access-Control-Allow-Origin` on a credentialed request, so the mock must
+    // reflect the caller's Origin and allow credentials, or /api/auth/me fails CORS,
+    // auth never resolves, and AuthGuard bounces the planner to /auth (0 rows).
+    const reqHeaders = event.request.headers || {};
+    const reqOrigin = reqHeaders.Origin || reqHeaders.origin || '*';
     const headers = [
-      { name: 'Access-Control-Allow-Origin', value: '*' },
-      { name: 'Access-Control-Allow-Headers', value: 'Authorization, Content-Type, X-BrainRouter-Org' },
+      { name: 'Access-Control-Allow-Origin', value: reqOrigin },
+      { name: 'Access-Control-Allow-Credentials', value: 'true' },
+      { name: 'Access-Control-Allow-Headers', value: 'Authorization, Content-Type, X-BrainRouter-Org, X-BrainRouter-Csrf' },
       { name: 'Access-Control-Allow-Methods', value: 'GET, POST, OPTIONS' },
       { name: 'Content-Type', value: 'application/json' },
     ];
@@ -1231,6 +1239,12 @@ function createPlannerApi(sharedFixture) {
     try {
       if (method === 'OPTIONS') { await answer(204, {}); return; }
       requests.push(`${method} ${url.pathname}`);
+      // ADR-037 D-2 — the cookie-session bootstrap: /api/auth/refresh mints the
+      // in-memory access token the dashboard uses for the rest of the session.
+      if (url.pathname === '/api/auth/refresh' && method === 'POST') {
+        await answer(200, { jwt: 'visual-access-token', csrfToken: 'visual-csrf' });
+        return;
+      }
       if (url.pathname === '/api/auth/me') { await answer(200, {
       userId: 'visual-person', displayName: 'Visual Reviewer', email: 'visual@example.test', isAdmin: true,
       }); return; }
