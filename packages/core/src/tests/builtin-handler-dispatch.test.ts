@@ -316,3 +316,28 @@ test('D8 Phase 16 — artifact_write dispatches through the registry', async () 
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 18 — the read-only fs tools (grow host by reviewSourceSafety;
+// use resolveHere + fsPort from context).
+test('D8 Phase 18 — list_dir / grep_search / glob_files dispatch through the registry', async () => {
+  for (const n of ['list_dir', 'grep_search', 'glob_files']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-fsread-'));
+  try {
+    fs.writeFileSync(path.join(ws, 'a.txt'), 'hello world\nfoo bar');
+    fs.mkdirSync(path.join(ws, 'sub'));
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, reviewSourceSafety: false };
+    const ld = await invokeBuiltinToolRuntime.call(host, 'list_dir', { path: '.' });
+    assert.match(ld, /a\.txt/);
+    assert.match(ld, /sub/);
+    const gf = await invokeBuiltinToolRuntime.call(host, 'glob_files', { pattern: '**/*.txt' });
+    assert.ok(Array.isArray(JSON.parse(gf)), 'glob_files returns a JSON array');
+    const gs = await invokeBuiltinToolRuntime.call(host, 'grep_search', { query: 'hello', path: '.' });
+    assert.match(gs, /hello/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'grep_search', { query: '' }), /Missing parameter "query"/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'glob_files', {}), /Missing parameter "pattern"/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

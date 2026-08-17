@@ -51,6 +51,8 @@ export interface BuiltinToolHost {
   readonly attachedRoots: readonly string[];
   /** Persist an artifact into session memory — agent.ts:2389. (D8 Phase 16: artifact_write) */
   captureArtifactToMemory(record: ArtifactRecord): Promise<void>;
+  /** Review-mode source-safety gate (redaction + path denial) — agent.ts:1275. (D8 Phase 18: fs reads) */
+  readonly reviewSourceSafety: boolean;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
