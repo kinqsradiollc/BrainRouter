@@ -309,6 +309,10 @@ export async function invokeBuiltinToolRuntime(
         throw new Error(`Cannot write ${p}: it is in a worktree owned by session ${owner} (attached read-only). Coordinate with them, or re-enter it with override once they are done.`);
       }
     };
+    // ADR-041 D3 — filesystem side effects go through the injected capability
+    // port (default `nodeFilesystemPort` = the previous inline `node:fs`), so an
+    // execution world (D10) can back them with container/remote I/O.
+    const fsPort: FilesystemPort = this.filesystemPort ?? nodeFilesystemPort;
     switch (name) {
       // ADR-042 D3 — worktrees the agent can enter. `worktree_list` is the
       // structured, agent-facing inventory; `worktree_enter` attaches a listed
@@ -578,7 +582,7 @@ export async function invokeBuiltinToolRuntime(
       }
       case 'read_file': {
         const resolved = resolveHere(args.path);
-        if (!fs.existsSync(resolved)) {
+        if (!(await fsPort.exists(resolved))) {
           throw new Error(`File not found: ${args.path}`);
         }
         if (this.reviewSourceSafety) {
@@ -589,17 +593,7 @@ export async function invokeBuiltinToolRuntime(
         // be fully buffered before any cap applied. Read at most READ_FILE_MAX_BYTES;
         // the full-read path truncates the visible output further via truncateFullRead.
         const READ_FILE_MAX_BYTES = 16 * 1024 * 1024;
-        let content: string;
-        if (fs.statSync(resolved).size > READ_FILE_MAX_BYTES) {
-          const fd = fs.openSync(resolved, 'r');
-          try {
-            const b = Buffer.alloc(READ_FILE_MAX_BYTES);
-            const n = fs.readSync(fd, b, 0, READ_FILE_MAX_BYTES, 0);
-            content = b.subarray(0, n).toString('utf8');
-          } finally { fs.closeSync(fd); }
-        } else {
-          content = fs.readFileSync(resolved, 'utf8');
-        }
+        const { content } = await fsPort.readFileBounded(resolved, READ_FILE_MAX_BYTES);
         this.filesReadThisSession.add(resolved); // CC-P6.4 — read-before-edit ledger
         // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
         // reads stay snappy, and guarded so a rejection never escapes.
@@ -649,9 +643,6 @@ export async function invokeBuiltinToolRuntime(
         // wrote — keep the read ledger accurate so a follow-up edit is allowed.
         this.filesReadThisSession.add(resolved);
         this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
-        // ADR-041 D3 — filesystem side effects go through the injected capability
-        // port (default `nodeFilesystemPort` = the previous inline `node:fs`).
-        const fsPort: FilesystemPort = this.filesystemPort ?? nodeFilesystemPort;
         const dir = path.dirname(resolved);
         if (!(await fsPort.exists(dir))) {
           await fsPort.mkdirp(dir);
@@ -731,25 +722,25 @@ export async function invokeBuiltinToolRuntime(
       }
       case 'list_dir': {
         const targetDir = resolveHere(args.path || '.');
-        if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+        if (!(await fsPort.exists(targetDir)) || !(await fsPort.stat(targetDir)).isDirectory) {
           throw new Error(`Directory not found: ${args.path || '.'}`);
         }
         if (this.reviewSourceSafety) {
           assertSafeReviewerFilesystemPath(this.workspaceRoot, targetDir, args.path || '.');
         }
-        const items = fs.readdirSync(targetDir);
-        const list = items.flatMap(item => {
+        const items = await fsPort.readDir(targetDir);
+        const list = (await Promise.all(items.map(async item => {
           const full = path.join(targetDir, item);
           if (this.reviewSourceSafety && !isSafeReviewerFilesystemPath(this.workspaceRoot, full)) {
-            return [];
+            return null;
           }
-          const stat = fs.statSync(full);
-          return [{
+          const stat = await fsPort.stat(full);
+          return {
             name: item,
-            type: stat.isDirectory() ? 'directory' : 'file',
-            size: stat.isFile() ? stat.size : undefined
-          }];
-        });
+            type: stat.isDirectory ? 'directory' : 'file',
+            size: stat.isFile ? stat.size : undefined,
+          };
+        }))).filter((e): e is NonNullable<typeof e> => e !== null);
         return JSON.stringify(list, null, 2);
       }
       case 'grep_search': {
