@@ -197,3 +197,16 @@ test('D8 Phase 9 — reconcile_steer + workflow_progress dispatch through the re
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 10 — mark_chapter (session-state write; grows host by recordTranscript).
+test('D8 Phase 10 — mark_chapter dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('mark_chapter'), 'mark_chapter has a registered handler');
+  const captured: any[] = [];
+  const host = { silent: false, agentDepth: 0, tier: 'chat', recordTranscript: (m: any) => captured.push(m) };
+  const out = await invokeBuiltinToolRuntime.call(host, 'mark_chapter', { title: 'Chapter One', summary: 'did stuff' });
+  assert.match(out, /"marked":true/);
+  assert.equal(captured.length, 1, 'the marker was persisted via recordTranscript');
+  assert.equal(captured[0].role, 'system');
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mark_chapter', {}), /requires a non-empty title/);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mark_chapter', { title: 'x'.repeat(61) }), /under 60 chars/);
+});

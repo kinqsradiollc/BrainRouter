@@ -6,9 +6,21 @@
 import { reconcileSteeringReceipt, type SteeringClassification } from '../../../task/steeringReceiptStore.js';
 import { getCurrentWorkflow } from '../../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../../workflow/run/workflowRun.js';
+import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../../session/transcript/chapterMarks.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const sessionHandlers: Record<string, BuiltinToolHandler> = {
+  mark_chapter: async ({ args, host }) => {
+    // CC-P12.3 — persist a chapter marker into the session transcript.
+    const title = String(args.title ?? '').trim();
+    if (!title) throw new Error('mark_chapter requires a non-empty title.');
+    if (title.length > 60) throw new Error('mark_chapter title must be under 60 chars.');
+    const summary = typeof args.summary === 'string' && args.summary.trim() ? args.summary.trim() : undefined;
+    const marker = { role: 'system', name: CHAPTER_ENTRY_NAME, content: chapterEntryContent(title, summary) };
+    host.recordTranscript(marker);
+    return JSON.stringify({ marked: true, title, note: 'Chapter recorded — the user can browse with /chapters.' });
+  },
+
   reconcile_steer: async ({ args, host }) => {
     const receipt = reconcileSteeringReceipt(host.workspaceRoot, host.sessionKey, {
       receiptId: String(args.receiptId ?? ''),
