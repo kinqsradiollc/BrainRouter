@@ -641,3 +641,32 @@ test('D8 Phase 30 — notebook_edit dispatches through the registry', async () =
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 31 — apply_patch (write-family; V4A envelope apply, completes the write tier).
+test('D8 Phase 31 — apply_patch dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('apply_patch'), 'apply_patch has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-patch-'));
+  try {
+    let snapshotted = 0;
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w31', ownership: null,
+      assertInheritedExecutionAuthorityCurrent: () => {},
+      captureFileSnapshot: () => { snapshotted += 1; },
+      confirmSilentChildToolApproval: async () => null,
+      maybeReindexSource: async () => '',
+    };
+    // Empty patch is refused.
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'apply_patch', { patch: '   ' }),
+      /non-empty patch/,
+    );
+    // Add-file envelope creates the file and snapshots for undo.
+    const patch = ['*** Begin Patch', '*** Add File: created.txt', '+line one', '+line two', '*** End Patch'].join('\n');
+    const out = await invokeBuiltinToolRuntime.call(host, 'apply_patch', { patch });
+    assert.equal(fs.readFileSync(path.join(ws, 'created.txt'), 'utf8'), 'line one\nline two\n');
+    assert.equal(snapshotted, 1, 'captured an undo snapshot for the added file');
+    assert.ok(typeof out === 'string' && out.length > 0, 'returned a result string');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
