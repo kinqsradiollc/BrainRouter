@@ -11,9 +11,10 @@ import { sessionHandlers } from './session.js';
 import { pentestHandlers } from './pentest.js';
 import { artifactHandlers } from './artifact.js';
 import { fsReadHandlers } from './fsRead.js';
+import { execHandlers } from './exec.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 

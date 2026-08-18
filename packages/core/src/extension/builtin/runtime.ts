@@ -24,7 +24,7 @@ import {
   githubTokenClient, defaultEnvTokenResolver,
   type McpConnectorClient, type McpConnectorResource,
 } from '../../connectors/index.js';
-import { startBackgroundShell, readBackgroundOutput, killBackgroundShell } from '../../exec/runtime/backgroundShell.js';
+import { startBackgroundShell, killBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
@@ -1136,18 +1136,6 @@ export async function invokeBuiltinToolRuntime(
           route: resolvedRoute || undefined,
           note: 'Applies from the next model call onward in this session.',
         });
-      }
-      case 'task_output': {
-        // CC-P11.1 — incremental output of a background run_command.
-        if (this.inheritedExecutionAuthorityGuard()) {
-          throw new Error('task_output is unavailable inside reviewed execution because background process ids are not execution-owned.');
-        }
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('task_output requires an id (from run_command background:true).');
-        const fromByte = typeof args.fromByte === 'number' && args.fromByte >= 0 ? Math.floor(args.fromByte) : 0;
-        const out = readBackgroundOutput(id, fromByte);
-        if (!out) return JSON.stringify({ id, found: false, note: 'Unknown background run (it dies with the CLI process).' });
-        return JSON.stringify(out);
       }
       case 'kill_command': {
         if (this.inheritedExecutionAuthorityGuard()) {
