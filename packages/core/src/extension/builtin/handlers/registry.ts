@@ -53,6 +53,10 @@ export interface BuiltinToolHost {
   captureArtifactToMemory(record: ArtifactRecord): Promise<void>;
   /** Review-mode source-safety gate (redaction + path denial) — agent.ts:1275. (D8 Phase 18: fs reads) */
   readonly reviewSourceSafety: boolean;
+  /** Read-before-edit ledger (CC-P6.4); the handler adds to it — agent.ts:1124. (D8 Phase 19: read_file) */
+  readonly filesReadThisSession: Set<string>;
+  /** Fire-and-forget code reindex on read — agent.ts:3022. (D8 Phase 19: read_file) */
+  maybeReindexSource(resolved: string, content: string): Promise<string>;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
