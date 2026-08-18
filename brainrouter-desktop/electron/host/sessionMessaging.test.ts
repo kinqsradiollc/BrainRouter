@@ -52,6 +52,25 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   assert.fail('timed out waiting for Desktop session-messaging state');
 }
 
+async function waitForSignal(signal: Promise<void>, description: string): Promise<void> {
+  // Await the exact state-transition signal instead of polling a wall-clock
+  // deadline. The signal resolves the instant the service reaches the awaited
+  // state, so a healthy run never touches the ceiling and cannot fail merely
+  // because a loaded CI box was slow to fire a poll timer. The generous ceiling
+  // only converts a genuinely stuck state into a clear failure instead of an
+  // unbounded hang.
+  let timer!: ReturnType<typeof setTimeout>;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out waiting for ${description}`)), 30_000);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  try {
+    await Promise.race([signal, guard]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function fakeTransport(
   sessionKey: string,
   onMessageAvailable?: (message: LocalSessionMessage) => void,
@@ -845,7 +864,8 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
     const receivedAt = Date.now();
     let clock = receivedAt;
     let settle!: (value: boolean | null) => void;
-    let promptStarted = false;
+    const promptStarted = deferred<void>();
+    const expiredAcknowledged = deferred<void>();
     let deliveries = 0;
     const acknowledgements: string[] = [];
     const row = {
@@ -857,6 +877,12 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
         senderDeviceId: '77777777-7777-4777-8777-777777777777',
       },
       status: 'pending', createdAt: new Date(receivedAt).toISOString(),
+      // Pin the Brain-owned absolute expiry to the injected clock, exactly as the
+      // "remote absolute expiry" test does. Without it the held record's TTL falls
+      // back to the transport's real Date.now() receivedAt, so whether the advanced
+      // clock (receivedAt + MAX_AGE + 1) counts as expired would hinge on how much
+      // real time elapsed before the poll stamped the message — the CI flake.
+      expiresAt: new Date(receivedAt + HELD_SESSION_MESSAGE_MAX_AGE_MS).toISOString(),
     };
     const service = new DesktopSessionMessaging({
       workspaceRoot: root,
@@ -869,6 +895,7 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
           if (name === 'session_inbox_read') return result({ messages: [row] });
           if (name === 'session_inbox_ack') {
             acknowledgements.push(String(args.status));
+            if (String(args.status) === 'expired') expiredAcknowledged.resolve();
             return result({ updated: 1, status: args.status });
           }
           return result({ deleted: true, updated: true });
@@ -877,8 +904,8 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
       getActiveAgent: () => ({ sessionKey: recipientKey, getAccessMode: () => 'read' }),
       deliverPeer: () => { deliveries += 1; return { accepted: true, state: 'steered' }; },
       confirmHeld: () => new Promise<boolean | null>((resolve) => {
-        promptStarted = true;
         settle = resolve;
+        promptStarted.resolve();
       }),
       pollIntervalMs: 60_000,
       local: {
@@ -890,10 +917,10 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
     });
     try {
       await service.start();
-      await waitUntil(() => promptStarted);
+      await waitForSignal(promptStarted.promise, 'the delayed held prompt to open');
       clock = receivedAt + HELD_SESSION_MESSAGE_MAX_AGE_MS + 1;
       settle(approved);
-      await waitUntil(() => acknowledgements.includes('expired'));
+      await waitForSignal(expiredAcknowledged.promise, 'the expired acknowledgement');
 
       assert.equal(acknowledgements.includes('declined'), false);
       assert.equal(acknowledgements.includes('rejected'), false);
