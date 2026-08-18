@@ -426,3 +426,20 @@ test('D8 Phase 22 — switch_model dispatches through the registry', async () =>
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 23 — wait_worker + close_worker (worker lifecycle, zero host growth).
+test('D8 Phase 23 — wait_worker + close_worker dispatch through the registry', async () => {
+  assert.ok(builtinToolHandler('wait_worker'), 'wait_worker has a registered handler');
+  assert.ok(builtinToolHandler('close_worker'), 'close_worker has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-worker-'));
+  try {
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w23' };
+    // Unknown worker id → deterministic not-found / unknown across a fresh workspace.
+    const wc = await invokeBuiltinToolRuntime.call(host, 'close_worker', { id: 'nope' });
+    assert.match(wc, /"closed":false/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'wait_worker', {}), /requires an id/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'close_worker', {}), /requires an id/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
