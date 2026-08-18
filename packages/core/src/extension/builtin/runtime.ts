@@ -38,23 +38,6 @@ import { spawnWorkerThread } from '../../orchestration/agents/workerTools.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
-import { parseTrackQuery } from '../../track/query/index.js';
-import {
-  ensureProject as trackEnsureProject,
-  getProject as trackGetProject,
-  listWorkItems as trackListWorkItems,
-  getWorkItem as trackGetWorkItem,
-  createWorkItem as trackCreateWorkItem,
-  transitionWorkItem as trackTransitionWorkItem,
-  updateWorkItem as trackUpdateWorkItem,
-  addComment as trackAddComment,
-  linkWorkItem as trackLinkWorkItem,
-  createSprint as trackCreateSprint,
-  listSprints as trackListSprints,
-  setSprintState as trackSetSprintState,
-  updateSprint as trackUpdateSprint,
-  sprintVelocity as trackSprintVelocity,
-} from '../../track/trackStore.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { runPostEditCheck } from '../../util/agentloop/postEditCheck.js';
@@ -87,7 +70,6 @@ const nodeShellPort: ShellPort = { runShell, startBackgroundShell };
 import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
 import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
 import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
-import { isWorkItemType, isWorkItemPriority } from '@kinqs/brainrouter-types';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
  *  WebContentsView). Typed loosely so the runtime pulls in no desktop imports. */
@@ -794,95 +776,6 @@ export async function invokeBuiltinToolRuntime(
           ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
-      }
-      case 'track_update': {
-        const action = String(args.action ?? '');
-        if (action === 'create') {
-          const item = trackCreateWorkItem(this.workspaceRoot, {
-            title: String(args.title ?? 'Untitled'),
-            type: isWorkItemType(args.type) ? args.type : 'task',
-            status: typeof args.status === 'string' ? args.status : undefined,
-            priority: isWorkItemPriority(args.priority) ? args.priority : undefined,
-            sessionKey: this.sessionKey, actor: 'agent',
-          });
-          return `Created ${item.key} [${item.status}]: ${item.title}`;
-        }
-        if (action === 'transition') {
-          try {
-            const item = trackTransitionWorkItem(this.workspaceRoot, String(args.key ?? ''), String(args.toStatus ?? ''), 'agent');
-            return item ? `${item.key} → ${item.status}` : `No work item "${args.key}".`;
-          } catch (e) { return (e as Error).message; }
-        }
-        if (action === 'comment') {
-          const item = trackAddComment(this.workspaceRoot, String(args.key ?? ''), 'agent', String(args.body ?? ''));
-          return item ? `Commented on ${item.key}.` : `No work item "${args.key}".`;
-        }
-        if (action === 'link') {
-          const item = trackLinkWorkItem(this.workspaceRoot, String(args.key ?? ''), {
-            codeLinks: Array.isArray(args.codeLinks) ? (args.codeLinks as Array<{ kind: 'branch' | 'commit' | 'pull-request' | 'file'; ref: string }>) : undefined,
-            linkedMemoryIds: Array.isArray(args.linkedMemoryIds) ? (args.linkedMemoryIds as string[]) : undefined,
-            links: typeof args.blocks === 'string' ? [{ type: 'blocks', targetId: args.blocks }] : undefined,
-          });
-          return item ? `Linked ${item.key}.` : `No work item "${args.key}".`;
-        }
-        if (action === 'assign-sprint') {
-          const sprintId = String(args.sprintId ?? '');
-          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
-          if (!sprint) return `No sprint "${sprintId}".`;
-          const item = trackUpdateWorkItem(this.workspaceRoot, String(args.key ?? ''), { sprintId }, 'agent');
-          return item ? `Assigned ${item.key} to ${sprint.name}.` : `No work item "${args.key}".`;
-        }
-        if (action === 'sprint-create') {
-          const name = String(args.name ?? '').trim();
-          if (!name) return 'sprint-create requires a name.';
-          const sprint = trackCreateSprint(this.workspaceRoot, {
-            name,
-            goal: typeof args.goal === 'string' ? args.goal : undefined,
-          });
-          return `Created ${sprint.name} (${sprint.id}).`;
-        }
-        if (action === 'batch-transition') {
-          const query = String(args.query ?? '').trim();
-          if (!query) return 'batch-transition requires a query.';
-          const parsed = parseTrackQuery(query);
-          if (!parsed.ok) return `Bad query: ${parsed.error}`;
-          const toStatus = String(args.toStatus ?? '');
-          const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
-          if (!project.workflowStates.some((state) => state.id === toStatus)) {
-            return `Unknown workflow state "${toStatus}". Valid: ${project.workflowStates.map((state) => state.id).join(', ')}`;
-          }
-          const items = trackListWorkItems(this.workspaceRoot, { query }).filter((item) => item.status !== toStatus);
-          for (const item of items) trackTransitionWorkItem(this.workspaceRoot, item.key, toStatus, 'agent');
-          return `Transitioned ${items.length} work item${items.length === 1 ? '' : 's'} to ${toStatus}.`;
-        }
-        if (action === 'sprint-start') {
-          const sprintId = String(args.sprintId ?? '');
-          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
-          if (!sprint) return `No sprint "${sprintId}".`;
-          if (args.capacity !== undefined && (typeof args.capacity !== 'number' || !Number.isFinite(args.capacity) || args.capacity < 0)) {
-            return 'Sprint capacity must be a non-negative number.';
-          }
-          try {
-            trackSetSprintState(this.workspaceRoot, sprintId, 'active');
-          } catch (error) {
-            return (error as Error).message;
-          }
-          const updated = trackUpdateSprint(this.workspaceRoot, sprintId, {
-            startDate: sprint.startDate ?? new Date().toISOString(),
-            ...(typeof args.capacity === 'number' ? { capacity: args.capacity } : {}),
-          })!;
-          return `Started ${updated.name}.`;
-        }
-        if (action === 'sprint-complete') {
-          const sprintId = String(args.sprintId ?? '');
-          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
-          if (!sprint) return `No sprint "${sprintId}".`;
-          const velocity = trackSprintVelocity(this.workspaceRoot, sprintId)!;
-          trackUpdateSprint(this.workspaceRoot, sprintId, { velocity });
-          trackSetSprintState(this.workspaceRoot, sprintId, 'completed');
-          return `Completed ${sprint.name} (velocity: ${velocity}).`;
-        }
-        return `Unknown track_update action "${action}". Use create · transition · comment · link · sprint-create · assign-sprint · batch-transition · sprint-start · sprint-complete.`;
       }
       case 'connector_run': {
         const connectorId = typeof args.connectorId === 'string' ? args.connectorId.trim() : '';

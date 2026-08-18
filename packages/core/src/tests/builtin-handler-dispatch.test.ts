@@ -687,3 +687,20 @@ test('D8 Phase 32 — workspace_* tools dispatch through the registry', async ()
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 33 — track_update (write side of Track; joins track_query in track.ts, zero host growth).
+test('D8 Phase 33 — track_update dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('track_update'), 'track_update has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-track-'));
+  try {
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w33' };
+    // create runs the full trackStore path and mints a key.
+    const created = await invokeBuiltinToolRuntime.call(host, 'track_update', { action: 'create', title: 'Fix the thing', type: 'task' });
+    assert.match(created, /Created \S+ \[.*\]: Fix the thing/);
+    // unknown action returns the guidance string byte-identical to the former switch.
+    const unknown = await invokeBuiltinToolRuntime.call(host, 'track_update', { action: 'nope' });
+    assert.match(unknown, /Unknown track_update action "nope"/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
