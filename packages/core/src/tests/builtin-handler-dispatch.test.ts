@@ -508,3 +508,33 @@ test('D8 Phase 26 — terminal_write dispatches through the registry', async () 
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 27 — ask_user_choice (grows host by hookNotifyActive; reuses interactionPort/prompter).
+test('D8 Phase 27 — ask_user_choice dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('ask_user_choice'), 'ask_user_choice has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-ask-'));
+  const opts = [{ label: 'A', description: 'first' }, { label: 'B', description: 'second' }];
+  try {
+    // Silent child agents are refused up front (NoTTYError contract).
+    const silent: any = { silent: true, agentDepth: 1, tier: 'worker', workspaceRoot: ws, sessionKey: 'a27' };
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(silent, 'ask_user_choice', { question: 'Q', header: 'H', options: opts }),
+      /not available to silent child agents/,
+    );
+    // Interactive top-level session with a UI port → returns the chosen label.
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'a27',
+      hookNotifyActive: () => false,
+      interactionPort: { confirm: async () => true, choice: async () => ['A'] },
+      prompter: {},
+    };
+    assert.match(await invokeBuiltinToolRuntime.call(host, 'ask_user_choice', { question: 'Q', header: 'H', options: opts }), /"answer":"A"/);
+    // Validation: 2–4 options required.
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'ask_user_choice', { question: 'Q', header: 'H', options: [{ label: 'A', description: 'a' }] }),
+      /2.4 options/,
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

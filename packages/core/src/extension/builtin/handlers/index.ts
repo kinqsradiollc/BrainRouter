@@ -14,9 +14,10 @@ import { fsReadHandlers } from './fsRead.js';
 import { execHandlers } from './exec.js';
 import { modelHandlers } from './model.js';
 import { terminalHandlers } from './terminal.js';
+import { interactionHandlers } from './interaction.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 
