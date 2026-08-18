@@ -64,6 +64,16 @@ export interface BuiltinToolHost {
   readonly llmConfig: LLMConfig;
   /** Overlay a new LLM config for the rest of the session — agent.ts:3030. (D8 Phase 22: switch_model) */
   setLLMConfig(next: Partial<LLMConfig>): void;
+  /** Active-session flags the top-level-only gates read — agent.ts:1200/1268/1266. (D8 Phase 25: terminal reads) */
+  readonly silent: boolean;
+  readonly agentDepth: number;
+  readonly tier?: 'chat' | 'reasoning' | 'worker';
+  /** The native-terminal (PTY) port; present only in the top-level Desktop session — agent.ts:721. (D8 Phase 25) */
+  readonly terminalUsePort?: {
+    list(): Array<{ id: string; shell: string; pid: number; start: number; next: number; alive: boolean }>;
+    read(id: string, fromOffset: number): { chunk: string; next: number; alive: boolean; dropped: number };
+    write(id: string, data: string): boolean;
+  };
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

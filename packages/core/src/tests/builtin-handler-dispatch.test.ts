@@ -455,3 +455,23 @@ test('D8 Phase 24 — kill_command dispatches through the registry', async () =>
   const reviewed: any = { silent: false, agentDepth: 0, tier: 'chat', inheritedExecutionAuthorityGuard: () => () => {} };
   await assert.rejects(() => invokeBuiltinToolRuntime.call(reviewed, 'kill_command', { id: 'x' }), /unavailable inside reviewed execution/);
 });
+
+// ADR-041 D8 Phase 25 — terminal_list + terminal_read (PTY reads; grow host by terminalUsePort + session flags).
+test('D8 Phase 25 — terminal reads dispatch through the registry', async () => {
+  assert.ok(builtinToolHandler('terminal_list'), 'terminal_list has a registered handler');
+  assert.ok(builtinToolHandler('terminal_read'), 'terminal_read has a registered handler');
+  // Headless (no terminalUsePort) → the deterministic unavailable message.
+  const headless: any = { silent: false, agentDepth: 0, tier: 'chat' };
+  assert.match(await invokeBuiltinToolRuntime.call(headless, 'terminal_list', {}), /unavailable outside the active top-level/);
+  // Top-level Desktop session with a port → works.
+  const port = {
+    list: () => [{ id: 't1', shell: 'bash', pid: 1, start: 0, next: 5, alive: true }],
+    read: (_id: string, _off: number) => ({ chunk: 'hello', next: 5, alive: true, dropped: 0 }),
+    write: () => true,
+  };
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', terminalUsePort: port };
+  assert.match(await invokeBuiltinToolRuntime.call(host, 'terminal_list', {}), /t1/);
+  assert.match(await invokeBuiltinToolRuntime.call(host, 'terminal_read', { id: 't1' }), /hello/);
+  assert.match(await invokeBuiltinToolRuntime.call(host, 'terminal_read', { id: 'unknown' }), /"found":false/);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'terminal_read', {}), /Missing parameter "id"/);
+});
