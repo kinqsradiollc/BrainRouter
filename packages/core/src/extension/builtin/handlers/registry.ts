@@ -57,6 +57,8 @@ export interface BuiltinToolHost {
   readonly filesReadThisSession: Set<string>;
   /** Fire-and-forget code reindex on read — agent.ts:3022. (D8 Phase 19: read_file) */
   maybeReindexSource(resolved: string, content: string): Promise<string>;
+  /** Returns a cleanup fn (truthy) when running inside reviewed execution — agent.ts:1409. (D8 Phase 21: task_output) */
+  inheritedExecutionAuthorityGuard(): (() => void) | undefined;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

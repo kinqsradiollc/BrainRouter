@@ -389,3 +389,15 @@ test('D8 Phase 20 — wait_until / lsp / finish_scan dispatch through the regist
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 21 — task_output (first DEFER tool; grows host by inheritedExecutionAuthorityGuard).
+test('D8 Phase 21 — task_output dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('task_output'), 'task_output has a registered handler');
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', inheritedExecutionAuthorityGuard: () => undefined };
+  const out = await invokeBuiltinToolRuntime.call(host, 'task_output', { id: 'nope' });
+  assert.match(out, /"found":false/);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'task_output', {}), /requires an id/);
+  // Inside reviewed execution the guard returns a cleanup fn (truthy) → refused.
+  const reviewed: any = { silent: false, agentDepth: 0, tier: 'chat', inheritedExecutionAuthorityGuard: () => () => {} };
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(reviewed, 'task_output', { id: 'x' }), /unavailable inside reviewed execution/);
+});
