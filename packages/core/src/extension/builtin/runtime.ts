@@ -808,29 +808,6 @@ export async function invokeBuiltinToolRuntime(
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
       }
-      case 'terminal_write': {
-        if (!this.terminalUsePort || this.silent || this.agentDepth !== 0 || this.tier === 'worker') {
-          return 'terminal_write is unavailable outside the active top-level local Desktop session.';
-        }
-        const id = String(args.id ?? '').trim();
-        const data = String(args.data ?? '');
-        if (!id) throw new Error('Missing parameter "id" for terminal_write.');
-        if (!data) throw new Error('Missing parameter "data" for terminal_write.');
-        if (data.length > 4_000) return 'terminal_write rejected: input exceeds 4000 characters.';
-        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
-        if (activeMode.executionMode !== 'fast') {
-          const approved = this.interactionPort
-            ? await this.interactionPort.confirm({
-                title: 'Send input to native terminal?',
-                detail: `Terminal ${id}\n\n${data}`,
-                dangerous: false,
-                tool: 'terminal_write',
-              })
-            : await this.prompter.askYesNo(`Send this input to terminal ${id}?\n${data}\n(y/N) `, false);
-          if (!approved) return 'terminal_write rejected by user.';
-        }
-        return JSON.stringify({ id, written: this.terminalUsePort.write(id, data) });
-      }
       case 'computer_use': {
         if (!getCliKnobs().computerUse.enabled) return 'computer_use is disabled. Set cli.computerUse.enabled=true to enable it.';
         if (!this.computerUsePort) return 'computer_use is unavailable in this runtime.';

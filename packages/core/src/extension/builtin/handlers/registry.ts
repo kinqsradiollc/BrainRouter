@@ -15,6 +15,8 @@ import type { McpClientPool as McpClientWrapper } from '../../../mcp/mcpPool.js'
 import type { PlanState } from '../../../task/taskStore.js';
 import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { LLMConfig } from '../../../config/config.js';
+import type { InteractionPort } from '@kinqs/brainrouter-agent-protocol';
+import type { InteractivePrompter } from '../../../agent/support/prompter.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -74,6 +76,10 @@ export interface BuiltinToolHost {
     read(id: string, fromOffset: number): { chunk: string; next: number; alive: boolean; dropped: number };
     write(id: string, data: string): boolean;
   };
+  /** The UI interaction port (confirm/choice dialogs); absent on headless hosts — agent.ts:688. (D8 Phase 26: terminal_write) */
+  readonly interactionPort?: InteractionPort;
+  /** The TTY prompter (yes/no + choice); HEADLESS_PROMPTER on non-TTY hosts — agent.ts:1297. (D8 Phase 26: terminal_write) */
+  readonly prompter: InteractivePrompter;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

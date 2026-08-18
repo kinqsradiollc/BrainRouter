@@ -475,3 +475,36 @@ test('D8 Phase 25 — terminal reads dispatch through the registry', async () =>
   assert.match(await invokeBuiltinToolRuntime.call(host, 'terminal_read', { id: 'unknown' }), /"found":false/);
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'terminal_read', {}), /Missing parameter "id"/);
 });
+
+// ADR-041 D8 Phase 26 — terminal_write (first approval-prompt tool; grows host by interactionPort + prompter).
+test('D8 Phase 26 — terminal_write dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('terminal_write'), 'terminal_write has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-tw-'));
+  try {
+    const written: Array<[string, string]> = [];
+    const port = {
+      list: () => [],
+      read: () => ({ chunk: '', next: 0, alive: false, dropped: 0 }),
+      write: (id: string, data: string) => { written.push([id, data]); return true; },
+    };
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 't26',
+      terminalUsePort: port,
+      interactionPort: { confirm: async () => true, choice: async () => [] },
+      prompter: {},
+    };
+    const out = await invokeBuiltinToolRuntime.call(host, 'terminal_write', { id: 't1', data: 'ls\n' });
+    assert.match(out, /"written":true/);
+    assert.equal(written.length, 1, 'wrote to the port after approval');
+    // Decline path.
+    const declineHost: any = { ...host, interactionPort: { confirm: async () => false, choice: async () => [] } };
+    assert.match(await invokeBuiltinToolRuntime.call(declineHost, 'terminal_write', { id: 't1', data: 'x' }), /rejected by user/);
+    // Headless (no terminal port) gate.
+    const headless: any = { silent: false, agentDepth: 0, tier: 'chat' };
+    assert.match(await invokeBuiltinToolRuntime.call(headless, 'terminal_write', { id: 't1', data: 'x' }), /unavailable outside/);
+    // Validation.
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'terminal_write', { id: 't1' }), /Missing parameter "data"/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
