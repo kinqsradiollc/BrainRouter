@@ -14,6 +14,7 @@ import type { ResultCache } from '../../../util/result/resultHandoff.js';
 import type { McpClientPool as McpClientWrapper } from '../../../mcp/mcpPool.js';
 import type { PlanState } from '../../../task/taskStore.js';
 import type { ArtifactRecord } from '@kinqs/brainrouter-types';
+import type { LLMConfig } from '../../../config/config.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -59,6 +60,10 @@ export interface BuiltinToolHost {
   maybeReindexSource(resolved: string, content: string): Promise<string>;
   /** Returns a cleanup fn (truthy) when running inside reviewed execution — agent.ts:1409. (D8 Phase 21: task_output) */
   inheritedExecutionAuthorityGuard(): (() => void) | undefined;
+  /** The live LLM config (switch_model reads model/etc.) — agent.ts:863. (D8 Phase 22: switch_model) */
+  readonly llmConfig: LLMConfig;
+  /** Overlay a new LLM config for the rest of the session — agent.ts:3030. (D8 Phase 22: switch_model) */
+  setLLMConfig(next: Partial<LLMConfig>): void;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

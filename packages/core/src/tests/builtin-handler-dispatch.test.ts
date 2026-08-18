@@ -401,3 +401,28 @@ test('D8 Phase 21 — task_output dispatches through the registry', async () => 
   const reviewed: any = { silent: false, agentDepth: 0, tier: 'chat', inheritedExecutionAuthorityGuard: () => () => {} };
   await assert.rejects(() => invokeBuiltinToolRuntime.call(reviewed, 'task_output', { id: 'x' }), /unavailable inside reviewed execution/);
 });
+
+// ADR-041 D8 Phase 22 — switch_model (grows host by llmConfig + setLLMConfig).
+test('D8 Phase 22 — switch_model dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('switch_model'), 'switch_model has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-model-'));
+  try {
+    let applied: any = null;
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'm22',
+      inheritedExecutionAuthorityGuard: () => undefined,
+      llmConfig: { model: 'gpt-x', endpoint: 'https://e/v1', apiKey: '' },
+      setLLMConfig: (c: any) => { applied = c; },
+    };
+    // Unknown profile → a structured failure, not a throw (resolveProfileSwitch).
+    const out = await invokeBuiltinToolRuntime.call(host, 'switch_model', { profile: 'does-not-exist-xyz' });
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.switched, false, 'unknown profile is rejected without switching');
+    assert.equal(applied, null, 'no live config overlay on a failed switch');
+    // Inside reviewed execution → refused before anything.
+    const reviewed: any = { ...host, inheritedExecutionAuthorityGuard: () => () => {} };
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(reviewed, 'switch_model', { profile: 'x' }), /unavailable inside reviewed execution/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

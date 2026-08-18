@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { NoTTYError } from '../../agent/support/prompter.js';
 import { runHooks } from '../../hooks/hooksStore.js';
-import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
+import { getCliKnobs, isRemoteBrainUrl } from '../../config/config.js';
 import { formatWorkspaceRef, parseWorkspaceRef } from '../../workspace/references/index.js';
 import {
   buildLocalWorkspaceRegistry, fenceWorkspaceResolutions, linkWorkspaceRef, localWorkspaceViewer,
@@ -42,10 +42,7 @@ import { ownershipWriteViolation } from '../../orchestration/ownership/ownership
 import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
 import { acknowledgeCompletions } from '../../session/completion/completionInbox.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
-import { resolveActiveMode, setSessionMode } from '../../session/state/sessionModeStore.js';
-import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
-import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
-import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.js';
+import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { parseTrackQuery } from '../../track/query/index.js';
@@ -1055,87 +1052,6 @@ export async function invokeBuiltinToolRuntime(
         if (!id) throw new Error('close_worker requires an id.');
         const meta = closeWorker(this.workspaceRoot, id);
         return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
-      }
-      case 'switch_model': {
-        if (this.inheritedExecutionAuthorityGuard()) {
-          throw new Error(
-            'switch_model is unavailable inside reviewed execution because the reviewed provider and model identity are fixed for the execution.',
-          );
-        }
-        // MC-D3 — agent-initiated switch to a named LLM profile: the explicit
-        // sibling of the first-line tier self-escalation marker. Validated
-        // against the configured profiles + the availableModels enforcement
-        // gate (always enforced in Fast mode, mirroring `/model`). On success
-        // the live LLM config is overlaid immediately — every subsequent model
-        // call this turn and after uses the new profile — and the choice is
-        // persisted to the session runtime so a resumed session keeps it.
-        // Deliberately NOT applied here: a profile's `fast` preference (an
-        // agent must never loosen its own approval posture).
-        const knobs = getCliKnobs();
-        const inFastMode = resolveActiveMode(this.workspaceRoot, this.sessionKey).executionMode === 'fast';
-        const profileName = String(args.profile ?? '');
-        const rawProfile = knobs.llmProfiles?.[profileName.trim()];
-        const routeProfileModel = knobs.router.enabled && !rawProfile?.endpoint;
-        const result = resolveProfileSwitch(String(args.profile ?? ''), knobs.llmProfiles, this.llmConfig, {
-          availableModels: knobs.availableModels,
-          enforceAvailableModels: routeProfileModel ? false : knobs.enforceAvailableModels,
-          fastMode: routeProfileModel ? false : inFastMode,
-        });
-        if (!result.ok) return JSON.stringify({ switched: false, error: result.error });
-        const before = this.llmConfig.model;
-        let nextLlm = result.llm;
-        let resolvedRoute = '';
-        if (routeProfileModel) {
-          const config = loadOrInitConfig();
-          const baseName = config.providers?.base ? 'base-config' : 'base';
-          const registry = buildModelRegistry(
-            { ...(config.providers ?? {}), [baseName]: this.llmConfig },
-            {
-              aliases: knobs.router.aliases,
-              chain: [...knobs.router.chain, ...knobs.fallbackModels, `${baseName}/${this.llmConfig.model}`],
-              order: knobs.router.order,
-              strategy: knobs.router.strategy,
-              passThrough: knobs.router.passThrough,
-              availableModels: knobs.availableModels,
-              enforceAvailableModels: knobs.enforceAvailableModels || inFastMode,
-            },
-          );
-          const route = resolveRoutes(registry, result.profile.model, { withFallbacks: true })[0];
-          if (!route) {
-            return JSON.stringify({
-              switched: false,
-              error: `Router could not resolve profile "${result.name}" model "${result.profile.model}".`,
-            });
-          }
-          nextLlm = { ...route.llm };
-          resolvedRoute = route.slug;
-        }
-        this.setLLMConfig(nextLlm);
-        try {
-          setSessionRuntime(this.workspaceRoot, this.sessionKey, {
-            model: routeProfileModel ? result.profile.model : nextLlm.model,
-            endpoint: result.profile.endpoint ?? '',
-            llmProfile: result.name,
-          });
-          if (result.profile.reasoningEffort) {
-            setSessionMode(this.workspaceRoot, this.sessionKey, { effort: result.profile.reasoningEffort });
-          }
-        } catch { /* persistence is best-effort; the live switch already applied */ }
-        traceEvent('model.profile_switch', {
-          from: before,
-          to: nextLlm.model,
-          profile: result.name,
-          route: resolvedRoute || null,
-          reason: typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : null,
-        });
-        return JSON.stringify({
-          switched: true,
-          profile: result.name,
-          from: before,
-          to: nextLlm.model,
-          route: resolvedRoute || undefined,
-          note: 'Applies from the next model call onward in this session.',
-        });
       }
       case 'kill_command': {
         if (this.inheritedExecutionAuthorityGuard()) {
