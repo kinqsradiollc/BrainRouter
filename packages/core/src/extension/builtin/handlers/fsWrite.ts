@@ -10,6 +10,8 @@ import { ownershipWriteViolation } from '../../../orchestration/ownership/owners
 import { runPostEditCheck } from '../../../util/agentloop/postEditCheck.js';
 import { getCliKnobs } from '../../../config/config.js';
 import { applyNotebookEdit } from '../../../agent/fs/notebookEdit.js';
+import fs from 'node:fs';
+import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../../agent/fs/applyPatch.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const fsWriteHandlers: Record<string, BuiltinToolHandler> = {
@@ -113,5 +115,40 @@ export const fsWriteHandlers: Record<string, BuiltinToolHandler> = {
         await fsPort.writeFile(resolved, result.content);
         host.filesReadThisSession.add(resolved);
         return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
+  },
+
+  apply_patch: async ({ args, host }) => {
+        const patch = String(args.patch ?? '');
+        if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
+        const ops = parsePatchEnvelope(patch);
+        const safety = assessPatchSafety(ops);
+        const parentDenial = await host.confirmSilentChildToolApproval({
+          tool: 'apply_patch',
+          summary: `${safety.adds} add, ${safety.updates} update, ${safety.deletes} delete, ${safety.renames} rename`,
+          reason: safety.touchesVcs
+            ? 'silent child agent requested a patch touching VCS metadata'
+            : 'silent child agent requested a patch',
+          dangerous: safety.touchesVcs || safety.deletes > 0,
+        });
+        if (parentDenial) return parentDenial;
+        host.assertInheritedExecutionAuthorityCurrent();
+        // 0.4.x-3b — capture each target file's prior content before the patch
+        // applies (undo log for /rewind --files). Parse the envelope's file
+        // headers (`*** Add/Update/Delete File: <path>`).
+        for (const m of patch.matchAll(/^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+)\s*$/gm)) {
+          const p = m[1].trim();
+          if (p) { try { host.captureFileSnapshot(path.resolve(host.workspaceRoot, p)); } catch { /* noop */ } }
+        }
+        {
+          const result = applyPatchEnvelope(patch, host.workspaceRoot, host.ownership);
+          const firstFile = patch.match(/^\*\*\*\s+(?:Add|Update) File:\s*(.+)\s*$/m)?.[1]?.trim();
+          const checkFile = firstFile ? path.resolve(host.workspaceRoot, firstFile) : host.workspaceRoot;
+          const patchNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: host.workspaceRoot });
+          let patchReindex = '';
+          if (firstFile) {
+            try { patchReindex = await host.maybeReindexSource(checkFile, fs.readFileSync(checkFile, 'utf8')); } catch { /* file may have been deleted */ }
+          }
+          return result + patchNotice + patchReindex;
+        }
   },
 };

@@ -71,7 +71,6 @@ import { canSpawnWorker } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
-import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
 import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
@@ -877,40 +876,6 @@ export async function invokeBuiltinToolRuntime(
           ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
-      }
-      case 'apply_patch': {
-        const patch = String(args.patch ?? '');
-        if (!patch.trim()) throw new Error('apply_patch requires a non-empty patch.');
-        const ops = parsePatchEnvelope(patch);
-        const safety = assessPatchSafety(ops);
-        const parentDenial = await this.confirmSilentChildToolApproval({
-          tool: 'apply_patch',
-          summary: `${safety.adds} add, ${safety.updates} update, ${safety.deletes} delete, ${safety.renames} rename`,
-          reason: safety.touchesVcs
-            ? 'silent child agent requested a patch touching VCS metadata'
-            : 'silent child agent requested a patch',
-          dangerous: safety.touchesVcs || safety.deletes > 0,
-        });
-        if (parentDenial) return parentDenial;
-        this.assertInheritedExecutionAuthorityCurrent();
-        // 0.4.x-3b — capture each target file's prior content before the patch
-        // applies (undo log for /rewind --files). Parse the envelope's file
-        // headers (`*** Add/Update/Delete File: <path>`).
-        for (const m of patch.matchAll(/^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+)\s*$/gm)) {
-          const p = m[1].trim();
-          if (p) { try { this.captureFileSnapshot(path.resolve(this.workspaceRoot, p)); } catch { /* noop */ } }
-        }
-        {
-          const result = applyPatchEnvelope(patch, this.workspaceRoot, this.ownership);
-          const firstFile = patch.match(/^\*\*\*\s+(?:Add|Update) File:\s*(.+)\s*$/m)?.[1]?.trim();
-          const checkFile = firstFile ? path.resolve(this.workspaceRoot, firstFile) : this.workspaceRoot;
-          const patchNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: checkFile, cwd: this.workspaceRoot });
-          let patchReindex = '';
-          if (firstFile) {
-            try { patchReindex = await this.maybeReindexSource(checkFile, fs.readFileSync(checkFile, 'utf8')); } catch { /* file may have been deleted */ }
-          }
-          return result + patchNotice + patchReindex;
-        }
       }
       case 'track_update': {
         const action = String(args.action ?? '');
