@@ -82,6 +82,14 @@ export interface BuiltinToolHost {
   readonly prompter: InteractivePrompter;
   /** True when notification hooks are active (advisory needs-input signal) — agent.ts:3367. (D8 Phase 27: ask_user_choice) */
   hookNotifyActive(): boolean;
+  /** This agent's ownership token (null = unowned) — agent.ts:1270. (D8 Phase 28: write_file) */
+  readonly ownership: string | null;
+  /** Re-assert the inherited execution authority is still current before a write — agent.ts:1404. (D8 Phase 28) */
+  assertInheritedExecutionAuthorityCurrent(): void;
+  /** Snapshot a file into the /rewind undo log before overwriting it — agent.ts:3018. (D8 Phase 28) */
+  captureFileSnapshot(absPath: string): void;
+  /** Silent-child write/edit/patch approval gate (returns a denial string, else null) — agent.ts:1507. (D8 Phase 28) */
+  confirmSilentChildToolApproval(info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean }): Promise<string | null>;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

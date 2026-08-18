@@ -538,3 +538,35 @@ test('D8 Phase 27 — ask_user_choice dispatches through the registry', async ()
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 28 — write_file (write-family foundation; grows host by ownership + 3 write-guard methods).
+test('D8 Phase 28 — write_file dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('write_file'), 'write_file has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-write-'));
+  try {
+    const read = new Set<string>();
+    let snapshotted = 0;
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w28', ownership: null,
+      filesReadThisSession: read,
+      assertInheritedExecutionAuthorityCurrent: () => {},
+      captureFileSnapshot: () => { snapshotted += 1; },
+      confirmSilentChildToolApproval: async () => null,
+      maybeReindexSource: async () => '',
+    };
+    // Creating a NEW file is allowed.
+    const out = await invokeBuiltinToolRuntime.call(host, 'write_file', { path: 'new.txt', content: 'hello' });
+    assert.match(out, /Successfully wrote file: new\.txt/);
+    assert.equal(fs.readFileSync(path.join(ws, 'new.txt'), 'utf8'), 'hello');
+    assert.equal(snapshotted, 1, 'captured an undo snapshot');
+    assert.equal(read.size, 1, 'kept the read ledger accurate after write');
+    // Overwriting an EXISTING unread file is refused (read-before-overwrite).
+    fs.writeFileSync(path.join(ws, 'exists.txt'), 'old');
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'write_file', { path: 'exists.txt', content: 'new' }),
+      /Read-before-overwrite/,
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
