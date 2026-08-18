@@ -80,6 +80,8 @@ export interface BuiltinToolHost {
   readonly interactionPort?: InteractionPort;
   /** The TTY prompter (yes/no + choice); HEADLESS_PROMPTER on non-TTY hosts — agent.ts:1297. (D8 Phase 26: terminal_write) */
   readonly prompter: InteractivePrompter;
+  /** True when notification hooks are active (advisory needs-input signal) — agent.ts:3367. (D8 Phase 27: ask_user_choice) */
+  hookNotifyActive(): boolean;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
