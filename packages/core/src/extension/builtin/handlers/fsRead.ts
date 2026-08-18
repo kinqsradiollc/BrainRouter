@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertSafeReviewerFilesystemPath, isSafeReviewerFilesystemPath, redactReviewSourceText } from '../../../review/sourceSafety.js';
 import { truncateFullRead } from '../../../agent/fs/readTruncation.js';
+import { waitUntilCondition } from '../../../util/agentloop/waitUntil.js';
+import { getCliKnobs } from '../../../config/config.js';
 import { grepSearch, globFiles } from '../../../agent/fs/workspaceFs.js';
 import type { BuiltinToolHandler } from './registry.js';
 
@@ -112,5 +114,50 @@ export const fsReadHandlers: Record<string, BuiltinToolHandler> = {
       || isSafeReviewerFilesystemPath(reviewRoot, path.resolve(reviewRoot, candidate))
     ));
     return JSON.stringify(matches, null, 2);
+  },
+
+  wait_until: async ({ args, resolveHere }) => {
+    // CC-P11.2 — block until a workspace file condition holds (or timeout).
+    const condition = String(args.condition ?? '');
+    if (condition !== 'file_exists' && condition !== 'file_contains') {
+      throw new Error('wait_until requires condition "file_exists" or "file_contains".');
+    }
+    const watchPath = String(args.path ?? '').trim();
+    if (!watchPath) throw new Error('wait_until requires a path.');
+    if (condition === 'file_contains' && !String(args.text ?? '').trim()) {
+      throw new Error('wait_until with file_contains requires `text`.');
+    }
+    const resolvedWatch = resolveHere(watchPath);
+    const result = await waitUntilCondition({
+      condition,
+      resolvedPath: resolvedWatch,
+      text: typeof args.text === 'string' ? args.text : undefined,
+      timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+      pollMs: typeof args.pollMs === 'number' ? args.pollMs : undefined,
+    });
+    return JSON.stringify({ ...result, condition, path: watchPath });
+  },
+
+  lsp: async ({ args, host, resolveHere }) => {
+    // CLI-19 — semantic navigation via a language server.
+    const action = String(args.action ?? '').trim() as 'definition' | 'references' | 'hover' | 'symbols';
+    if (!['definition', 'references', 'hover', 'symbols'].includes(action)) {
+      throw new Error('lsp: action must be definition | references | hover | symbols.');
+    }
+    if (!args.file) throw new Error('lsp requires a `file`.');
+    const resolved = resolveHere(String(args.file));
+    if (host.reviewSourceSafety) {
+      assertSafeReviewerFilesystemPath(host.workspaceRoot, resolved, args.file);
+    }
+    const { runLspQuery } = await import('../../../lsp/manager.js');
+    const result = await runLspQuery({
+      action,
+      file: resolved,
+      line: args.line != null ? Number(args.line) : undefined,
+      character: args.character != null ? Number(args.character) : undefined,
+      cwd: host.workspaceRoot,
+      servers: getCliKnobs().lspServers,
+    });
+    return host.reviewSourceSafety ? redactReviewSourceText(result) : result;
   },
 };

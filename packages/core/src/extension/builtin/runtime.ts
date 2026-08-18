@@ -69,13 +69,11 @@ import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { runPostEditCheck } from '../../util/agentloop/postEditCheck.js';
 import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/tokenEstimate.js';
-import { waitUntilCondition } from '../../util/agentloop/waitUntil.js';
 import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
 import { parseGoogleHtml, googleSearchUrl } from '../../websearch/providers/google.js';
 import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
-import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
@@ -1019,28 +1017,6 @@ export async function invokeBuiltinToolRuntime(
         const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
         return extractToolText(mcpRes);
       }
-      case 'lsp': {
-        // CLI-19 — semantic navigation via a language server.
-        const action = String(args.action ?? '').trim() as 'definition' | 'references' | 'hover' | 'symbols';
-        if (!['definition', 'references', 'hover', 'symbols'].includes(action)) {
-          throw new Error('lsp: action must be definition | references | hover | symbols.');
-        }
-        if (!args.file) throw new Error('lsp requires a `file`.');
-        const resolved = resolveHere(String(args.file));
-        if (this.reviewSourceSafety) {
-          assertSafeReviewerFilesystemPath(this.workspaceRoot, resolved, args.file);
-        }
-        const { runLspQuery } = await import('../../lsp/manager.js');
-        const result = await runLspQuery({
-          action,
-          file: resolved,
-          line: args.line != null ? Number(args.line) : undefined,
-          character: args.character != null ? Number(args.character) : undefined,
-          cwd: this.workspaceRoot,
-          servers: getCliKnobs().lspServers,
-        });
-        return this.reviewSourceSafety ? redactReviewSourceText(result) : result;
-      }
       case 'spawn_worker_thread': {
         if (!canSpawnWorker(this.agentDepth)) {
           throw new Error('Workers cannot spawn workers (MAX_WORKER_DEPTH=1).');
@@ -1182,27 +1158,6 @@ export async function invokeBuiltinToolRuntime(
         const signal = args.signal === 'SIGKILL' || args.signal === 'SIGINT' ? args.signal : 'SIGTERM';
         const killed = killBackgroundShell(id, signal);
         return JSON.stringify({ id, killed, signal, ...(killed ? {} : { note: 'No running background command with that id (already exited, or unknown id).' }) });
-      }
-      case 'wait_until': {
-        // CC-P11.2 — block until a workspace file condition holds (or timeout).
-        const condition = String(args.condition ?? '');
-        if (condition !== 'file_exists' && condition !== 'file_contains') {
-          throw new Error('wait_until requires condition "file_exists" or "file_contains".');
-        }
-        const watchPath = String(args.path ?? '').trim();
-        if (!watchPath) throw new Error('wait_until requires a path.');
-        if (condition === 'file_contains' && !String(args.text ?? '').trim()) {
-          throw new Error('wait_until with file_contains requires `text`.');
-        }
-        const resolvedWatch = resolveHere(watchPath);
-        const result = await waitUntilCondition({
-          condition,
-          resolvedPath: resolvedWatch,
-          text: typeof args.text === 'string' ? args.text : undefined,
-          timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
-          pollMs: typeof args.pollMs === 'number' ? args.pollMs : undefined,
-        });
-        return JSON.stringify({ ...result, condition, path: watchPath });
       }
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
@@ -1418,21 +1373,6 @@ export async function invokeBuiltinToolRuntime(
         const finding = { ...input, id: `pentest_${randomUUID().slice(0, 12)}` };
         saveReview(this.workspaceRoot, { ...run, updatedAt: new Date().toISOString(), findings: [...run.findings, finding] });
         return JSON.stringify({ accepted: true, finding: { id: finding.id, severity: finding.severity, cvss: finding.cvss } });
-      }
-      case 'finish_scan': {
-        const activeWorkers = listWorkers(this.workspaceRoot).filter((worker) => worker.status === 'running');
-        if (activeWorkers.length) throw new Error(`finish_scan refused while ${activeWorkers.length} worker(s) are still running: ${activeWorkers.map((worker) => worker.id).join(', ')}`);
-        const run = getLatestReview(this.workspaceRoot);
-        if (!run || run.status !== 'running') throw new Error('finish_scan requires an active pentest review run.');
-        const executiveSummary = String(args.executiveSummary ?? '').trim();
-        const methodology = String(args.methodology ?? '').trim();
-        const technicalAnalysis = String(args.technicalAnalysis ?? '').trim();
-        const recommendations = String(args.recommendations ?? '').trim();
-        const limitations = String(args.limitations ?? '').trim();
-        if (!executiveSummary || !methodology || !technicalAnalysis || !recommendations || !limitations) throw new Error('finish_scan requires executiveSummary, methodology, technicalAnalysis, recommendations, and limitations.');
-        const summary = `${executiveSummary}\n\n## Methodology\n${methodology}\n\n## Technical analysis\n${technicalAnalysis}\n\n## Recommendations\n${recommendations}\n\n## Limitations\n${limitations}`;
-        saveReview(this.workspaceRoot, { ...run, status: 'completed', updatedAt: new Date().toISOString(), summary });
-        return JSON.stringify({ completed: true, findings: run.findings.length, sarif: '.brainrouter/findings.sarif' });
       }
       case 'ask_user_choice': {
         // PARITY — accept either the single-question fields or a batched
