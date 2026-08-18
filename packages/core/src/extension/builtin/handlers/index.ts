@@ -17,9 +17,10 @@ import { terminalHandlers } from './terminal.js';
 import { interactionHandlers } from './interaction.js';
 import { fsWriteHandlers } from './fsWrite.js';
 import { workspaceHandlers } from './workspace.js';
+import { connectorHandlers } from './connector.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers, ...fsWriteHandlers, ...workspaceHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers, ...fsWriteHandlers, ...workspaceHandlers, ...connectorHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 

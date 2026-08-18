@@ -704,3 +704,22 @@ test('D8 Phase 33 — track_update dispatches through the registry', async () =>
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 34 — connector_run (execute a connector + import docs; new connector.ts, +1 host method).
+test('D8 Phase 34 — connector_run dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('connector_run'), 'connector_run has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-conn-'));
+  try {
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w34',
+      agentMcpConnectorClient: () => undefined,
+      mcpClient: { callTool: async () => ({}) },
+      turnAbort: null,
+    };
+    // A missing/blank connectorId is refused before any runner call (byte-identical to the former switch).
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'connector_run', {}), /requires a .connectorId/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'connector_run', { connectorId: '   ' }), /requires a .connectorId/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
