@@ -366,3 +366,26 @@ test('D8 Phase 19 — read_file dispatches through the registry', async () => {
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 20 — the last gate-free tools: wait_until + lsp (fsRead) + finish_scan (pentest).
+test('D8 Phase 20 — wait_until / lsp / finish_scan dispatch through the registry', async () => {
+  for (const n of ['wait_until', 'lsp', 'finish_scan']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-last-'));
+  try {
+    fs.writeFileSync(path.join(ws, 'ready.txt'), 'ok');
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, reviewSourceSafety: false };
+    // wait_until: an already-satisfied file_exists returns immediately.
+    const wu = await invokeBuiltinToolRuntime.call(host, 'wait_until', { condition: 'file_exists', path: 'ready.txt', timeoutMs: 1000 });
+    assert.match(wu, /"path":"ready.txt"/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'wait_until', { condition: 'bogus', path: 'x' }), /condition "file_exists" or "file_contains"/);
+    // lsp: validation gates before any language server is started.
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'lsp', { action: 'nope', file: 'x' }), /action must be/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'lsp', { action: 'definition' }), /requires a `file`/);
+    // finish_scan: no active pentest run in a fresh workspace → the deterministic refusal.
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'finish_scan', {}), /requires an active pentest review run/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
