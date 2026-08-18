@@ -723,3 +723,25 @@ test('D8 Phase 34 — connector_run dispatches through the registry', async () =
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 35 — worktree_enter/create/done (ADR-042 lifecycle; new worktree.ts, +5 host members).
+test('D8 Phase 35 — worktree_* tools dispatch through the registry', async () => {
+  for (const n of ['worktree_enter', 'worktree_create', 'worktree_done']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-wt-'));
+  try {
+    // review-source-safety disables enter/create (guards byte-identical to the former switch).
+    const review: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w35', reviewSourceSafety: true };
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(review, 'worktree_enter', { target: 'x' }), /disabled while reviewing untrusted source/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(review, 'worktree_create', { branch: 'x' }), /disabled while reviewing untrusted source/);
+    // worktree_done requires a non-empty target.
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w35', reviewSourceSafety: false,
+      lastUserPrompt: '', agentAuthoredCommits: new Set<string>(),
+    };
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'worktree_done', { path: '  ' }), /requires a worktree path or branch/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

@@ -62,9 +62,6 @@ const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
 // so the local exec path is byte-identical. An execution world (D10) injects a
 // port that runs the command in a container/remote.
 const nodeShellPort: ShellPort = { runShell, startBackgroundShell };
-import { listWorktreesStructured, resolveAttachableWorktree } from '../../worktree/concurrentWorktrees.js';
-import { createNamedWorktree, removeWorktreeAt } from '../../worktree/isolation/worktreeIsolation.impl.js';
-import { liveForeignOwner, recordWorktreeOwner, clearWorktreeOwner } from '../../worktree/ownership/worktreeOwnership.js';
 
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
  *  WebContentsView). Typed loosely so the runtime pulls in no desktop imports. */
@@ -257,115 +254,6 @@ export async function invokeBuiltinToolRuntime(
       });
     }
     switch (name) {
-      // ADR-042 D3 — worktrees the agent can enter. `worktree_list` is the
-      // structured, agent-facing inventory; `worktree_enter` attaches a listed
-      // same-repo worktree (D2 derivation) so its files resolve. Non-destructive
-      // and reversible — unlike `/cd`, it widens scope without moving the anchor.
-      case 'worktree_enter': {
-        if (this.reviewSourceSafety) {
-          throw new Error('worktree_enter is disabled while reviewing untrusted source.');
-        }
-        const target = typeof args.target === 'string' ? args.target
-          : typeof args.path === 'string' ? args.path
-          : typeof args.branch === 'string' ? args.branch
-          : '';
-        const res = resolveAttachableWorktree(this.workspaceRoot, target);
-        if (!res.ok) throw new Error(res.reason);
-        // ADR-042 D6 — if a LIVE foreign session owns this worktree, attach it
-        // read-only (writes refused, owner named) unless the user overrides.
-        const override = args.override === true || args.force === true;
-        const foreignOwner = !override && this.sessionKey
-          ? liveForeignOwner(this.workspaceRoot, res.info.path, this.sessionKey)
-          : null;
-        if (foreignOwner && typeof this.attachReadOnlyWorktree === 'function') {
-          this.attachReadOnlyWorktree(res.info.path, foreignOwner);
-          return JSON.stringify({
-            entered: res.info.path,
-            branch: res.info.branch,
-            readOnly: true,
-            owner: foreignOwner,
-            note: `Attached READ-ONLY — session ${foreignOwner} is working in this worktree. You can read it; writes are refused. Pass override:true to take it read/write anyway.`,
-          });
-        }
-        if (typeof this.attachWorktree === 'function') this.attachWorktree(res.info.path);
-        if (this.sessionKey) { try { recordWorktreeOwner(this.workspaceRoot, res.info.path, this.sessionKey); } catch { /* best-effort */ } }
-        return JSON.stringify({
-          entered: res.info.path,
-          branch: res.info.branch,
-          detached: res.info.detached || undefined,
-          note: 'Attached for this repository — files under this worktree now resolve for read and edit. The exec default cwd still points at the primary root; pass an explicit cwd to run commands there.',
-        });
-      }
-      case 'worktree_create': {
-        if (this.reviewSourceSafety) {
-          throw new Error('worktree_create is disabled while reviewing untrusted source.');
-        }
-        const branch = typeof args.branch === 'string' ? args.branch
-          : typeof args.name === 'string' ? args.name : '';
-        const fromRef = typeof args.from === 'string' && args.from.trim() ? args.from.trim() : 'HEAD';
-        const created = createNamedWorktree(this.workspaceRoot, branch, fromRef);
-        if ('error' in created) throw new Error(created.error);
-        if (typeof this.attachWorktree === 'function') this.attachWorktree(created.worktreeRoot);
-        if (this.sessionKey) { try { recordWorktreeOwner(this.workspaceRoot, created.worktreeRoot, this.sessionKey); } catch { /* best-effort */ } }
-        return JSON.stringify({
-          created: created.worktreeRoot,
-          branch: created.branch,
-          from: fromRef,
-          attached: true,
-          note: 'A new worktree on this branch, attached for read and edit. Run commands there by passing cwd to run_command; finish with worktree_done once the work is committed or merged.',
-        });
-      }
-      case 'worktree_done': {
-        const target = typeof args.path === 'string' ? args.path
-          : typeof args.target === 'string' ? args.target : '';
-        if (!target.trim()) {
-          throw new Error('worktree_done requires a worktree path or branch. Run worktree_list to see them.');
-        }
-        const list = listWorktreesStructured(this.workspaceRoot, undefined, { withDirty: true });
-        const asPath = path.isAbsolute(target) ? path.resolve(target) : path.resolve(this.workspaceRoot, target);
-        const match = list.find((w) => path.resolve(w.path) === asPath) ?? list.find((w) => w.branch === target.trim());
-        if (!match) {
-          throw new Error(`No git worktree of this repository matches "${target}". Run worktree_list.`);
-        }
-        if (match.isSelf) {
-          throw new Error(`"${target}" is the current workspace root — worktree_done cannot remove it.`);
-        }
-        const force = args.force === true;
-        // Uncommitted work is preserved by default: surface it and stop, unless
-        // the caller explicitly forces (which discards it).
-        if (match.dirty && !force) {
-          return JSON.stringify({
-            removed: false,
-            path: match.path,
-            branch: match.branch,
-            reason: 'This worktree has uncommitted changes. Commit or push them first, or call worktree_done with force:true to discard them.',
-          });
-        }
-        // Route the removal through the SAME destructive-command guard as a
-        // hand-typed `git worktree remove` (worktree-remove rule): the user's
-        // intent authorizes it, otherwise a silent agent is refused and an
-        // attended one is asked.
-        const verdict = evaluateDestructiveCommand(`git worktree remove ${match.path}`, {
-          userIntent: this.lastUserPrompt,
-          headSha: gitHeadSha(this.workspaceRoot),
-          agentAuthoredCommits: this.agentAuthoredCommits,
-        });
-        if (verdict.decision === 'block') {
-          if (this.silent || (!this.interactionPort && !this.prompter)) {
-            return JSON.stringify({ removed: false, path: match.path, reason: `${verdict.rule}: ${verdict.reason}` });
-          }
-          const approved = this.interactionPort
-            ? await this.interactionPort.confirm({ title: 'Remove worktree?', detail: `${match.path}\n\n${verdict.reason}`, dangerous: true, tool: 'worktree_done' })
-            : await this.prompter.askYesNo(`${verdict.reason}\nRemove it? (y/N) `, false);
-          if (!approved) return JSON.stringify({ removed: false, path: match.path, reason: 'Removal declined.' });
-        }
-        const removed = removeWorktreeAt(this.workspaceRoot, match.path, { force });
-        if (!removed.ok) throw new Error(removed.error ?? 'git worktree remove failed.');
-        if (typeof this.detachWorktree === 'function') this.detachWorktree(match.path);
-        try { clearWorktreeOwner(this.workspaceRoot, match.path); } catch { /* best-effort */ }
-        return JSON.stringify({ removed: true, path: match.path, branch: match.branch });
-      }
-      // ADR-029 C3 — the same verbs the UI calls, over the same registry.
       case 'run_command': {
         const cmd = args.command;
         // ADR-042 D4 — an optional validated `cwd`. The default stays the

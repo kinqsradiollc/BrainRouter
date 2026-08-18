@@ -93,6 +93,16 @@ export interface BuiltinToolHost {
   confirmSilentChildToolApproval(info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean }): Promise<string | null>;
   /** The agent's own MCP client for the `mcp` connector source (undefined if none) — agent.ts:2680. (D8 Phase 34: connector_run) */
   agentMcpConnectorClient(): McpConnectorClient | undefined;
+  /** The most recent user prompt — the destructive guard's user-intent input — agent.ts:3135. (D8 Phase 35: worktree_done) */
+  readonly lastUserPrompt: string;
+  /** SHAs of commits this agent authored — the destructive guard's authorship input — agent.ts:1129. (D8 Phase 35: worktree_done) */
+  readonly agentAuthoredCommits: Set<string>;
+  /** Attach an existing/created worktree for read+edit (optional; absent on non-Agent hosts) — agent.ts:956. (D8 Phase 35: worktree_enter/create) */
+  attachWorktree?(root: string): void;
+  /** Attach a foreign-owned worktree READ-ONLY — agent.ts:983. (D8 Phase 35: worktree_enter) */
+  attachReadOnlyWorktree?(root: string, owner: string): void;
+  /** Detach a removed worktree — agent.ts:970. (D8 Phase 35: worktree_done) */
+  detachWorktree?(root: string): void;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
