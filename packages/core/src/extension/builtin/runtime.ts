@@ -39,8 +39,7 @@ import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
-import { spawnWorkerThread, waitWorker } from '../../orchestration/agents/workerTools.js';
-import { acknowledgeCompletions } from '../../session/completion/completionInbox.js';
+import { spawnWorkerThread } from '../../orchestration/agents/workerTools.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
@@ -70,7 +69,7 @@ import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
 import { parseGoogleHtml, googleSearchUrl } from '../../websearch/providers/google.js';
 import type { WebSearchResult } from '../../websearch/types.js';
-import { readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
+import { canSpawnWorker } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
@@ -1036,22 +1035,6 @@ export async function invokeBuiltinToolRuntime(
           ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
-      }
-      case 'wait_worker': {
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('wait_worker requires an id.');
-        const meta = await waitWorker(this.workspaceRoot, id, typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined);
-        if (!meta) return JSON.stringify({ id, found: false });
-        // Terminal → delivered in-turn; drop any pending next-turn feedback.
-        // A timeout leaves status 'running', so its completion still reports later.
-        if (meta.status !== 'running') acknowledgeCompletions(this.sessionKey, [id]);
-        return JSON.stringify({ id, status: meta.status, summary: readWorkerSummary(this.workspaceRoot, id) ?? null });
-      }
-      case 'close_worker': {
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('close_worker requires an id.');
-        const meta = closeWorker(this.workspaceRoot, id);
-        return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
       }
       case 'kill_command': {
         if (this.inheritedExecutionAuthorityGuard()) {
