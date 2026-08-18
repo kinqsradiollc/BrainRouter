@@ -72,7 +72,6 @@ import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
-import { applyNotebookEdit } from '../../agent/fs/notebookEdit.js';
 import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
@@ -472,29 +471,6 @@ export async function invokeBuiltinToolRuntime(
           to: formatWorkspaceRef(outcome.to),
           alreadyLinked: outcome.alreadyLinked,
         });
-      }
-      case 'notebook_edit': {
-        readOnlyGuard(args.path);
-        const resolved = resolveHere(args.path);
-        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
-        if (ownErr) throw new Error(ownErr);
-        if (!/\.ipynb$/i.test(resolved)) throw new Error('notebook_edit targets a .ipynb (Jupyter notebook) file.');
-        if (!(await fsPort.exists(resolved))) throw new Error(`Notebook not found: ${args.path}`);
-        const editMode = args.edit_mode === 'insert' || args.edit_mode === 'delete' ? args.edit_mode : 'replace';
-        const cellIndex = args.cell_index === undefined || args.cell_index === null ? undefined : Number(args.cell_index);
-        const cellType = args.cell_type === 'markdown' ? 'markdown' : args.cell_type === 'code' ? 'code' : undefined;
-        const parentDenial = await this.confirmSilentChildToolApproval({
-          tool: 'notebook_edit', path: String(args.path ?? ''),
-          summary: `${editMode} cell ${cellIndex ?? '(append)'}`,
-          reason: 'silent child agent requested a notebook edit',
-        });
-        if (parentDenial) return parentDenial;
-        this.assertInheritedExecutionAuthorityCurrent();
-        this.captureFileSnapshot(resolved); // undo log for /rewind --files
-        const result = applyNotebookEdit(await fsPort.readFile(resolved), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
-        await fsPort.writeFile(resolved, result.content);
-        this.filesReadThisSession.add(resolved);
-        return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
       }
       case 'run_command': {
         const cmd = args.command;

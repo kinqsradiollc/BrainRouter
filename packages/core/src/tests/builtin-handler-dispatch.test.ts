@@ -608,3 +608,36 @@ test('D8 Phase 29 — edit_file dispatches through the registry', async () => {
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 30 — notebook_edit (write-family; same guard members, .ipynb cell edit).
+test('D8 Phase 30 — notebook_edit dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('notebook_edit'), 'notebook_edit has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-nb-'));
+  try {
+    let snapshotted = 0;
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w30', ownership: null,
+      filesReadThisSession: new Set<string>(),
+      assertInheritedExecutionAuthorityCurrent: () => {},
+      captureFileSnapshot: () => { snapshotted += 1; },
+      confirmSilentChildToolApproval: async () => null,
+    };
+    const nb = { cells: [{ cell_type: 'code', source: ['print(1)'], metadata: {}, execution_count: null, outputs: [] }], metadata: {}, nbformat: 4, nbformat_minor: 5 };
+    fs.writeFileSync(path.join(ws, 'nb.ipynb'), JSON.stringify(nb));
+    // A non-.ipynb path is refused.
+    fs.writeFileSync(path.join(ws, 'notanb.txt'), 'x');
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'notebook_edit', { path: 'notanb.txt', edit_mode: 'replace', cell_index: 0, source: 'y' }),
+      /\.ipynb/,
+    );
+    // Replacing cell 0 succeeds, snapshots for undo, and rewrites the source.
+    const out = await invokeBuiltinToolRuntime.call(host, 'notebook_edit', { path: 'nb.ipynb', edit_mode: 'replace', cell_index: 0, source: 'print(2)' });
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.edit_mode, 'replace');
+    assert.equal(parsed.path, 'nb.ipynb');
+    assert.equal(snapshotted, 1, 'captured an undo snapshot before the notebook edit');
+    assert.match(fs.readFileSync(path.join(ws, 'nb.ipynb'), 'utf8'), /print\(2\)/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
