@@ -570,3 +570,41 @@ test('D8 Phase 28 — write_file dispatches through the registry', async () => {
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 29 — edit_file (reuses Phase 28's write-guard host members; targeted in-place replace).
+test('D8 Phase 29 — edit_file dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('edit_file'), 'edit_file has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-edit-'));
+  try {
+    const read = new Set<string>();
+    let snapshotted = 0;
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w29', ownership: null,
+      filesReadThisSession: read,
+      assertInheritedExecutionAuthorityCurrent: () => {},
+      captureFileSnapshot: () => { snapshotted += 1; },
+      confirmSilentChildToolApproval: async () => null,
+      maybeReindexSource: async () => '',
+    };
+    fs.writeFileSync(path.join(ws, 'edit.txt'), 'alpha BETA gamma');
+    const resolved = fs.realpathSync(path.join(ws, 'edit.txt'));
+    // Read-before-edit: editing a file not read this session is refused.
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'edit_file', { path: 'edit.txt', targetContent: 'BETA', replacementContent: 'delta' }),
+      /Read-before-edit/,
+    );
+    // After a read, a unique targeted replace succeeds with the replacement inserted VERBATIM ($ not special).
+    read.add(resolved);
+    const out = await invokeBuiltinToolRuntime.call(host, 'edit_file', { path: 'edit.txt', targetContent: 'BETA', replacementContent: '$dollar$' });
+    assert.match(out, /Successfully edited edit\.txt/);
+    assert.equal(fs.readFileSync(path.join(ws, 'edit.txt'), 'utf8'), 'alpha $dollar$ gamma');
+    assert.equal(snapshotted, 1, 'captured an undo snapshot before the edit');
+    // A target that does not occur is rejected.
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'edit_file', { path: 'edit.txt', targetContent: 'NOPE', replacementContent: 'x' }),
+      /Target content not found/,
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
