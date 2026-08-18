@@ -670,3 +670,20 @@ test('D8 Phase 31 — apply_patch dispatches through the registry', async () => 
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 32 — workspace_* participant tools (zero host growth; new workspace.ts module).
+test('D8 Phase 32 — workspace_* tools dispatch through the registry', async () => {
+  for (const n of ['workspace_resolve', 'workspace_create', 'workspace_update', 'workspace_link']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-ws-'));
+  try {
+    const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w32' };
+    // Arg-validation is byte-identical to the former switch (these throw before any backend call).
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'workspace_create', { title: '   ' }), /A title is required/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'workspace_update', { uri: 'not a reference' }), /is not a reference/);
+    await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'workspace_link', { from: 'bad', to: 'alsobad' }), /is not a reference/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
