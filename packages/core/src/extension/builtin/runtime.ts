@@ -496,51 +496,6 @@ export async function invokeBuiltinToolRuntime(
         this.filesReadThisSession.add(resolved);
         return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
       }
-      case 'edit_file': {
-        readOnlyGuard(args.path);
-        const resolved = resolveHere(args.path);
-        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
-        if (ownErr) throw new Error(ownErr);
-        if (!(await fsPort.exists(resolved))) {
-          throw new Error(`File not found: ${args.path}`);
-        }
-        // CC-P6.4 — read-before-edit. Editing a file the agent hasn't read this
-        // session risks clobbering content it can't see (stale assumptions,
-        // mismatched indentation). Require a read_file first.
-        if (!this.filesReadThisSession.has(resolved)) {
-          throw new Error(`Read-before-edit: you must read_file("${args.path}") before editing it — you have not read this file this session. Read it first, then edit with targetContent that matches the current contents.`);
-        }
-        const content = await fsPort.readFile(resolved);
-        const target = args.targetContent;
-        const replacement = args.replacementContent;
-
-        const occurrences = content.split(target).length - 1;
-        if (occurrences === 0) {
-          throw new Error(`Target content not found in ${args.path}. Ensure targetContent matches exact indentation and newlines.`);
-        }
-        if (occurrences > 1) {
-          throw new Error(`Target content found ${occurrences} times in ${args.path}. Specify more surrounding context to target uniquely.`);
-        }
-
-        // Use a replacer FUNCTION so `replacement` is inserted verbatim. A string
-        // second arg makes String.replace interpret `$&`, `$1`, `$$`, `` $` ``, `$'`
-        // as special patterns, silently corrupting any edit whose replacement text
-        // contains a `$` (regex source, shell vars, template literals, prices…).
-        const updated = content.replace(target, () => replacement);
-        const parentDenial = await this.confirmSilentChildToolApproval({
-          tool: 'edit_file',
-          path: String(args.path ?? ''),
-          summary: `replace ${String(target ?? '').length} chars with ${String(replacement ?? '').length} chars`,
-          reason: 'silent child agent requested a file edit',
-        });
-        if (parentDenial) return parentDenial;
-        this.assertInheritedExecutionAuthorityCurrent();
-        this.captureFileSnapshot(resolved); // 0.4.x-3b — undo log for /rewind --files
-        await fsPort.writeFile(resolved, updated);
-        const editNotice = runPostEditCheck({ template: getCliKnobs().postEditCheck, file: resolved, cwd: this.workspaceRoot });
-        const editReindex = await this.maybeReindexSource(resolved, updated);
-        return `Successfully edited ${args.path}` + editNotice + editReindex;
-      }
       case 'run_command': {
         const cmd = args.command;
         // ADR-042 D4 — an optional validated `cwd`. The default stays the
