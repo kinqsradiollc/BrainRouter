@@ -443,3 +443,15 @@ test('D8 Phase 23 — wait_worker + close_worker dispatch through the registry',
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 24 — kill_command (exec family, zero host growth).
+test('D8 Phase 24 — kill_command dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('kill_command'), 'kill_command has a registered handler');
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', inheritedExecutionAuthorityGuard: () => undefined };
+  const out = await invokeBuiltinToolRuntime.call(host, 'kill_command', { id: 'nope' });
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.killed, false);
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'kill_command', {}), /requires an id/);
+  const reviewed: any = { silent: false, agentDepth: 0, tier: 'chat', inheritedExecutionAuthorityGuard: () => () => {} };
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(reviewed, 'kill_command', { id: 'x' }), /unavailable inside reviewed execution/);
+});

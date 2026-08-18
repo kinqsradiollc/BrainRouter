@@ -24,7 +24,7 @@ import {
   githubTokenClient, defaultEnvTokenResolver,
   type McpConnectorClient, type McpConnectorResource,
 } from '../../connectors/index.js';
-import { startBackgroundShell, killBackgroundShell } from '../../exec/runtime/backgroundShell.js';
+import { startBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
@@ -1035,16 +1035,6 @@ export async function invokeBuiltinToolRuntime(
           ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
-      }
-      case 'kill_command': {
-        if (this.inheritedExecutionAuthorityGuard()) {
-          throw new Error('kill_command is unavailable inside reviewed execution because background process ids are not execution-owned.');
-        }
-        const id = String(args.id ?? '').trim();
-        if (!id) throw new Error('kill_command requires an id (from run_command background:true).');
-        const signal = args.signal === 'SIGKILL' || args.signal === 'SIGINT' ? args.signal : 'SIGTERM';
-        const killed = killBackgroundShell(id, signal);
-        return JSON.stringify({ id, killed, signal, ...(killed ? {} : { note: 'No running background command with that id (already exited, or unknown id).' }) });
       }
       case 'apply_patch': {
         const patch = String(args.patch ?? '');
