@@ -78,6 +78,18 @@ describe("createDeviceSessionHelloAuthenticator (C4 follow-up)", () => {
     await expect(auth(hello())).resolves.toBeNull();
   });
 
+  it("rejects a rotated-away session (old token whose row was replaced)", async () => {
+    // Rotation leaves the old row non-revoked but sets rotated_at/replaced_by.
+    const authRotated = createDeviceSessionHelloAuthenticator({
+      store: storeFor(makeSession({ rotatedAt: "2026-01-02T00:00:00.000Z" })),
+    });
+    await expect(authRotated(hello())).resolves.toBeNull();
+    const authReplaced = createDeviceSessionHelloAuthenticator({
+      store: storeFor(makeSession({ replacedBySessionId: "sess_2" })),
+    });
+    await expect(authReplaced(hello())).resolves.toBeNull();
+  });
+
   it("rejects an expired session (now override)", async () => {
     const auth = createDeviceSessionHelloAuthenticator({
       store: storeFor(makeSession({ expiresAt: "2026-01-01T00:00:00.000Z" })),

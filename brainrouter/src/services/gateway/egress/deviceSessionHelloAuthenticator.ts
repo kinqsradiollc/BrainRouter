@@ -64,6 +64,11 @@ export function createDeviceSessionHelloAuthenticator(
     if (session.deviceId !== deviceId) return null;
     if (session.revokedAt) return null;
     if (session.reuseDetectedAt) return null;
+    // A rotated-away token still resolves to its (old) row — rotation creates a
+    // new row and only marks the old one rotated_at/replaced_by, leaving
+    // revoked_at NULL. Admit ONLY the current session, so a captured stale token
+    // cannot hold the channel and keep receiving this user's dial pushes.
+    if (session.rotatedAt || session.replacedBySessionId) return null;
     // Fail closed on an unparseable expiry (Date.parse → NaN), which would
     // otherwise slip past a bare `<= now()` comparison and admit the session.
     const expiresAt = Date.parse(session.expiresAt);
