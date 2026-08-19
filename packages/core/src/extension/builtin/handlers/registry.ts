@@ -22,6 +22,8 @@ import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import type { SubprocessPort } from '../../../agent/subprocess/subprocessPort.js';
 import type { AccessMode } from '../../../orchestration/roles/roles.js';
 import type { EffortLevel } from '../../../session/preferences/preferencesStore.js';
+import type { WorkspaceScope } from '../../../agent/fs/workspaceFs.js';
+import type { ShellPort } from '../../../agent/shell/shellPort.js';
 import type { McpConnectorClient } from '../../../connectors/index.js';
 
 /**
@@ -136,6 +138,18 @@ export interface BuiltinToolHost {
   readonly federationSessionKey: string | null;
   /** ADR-040 nested-MCP approval gate for a mid-turn tool call (throws to deny) — agent.ts:2460. (D8 Phase 40: mcp_call) */
   approveMcpToolCall(name: string, descriptor: any, args: Record<string, any>): Promise<void>;
+  /** The multi-root workspace scope (primary + entered worktrees) for cwd validation — agent.ts:943. (D8 Phase 41: run_command) */
+  readonly workspaceScope: WorkspaceScope;
+  /** The parent's execution mode a silent child inherits (CHILD-EXEC-INHERIT) — agent.ts:1300. (D8 Phase 41) */
+  readonly parentExecutionMode?: 'planning' | 'fast';
+  /** Silent-child shell approval gate (returns false to reject) — agent.ts:1286. (D8 Phase 41) */
+  confirmToolApproval?: (info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean; arguments?: Record<string, unknown> }) => Promise<boolean>;
+  /** Enforce the sandbox for silent/unattended agents regardless of the global knob — agent.ts:1207. (D8 Phase 41) */
+  readonly sandboxEnforceWhenSilent: boolean;
+  /** The shell capability for exec (default wraps runShell/startBackgroundShell) — agent.ts:1291. (D8 Phase 41) */
+  readonly shellPort?: ShellPort;
+  /** The pentest Docker/proxy sandbox descriptor — agent.ts:1210. (D8 Phase 41) */
+  readonly pentestSandbox?: { image: string; network: string; proxyUrl: string };
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

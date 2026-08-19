@@ -23,9 +23,9 @@ test('D8 — the planner tools dispatch through the registry, not the switch', (
     assert.ok(builtinToolHandler(name), `${name} has a registered handler`);
     assert.ok(registeredHandlerNames().has(name), `${name} is in the registered set`);
   }
-  // A tool still living in the switch must NOT be in the registry — the registry
-  // holds exactly the migrated tools, so the coverage stays partitioned.
-  assert.equal(builtinToolHandler('run_command'), undefined, 'run_command is still switch-dispatched');
+  // D8 COMPLETE — every builtin is migrated and the switch is dissolved, so the
+  // registry holds exactly the real tools: an unknown name resolves to no handler.
+  assert.equal(builtinToolHandler('definitely_not_a_builtin_tool'), undefined, 'unknown tools are not registered');
 });
 
 test('D8 — migrated planner tools behave byte-for-byte as before (round-trip + validation)', async () => {
@@ -814,4 +814,26 @@ test('D8 Phase 40 — mcp_call dispatches through the registry', async () => {
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mcp_call', { name: '' }), /requires a tool `name`/);
   // An unknown tool is refused (after the inherited-authority re-assert), byte-identical to the switch.
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mcp_call', { name: 'nope' }), /not an available MCP tool/);
+});
+
+// ADR-041 D8 Phase 41 — run_command (THE keystone; the 232-line exec guard → exec.ts). Switch fully dissolved.
+test('D8 Phase 41 — run_command dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('run_command'), 'run_command has a registered handler');
+  // A silent child under a non-fast parent cannot run shell without parent opt-in (deny-silent, no confirmToolApproval) —
+  // this exercises the cwd-validate → shell-policy → destructive-guard → approval-gate chain to its refusal, no exec.
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-rc-'));
+  try {
+    const host: any = {
+      silent: true, agentDepth: 1, tier: 'worker', workspaceRoot: ws, sessionKey: 'w41', launchCwd: ws,
+      accessMode: 'all', pentestMode: false, forceFleetSandbox: false, sandboxEnforceWhenSilent: false,
+      lastUserPrompt: '', agentAuthoredCommits: new Set<string>(), attachedRoots: [],
+      workspaceScope: { primaryRoot: ws, roots: [ws] },
+      assertInheritedExecutionAuthorityCurrent: () => {},
+      inheritedExecutionAuthorityGuard: () => undefined,
+    };
+    const out = await invokeBuiltinToolRuntime.call(host, 'run_command', { command: 'echo hi' });
+    assert.match(out, /silent child agents may not run shell|denied|rejected/);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
 });
