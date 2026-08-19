@@ -25,14 +25,32 @@ export interface EgressControlChannelOptions {
   readonly now?: () => number;
   /** Close a connection that has not sent a valid hello within this window. */
   readonly helloDeadlineMs?: number;
+  /** Max bytes of a single control frame; a hello is tiny, so cap it hard. */
+  readonly maxHelloBytes?: number;
+  /** Ceiling on concurrently-open sockets (authenticated + pending) — an
+   * internet-facing listener must not let anonymous peers exhaust fds/heap. */
+  readonly maxConnections?: number;
 }
 
 const DEFAULT_HELLO_DEADLINE_MS = 10_000;
+/** A legitimate hello is a few hundred bytes; anything larger is abuse. */
+const DEFAULT_MAX_HELLO_BYTES = 16 * 1024;
+/** Generous vs. any realistic enrolled-device fleet; deployers may lower it. */
+const DEFAULT_MAX_CONNECTIONS = 100_000;
 const CLOSE_UNAUTHENTICATED = 4001;
 const CLOSE_SUPERSEDED = 4002;
+const CLOSE_GOING_AWAY = 1001;
+const CLOSE_OVERLOADED = 1013;
 
+/**
+ * Injective routing key. A plain `a:b:c` join is NOT injective — `{org:"a:b",…}`
+ * and `{org:"a",user:"b:…"}` would collide onto one key, letting one tenant's
+ * reconnect supersede another's control socket and misroute its dial ticket.
+ * JSON-encoding the tuple escapes the delimiter so distinct identities stay
+ * distinct.
+ */
 function deviceKey(id: EdgeIdentity): string {
-  return `${id.orgId}:${id.userId}:${id.deviceId}`;
+  return JSON.stringify([id.orgId, id.userId, id.deviceId]);
 }
 
 /**
@@ -53,30 +71,73 @@ export class EgressControlChannel {
   readonly #authenticate: EdgeHelloAuthenticator;
   readonly #now: () => number;
   readonly #helloDeadlineMs: number;
+  readonly #maxConnections: number;
   readonly #online = new Map<string, WebSocket>();
+  #liveSockets = 0;
+  #closed = false;
 
   constructor(options: EgressControlChannelOptions) {
     this.#authenticate = options.authenticate;
     this.#now = options.now ?? Date.now;
     this.#helloDeadlineMs = options.helloDeadlineMs ?? DEFAULT_HELLO_DEADLINE_MS;
+    this.#maxConnections = options.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
     this.#http = createServer((req, res) => {
       if (req.method === "GET" && (req.url === "/health" || req.url === "/ready")) {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, online: this.#online.size }));
+        // Deliberately no online-device count — that would leak fleet size to an
+        // unauthenticated GET on an internet-facing listener.
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
       res.writeHead(404);
       res.end();
     });
-    this.#wss = new WebSocketServer({ server: this.#http, path: options.path ?? EGRESS_CONTROL_PATH });
+    this.#wss = new WebSocketServer({
+      server: this.#http,
+      path: options.path ?? EGRESS_CONTROL_PATH,
+      // A hello is a few hundred bytes; cap frames hard so an oversized payload
+      // is rejected by `ws` (1009) instead of buffering toward the 100 MiB default.
+      maxPayload: options.maxHelloBytes ?? DEFAULT_MAX_HELLO_BYTES,
+    });
     this.#wss.on("connection", (socket) => this.#onConnection(socket));
   }
 
   #onConnection(socket: WebSocket): void {
+    // Refuse new work once shutting down, and bound concurrent sockets so an
+    // anonymous peer cannot exhaust fds/heap by opening connections in a loop.
+    if (this.#closed) {
+      try {
+        socket.close(CLOSE_GOING_AWAY, "shutting down");
+      } catch {
+        /* best effort */
+      }
+      return;
+    }
+    if (this.#liveSockets >= this.#maxConnections) {
+      try {
+        socket.close(CLOSE_OVERLOADED, "too many connections");
+      } catch {
+        /* best effort */
+      }
+      return;
+    }
+    this.#liveSockets += 1;
+
     let authed: EdgeIdentity | null = null;
+    // Synchronous one-shot latch. `authed` only flips inside the async `.then`,
+    // but `ws` can emit several buffered frames back-to-back BEFORE that promise
+    // settles, so a guard that reads `authed` would let a burst of hellos each
+    // reach `authenticate()` (unauthenticated amplification) and double-register
+    // the socket. This flag flips synchronously in the handler body, so at most
+    // one hello is ever processed per socket.
+    let helloHandled = false;
     const deadline = setTimeout(() => {
       if (!authed) socket.close(CLOSE_UNAUTHENTICATED, "no hello");
     }, this.#helloDeadlineMs);
+    socket.on("close", () => {
+      this.#liveSockets -= 1;
+      clearTimeout(deadline);
+    });
 
     socket.on("message", (data: Buffer, isBinary: boolean) => {
       // Control channel is text-JSON only; a binary frame is a protocol error.
@@ -84,7 +145,8 @@ export class EgressControlChannel {
         socket.close(CLOSE_UNAUTHENTICATED, "binary frame on control channel");
         return;
       }
-      if (authed) return; // post-hello the edge only receives; extra frames are ignored
+      if (helloHandled) return; // exactly one hello per socket; nothing else is read
+      helloHandled = true;
       let hello: Record<string, unknown>;
       try {
         hello = JSON.parse(data.toString("utf8")) as Record<string, unknown>;
@@ -98,7 +160,16 @@ export class EgressControlChannel {
             socket.close(CLOSE_UNAUTHENTICATED, "hello rejected");
             return;
           }
-          if (socket.readyState !== WebSocket.OPEN) return;
+          // The channel may have shut down, or the socket may have closed, while
+          // the authenticator ran — never resurrect a dead socket into #online.
+          if (this.#closed || socket.readyState !== WebSocket.OPEN) {
+            try {
+              socket.close(CLOSE_GOING_AWAY, "unavailable");
+            } catch {
+              /* best effort */
+            }
+            return;
+          }
           authed = identity;
           clearTimeout(deadline);
           const key = deviceKey(identity);
@@ -169,15 +240,24 @@ export class EgressControlChannel {
   }
 
   async close(): Promise<void> {
-    for (const socket of this.#online.values()) {
+    // Flip first so any in-flight authenticate resolving after this point sees a
+    // dead channel and refuses to re-register (no resurrection into #online).
+    this.#closed = true;
+    // Terminate EVERY live socket — authenticated (#online) AND pending (pre-hello,
+    // never in #online). A lingering pending socket would otherwise keep the HTTP
+    // server from closing, hanging shutdown.
+    for (const socket of this.#wss.clients) {
       try {
-        socket.close();
+        socket.terminate();
       } catch {
         /* best effort */
       }
     }
     this.#online.clear();
     await new Promise<void>((resolve) => this.#wss.close(() => resolve()));
+    // Drop any lingering HTTP keep-alive sockets (e.g. a /health probe) so the
+    // server stops instead of waiting on idle connections.
+    (this.#http as { closeAllConnections?: () => void }).closeAllConnections?.();
     await new Promise<void>((resolve) => this.#http.close(() => resolve()));
   }
 }

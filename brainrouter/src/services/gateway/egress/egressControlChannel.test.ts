@@ -111,4 +111,133 @@ describe("EgressControlChannel (C4)", () => {
     await channel.listen(0, "127.0.0.1");
     expect(channel.pushDialToEdge(DEVICE, push)).toBe(false);
   });
+
+  // Finding #1 — a burst of hellos in one tick must not amplify authenticate()
+  // calls or double-register the socket (the `authed` guard flips only inside the
+  // async .then; the synchronous one-shot latch is what makes this safe).
+  it("processes at most one hello per socket under a burst (no amplification, single registration)", async () => {
+    let authCalls = 0;
+    const countingAuth = async (hello: Record<string, unknown>): Promise<EdgeIdentity | null> => {
+      authCalls += 1;
+      return hello.token === "good" ? DEVICE : null;
+    };
+    channel = new EgressControlChannel({ authenticate: countingAuth });
+    const port = await channel.listen(0, "127.0.0.1");
+
+    const device = connect(port);
+    await new Promise<void>((r) => device.once("open", () => r()));
+    const ready = nextText(device);
+    for (let i = 0; i < 25; i += 1) {
+      device.send(JSON.stringify({ kind: "hello", token: "good" }));
+    }
+    expect(await ready).toMatchObject({ kind: "ready" });
+    await new Promise((r) => setTimeout(r, 50)); // let any stray authenticate calls run
+    expect(authCalls).toBe(1);
+    expect(channel.isOnline(DEVICE)).toBe(true);
+
+    const gotDial = nextText(device);
+    expect(channel.pushDialToEdge(DEVICE, push)).toBe(true);
+    expect(await gotDial).toMatchObject({ kind: "dial" });
+  });
+
+  // Finding #2 — the routing key must be injective. These two identities would
+  // collide onto "a:b:c:d" under a naive colon-join; they must stay isolated.
+  it("keys devices injectively: colon-bearing identities do not collide or misroute", async () => {
+    const A: EdgeIdentity = { orgId: "a:b", userId: "c", deviceId: "d" };
+    const B: EdgeIdentity = { orgId: "a", userId: "b:c", deviceId: "d" };
+    const auth = async (hello: Record<string, unknown>): Promise<EdgeIdentity | null> =>
+      hello.token === "A" ? A : hello.token === "B" ? B : null;
+    channel = new EgressControlChannel({ authenticate: auth });
+    const port = await channel.listen(0, "127.0.0.1");
+
+    const sa = connect(port);
+    await new Promise<void>((r) => sa.once("open", () => r()));
+    const aReady = nextText(sa);
+    sa.send(JSON.stringify({ kind: "hello", token: "A" }));
+    await aReady;
+    let aClosed = -1;
+    sa.once("close", (code) => {
+      aClosed = code;
+    });
+
+    const sb = connect(port);
+    await new Promise<void>((r) => sb.once("open", () => r()));
+    const bReady = nextText(sb);
+    sb.send(JSON.stringify({ kind: "hello", token: "B" }));
+    await bReady;
+
+    await new Promise((r) => setTimeout(r, 40));
+    expect(aClosed).toBe(-1); // B did NOT supersede A — no collision
+    expect(channel.isOnline(A)).toBe(true);
+    expect(channel.isOnline(B)).toBe(true);
+
+    const aDial = nextText(sa);
+    const bDial = nextText(sb);
+    expect(channel.pushDialToEdge(A, { ...push, sessionId: "sA" })).toBe(true);
+    expect(channel.pushDialToEdge(B, { ...push, sessionId: "sB" })).toBe(true);
+    expect(await aDial).toMatchObject({ sessionId: "sA" });
+    expect(await bDial).toMatchObject({ sessionId: "sB" });
+  });
+
+  // Finding #3a — an oversized frame is rejected by ws (maxPayload), never buffered
+  // toward the 100 MiB default, and the connection is not registered.
+  it("rejects an oversized hello and never registers it (maxHelloBytes)", async () => {
+    channel = new EgressControlChannel({ authenticate, maxHelloBytes: 64 });
+    const port = await channel.listen(0, "127.0.0.1");
+    const device = connect(port);
+    await new Promise<void>((r) => device.once("open", () => r()));
+    const closed = closedCode(device);
+    device.send(JSON.stringify({ kind: "hello", token: "good", pad: "x".repeat(400) }));
+    await closed; // ws enforces maxPayload and closes the connection
+    expect(channel.isOnline(DEVICE)).toBe(false);
+  });
+
+  // Finding #3b — concurrent sockets are bounded so anonymous peers cannot exhaust
+  // fds/heap by opening connections in a loop.
+  it("bounds concurrent connections (maxConnections)", async () => {
+    channel = new EgressControlChannel({ authenticate, maxConnections: 1 });
+    const port = await channel.listen(0, "127.0.0.1");
+
+    const first = connect(port);
+    await new Promise<void>((r) => first.once("open", () => r()));
+    const firstReady = nextText(first);
+    first.send(JSON.stringify({ kind: "hello", token: "good" }));
+    await firstReady;
+
+    const second = connect(port);
+    const secondClosed = closedCode(second);
+    expect(await secondClosed).toBe(1013); // overloaded — slot is full
+  });
+
+  // Finding #4 — an authenticate that resolves AFTER close() must not resurrect a
+  // dead socket back into the online map.
+  it("does not register a socket whose hello resolves after close() (no resurrection)", async () => {
+    let release!: (v: EdgeIdentity | null) => void;
+    const gated = new Promise<EdgeIdentity | null>((r) => {
+      release = r;
+    });
+    channel = new EgressControlChannel({ authenticate: async () => gated });
+    const port = await channel.listen(0, "127.0.0.1");
+    const ch = channel;
+
+    const device = connect(port);
+    await new Promise<void>((r) => device.once("open", () => r()));
+    device.send(JSON.stringify({ kind: "hello", token: "good" }));
+    await new Promise((r) => setTimeout(r, 20)); // authenticate is now pending
+
+    await ch.close(); // shut down while the hello is in flight
+    release(DEVICE); // authenticator resolves AFTER close
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ch.isOnline(DEVICE)).toBe(false);
+  });
+
+  // Finding #5 — /health must not disclose the enrolled-device count.
+  it("does not expose the online-device count on /health", async () => {
+    channel = new EgressControlChannel({ authenticate });
+    const port = await channel.listen(0, "127.0.0.1");
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ ok: true });
+    expect(body).not.toHaveProperty("online");
+  });
 });
