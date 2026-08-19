@@ -64,7 +64,7 @@ class FakeTcp implements TcpSocketLike {
   }
 }
 
-const PUBLIC: VettedTarget = { address: '104.18.2.3', family: 4, port: 443, host: 'api.provider.test' };
+const PUBLIC: VettedTarget = { address: '104.18.2.3', family: 4, port: 443 };
 
 function instruction(over: Partial<EgressDialInstruction> = {}): EgressDialInstruction {
   return {
@@ -215,6 +215,27 @@ void test('splits an oversized provider chunk at the relay frame ceiling', async
   assert.equal(dataFrames.length, 2, 'one 200 KiB chunk → two frames');
   assert.equal(dataFrames[0].length, 128 * 1024);
   assert.equal(dataFrames[1].length, 200 * 1024 - 128 * 1024);
+});
+
+void test('connect timeout destroys the socket (no leak) and swallows late provider data', async () => {
+  const { handler, relays, tcps } = harness({ connectTimeoutMs: 20 });
+  handler.handle(instruction());
+  const relay = relays[0];
+  relay.emit('open');
+  relay.emit('message', dialFrame(), true);
+  await flush();
+  const tcp = tcps[0];
+  assert.ok(tcp, 'a socket was created');
+  await new Promise((resolve) => setTimeout(resolve, 40)); // let the connect timeout fire (socket never connects)
+  assert.ok(tcp.destroyed, 'the never-connected socket is destroyed, not leaked');
+  const ack = decode(relay.binaryFrames()[0]);
+  assert.equal(ack.ok, false);
+  assert.ok(relay.closed);
+  // A late SYN-ACK arriving after the timeout, then data, must not throw.
+  assert.doesNotThrow(() => {
+    tcp.emit('connect');
+    tcp.emit('data', Buffer.from([1, 2, 3]));
+  });
 });
 
 void test('tears down the provider socket when the relay closes', async () => {

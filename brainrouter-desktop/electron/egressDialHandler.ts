@@ -125,13 +125,94 @@ export class EdgeDialHandler {
       }
     };
 
-    const refuse = (error: string): void => {
+    // Every relay send goes through here: after teardown the relay is closed, and
+    // a late ack/provider byte must not throw an uncaught error inside a socket
+    // listener (which a raw net.Socket would surface as an unhandled 'error').
+    const sendToRelay = (data: string | Uint8Array, binary: boolean): void => {
+      if (state === 'closed') return;
       try {
-        relay.send(encodeDialed(false, error), { binary: true });
+        relay.send(data, binary ? { binary: true } : undefined);
       } catch {
         /* best effort */
       }
+    };
+
+    const refuse = (error: string): void => {
+      sendToRelay(encodeDialed(false, error), true);
       teardown(error);
+    };
+
+    const startDial = async (frame: Uint8Array): Promise<void> => {
+      const parsed = decodeDialInstruction(frame);
+      if (!parsed) {
+        refuse('malformed dial instruction');
+        return;
+      }
+      // The relay-delivered target MUST match the control-push target — a
+      // divergence means the instruction was tampered with in transit.
+      if (parsed.host !== instruction.host || parsed.port !== instruction.port) {
+        refuse('dial target mismatch');
+        return;
+      }
+      let vetted: VettedTarget;
+      try {
+        vetted = await this.vet(parsed.host, parsed.port);
+      } catch (err) {
+        refuse(err instanceof DialNotAllowedError ? err.message : 'dial target refused');
+        return;
+      }
+      if (state === 'closed') return; // torn down while vetting
+
+      // Bind the socket to `tcp` IMMEDIATELY so EVERY teardown path (connect
+      // timeout, relay close, error) destroys it. A socket that finishes its
+      // handshake only after the timeout must not be left dangling as a leaked
+      // outbound connection on the user's own network.
+      const socket = this.deps.tcpConnect(vetted);
+      tcp = socket;
+      let settled = false;
+      connectTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        refuse('dial timed out'); // teardown destroys the now-bound socket
+      }, this.deps.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
+      (connectTimer as { unref?: () => void }).unref?.();
+
+      socket.on('connect', () => {
+        if (settled) return;
+        settled = true;
+        if (connectTimer) {
+          clearTimeout(connectTimer);
+          connectTimer = null;
+        }
+        if (state === 'closed') {
+          try {
+            socket.destroy();
+          } catch {
+            /* best effort */
+          }
+          return;
+        }
+        state = 'splicing';
+        sendToRelay(encodeDialed(true), true); // ack; the gateway now streams bytes
+      });
+      socket.on('data', (...dataArgs: unknown[]) => {
+        if (state !== 'splicing') return; // no send after teardown
+        const chunk = toBytes(dataArgs[0]);
+        // Split at the relay frame ceiling so one large record can't trip the
+        // payload-blind splice's bound.
+        for (let offset = 0; offset < chunk.length; offset += EGRESS_MAX_FRAME_BYTES) {
+          sendToRelay(chunk.subarray(offset, offset + EGRESS_MAX_FRAME_BYTES), true);
+        }
+      });
+      socket.on('close', () => teardown('provider closed'));
+      socket.on('error', () => {
+        if (settled) {
+          teardown('provider error');
+          return;
+        }
+        settled = true;
+        refuse('dial failed');
+      });
     };
 
     relay.on('open', () => {
@@ -140,106 +221,29 @@ export class EdgeDialHandler {
         teardown('device not enrolled');
         return;
       }
-      relay.send(JSON.stringify({ kind: 'attach', ticket: instruction.clientToken, deviceId }));
+      sendToRelay(JSON.stringify({ kind: 'attach', ticket: instruction.clientToken, deviceId }), false);
     });
 
     relay.on('message', (...args: unknown[]) => {
       const isBinary = args[1] === true;
       if (!isBinary) return; // relay TEXT control frames (attached/peer-*) — not ours to act on
       const frame = toBytes(args[0]);
-      if (state === 'attaching' || state === 'dialing') {
-        if (state === 'dialing') return; // already handling the one dial instruction
-        state = 'dialing';
-        void this.onDialInstruction(frame, instruction, relay, {
-          onConnected: (socket) => {
-            tcp = socket;
-            state = 'splicing';
-          },
-          setTimer: (t) => {
-            connectTimer = t;
-          },
-          clearTimer: () => {
-            if (connectTimer) {
-              clearTimeout(connectTimer);
-              connectTimer = null;
-            }
-          },
-          refuse,
-          teardown,
-        });
+      if (state === 'splicing') {
+        if (tcp) {
+          try {
+            tcp.write(frame); // raw ciphertext → provider
+          } catch {
+            teardown('provider write failed');
+          }
+        }
         return;
       }
-      if (state === 'splicing' && tcp) tcp.write(frame); // raw ciphertext → provider
+      if (state !== 'attaching') return; // 'dialing' (already handling the one dial) or 'closed'
+      state = 'dialing';
+      void startDial(frame);
     });
 
     relay.on('close', () => teardown('relay closed'));
     relay.on('error', () => teardown('relay error'));
-  }
-
-  private async onDialInstruction(
-    frame: Uint8Array,
-    instruction: EgressDialInstruction,
-    relay: RelaySocketLike,
-    hooks: {
-      onConnected: (socket: TcpSocketLike) => void;
-      setTimer: (t: ReturnType<typeof setTimeout>) => void;
-      clearTimer: () => void;
-      refuse: (error: string) => void;
-      teardown: (reason?: string) => void;
-    },
-  ): Promise<void> {
-    const parsed = decodeDialInstruction(frame);
-    if (!parsed) {
-      hooks.refuse('malformed dial instruction');
-      return;
-    }
-    // The relay-delivered target MUST match the control-push target — a divergence
-    // means the instruction was tampered with in transit.
-    if (parsed.host !== instruction.host || parsed.port !== instruction.port) {
-      hooks.refuse('dial target mismatch');
-      return;
-    }
-
-    let vetted: VettedTarget;
-    try {
-      vetted = await this.vet(parsed.host, parsed.port);
-    } catch (err) {
-      hooks.refuse(err instanceof DialNotAllowedError ? err.message : 'dial target refused');
-      return;
-    }
-
-    let settled = false;
-    const socket = this.deps.tcpConnect(vetted);
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      hooks.refuse('dial timed out');
-    }, this.deps.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
-    hooks.setTimer(timer);
-
-    socket.on('connect', () => {
-      if (settled) return;
-      settled = true;
-      hooks.clearTimer();
-      hooks.onConnected(socket);
-      relay.send(encodeDialed(true), { binary: true }); // ack; the gateway now streams bytes
-    });
-    socket.on('data', (...dataArgs: unknown[]) => {
-      const chunk = toBytes(dataArgs[0]);
-      // Split at the relay frame ceiling so one large record can't trip the
-      // payload-blind splice's bound.
-      for (let offset = 0; offset < chunk.length; offset += EGRESS_MAX_FRAME_BYTES) {
-        relay.send(chunk.subarray(offset, offset + EGRESS_MAX_FRAME_BYTES), { binary: true });
-      }
-    });
-    socket.on('close', () => hooks.teardown('provider closed'));
-    socket.on('error', () => {
-      if (settled) {
-        hooks.teardown('provider error');
-        return;
-      }
-      settled = true;
-      hooks.refuse('dial failed');
-    });
   }
 }

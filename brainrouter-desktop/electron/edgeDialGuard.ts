@@ -30,13 +30,17 @@ export interface DialGuardOptions {
   isHostAllowed?: (host: string) => boolean;
 }
 
-/** The concrete, vetted endpoint to connect to — pinned, so no re-resolution. */
+/**
+ * The concrete, vetted endpoint to connect to — PINNED. Carries only the
+ * resolved IP (`address`), never the hostname: the device does not terminate TLS
+ * (the server does), so it needs no SNI, and exposing the hostname would invite a
+ * dialer to `net.connect({host})` and re-resolve, defeating the resolve-and-pin
+ * guard (TOCTOU rebind). The dialer MUST connect to `address:port`.
+ */
 export interface VettedTarget {
   readonly address: string;
   readonly family: 4 | 6;
   readonly port: number;
-  /** The original hostname, retained for upstream TLS SNI / logging. */
-  readonly host: string;
 }
 
 function ipv4ToInt(ip: string): number | null {
@@ -132,21 +136,29 @@ function allZero(bytes: Uint8Array, start: number, end: number): boolean {
   return true;
 }
 
+function embeddedV4(b: Uint8Array): string {
+  return `${b[12]}.${b[13]}.${b[14]}.${b[15]}`;
+}
+
 function isBlockedIpv6(ip: string): boolean {
   const b = ipv6ToBytes(ip);
   if (b === null) return true; // unparseable → fail closed
-  // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible → judge by the embedded IPv4.
-  if (allZero(b, 0, 10) && b[10] === 0xff && b[11] === 0xff) {
-    return isBlockedIpv4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-  }
+  // IPv4-mapped (::ffff:0:0/96) → judge by the embedded IPv4.
+  if (allZero(b, 0, 10) && b[10] === 0xff && b[11] === 0xff) return isBlockedIpv4(embeddedV4(b));
   // NAT64 well-known prefix 64:ff9b::/96 → embedded IPv4.
   if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && allZero(b, 4, 12)) {
-    return isBlockedIpv4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
+    return isBlockedIpv4(embeddedV4(b));
   }
-  if (allZero(b, 0, 15) && (b[15] === 0 || b[15] === 1)) return true; // :: and ::1
+  // ::/96 covers the unspecified (::), loopback (::1), AND the deprecated
+  // IPv4-COMPATIBLE form ::a.b.c.d — all judged by the embedded IPv4 (0.0.0.0/8
+  // catches :: and ::1; a compatible ::127.0.0.1 / ::169.254.169.254 is caught
+  // by the loopback/link-local IPv4 blocks). This closes the ::a.b.c.d bypass.
+  if (allZero(b, 0, 12)) return isBlockedIpv4(embeddedV4(b));
   if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true; // fec0::/10 site-local (deprecated)
   if ((b[0] & 0xfe) === 0xfc) return true; // fc00::/7 unique-local
   if (b[0] === 0xff) return true; // ff00::/8 multicast
+  if (b[0] === 0x20 && b[1] === 0x02) return true; // 2002::/16 6to4 (deprecated; can wrap an internal IPv4)
   if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return true; // 2001:db8::/32 doc
   return false;
 }
@@ -169,7 +181,7 @@ export async function vetDialTarget(host: string, port: number, opts: DialGuardO
   const literalFamily = isIP(host);
   if (literalFamily) {
     if (isBlockedIp(host, literalFamily)) throw new DialNotAllowedError('target IP is in a blocked range');
-    return { address: host, family: literalFamily as 4 | 6, port, host };
+    return { address: host, family: literalFamily as 4 | 6, port };
   }
 
   const lookup =
@@ -184,7 +196,7 @@ export async function vetDialTarget(host: string, port: number, opts: DialGuardO
     }
   }
   const chosen = addresses[0];
-  return { address: chosen.address, family: chosen.family as 4 | 6, port, host };
+  return { address: chosen.address, family: chosen.family as 4 | 6, port };
 }
 
 /** Exposed for tests. */

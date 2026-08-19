@@ -55,6 +55,20 @@ void test('blocks IPv6 SSRF ranges incl. crafted / non-canonical loopback', () =
   }
 });
 
+void test('blocks IPv4-compatible ::a.b.c.d, site-local, and 6to4', () => {
+  for (const ip of [
+    '::127.0.0.1', // IPv4-compatible loopback (the ::a.b.c.d bypass)
+    '::169.254.169.254', // IPv4-compatible metadata
+    '::a9fe:a9fe', // same, hex form
+    '::10.0.0.1', // IPv4-compatible RFC1918
+    '::192.168.1.1',
+    'fec0::1', // site-local (deprecated)
+    '2002:0a00:0001::1', // 6to4 wrapping 10.0.0.1
+  ]) {
+    assert.equal(isBlockedIpv6(ip), true, `${ip} must be blocked`);
+  }
+});
+
 void test('allows public IPv6', () => {
   for (const ip of ['2606:4700:4700::1111', '2001:4860:4860::8888']) {
     assert.equal(isBlockedIpv6(ip), false, `${ip} must be allowed`);
@@ -77,7 +91,7 @@ void test('vetDialTarget pins a public IP literal without resolving', async () =
       throw new Error('must not resolve an IP literal');
     },
   });
-  assert.deepEqual(vetted, { address: '1.1.1.1', family: 4, port: 443, host: '1.1.1.1' });
+  assert.deepEqual(vetted, { address: '1.1.1.1', family: 4, port: 443 });
 });
 
 void test('vetDialTarget refuses a hostname that resolves into a blocked range', async () => {
@@ -98,9 +112,7 @@ void test('vetDialTarget pins the first resolved public address', async () => {
     { address: '104.18.2.4', family: 4 },
   ];
   const vetted = await vetDialTarget('api.provider.test', 443, { lookup });
-  assert.equal(vetted.address, '104.18.2.3');
-  assert.equal(vetted.host, 'api.provider.test');
-  assert.equal(vetted.port, 443);
+  assert.deepEqual(vetted, { address: '104.18.2.3', family: 4, port: 443 });
 });
 
 void test('vetDialTarget enforces an optional host allowlist before resolving', async () => {
