@@ -6,7 +6,6 @@ import fs from 'node:fs';
 // the top of the switch so a migrated tool dispatches by lookup, not a case.
 import { builtinToolHandler } from './handlers/index.js';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { NoTTYError } from '../../agent/support/prompter.js';
 import { getCliKnobs } from '../../config/config.js';
@@ -18,9 +17,6 @@ import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permi
 import { decideExecutionPolicy } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
-import { buildPentestDedupeMessages, findingKey, parsePentestDedupeDecision } from '../../review/reviewSynthesis.js';
-import { callOpenAI } from '../../agent/transport/llmTransport.js';
-import { enforceTaskBudget } from '../../provider/budget.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal } from '../../goal/store/goalStore.js';
@@ -35,9 +31,7 @@ import { applyFederationIdentity } from '../../util/agentloop/federationIdentity
 import { runPostEditCheck } from '../../util/agentloop/postEditCheck.js';
 import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/tokenEstimate.js';
 import { canSpawnWorker } from '../../worker/workerStore.js';
-import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
-import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope } from '../../agent/fs/workspaceFs.js';
@@ -393,44 +387,6 @@ export async function invokeBuiltinToolRuntime(
           ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
-      }
-      case 'file_vulnerability': {
-        const run = getLatestReview(this.workspaceRoot);
-        if (!run || run.status !== 'running') throw new Error('file_vulnerability requires an active pentest review run.');
-        const input = validatePentestFinding({
-          file: String(args.file ?? ''), line: Number.isInteger(args.line) ? Number(args.line) : undefined,
-          endLine: Number.isInteger(args.endLine) ? Number(args.endLine) : undefined,
-          summary: String(args.summary ?? ''), details: typeof args.details === 'string' ? args.details : undefined,
-          confidence: Math.max(0, Math.min(100, Number(args.confidence) || 0)),
-          cvssVector: String(args.cvssVector ?? ''), cwe: String(args.cwe ?? ''),
-          cve: typeof args.cve === 'string' ? args.cve : undefined,
-          poc: String(args.poc ?? ''), remediation: String(args.remediation ?? ''),
-        });
-        const key = findingKey({ file: input.file, line: input.line, lineEnd: input.endLine, severity: input.severity, confidence: input.confidence, summary: input.summary, rootCause: input.cwe });
-        const duplicate = run.findings.find((existing) => findingKey({ file: existing.file, line: existing.line, lineEnd: existing.endLine, severity: existing.severity, confidence: existing.confidence, summary: existing.summary, rootCause: existing.cwe }) === key);
-        if (duplicate) return JSON.stringify({ accepted: false, duplicate_of: duplicate.id, reason: 'Same file, location, and root cause already recorded.' });
-        if (run.findings.length) {
-          try {
-            const judged: any = await callOpenAI(this.llmConfig, buildPentestDedupeMessages(input, run.findings.map((finding) => ({ id: finding.id, file: finding.file, line: finding.line, endLine: finding.endLine, summary: finding.summary, details: finding.details, cwe: finding.cwe, poc: finding.poc }))), [], { effort: 'low', signal: this.turnAbort?.signal });
-            if (judged?.usage) {
-              this.lastTurnUsage.promptTokens += judged.usage.prompt_tokens ?? 0;
-              this.lastTurnUsage.completionTokens += judged.usage.completion_tokens ?? 0;
-              this.lastTurnUsage.calls += 1;
-              enforceTaskBudget({ caps: this.taskBudgetCaps ?? getCliKnobs().budget, modelId: this.llmConfig.model, usage: { promptTokens: this.sessionUsage.promptTokens + this.lastTurnUsage.promptTokens, completionTokens: this.sessionUsage.completionTokens + this.lastTurnUsage.completionTokens, cachedTokens: this.sessionUsage.cachedTokens + this.lastTurnUsage.cachedTokens, missedTokens: this.sessionUsage.missedTokens + this.lastTurnUsage.missedTokens } });
-            }
-            const decision = parsePentestDedupeDecision(String(judged?.content ?? ''));
-            if (decision?.is_duplicate && decision.duplicate_id && decision.confidence >= 0.75 && run.findings.some((finding) => finding.id === decision.duplicate_id)) {
-              return JSON.stringify({ accepted: false, duplicate_of: decision.duplicate_id, confidence: decision.confidence, reason: decision.reason });
-            }
-          } catch (error) {
-            // Deterministic same-location/root-cause protection above remains
-            // authoritative if the optional semantic judge is unavailable.
-            if (error instanceof Error && error.name === 'BudgetExceededError') throw error;
-          }
-        }
-        const finding = { ...input, id: `pentest_${randomUUID().slice(0, 12)}` };
-        saveReview(this.workspaceRoot, { ...run, updatedAt: new Date().toISOString(), findings: [...run.findings, finding] });
-        return JSON.stringify({ accepted: true, finding: { id: finding.id, severity: finding.severity, cvss: finding.cvss } });
       }
       default:
         throw new Error(`Unknown local tool: ${name}`);
