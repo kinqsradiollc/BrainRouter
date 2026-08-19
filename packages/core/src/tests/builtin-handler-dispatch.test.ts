@@ -801,3 +801,17 @@ test('D8 Phase 39 — spawn_worker_thread dispatches through the registry', asyn
   const top: any = { silent: false, tier: 'chat', agentDepth: 0, workspaceRoot: '/tmp', sessionKey: 'w39' };
   await assert.rejects(() => invokeBuiltinToolRuntime.call(top, 'spawn_worker_thread', { goal: '   ' }), /requires a goal/);
 });
+
+// ADR-041 D8 Phase 40 — mcp_call (ADR-040 nested-MCP authorization; joins mcp.ts). Keystone half 1 of 2.
+test('D8 Phase 40 — mcp_call dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('mcp_call'), 'mcp_call has a registered handler');
+  const host: any = {
+    silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: '/tmp', sessionKey: 'w40', federationSessionKey: null,
+    findVisibleMcpTool: async () => undefined,
+    assertInheritedExecutionAuthorityCurrent: () => {},
+  };
+  // Empty name is refused before any lookup.
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mcp_call', { name: '' }), /requires a tool `name`/);
+  // An unknown tool is refused (after the inherited-authority re-assert), byte-identical to the switch.
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'mcp_call', { name: 'nope' }), /not an available MCP tool/);
+});

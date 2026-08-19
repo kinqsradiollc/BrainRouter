@@ -5,6 +5,10 @@
 // are the former case bodies verbatim (`this.x` → `ctx.host.x`).
 
 import { searchMcpCatalog } from '../../../mcp/discovery/discovery.js';
+import { getCliKnobs } from '../../../config/config.js';
+import { applyFederationIdentity } from '../../../util/agentloop/federationIdentity.js';
+import { evaluatePermissionRules, primaryArgText } from '../../../exec/policy/permissionRules.js';
+import { extractToolText } from '../../../mcp/mcpUtils.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const mcpHandlers: Record<string, BuiltinToolHandler> = {
@@ -79,5 +83,35 @@ export const mcpHandlers: Record<string, BuiltinToolHandler> = {
     if (!uri) throw new Error('read_mcp_resource requires a uri.');
     const result = await client.readResource({ server, uri }, { signal: host.turnAbort?.signal });
     return JSON.stringify(result, null, 2);
+  },
+
+  mcp_call: async ({ args, host, authorizeMcpTarget }) => {
+        const target = String(args.name ?? '').trim();
+        if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
+        const tool = await host.findVisibleMcpTool(target);
+        host.assertInheritedExecutionAuthorityCurrent();
+        if (!tool) throw new Error(`mcp_call: "${target}" is not an available MCP tool. Use mcp_search to find the exact name.`);
+        const callArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
+          ? (args.args as Record<string, any>)
+          : {};
+        const toolName = String(tool.name);
+        const mcpArgs = applyFederationIdentity(toolName, callArgs, host.federationSessionKey) as Record<string, any>;
+        authorizeMcpTarget?.(toolName, mcpArgs, tool);
+        const permissionNames = [
+          toolName,
+          String(tool.__rawName ?? '').trim(),
+        ].filter((name, index, names) => name && names.indexOf(name) === index);
+        if (permissionNames.some((permissionName) => evaluatePermissionRules(
+          getCliKnobs().permissions,
+          permissionName,
+          primaryArgText(permissionName, mcpArgs),
+          { workspace: host.workspaceRoot },
+        ) === 'deny')) {
+          throw new Error(`mcp_call target "${toolName}" denied by cli.permissions.`);
+        }
+        await host.approveMcpToolCall(toolName, tool, mcpArgs);
+        host.assertInheritedExecutionAuthorityCurrent();
+        const mcpRes = await host.mcpClient.callTool(toolName, mcpArgs, { signal: host.turnAbort?.signal });
+        return extractToolText(mcpRes);
   },
 };

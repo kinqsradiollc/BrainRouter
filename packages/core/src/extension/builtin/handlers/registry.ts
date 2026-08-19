@@ -132,6 +132,10 @@ export interface BuiltinToolHost {
   readonly effortOverride?: EffortLevel;
   /** HONK-H0 — fleet-sandbox lockdown cascaded to descendants — agent.ts:1208. (D8 Phase 39) */
   readonly forceFleetSandbox: boolean;
+  /** The federation session key stamped onto outbound MCP identity — agent.ts:906. (D8 Phase 40: mcp_call) */
+  readonly federationSessionKey: string | null;
+  /** ADR-040 nested-MCP approval gate for a mid-turn tool call (throws to deny) — agent.ts:2460. (D8 Phase 40: mcp_call) */
+  approveMcpToolCall(name: string, descriptor: any, args: Record<string, any>): Promise<void>;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
