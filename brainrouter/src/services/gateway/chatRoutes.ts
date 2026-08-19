@@ -154,20 +154,28 @@ export async function selectUpstreamForRequest(
   const base = options.upstream;
   const egress = options.egress;
   if (!egress || auth.principalType !== 'user') return base;
-  const def = lookupEgress(provider.endpoint);
-  const mode = def?.egressMode;
-  if (!def?.egressCapabilities?.clientTunnel || (mode !== 'client-tunnel' && mode !== 'auto')) return base;
-  const transport = egress.transportForAccount(auth.orgId, auth.userId, provider.endpoint);
-  if (!transport) return base;
-  if (!(await egress.orgOptIn(auth.orgId))) return base;
-  const dispatcherFactory = selectEdgeDialer({
-    egressMode: mode,
-    egressCapabilities: def.egressCapabilities,
-    transport,
-    orgOptIn: true,
-    onFallback: egress.onFallback,
-  });
-  return { ...base, dispatcherFactory };
+  try {
+    const def = lookupEgress(provider.endpoint);
+    const mode = def?.egressMode;
+    if (!def?.egressCapabilities?.clientTunnel || (mode !== 'client-tunnel' && mode !== 'auto')) return base;
+    const transport = egress.transportForAccount(auth.orgId, auth.userId, provider.endpoint);
+    if (!transport) return base;
+    if (!(await egress.orgOptIn(auth.orgId))) return base;
+    const dispatcherFactory = selectEdgeDialer({
+      egressMode: mode,
+      egressCapabilities: def.egressCapabilities,
+      transport,
+      orgOptIn: true,
+      onFallback: egress.onFallback,
+    });
+    return { ...base, dispatcherFactory };
+  } catch (err) {
+    // The tunnel must NEVER fail a request. Any error while selecting it — a
+    // transient consent-read DB error, a provider lookup, a transport build —
+    // falls back to direct server egress (the behaviour before this feature).
+    egress.onFallback?.(err instanceof Error ? err : new Error(String(err)));
+    return base;
+  }
 }
 
 interface OpenAiErrorBody {

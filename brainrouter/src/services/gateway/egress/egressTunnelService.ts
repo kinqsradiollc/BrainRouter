@@ -95,8 +95,32 @@ export class EgressTunnelService {
       ping: this.#deps.ping,
       now: this.#deps.now,
     });
-    this.#boundControlPort = await this.#control.listen(config.controlPort, host);
-    this.#boundRelayPort = await this.#relay.listen(config.relayPort, host);
+    try {
+      this.#boundControlPort = await this.#control.listen(config.controlPort, host);
+      this.#boundRelayPort = await this.#relay.listen(config.relayPort, host);
+    } catch (err) {
+      // A partial bind (e.g. control up but relay EADDRINUSE) must NOT leave a
+      // half-started service that hands out transports pointed at an empty relay
+      // URL. Reset to the dark state SYNCHRONOUSLY (so `running` is false at once
+      // and transportForAccount yields nothing), and close best-effort WITHOUT
+      // awaiting — closing a server that failed to listen can hang. Then rethrow
+      // so the boot's own .catch logs and the tunnel stays off.
+      const control = this.#control;
+      const relay = this.#relay;
+      this.#control = null;
+      this.#relay = null;
+      this.#registry = null;
+      this.#relayUrl = '';
+      this.#boundControlPort = 0;
+      this.#boundRelayPort = 0;
+      void Promise.resolve()
+        .then(() => control?.close())
+        .catch(() => undefined);
+      void Promise.resolve()
+        .then(() => relay?.close())
+        .catch(() => undefined);
+      throw err;
+    }
     const reachableHost = host === '0.0.0.0' ? '127.0.0.1' : host;
     this.#relayUrl = config.relayPublicUrl ?? `ws://${reachableHost}:${this.#boundRelayPort}/egress-relay`;
   }

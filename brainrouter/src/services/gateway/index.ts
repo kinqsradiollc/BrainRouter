@@ -43,12 +43,21 @@ function main(): void {
     store: { getDeviceSessionByTokenHash: (o, u, h) => svc.getDeviceSessionByTokenHash(o, u, h) },
     ping: () => svc.ping(),
   });
+  // Short-TTL cache so a burst of eligible requests does not re-read the same
+  // per-org opt-in row every time (the value changes rarely).
+  const optInCache = new Map<string, { value: boolean; expires: number }>();
+  const OPT_IN_TTL_MS = 30_000;
   const egressSelection: GatewayEgressSelection | undefined = egressConfig.enabled
     ? {
         transportForAccount: (orgId, userId, keyId) => egressService.transportForAccount(orgId, userId, keyId),
         orgOptIn: async (orgId) => {
+          const now = Date.now();
+          const cached = optInCache.get(orgId);
+          if (cached && cached.expires > now) return cached.value;
           const setting = await svc.getOrgSetting<{ enabled?: boolean }>(`egress:clientTunnelOptIn:${orgId}`);
-          return setting?.enabled === true;
+          const value = setting?.enabled === true;
+          optInCache.set(orgId, { value, expires: now + OPT_IN_TTL_MS });
+          return value;
         },
         onFallback: (reason) => console.error(`[provider-gateway] egress tunnel fell back to direct: ${reason.message}`),
       }
@@ -56,13 +65,22 @@ function main(): void {
 
   const { server, audioStreaming } = createGatewayServer(svc, { egress: egressSelection });
   server.listen(port, () => console.error(`[provider-gateway] listening on :${port}`));
-  void egressService.start().then(() => {
-    if (egressConfig.enabled) {
+  // Fire-and-forget, but NEVER let a bind failure become an unhandled rejection
+  // that kills the already-listening gateway — on failure the tunnel stays dark.
+  void egressService
+    .start()
+    .then(() => {
+      if (egressConfig.enabled) {
+        console.error(
+          `[provider-gateway] egress tunnel up (control :${egressService.boundControlPort}, relay :${egressService.boundRelayPort})`,
+        );
+      }
+    })
+    .catch((err: unknown) => {
       console.error(
-        `[provider-gateway] egress tunnel up (control :${egressService.boundControlPort}, relay :${egressService.boundRelayPort})`,
+        `[provider-gateway] egress tunnel failed to start; staying dark: ${err instanceof Error ? err.message : String(err)}`,
       );
-    }
-  });
+    });
 
   let shutdownPromise: Promise<void> | null = null;
   const shutdown = () => {

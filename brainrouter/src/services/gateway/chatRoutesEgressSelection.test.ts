@@ -41,9 +41,9 @@ const clientTunnel = () => ({ egressMode: 'client-tunnel' as const, egressCapabi
 const serverOnly = () => ({ egressMode: 'server' as const, egressCapabilities: {} });
 
 function egress(over: Partial<GatewayEgressSelection> = {}): GatewayEgressSelection & {
-  calls: { transport: number; optIn: number };
+  calls: { transport: number; optIn: number; fallback: number };
 } {
-  const calls = { transport: 0, optIn: 0 };
+  const calls = { transport: 0, optIn: 0, fallback: 0 };
   return {
     calls,
     transportForAccount: () => {
@@ -54,9 +54,14 @@ function egress(over: Partial<GatewayEgressSelection> = {}): GatewayEgressSelect
       calls.optIn += 1;
       return true;
     },
+    onFallback: () => {
+      calls.fallback += 1;
+    },
     ...over,
   };
 }
+
+const autoMode = () => ({ egressMode: 'auto' as const, egressCapabilities: { clientTunnel: true } });
 
 const base: SafeUpstreamFetchOptions = {};
 
@@ -106,5 +111,36 @@ describe('selectUpstreamForRequest (C6b-2 dialer gate)', () => {
     expect(typeof result?.dispatcherFactory).toBe('function');
     expect(eg.calls.transport).toBe(1);
     expect(eg.calls.optIn).toBe(1);
+  });
+
+  it('also engages for egressMode "auto"', async () => {
+    const eg = egress();
+    const options: GatewayDataPlaneOptions = { upstream: base, egress: eg };
+    const result = await selectUpstreamForRequest(options, userAuth, provider, autoMode);
+    expect(typeof result?.dispatcherFactory).toBe('function');
+  });
+
+  it('fails OPEN (→ base) when the consent read throws — never fails the request', async () => {
+    const eg = egress({
+      orgOptIn: async () => {
+        throw new Error('db pool exhausted');
+      },
+    });
+    const options: GatewayDataPlaneOptions = { upstream: base, egress: eg };
+    const result = await selectUpstreamForRequest(options, userAuth, provider, clientTunnel);
+    expect(result).toBe(base); // direct egress, not a thrown error
+    expect(eg.calls.fallback).toBe(1);
+  });
+
+  it('fails OPEN (→ base) when transport resolution throws', async () => {
+    const eg = egress({
+      transportForAccount: () => {
+        throw new Error('boom');
+      },
+    });
+    const options: GatewayDataPlaneOptions = { upstream: base, egress: eg };
+    const result = await selectUpstreamForRequest(options, userAuth, provider, clientTunnel);
+    expect(result).toBe(base);
+    expect(eg.calls.fallback).toBe(1);
   });
 });
