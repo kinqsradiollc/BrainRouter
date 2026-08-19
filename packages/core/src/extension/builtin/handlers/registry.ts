@@ -17,6 +17,7 @@ import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { LLMConfig } from '../../../config/config.js';
 import type { InteractionPort } from '@kinqs/brainrouter-agent-protocol';
 import type { InteractivePrompter } from '../../../agent/support/prompter.js';
+import type { BrowserFetchPort } from '../../../websearch/inAppBrowser.js';
 import type { McpConnectorClient } from '../../../connectors/index.js';
 
 /**
@@ -103,6 +104,10 @@ export interface BuiltinToolHost {
   attachReadOnlyWorktree?(root: string, owner: string): void;
   /** Detach a removed worktree — agent.ts:970. (D8 Phase 35: worktree_done) */
   detachWorktree?(root: string): void;
+  /** True on a pentest turn — host-side egress (fetch_url/web_search) is refused so the scope-pinned sandbox is the only path out — agent.ts:1209. (D8 Phase 36) */
+  readonly pentestMode: boolean;
+  /** The in-app browser control port (desktop, top-level session); absent on CLI/server — agent.ts:1294. (D8 Phase 36: fetch_url/web_search browser-first) */
+  readonly browserControlPort?: BrowserFetchPort;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
