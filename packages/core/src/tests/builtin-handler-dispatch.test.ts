@@ -769,3 +769,24 @@ test('D8 Phase 37 — computer_use dispatches through the registry', async () =>
   const out = await invokeBuiltinToolRuntime.call(host, 'computer_use', { action: 'screenshot' });
   assert.match(out, /computer_use (is disabled|is unavailable|denied)/);
 });
+
+// ADR-041 D8 Phase 38 — file_vulnerability (pentest write; joins pentest.ts, +lastTurnUsage/sessionUsage/taskBudgetCaps).
+test('D8 Phase 38 — file_vulnerability dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('file_vulnerability'), 'file_vulnerability has a registered handler');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'd8-fv-'));
+  try {
+    const host: any = {
+      silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: ws, sessionKey: 'w38',
+      llmConfig: { model: 'test' },
+      lastTurnUsage: { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 },
+      sessionUsage: { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 },
+    };
+    // With no active pentest review run, the tool is refused (byte-identical to the former switch).
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call(host, 'file_vulnerability', { file: 'x.ts', summary: 'y' }),
+      /active pentest review run/,
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

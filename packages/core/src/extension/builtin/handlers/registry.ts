@@ -113,6 +113,12 @@ export interface BuiltinToolHost {
   readonly computerUsePort?: ComputerUsePort;
   /** MUTABLE per-turn computer-action counter the handler increments against the cap — agent.ts:1147. (D8 Phase 37: computer_use) */
   computerActionsThisTurn: number;
+  /** MUTABLE per-turn LLM usage tally the pentest dedupe-judge adds to — agent.ts:3058. (D8 Phase 38: file_vulnerability) */
+  lastTurnUsage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens: number; missedTokens: number; lastPrefixFingerprint?: string };
+  /** Running session usage — the budget denominator — agent.ts:3078. (D8 Phase 38: file_vulnerability) */
+  readonly sessionUsage: { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens: number; missedTokens: number };
+  /** Per-task budget caps (falls back to cli.budget) — agent.ts:1213. (D8 Phase 38: file_vulnerability) */
+  readonly taskBudgetCaps?: { maxPerTaskUSD: number; maxPerTaskTokens: number };
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
