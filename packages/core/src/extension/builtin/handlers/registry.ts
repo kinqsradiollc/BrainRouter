@@ -17,6 +17,7 @@ import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { LLMConfig } from '../../../config/config.js';
 import type { InteractionPort } from '@kinqs/brainrouter-agent-protocol';
 import type { InteractivePrompter } from '../../../agent/support/prompter.js';
+import type { McpConnectorClient } from '../../../connectors/index.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -90,6 +91,8 @@ export interface BuiltinToolHost {
   captureFileSnapshot(absPath: string): void;
   /** Silent-child write/edit/patch approval gate (returns a denial string, else null) — agent.ts:1507. (D8 Phase 28) */
   confirmSilentChildToolApproval(info: { tool: string; command?: string; path?: string; summary?: string; reason: string; dangerous?: boolean }): Promise<string | null>;
+  /** The agent's own MCP client for the `mcp` connector source (undefined if none) — agent.ts:2680. (D8 Phase 34: connector_run) */
+  agentMcpConnectorClient(): McpConnectorClient | undefined;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
