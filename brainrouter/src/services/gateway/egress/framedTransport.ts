@@ -93,13 +93,21 @@ export class FramedEgressTransport implements EgressTunnelTransport {
     return new Promise<Duplex>((resolve, reject) => {
       let state: 'dialing' | 'open' | 'closed' = 'dialing';
       let duplex: Duplex | null = null;
+      const signal = options?.signal;
 
+      const detach = (): void => signal?.removeEventListener('abort', onAbort);
       const failDial = (message: string): void => {
         if (state !== 'dialing') return;
         state = 'closed';
+        detach();
         channel.close(message);
         reject(new Error(message));
       };
+      // The fallback ladder aborts the signal on its connect-timeout; honour it
+      // here so a live-but-unacked channel (edge accepted the splice then
+      // black-holed the dial) is torn down instead of leaking the relay socket
+      // and this never-settling promise.
+      const onAbort = (): void => failDial('egress dial aborted before the tunnel opened');
 
       channel.onClose((reason) => {
         if (state === 'dialing') {
@@ -119,6 +127,7 @@ export class FramedEgressTransport implements EgressTunnelTransport {
             failDial(`egress client could not dial ${target.host}:${target.port}: ${result.error ?? 'unknown'}`);
           } else {
             state = 'open';
+            detach();
             duplex = this.#bridge(channel);
             resolve(duplex);
           }
@@ -127,6 +136,11 @@ export class FramedEgressTransport implements EgressTunnelTransport {
         if (state === 'open') duplex?.push(Buffer.from(frame)); // raw TLS bytes
       });
 
+      if (signal?.aborted) {
+        failDial('egress dial aborted before the tunnel opened');
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
       channel.send(encodeControl({ v: 1, kind: 'dial', host: target.host, port: target.port }));
     });
   }
