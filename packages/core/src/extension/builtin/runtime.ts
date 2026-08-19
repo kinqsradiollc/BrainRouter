@@ -22,7 +22,6 @@ import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
-import { spawnWorkerThread } from '../../orchestration/agents/workerTools.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
@@ -30,19 +29,13 @@ import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { runPostEditCheck } from '../../util/agentloop/postEditCheck.js';
 import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/tokenEstimate.js';
-import { canSpawnWorker } from '../../worker/workerStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope } from '../../agent/fs/workspaceFs.js';
 import { nodeFilesystemPort, type FilesystemPort } from '../../agent/fs/filesystemPort.js';
-import type { SubprocessPort } from '../../agent/subprocess/subprocessPort.js';
 import type { ShellPort } from '../../agent/shell/shellPort.js';
 
-// ADR-041 D3 — default subprocess port: wraps `spawnWorkerThread` verbatim, so
-// the local worker-spawn path is byte-identical. An execution world (D10) injects
-// a port that spawns the worker in a container/remote.
-const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
 
 // ADR-041 D3 — default shell port: wraps runShell / startBackgroundShell verbatim,
 // so the local exec path is byte-identical. An execution world (D10) injects a
@@ -364,29 +357,6 @@ export async function invokeBuiltinToolRuntime(
         this.assertInheritedExecutionAuthorityCurrent();
         const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
         return extractToolText(mcpRes);
-      }
-      case 'spawn_worker_thread': {
-        if (!canSpawnWorker(this.agentDepth)) {
-          throw new Error('Workers cannot spawn workers (MAX_WORKER_DEPTH=1).');
-        }
-        const goal = String(args.goal ?? '').trim();
-        if (!goal) throw new Error('spawn_worker_thread requires a goal.');
-        // ADR-041 D3 — spawn via the injected subprocess port (default wraps
-        // spawnWorkerThread; an execution world can spawn in a container/remote).
-        const worker = (this.subprocessPort ?? nodeSubprocessPort).spawnWorker(this.mcpClient, this.llmConfig, {
-          workspaceRoot: this.workspaceRoot,
-          launchCwd: this.launchCwd,
-          role: String(args.role ?? 'worker'),
-          goal,
-          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
-          ownership: typeof args.ownership === 'string' ? args.ownership : (this.ownership ?? null),
-          parentSessionKey: this.sessionKey,
-          parentAccessMode: this.accessMode,
-          spawnerDepth: this.agentDepth,
-          effortOverride: this.effortOverride,
-          ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
-        });
-        return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
       }
       default:
         throw new Error(`Unknown local tool: ${name}`);

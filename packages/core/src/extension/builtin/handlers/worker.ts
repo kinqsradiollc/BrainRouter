@@ -3,10 +3,16 @@
 // tool still calls it), so it is re-imported here from the same source — no dead
 // export. Body verbatim (this.workspaceRoot -> ctx.host.workspaceRoot).
 
-import { readWorkerMeta, readWorkerSummary, closeWorker } from '../../../worker/workerStore.js';
-import { waitWorker } from '../../../orchestration/agents/workerTools.js';
+import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../../worker/workerStore.js';
+import { waitWorker, spawnWorkerThread } from '../../../orchestration/agents/workerTools.js';
 import { acknowledgeCompletions } from '../../../session/completion/completionInbox.js';
+import type { SubprocessPort } from '../../../agent/subprocess/subprocessPort.js';
 import type { BuiltinToolHandler } from './registry.js';
+
+// ADR-041 D3 — default subprocess port: wraps `spawnWorkerThread` verbatim, so
+// the local worker-spawn path is byte-identical. An execution world (D10) injects
+// a port that spawns the worker in a container/remote. (Moved here with its sole consumer.)
+const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
 
 export const workerHandlers: Record<string, BuiltinToolHandler> = {
   read_worker_summary: async ({ args, host }) => {
@@ -33,5 +39,29 @@ export const workerHandlers: Record<string, BuiltinToolHandler> = {
     if (!id) throw new Error('close_worker requires an id.');
     const meta = closeWorker(host.workspaceRoot, id);
     return JSON.stringify({ id, status: meta?.status ?? 'unknown', closed: !!meta });
+  },
+
+  spawn_worker_thread: async ({ args, host }) => {
+        if (!canSpawnWorker(host.agentDepth)) {
+          throw new Error('Workers cannot spawn workers (MAX_WORKER_DEPTH=1).');
+        }
+        const goal = String(args.goal ?? '').trim();
+        if (!goal) throw new Error('spawn_worker_thread requires a goal.');
+        // ADR-041 D3 — spawn via the injected subprocess port (default wraps
+        // spawnWorkerThread; an execution world can spawn in a container/remote).
+        const worker = (host.subprocessPort ?? nodeSubprocessPort).spawnWorker(host.mcpClient, host.llmConfig, {
+          workspaceRoot: host.workspaceRoot,
+          launchCwd: host.launchCwd,
+          role: String(args.role ?? 'worker'),
+          goal,
+          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+          ownership: typeof args.ownership === 'string' ? args.ownership : (host.ownership ?? null),
+          parentSessionKey: host.sessionKey,
+          parentAccessMode: host.accessMode,
+          spawnerDepth: host.agentDepth,
+          effortOverride: host.effortOverride,
+          ancestorFleet: host.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
+        });
+        return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
   },
 };

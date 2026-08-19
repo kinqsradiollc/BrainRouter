@@ -19,6 +19,9 @@ import type { InteractionPort } from '@kinqs/brainrouter-agent-protocol';
 import type { InteractivePrompter } from '../../../agent/support/prompter.js';
 import type { BrowserFetchPort } from '../../../websearch/inAppBrowser.js';
 import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
+import type { SubprocessPort } from '../../../agent/subprocess/subprocessPort.js';
+import type { AccessMode } from '../../../orchestration/roles/roles.js';
+import type { EffortLevel } from '../../../session/preferences/preferencesStore.js';
 import type { McpConnectorClient } from '../../../connectors/index.js';
 
 /**
@@ -119,6 +122,16 @@ export interface BuiltinToolHost {
   readonly sessionUsage: { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens: number; missedTokens: number };
   /** Per-task budget caps (falls back to cli.budget) — agent.ts:1213. (D8 Phase 38: file_vulnerability) */
   readonly taskBudgetCaps?: { maxPerTaskUSD: number; maxPerTaskTokens: number };
+  /** The subprocess capability for spawning workers (default wraps spawnWorkerThread) — agent.ts:1290. (D8 Phase 39: spawn_worker_thread) */
+  readonly subprocessPort?: SubprocessPort;
+  /** The process launch cwd inherited by a spawned worker — agent.ts:1004. (D8 Phase 39) */
+  readonly launchCwd: string;
+  /** This agent's access mode, inherited by the child worker — agent.ts:1190. (D8 Phase 39) */
+  readonly accessMode: AccessMode;
+  /** Reasoning-effort override passed down to the worker — agent.ts:1285. (D8 Phase 39) */
+  readonly effortOverride?: EffortLevel;
+  /** HONK-H0 — fleet-sandbox lockdown cascaded to descendants — agent.ts:1208. (D8 Phase 39) */
+  readonly forceFleetSandbox: boolean;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */
