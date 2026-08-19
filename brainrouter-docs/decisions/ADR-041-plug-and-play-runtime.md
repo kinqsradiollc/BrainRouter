@@ -1,6 +1,6 @@
 # ADR-041 — Plug-and-play runtime: swappable providers, capability ports, and product-wide registries
 
-**Status:** PROPOSED
+**Status:** Accepted — in phased implementation (foundational runtime seams shipped to `release/0.4.21`, 2026-08). **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims). **Remaining:** D5 (product-wide registry pattern), D7 (extension-host consolidation), D9 (session-scoped reversible registrations), D11 (composition-from-configuration + dumpable tree), D12 (services-are-profiles), and the D13 feature-parity program + D14 glass-box capstone (both specified — see the D13/D14 waves doc — with the parity features themselves not yet built).
 
 **Builds on:** ADR-029 (one workspace, many surfaces), the existing `ExtensionHost` and
 `ProviderDefinition` system.
