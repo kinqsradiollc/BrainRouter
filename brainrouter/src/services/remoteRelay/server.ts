@@ -57,6 +57,13 @@ export interface RemoteRelayServerOptions {
   now?: () => number;
   attachDeadlineMs?: number;
   framesPerSecond?: number;
+  /**
+   * The WebSocket path this instance binds. Defaults to {@link RELAY_PATH}
+   * (`/remote-relay`, device pairing). ADR-043's egress relay binds a distinct
+   * path (`/egress-relay`) with an egress control plane, so the two audiences
+   * never share an endpoint even when co-located.
+   */
+  path?: string;
 }
 
 interface AttachedConnection {
@@ -89,7 +96,7 @@ export class RemoteRelayServer {
     this.attachDeadlineMs = options.attachDeadlineMs ?? ATTACH_DEADLINE_MS;
     this.framesPerSecond = options.framesPerSecond ?? FRAMES_PER_SECOND;
     this.http = createServer((req, res) => { void this.handleHttp(req, res); });
-    this.wss = new WebSocketServer({ server: this.http, path: RELAY_PATH, maxPayload: MAX_FRAME_BYTES });
+    this.wss = new WebSocketServer({ server: this.http, path: options.path ?? RELAY_PATH, maxPayload: MAX_FRAME_BYTES });
     this.wss.on("connection", (socket) => this.handleConnection(socket));
     if (options.revocationFeed) {
       this.unsubscribeRevocations = options.revocationFeed.subscribe((selector) => this.revoke(selector));
