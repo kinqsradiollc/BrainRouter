@@ -13,20 +13,17 @@ import { getCliKnobs } from '../../config/config.js';
 import { startBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
-import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
 import { decideExecutionPolicy } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal } from '../../goal/store/goalStore.js';
-import { extractToolText } from '../../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../../orchestration/ownership/ownership.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
-import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { runPostEditCheck } from '../../util/agentloop/postEditCheck.js';
 import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/tokenEstimate.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
@@ -328,35 +325,6 @@ export async function invokeBuiltinToolRuntime(
             : '';
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
-      }
-      case 'mcp_call': {
-        const target = String(args.name ?? '').trim();
-        if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
-        const tool = await this.findVisibleMcpTool(target);
-        this.assertInheritedExecutionAuthorityCurrent();
-        if (!tool) throw new Error(`mcp_call: "${target}" is not an available MCP tool. Use mcp_search to find the exact name.`);
-        const callArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
-          ? (args.args as Record<string, any>)
-          : {};
-        const toolName = String(tool.name);
-        const mcpArgs = applyFederationIdentity(toolName, callArgs, this.federationSessionKey) as Record<string, any>;
-        authorizeMcpTarget?.(toolName, mcpArgs, tool);
-        const permissionNames = [
-          toolName,
-          String(tool.__rawName ?? '').trim(),
-        ].filter((name, index, names) => name && names.indexOf(name) === index);
-        if (permissionNames.some((permissionName) => evaluatePermissionRules(
-          getCliKnobs().permissions,
-          permissionName,
-          primaryArgText(permissionName, mcpArgs),
-          { workspace: this.workspaceRoot },
-        ) === 'deny')) {
-          throw new Error(`mcp_call target "${toolName}" denied by cli.permissions.`);
-        }
-        await this.approveMcpToolCall(toolName, tool, mcpArgs);
-        this.assertInheritedExecutionAuthorityCurrent();
-        const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
-        return extractToolText(mcpRes);
       }
       default:
         throw new Error(`Unknown local tool: ${name}`);
