@@ -759,3 +759,13 @@ test('D8 Phase 36 — fetch_url + web_search dispatch through the registry', asy
   const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: '/tmp', sessionKey: 'w36', pentestMode: false };
   await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'web_search', { query: '   ' }), /non-empty query/);
 });
+
+// ADR-041 D8 Phase 37 — computer_use (desktop control; new computer.ts, +computerUsePort/computerActionsThisTurn).
+test('D8 Phase 37 — computer_use dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('computer_use'), 'computer_use has a registered handler');
+  // A minimal/silent host with no computer port is refused with a governance string — never throws —
+  // whichever gate fires first (knob-disabled / unavailable / silent-denied). Byte-identical to the switch.
+  const host: any = { silent: true, agentDepth: 0, tier: 'chat', workspaceRoot: '/tmp', sessionKey: 'w37', computerActionsThisTurn: 0 };
+  const out = await invokeBuiltinToolRuntime.call(host, 'computer_use', { action: 'screenshot' });
+  assert.match(out, /computer_use (is disabled|is unavailable|denied)/);
+});

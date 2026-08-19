@@ -18,6 +18,7 @@ import type { LLMConfig } from '../../../config/config.js';
 import type { InteractionPort } from '@kinqs/brainrouter-agent-protocol';
 import type { InteractivePrompter } from '../../../agent/support/prompter.js';
 import type { BrowserFetchPort } from '../../../websearch/inAppBrowser.js';
+import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import type { McpConnectorClient } from '../../../connectors/index.js';
 
 /**
@@ -108,6 +109,10 @@ export interface BuiltinToolHost {
   readonly pentestMode: boolean;
   /** The in-app browser control port (desktop, top-level session); absent on CLI/server — agent.ts:1294. (D8 Phase 36: fetch_url/web_search browser-first) */
   readonly browserControlPort?: BrowserFetchPort;
+  /** The desktop computer-control capability (screenshot/act); absent on non-desktop hosts — agent.ts:1288. (D8 Phase 37: computer_use) */
+  readonly computerUsePort?: ComputerUsePort;
+  /** MUTABLE per-turn computer-action counter the handler increments against the cap — agent.ts:1147. (D8 Phase 37: computer_use) */
+  computerActionsThisTurn: number;
 }
 
 /** Everything a migrated handler receives — the shared closures the switch built inline. */

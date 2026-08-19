@@ -9,11 +9,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { NoTTYError } from '../../agent/support/prompter.js';
-import { getCliKnobs, isRemoteBrainUrl } from '../../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
 
-// Per-turn computer_use action cap — module const in the original agent.ts; kept
-// here because the internal capability runtime is its only consumer.
-const MAX_COMPUTER_ACTIONS_PER_TURN = 20;
 import { startBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
@@ -41,7 +38,6 @@ import { canSpawnWorker } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
-import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, resolveWorkspacePathInScope, singleRootScope } from '../../agent/fs/workspaceFs.js';
@@ -345,52 +341,6 @@ export async function invokeBuiltinToolRuntime(
             : '';
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
-      }
-      case 'computer_use': {
-        if (!getCliKnobs().computerUse.enabled) return 'computer_use is disabled. Set cli.computerUse.enabled=true to enable it.';
-        if (!this.computerUsePort) return 'computer_use is unavailable in this runtime.';
-        if (this.silent) return 'computer_use denied: silent child agents cannot control the desktop.';
-        if (isRemoteBrainUrl(getCliKnobs().brainUrl)) return 'computer_use denied: remote-brain sessions cannot control the local desktop.';
-        if (this.computerActionsThisTurn >= MAX_COMPUTER_ACTIONS_PER_TURN) {
-          return `computer_use denied: per-turn action cap (${MAX_COMPUTER_ACTIONS_PER_TURN}) reached.`;
-        }
-        const validation = validateComputerAction(args);
-        if (!validation.ok) return `computer_use invalid action: ${validation.error}`;
-        const action = validation.action;
-        this.computerActionsThisTurn += 1;
-
-        if (action.action === 'screenshot') {
-          try {
-            const image = await this.computerUsePort.screenshot();
-            return JSON.stringify({
-              success: true,
-              action: 'screenshot',
-              image,
-              note: 'Screenshot captured at full logical resolution.',
-            }, null, 2);
-          } catch (err: any) {
-            return JSON.stringify({
-              success: false,
-              action: 'screenshot',
-              permissionDenied: /permission|screen recording|accessibility/i.test(String(err?.message ?? err)),
-              error: err?.message ?? String(err),
-            }, null, 2);
-          }
-        }
-
-        const destructive = evaluateDestructiveAction(action, { userIntent: this.lastUserPrompt });
-        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
-        const shouldAsk = destructive.dangerous || (isComputerActionMutating(action.action) && activeMode.executionMode !== 'fast');
-        if (shouldAsk) {
-          const detail = `${JSON.stringify(action, null, 2)}${destructive.reason ? `\n\n${destructive.reason}` : ''}`;
-          const approved = this.interactionPort
-            ? await this.interactionPort.confirm({ title: 'Allow computer control?', detail, dangerous: destructive.dangerous, tool: 'computer_use' })
-            : await this.prompter.askYesNo(`${detail}\nAllow computer control? (y/N) `, false);
-          if (!approved) return 'computer_use rejected by user.';
-        }
-
-        const result = await this.computerUsePort.act(action);
-        return JSON.stringify({ action: action.action, ...result }, null, 2);
       }
       case 'mcp_call': {
         const target = String(args.name ?? '').trim();
