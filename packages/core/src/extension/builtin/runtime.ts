@@ -18,7 +18,7 @@ import { startBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
-import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
+import { decideExecutionPolicy } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
 import { buildPentestDedupeMessages, findingKey, parsePentestDedupeDecision } from '../../review/reviewSynthesis.js';
@@ -37,10 +37,6 @@ import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { runPostEditCheck } from '../../util/agentloop/postEditCheck.js';
 import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/tokenEstimate.js';
-import { fetchAndExtract } from '../../websearch/crawler.js';
-import { buildSearchProvider } from '../../websearch/factory.js';
-import { parseGoogleHtml, googleSearchUrl } from '../../websearch/providers/google.js';
-import type { WebSearchResult } from '../../websearch/types.js';
 import { canSpawnWorker } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { redactReviewSourceText, assertSafeReviewerFilesystemPath } from '../../review/sourceSafety.js';
@@ -63,143 +59,6 @@ const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
 // port that runs the command in a container/remote.
 const nodeShellPort: ShellPort = { runShell, startBackgroundShell };
 
-/** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
- *  WebContentsView). Typed loosely so the runtime pulls in no desktop imports. */
-interface BrowserFetchPort { request(command: unknown, options?: { signal?: AbortSignal }): Promise<{ ok?: boolean; tabId?: string; data?: unknown }> }
-
-/** True when a URL clearly points at STRUCTURED data (a JSON/XML/CSV/feed or an
- *  API endpoint) rather than a rendered web page. Those must NOT go through the
- *  browser — Chromium renders the response into a DOM view and innerText scraping
- *  mangles it; the HTTP crawler returns the bytes near-verbatim (parseable). */
-export function looksStructuredUrl(rawUrl: string): boolean {
-  try {
-    const u = new URL(rawUrl);
-    const path = u.pathname.toLowerCase();
-    if (/\.(json|xml|csv|tsv|txt|rss|atom|ndjson|yaml|yml)$/.test(path)) return true;
-    if (path.includes('/api/') || path.startsWith('/api') || path.includes('/v1/') || path.includes('/v2/')) return true;
-    if (/^(api|data|feeds?)\./i.test(u.hostname)) return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * How the agent's `web_search` / `fetch_url` fast-path drives the in-app browser.
- *
- * When `live` is set, the fetch is made WATCHABLE: it opens (or reuses via
- * `tabRef`) a single VISIBLE research tab, activates it, and LEAVES it open so
- * the user sees the agent navigate to the URL / search / page forward — one tab
- * moving page→page rather than throwaway tabs flashing open and closed. Without
- * `live` (the default) it keeps the original silent behavior: a NON-active
- * background tab that is always closed after the read.
- */
-export interface InAppBrowseOptions {
-  live?: boolean;
-  /** Mutable holder for the reused research tab id, shared across an agent's
-   *  web_search / fetch_url calls so the user watches ONE tab, not many. */
-  tabRef?: { id?: string };
-}
-
-/**
- * Open a browse tab, or — in `live` mode with a known `tabRef.id` — reuse and
- * navigate the existing research tab (and re-activate it) so the user watches a
- * single tab move. Returns the tab id, or undefined if a fresh tab won't open.
- */
-async function openOrReuseBrowseTab(port: BrowserFetchPort, url: string, signal: AbortSignal, opts: InAppBrowseOptions): Promise<string | undefined> {
-  const live = opts.live === true;
-  const ref = opts.tabRef;
-  if (live && ref?.id) {
-    const nav = await port.request({ kind: 'page.navigate', url, tabId: ref.id }, { signal }).catch(() => null);
-    if (nav?.ok) {
-      // Bring the reused research tab to the front so the user watches it move.
-      await port.request({ kind: 'tabs.select', tabId: ref.id }, { signal }).catch(() => undefined);
-      return ref.id;
-    }
-    ref.id = undefined; // stale/closed — fall through and open a fresh visible tab
-  }
-  const open = await port.request({ kind: 'tabs.open', url, activate: live }, { signal });
-  if (!open?.ok || !open.tabId) return undefined;
-  if (live && ref) ref.id = open.tabId;
-  return open.tabId;
-}
-
-/**
- * Fetch a URL through the in-app browser (real Chromium, JS-rendered, using the
- * user's logged-in session), returning the page's rendered text — the SAME view
- * the agent gets from the browser tools. In `live` mode it drives a VISIBLE,
- * reused research tab the user can watch; otherwise a NON-active background tab
- * that is always closed after the read.
- *
- * Best-effort by design: a hard timeout bounds the whole flow and ANY failure
- * returns null so the caller falls back to the HTTP crawler — fetch_url can
- * never be made worse than the crawler baseline. SSRF is enforced by the desktop
- * browser's own onBeforeRequest destination gate, so no extra check is needed.
- */
-export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal, opts: InAppBrowseOptions = {}): Promise<{ title: string; url: string; text: string } | null> {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = outerSignal ? AbortSignal.any([outerSignal, timeout]) : timeout;
-  const live = opts.live === true;
-  let tabId: string | undefined;
-  try {
-    tabId = await openOrReuseBrowseTab(port, url, signal, opts);
-    if (!tabId) return null;
-    // Wait for load, but ignore its timeout — we still read whatever rendered.
-    await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
-    // page.text returns the page's clean rendered innerText (article text, not the
-    // structural agent snapshot). Fall back to the semantic snapshot's node text
-    // if page.text is somehow empty, and to the crawler (return null) if both are.
-    const textRes = await port.request({ kind: 'page.text', tabId, maxChars: 100_000 }, { signal }).catch(() => null);
-    const td = (textRes?.ok ? textRes.data : null) as { url?: string; title?: string; text?: string } | null;
-    let title = String(td?.title ?? '');
-    let finalUrl = String(td?.url ?? url);
-    let text = String(td?.text ?? '').replace(/\n{3,}/g, '\n\n').slice(0, 60_000).trim();
-    if (!text) {
-      const snap = await port.request({ kind: 'page.snapshot', tabId, maxChars: 50_000 }, { signal }).catch(() => null);
-      const sd = (snap?.ok ? snap.data : null) as { url?: string; title?: string; nodes?: Array<{ name?: unknown; value?: unknown }> } | null;
-      const nodes = Array.isArray(sd?.nodes) ? sd!.nodes : [];
-      text = nodes.map((n) => String(n?.name ?? n?.value ?? '').trim()).filter(Boolean).join('\n').slice(0, 40_000);
-      if (sd?.title) title = String(sd.title);
-      if (sd?.url) finalUrl = String(sd.url);
-    }
-    return text ? { title, url: finalUrl, text } : null;
-  } catch {
-    return null;
-  } finally {
-    // Live mode keeps the reused research tab open (the user is watching it;
-    // reapAgentTabs cleans it up between turns). Headless mode always closes.
-    if (tabId && !live) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
-  }
-}
-
-/**
- * Fetch a page's RENDERED HTML through the in-app browser (real Chromium + the
- * user's session), so structured extraction (e.g. web_search parsing a results
- * page) runs over what the browser actually rendered — the network/JS/session
- * all go through the browser, never a raw HTTP scrape. In `live` mode it drives
- * a VISIBLE, reused research tab (so the user watches the search happen);
- * otherwise a background tab that is always closed. Returns null on any failure.
- */
-export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal, opts: InAppBrowseOptions = {}): Promise<string | null> {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = outerSignal ? AbortSignal.any([outerSignal, timeout]) : timeout;
-  const live = opts.live === true;
-  let tabId: string | undefined;
-  try {
-    tabId = await openOrReuseBrowseTab(port, url, signal, opts);
-    if (!tabId) return null;
-    await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
-    const res = await port.request({ kind: 'page.html', tabId, maxChars: 500_000 }, { signal }).catch(() => null);
-    const data = (res?.ok ? res.data : null) as { html?: string } | null;
-    const html = String(data?.html ?? '');
-    return html.length > 100 ? html : null;
-  } catch {
-    return null;
-  } finally {
-    // Live mode leaves the reused research tab open for the user to watch.
-    if (tabId && !live) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
-  }
-}
 
 /** Reviewer reads never follow aliases: policy is evaluated on lexical and canonical paths. */
 
@@ -532,81 +391,6 @@ export async function invokeBuiltinToolRuntime(
 
         const result = await this.computerUsePort.act(action);
         return JSON.stringify({ action: action.action, ...result }, null, 2);
-      }
-      case 'fetch_url': {
-        // A pentest turn must never reach the network from the HOST — that path
-        // bypasses the scope-pinned Docker/proxy sandbox entirely (SSRF to
-        // internal services / cloud metadata). Force target interaction through
-        // the sandboxed run_command or the scoped proxy tools.
-        if (this.pentestMode) return 'fetch_url is disabled for pentests; reach the target via run_command inside the sandbox, or view_request/repeat_request through the scoped proxy.';
-        const url = args.url;
-        // POLICY-3 — per-host egress allowlist (empty = unrestricted).
-        const egressAllowlist = getCliKnobs().egressAllowlist;
-        const egress = egressDecision(url, egressAllowlist);
-        if (egress.decision === 'deny') {
-          return `fetch_url blocked by egress policy: ${egress.reason}.`;
-        }
-        const knobs = getCliKnobs();
-        // BROWSER-FIRST: when the in-app browser is available (desktop, top-level,
-        // not a silent child), fetch through it so JS-rendered / logged-in /
-        // bot-guarded pages return their REAL rendered content. Falls back to the
-        // HTTP crawler on any failure or when there is no browser (CLI/server).
-        // EXCEPT structured/API URLs (JSON/XML/feeds): the browser would render
-        // them into a DOM and innerText-scrape a mangled copy — send those
-        // straight to the crawler, which returns the raw bytes.
-        if (this.browserControlPort && !this.silent && !looksStructuredUrl(String(url))) {
-          // Read through a background agent-owned tab, then close it. The human's
-          // selected tab and panel remain untouched while the real browser
-          // session, JavaScript, and authentication are still available.
-          const viaBrowser = await fetchViaInAppBrowser(this.browserControlPort, String(url), 25_000, this.turnAbort?.signal);
-          if (viaBrowser?.text) {
-            return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text }, null, 2);
-          }
-        }
-        const result = await fetchAndExtract(String(url), {
-          ...knobs.webSearch.crawler,
-          signal: this.turnAbort?.signal,
-          // Re-apply the allowlist on every redirect hop (the crawler also blocks
-          // private/loopback/metadata IPs on each hop as an always-on SSRF guard).
-          isEgressAllowed: (target) => egressDecision(target, egressAllowlist).decision !== 'deny',
-        });
-        return JSON.stringify(result, null, 2);
-      }
-      case 'web_search': {
-        // Host-side egress; disabled in a pentest for the same reason as fetch_url.
-        if (this.pentestMode) return 'web_search is disabled for pentests; stay inside the authorized target using the sandboxed tools.';
-        const query = String(args.query ?? '').trim();
-        if (!query) throw new Error('web_search requires a non-empty query.');
-        const knobs = getCliKnobs();
-        const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
-        const page = Math.max(1, Math.min(10, Math.floor(Number(args.page ?? 1))));
-        // BROWSER-ONLY when available: run the search THROUGH the in-app browser
-        // (real Chromium, the user's session, no raw HTTP scrape / bot-challenge).
-        // Google runs through the real browser so the search shares the user's
-        // locale and session. A consent wall, challenge, or parser miss falls
-        // through to an explicitly configured HTTP provider; there is no hidden
-        // second search engine.
-        if (this.browserControlPort && !this.silent) {
-          const port = this.browserControlPort;
-          const sig = this.turnAbort?.signal;
-          const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
-            try {
-              const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig);
-              if (html) for (const parse of parsers) { const r = parse(html, maxResults); if (r.length) return r; }
-            } catch { /* fall through to the explicitly configured HTTP provider */ }
-            return [];
-          };
-          const results = await tryEngine(googleSearchUrl(query, maxResults, page), [parseGoogleHtml]);
-          if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
-        }
-        if (page > 1) return 'web_search pagination requires the managed Desktop browser; headless API providers currently support page 1 only.';
-        try {
-          const provider = buildSearchProvider(knobs);
-          const results = await provider.search(query, maxResults, this.turnAbort?.signal);
-          return JSON.stringify(results.slice(0, maxResults), null, 2);
-        } catch (err: any) {
-          return `web_search failed: ${err?.message ?? err}`;
-        }
       }
       case 'mcp_call': {
         const target = String(args.name ?? '').trim();

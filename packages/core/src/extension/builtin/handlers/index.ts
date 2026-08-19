@@ -19,9 +19,10 @@ import { fsWriteHandlers } from './fsWrite.js';
 import { workspaceHandlers } from './workspace.js';
 import { connectorHandlers } from './connector.js';
 import { worktreeHandlers } from './worktree.js';
+import { websearchHandlers } from './websearch.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers, ...fsWriteHandlers, ...workspaceHandlers, ...connectorHandlers, ...worktreeHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers, ...fsWriteHandlers, ...workspaceHandlers, ...connectorHandlers, ...worktreeHandlers, ...websearchHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 

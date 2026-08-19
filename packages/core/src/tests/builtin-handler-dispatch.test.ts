@@ -745,3 +745,17 @@ test('D8 Phase 35 — worktree_* tools dispatch through the registry', async () 
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 36 — fetch_url + web_search (host-side egress; new websearch.ts + inAppBrowser.ts extraction).
+test('D8 Phase 36 — fetch_url + web_search dispatch through the registry', async () => {
+  for (const n of ['fetch_url', 'web_search']) {
+    assert.ok(builtinToolHandler(n), `${n} has a registered handler`);
+  }
+  // A pentest turn refuses host-side egress (byte-identical to the former switch).
+  const pentest: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: '/tmp', sessionKey: 'w36', pentestMode: true };
+  assert.match(await invokeBuiltinToolRuntime.call(pentest, 'fetch_url', { url: 'https://example.com' }), /disabled for pentests/);
+  assert.match(await invokeBuiltinToolRuntime.call(pentest, 'web_search', { query: 'x' }), /disabled for pentests/);
+  // A non-pentest web_search with an empty query is refused before any network call.
+  const host: any = { silent: false, agentDepth: 0, tier: 'chat', workspaceRoot: '/tmp', sessionKey: 'w36', pentestMode: false };
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(host, 'web_search', { query: '   ' }), /non-empty query/);
+});
