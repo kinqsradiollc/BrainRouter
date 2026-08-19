@@ -790,3 +790,14 @@ test('D8 Phase 38 — file_vulnerability dispatches through the registry', async
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+// ADR-041 D8 Phase 39 — spawn_worker_thread (last mid-weight tool; worker.ts, +5 spawn host members).
+test('D8 Phase 39 — spawn_worker_thread dispatches through the registry', async () => {
+  assert.ok(builtinToolHandler('spawn_worker_thread'), 'spawn_worker_thread has a registered handler');
+  // A worker (depth >= MAX_WORKER_DEPTH) cannot spawn a worker — refused before any spawn.
+  const worker: any = { silent: false, tier: 'worker', agentDepth: 1, workspaceRoot: '/tmp', sessionKey: 'w39' };
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(worker, 'spawn_worker_thread', { goal: 'x' }), /Workers cannot spawn workers/);
+  // A top-level agent with an empty goal is refused before any spawn.
+  const top: any = { silent: false, tier: 'chat', agentDepth: 0, workspaceRoot: '/tmp', sessionKey: 'w39' };
+  await assert.rejects(() => invokeBuiltinToolRuntime.call(top, 'spawn_worker_thread', { goal: '   ' }), /requires a goal/);
+});
