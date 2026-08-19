@@ -112,6 +112,34 @@ describe("EgressControlChannel (C4)", () => {
     expect(channel.pushDialToEdge(DEVICE, push)).toBe(false);
   });
 
+  it("onlineDevicesFor lists only the given account's online devices", async () => {
+    // Authenticator maps token → whichever identity the token names, so the test
+    // can bring several distinct devices/accounts online at once.
+    const multiAuth = async (hello: Record<string, unknown>): Promise<EdgeIdentity | null> => {
+      const t = hello.token;
+      if (t === "a1") return { orgId: "org_1", userId: "user_1", deviceId: "dev_a1" };
+      if (t === "a2") return { orgId: "org_1", userId: "user_1", deviceId: "dev_a2" };
+      if (t === "other") return { orgId: "org_2", userId: "user_9", deviceId: "dev_x" };
+      return null;
+    };
+    channel = new EgressControlChannel({ authenticate: multiAuth });
+    const port = await channel.listen(0, "127.0.0.1");
+    const bring = async (token: string): Promise<void> => {
+      const s = connect(port);
+      await new Promise<void>((r) => s.once("open", () => r()));
+      const ready = nextText(s);
+      s.send(JSON.stringify({ kind: "hello", token }));
+      await ready;
+    };
+    await bring("a1");
+    await bring("a2");
+    await bring("other");
+
+    expect(channel.onlineDevicesFor("org_1", "user_1").sort()).toEqual(["dev_a1", "dev_a2"]);
+    expect(channel.onlineDevicesFor("org_2", "user_9")).toEqual(["dev_x"]);
+    expect(channel.onlineDevicesFor("org_1", "nobody")).toEqual([]);
+  });
+
   // Finding #1 — a burst of hellos in one tick must not amplify authenticate()
   // calls or double-register the socket (the `authed` guard flips only inside the
   // async .then; the synchronous one-shot latch is what makes this safe).

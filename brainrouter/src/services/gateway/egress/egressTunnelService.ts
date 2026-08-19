@@ -131,6 +131,20 @@ export class EgressTunnelService {
     return new FramedEgressTransport(opener);
   }
 
+  /**
+   * Resolve a live transport for an ACCOUNT (org,user) + upstream key, picking one
+   * of that user's currently-online devices to relay through. Returns `undefined`
+   * when the tunnel is off or the user has no online device (→ direct egress).
+   * This is the form the chat route calls, since a request knows only (org,user).
+   */
+  transportForAccount(orgId: string, userId: string, upstreamKeyId: string): EgressTunnelTransport | undefined {
+    const control = this.#control;
+    if (!control) return undefined;
+    const [clientDeviceId] = control.onlineDevicesFor(orgId, userId);
+    if (!clientDeviceId) return undefined;
+    return this.transportForUser({ orgId, userId, clientDeviceId, upstreamKeyId });
+  }
+
   async stop(): Promise<void> {
     await this.#control?.close();
     await this.#relay?.close();
