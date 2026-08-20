@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   BUILTIN_COMMAND_HANDLERS,
   dispatchBuiltinCommand,
+  type CommandHandler,
 } from '../cli/commands/dispatchRegistry.js';
 
 test('A41-7: the builtin command registry is a non-empty array of handler fns', () => {
@@ -32,7 +33,9 @@ test('A41-7: dispatchBuiltinCommand walks first-match-wins and stops at the firs
   // Exercise the walker directly against a synthetic registry to prove the
   // first-match-wins + short-circuit semantics the if-chain had (byte-neutral).
   const order: string[] = [];
-  const mk = (name: string, matches: boolean) => async () => {
+  // Typed as CommandHandler so the walk below can pass a (ignored) context arg,
+  // exactly as dispatchBuiltinCommand does — a bare 0-arg fn would fail tsc.
+  const mk = (name: string, matches: boolean): CommandHandler => async () => {
     order.push(name);
     return matches;
   };
