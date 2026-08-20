@@ -16,6 +16,7 @@ import { PROVIDER_REGISTRY } from '../provider/providers/index.js';
 import { SLASH_COMMANDS } from '../command/catalog.js';
 import { invariantCompanions, verifyInvariants } from './invariants.js';
 import { registerBuiltinInvariantCompanions } from './invariantCompanions.js';
+import { activeLoopDriverId } from './loopDriver.js';
 
 export interface RuntimeCompositionSnapshot {
   /** Every builtin agent tool name, sorted. */
@@ -38,6 +39,8 @@ export interface RuntimeCompositionSnapshot {
     areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>;
     violations: number;
   };
+  /** ADR-041 A41-11 — the active agent loop-driver row (`default` until a host swaps it). */
+  loopDriver: string;
 }
 
 export function runtimeCompositionSnapshot(): RuntimeCompositionSnapshot {
@@ -58,5 +61,6 @@ export function runtimeCompositionSnapshot(): RuntimeCompositionSnapshot {
       })),
       violations: verifyInvariants().length,
     },
+    loopDriver: activeLoopDriverId(),
   };
 }

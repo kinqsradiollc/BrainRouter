@@ -22,3 +22,4 @@ export * from './invariants.js';
 export * from './invariantCompanions.js';
 export * from './hostProfiles.js';
 export * from './serviceProfiles.js';
+export * from './loopDriver.js';
