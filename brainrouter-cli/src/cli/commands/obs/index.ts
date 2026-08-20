@@ -13,7 +13,7 @@ import { formatContextReport } from '../../../runtime/observability/contextRepor
 import { formatMemoryDecisions } from '../../../runtime/observability/memoryDecisionView.js';
 import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../../runtime/observability/offloadView.js';
 import { contextWindowFor } from '@kinqs/brainrouter-core/context';
-import { readPreferences, readTranscriptEntries } from '@kinqs/brainrouter-core/session';
+import { readPreferences, readTranscriptEntries, recordMessageFeedback, messageFeedbackTally } from '@kinqs/brainrouter-core/session';
 import { getStateFile } from '@kinqs/brainrouter-core/storage';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
@@ -368,6 +368,31 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
     }
     case '/feedback':
     {
+      // ADR-041 A41-14 (W2) — `/feedback up|down [note]` rates the LAST assistant
+      // message (thumbs + optional note), stored per-message WITH the session so it
+      // travels with a fork/export. Any other `/feedback <text>` keeps the original
+      // session-level free-text note in the user-global home.
+      const ratingToken = (args[0] ?? '').toLowerCase();
+      const rating: 'up' | 'down' | undefined =
+        ['up', '+1', '👍', 'good', 'yes'].includes(ratingToken) ? 'up'
+        : ['down', '-1', '👎', 'bad', 'no'].includes(ratingToken) ? 'down'
+        : undefined;
+      if (rating) {
+        const note = args.slice(1).join(' ').trim();
+        // Address the most recent assistant message by its transcript timestamp.
+        const recent = readTranscriptEntries(agent.workspaceRoot, agent.sessionKey, 50);
+        const lastAssistant = [...recent].reverse().find((e) => e.role === 'assistant' && typeof e.timestamp === 'string');
+        if (!lastAssistant?.timestamp) {
+          console.log(chalk.yellow('\n  No assistant message to rate yet.\n'));
+          return true;
+        }
+        recordMessageFeedback(agent.workspaceRoot, agent.sessionKey, { messageTs: lastAssistant.timestamp, rating, note });
+        const tally = messageFeedbackTally(agent.workspaceRoot, agent.sessionKey);
+        const mark = rating === 'up' ? '👍' : '👎';
+        console.log(chalk.green(`\n✓ ${mark} recorded on the last reply${note ? ` — “${note}”` : ''}`));
+        console.log(chalk.gray(`  This session: ${tally.up} 👍 / ${tally.down} 👎 across rated messages.\n`));
+        return true;
+      }
       // Personal CLI state lives under the user-global brainrouter home (per
       // README's storage contract), NOT inside the workspace — writing
       // feedback.jsonl into the project tree risks accidental commits and
