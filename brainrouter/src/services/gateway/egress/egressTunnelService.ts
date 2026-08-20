@@ -10,6 +10,7 @@ import {
   type DeviceSessionLookup,
 } from './deviceSessionHelloAuthenticator.js';
 import type { EgressTunnelTransport } from './tunnelTransport.js';
+import { assertRemoteBindable } from '@kinqs/brainrouter-core/runtime';
 
 export interface EgressTunnelServiceConfig {
   /** Master switch — the tunnel is OFF (fully dark) unless this is true. */
@@ -84,6 +85,12 @@ export class EgressTunnelService {
   async start(): Promise<void> {
     const { config } = this.#deps;
     if (!config.enabled || this.#control) return;
+    // ADR-041 A41-12 / ADR-043 — the tunnel binds a REMOTE device to the provider
+    // gateway's seam. Assert that seam is declared remote-capable before standing
+    // up any listener: if the service profile ever regresses to in-process-only,
+    // this is a fail-closed boot error, never a silent tunnel over a seam that
+    // was supposed to stay on the server.
+    assertRemoteBindable('provider-gateway');
     const host = config.host ?? '0.0.0.0';
     this.#registry = new EgressTicketRegistry(this.#deps.now ? { now: this.#deps.now } : {});
     this.#control = new EgressControlChannel({
