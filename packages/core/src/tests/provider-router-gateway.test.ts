@@ -151,10 +151,10 @@ test('router gateway projects the shared recovery receipt without provider secre
 test('router gateway streams OpenAI SSE: role → content deltas → finish → usage → [DONE]', async () => {
   const handle = await startRouterGateway({
     config, host: '127.0.0.1', port: 0, serveKey: 'test-key',
-    streamTransport: async (_llm, _messages, _tools, _options, handlers) => {
-      handlers.onTextDelta?.('Hello');
-      handlers.onTextDelta?.(' world');
-      return { content: 'Hello world', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } };
+    streamTransport: async function* (_llm, _messages, _tools, _options) {
+      yield { type: 'text', delta: 'Hello' };
+      yield { type: 'text', delta: ' world' };
+      yield { type: 'done', result: { content: 'Hello world', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } } };
     },
   });
   try {
@@ -187,13 +187,13 @@ test('router gateway streaming falls back before output and records one recovery
     host: '127.0.0.1',
     port: 0,
     onRecoveryReceipt: (receipt) => receipts.push(receipt),
-    streamTransport: async (llm, _messages, _tools, _options, handlers) => {
+    streamTransport: async function* (llm, _messages, _tools, _options) {
       seen.push(`${llm.provider}/${llm.model}`);
       if (llm.provider === 'groq') {
         throw Object.assign(new Error('rate limited before output'), { status: 429 });
       }
-      handlers.onTextDelta?.('fallback answer');
-      return { content: 'fallback answer' };
+      yield { type: 'text', delta: 'fallback answer' };
+      yield { type: 'done', result: { content: 'fallback answer' } };
     },
   });
   try {
@@ -228,9 +228,9 @@ test('router gateway streaming never changes route after output has started', as
     host: '127.0.0.1',
     port: 0,
     onRecoveryReceipt: (receipt) => receipts.push(receipt),
-    streamTransport: async (llm, _messages, _tools, _options, handlers) => {
+    streamTransport: async function* (llm, _messages, _tools, _options) {
       seen.push(`${llm.provider}/${llm.model}`);
-      handlers.onTextDelta?.('partial answer');
+      yield { type: 'text', delta: 'partial answer' };
       throw Object.assign(new Error('connection closed after output'), { status: 503 });
     },
   });
