@@ -18,3 +18,4 @@ export * from './pendingQueue.js';
 export * from './runnerClient.js';
 export * from './preview.js';
 export * from './compositionSnapshot.js';
+export * from './hostProfiles.js';
