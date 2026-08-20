@@ -24,6 +24,7 @@ import { registerChatSyncCommand } from './entry/chatSyncCommand.js';
 import { registerRunnerCommand } from './entry/runnerCommand.js';
 import { registerAgentHookCommand } from './entry/agentHookCommand.js';
 import { registerMcpProxyCommand } from './entry/mcpProxyCommand.js';
+import { registerDumpCompositionCommand } from './entry/dumpCompositionCommand.js';
 
 const program = new Command();
 
@@ -49,5 +50,6 @@ registerChatSyncCommand(program);
 registerRunnerCommand(program);
 registerAgentHookCommand(program);
 registerMcpProxyCommand(program);
+registerDumpCompositionCommand(program);
 
 program.parse(process.argv);
