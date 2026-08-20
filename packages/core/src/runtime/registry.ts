@@ -16,6 +16,7 @@ import { createContainerRuntime } from './backends/container.js';
 import { createHostedCliRuntime } from './backends/hostedCli.js';
 import { createProcessRuntime } from './backends/process.js';
 import { createWorktreeRuntime } from './backends/worktree.js';
+import { applyLoopDriver } from './loopDriver.js';
 
 export interface ResolveRuntimeOptions {
   /** Turn-execution seam handed to the backend (production: `agentTurnExecutor(agent)`). */
@@ -63,5 +64,8 @@ export function resolveRuntime(options: ResolveRuntimeOptions, kind?: string): I
       `runtime backend '${resolved}' is not available yet (registered: ${availableRuntimeBackends().join(', ') || 'none'})`,
     );
   }
-  return factory(options);
+  // ADR-041 A41-11 — apply the active loop-driver row to the executor before the
+  // backend runs it. The default row is identity, so this is byte-neutral until a
+  // host registers a different driver.
+  return factory({ ...options, executeTurn: applyLoopDriver(options.executeTurn) });
 }
