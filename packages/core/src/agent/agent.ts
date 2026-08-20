@@ -38,6 +38,7 @@ import type { FilesystemPort } from './fs/filesystemPort.js';
 import type { SubprocessPort } from './subprocess/subprocessPort.js';
 import type { ShellPort } from './shell/shellPort.js';
 import { type ExecutionWorld, resolveExecutionPorts } from '../runtime/executionWorld.js';
+import { localExecutionWorld } from '../runtime/localWorld.js';
 import type { IAgent } from './iagent.js';
 import {
   appendTranscriptEntry,
@@ -1371,10 +1372,15 @@ export class Agent implements IAgent {
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
     // ADR-041 D10 — an execution world supplies any port not given explicitly; an
-    // explicit per-port option wins. No world + no port ⇒ every field undefined,
-    // so the tool runtime uses its local node*Port default (byte-identical to D3).
-    this.executionWorld = options.executionWorld;
-    const resolvedPorts = resolveExecutionPorts(options);
+    // ADR-041 A41-10 — every agent runs in an execution world. Absent an explicit
+    // one, that is the `local` world, which binds the same node ports the tool
+    // runtime would otherwise fall through to (`?? nodeFilesystemPort`, etc.) — so
+    // the resolved ports are byte-identical, but the seam is now live: the world is
+    // introspectable and a host/extension can swap the whole set at once. An
+    // explicit per-port option still wins over the world.
+    const executionWorld = options.executionWorld ?? localExecutionWorld();
+    this.executionWorld = executionWorld;
+    const resolvedPorts = resolveExecutionPorts({ ...options, executionWorld });
     this.filesystemPort = resolvedPorts.filesystemPort;
     this.subprocessPort = resolvedPorts.subprocessPort;
     this.shellPort = resolvedPorts.shellPort;

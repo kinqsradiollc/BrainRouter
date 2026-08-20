@@ -17,6 +17,7 @@ import { SLASH_COMMANDS } from '../command/catalog.js';
 import { invariantCompanions, verifyInvariants } from './invariants.js';
 import { registerBuiltinInvariantCompanions } from './invariantCompanions.js';
 import { activeLoopDriverId } from './loopDriver.js';
+import { LOCAL_EXECUTION_WORLD_NAME } from './localWorld.js';
 
 export interface RuntimeCompositionSnapshot {
   /** Every builtin agent tool name, sorted. */
@@ -41,6 +42,8 @@ export interface RuntimeCompositionSnapshot {
   };
   /** ADR-041 A41-11 — the active agent loop-driver row (`default` until a host swaps it). */
   loopDriver: string;
+  /** ADR-041 A41-10 — the default execution world an agent runs in (`local` until a host swaps it). */
+  executionWorld: string;
 }
 
 export function runtimeCompositionSnapshot(): RuntimeCompositionSnapshot {
@@ -62,5 +65,6 @@ export function runtimeCompositionSnapshot(): RuntimeCompositionSnapshot {
       violations: verifyInvariants().length,
     },
     loopDriver: activeLoopDriverId(),
+    executionWorld: LOCAL_EXECUTION_WORLD_NAME,
   };
 }
