@@ -306,6 +306,10 @@
     "./orchestration/runs": {
       "types": "./dist/orchestration/execution/publicRuns.d.ts",
       "default": "./dist/orchestration/execution/publicRuns.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "default": "./dist/sdk/index.js"
     }
   },
   "files": [
