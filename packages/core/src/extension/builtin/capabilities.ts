@@ -22,7 +22,10 @@ const CAPABILITY_TOOLS = {
     // ADR-029 C3 — the workspace verbs join the same capability for the same
     // reason the planner did: they are about what the user has decided and
     // written down, across surfaces, not a new area of authority.
-    'workspace_resolve', 'workspace_create', 'workspace_update', 'workspace_link'],
+    'workspace_resolve', 'workspace_create', 'workspace_update', 'workspace_link',
+    // ADR-041 A41-16 — `remind` is decided-intent state (a thing the agent chose to
+    // be reminded of), the same family as the planner and goal verbs above.
+    'remind'],
   'security-review': ['file_vulnerability', 'finish_scan', 'list_requests', 'view_request', 'repeat_request', 'list_sitemap', 'scope_rules'],
   orchestration: ['profile_stage', 'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents', 'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task', 'session_list', 'session_read', 'session_search', 'session_reference'],
   'workflow-workers': ['run_workflow', 'run_workflow_graph', 'workflow_progress', 'extract_result', 'spawn_worker_thread', 'wait_worker', 'read_worker_summary', 'close_worker'],
