@@ -24,11 +24,12 @@ import { resolveEffortForTurn } from '../support/effortRouting.js';
 import {
   abortableDelay,
   callOpenAI,
-  callOpenAIStream,
   effortForTurnSelection,
   InterruptError,
   isInterrupt,
 } from '../transport/llmTransport.js';
+// ADR-041 A41-5 — the provider-neutral streaming seam (wraps callOpenAIStream).
+import { callProviderStream, type ProviderStreamResult } from '../transport/providerStream.js';
 import { recoverAgentProviderRoute } from './providerRecovery.js';
 import { ReviewProviderRequestBudgetExceededError } from './modelRequestBudget.js';
 import { runPhaseWaterfall } from './phaseWaterfall.js';
@@ -117,28 +118,36 @@ export async function invokeModelPhase(
       if (streamRequested) {
         let started = false;
         try {
-          const final = await callOpenAIStream(
+          // ADR-041 A41-5 — consume the provider-neutral StreamChunk stream instead
+          // of registering delta callbacks + reading a separate return value. Same
+          // deltas, same order, same final result (the terminal `done` chunk).
+          let final: ProviderStreamResult | undefined;
+          for await (const chunk of callProviderStream(
             agent.llmConfig,
             requestMessages,
             allTools,
             { effort, signal: agent.turnAbort?.signal, ...requestBudget },
-            {
-              onTextDelta: (text) => {
-                if (!started) {
-                  started = true;
-                  callbacks.onAssistantTurnStart?.();
-                }
-                callbacks.onAssistantDelta?.(text);
-              },
-              onReasoningDelta: (text) => callbacks.onReasoningDelta?.(text),
-            },
-          );
-          if (started) callbacks.onAssistantTurnEnd?.(final.content);
+          )) {
+            if (chunk.type === 'text') {
+              if (!started) {
+                started = true;
+                callbacks.onAssistantTurnStart?.();
+              }
+              callbacks.onAssistantDelta?.(chunk.delta);
+            } else if (chunk.type === 'reasoning') {
+              callbacks.onReasoningDelta?.(chunk.delta);
+            } else {
+              final = chunk.result;
+            }
+          }
+          // The stream always terminates with a `done` chunk on success.
+          const result = final!;
+          if (started) callbacks.onAssistantTurnEnd?.(result.content);
           return {
-            content: final.content,
-            toolCalls: final.toolCalls,
-            usage: final.usage,
-            finishReason: final.finishReason,
+            content: result.content,
+            toolCalls: result.toolCalls,
+            usage: result.usage,
+            finishReason: result.finishReason,
           };
         } catch (streamError: any) {
           if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
