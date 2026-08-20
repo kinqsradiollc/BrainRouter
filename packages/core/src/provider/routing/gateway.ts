@@ -6,7 +6,9 @@ import crypto from 'node:crypto';
 import type { ProviderRecoveryReceipt } from '@kinqs/brainrouter-types';
 import type { Config, LLMConfig } from '../../config/config.js';
 import { resolveCliKnobs } from '../../config/config.js';
-import { callOpenAI, callOpenAIStream, type BuildPayloadOptions } from '../../agent/transport/llmTransport.js';
+import { callOpenAI, type BuildPayloadOptions } from '../../agent/transport/llmTransport.js';
+// ADR-041 A41-5 — the gateway consumes the provider-neutral StreamChunk stream.
+import { callProviderStream, type StreamChunk, type ProviderStreamResult } from '../../agent/transport/providerStream.js';
 import { aggregateCatalog, buildModelRegistry } from './registry.js';
 import { resolveRoutes } from './resolve.js';
 import { classifyRouterFailure, getRouterPolicy } from './policy.js';
@@ -22,14 +24,13 @@ export type RouterGatewayTransport = (
   options?: BuildPayloadOptions,
 ) => Promise<{ content: string; toolCalls?: any[]; usage?: any; finishReason?: string }>;
 
-/** A streaming upstream call — defaults to callOpenAIStream; injectable for tests. */
+/** A streaming upstream call — defaults to callProviderStream; injectable for tests. */
 export type RouterGatewayStreamTransport = (
   llm: LLMConfig,
   messages: any[],
   tools: any[],
   options: BuildPayloadOptions,
-  handlers: { onTextDelta?: (text: string) => void },
-) => Promise<{ content: string; toolCalls?: any[]; usage?: any; finishReason?: string }>;
+) => AsyncIterable<StreamChunk>;
 
 export interface RouterGatewayOptions {
   config: Config;
@@ -183,7 +184,7 @@ async function streamRoutedChat(
   opts: Pick<RouterGatewayOptions, 'streamTransport' | 'maxAttempts' | 'onRecoveryReceipt'>,
 ): Promise<void> {
   const policy = getRouterPolicy();
-  const stream = opts.streamTransport ?? callOpenAIStream;
+  const stream = opts.streamTransport ?? callProviderStream;
   const options = transportOptions(body);
   const includeUsage = body.stream_options?.include_usage === true;
   const id = newCompletionId();
@@ -200,17 +201,27 @@ async function streamRoutedChat(
       execute: async (route) => {
         activeModel = route.model;
         try {
-          const result = await stream(route.llm, body.messages ?? [], body.tools ?? [], options, {
-            onTextDelta: (text) => {
-              if (!text) return;
+          // ADR-041 A41-5 — iterate the provider-neutral StreamChunk stream. Only
+          // text deltas produce output frames here (as before); the terminal `done`
+          // chunk carries the assembled result. Reasoning deltas are ignored, exactly
+          // as the former onTextDelta-only handler ignored them — byte-neutral.
+          let result: ProviderStreamResult | undefined;
+          for await (const chunk of stream(route.llm, body.messages ?? [], body.tools ?? [], options)) {
+            if (chunk.type === 'text') {
+              const text = chunk.delta;
+              if (!text) continue;
               if (!headersSent) {
                 res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive', ...CORS_HEADERS });
                 headersSent = true;
                 res.write(chunkFrame(id, created, activeModel, { role: 'assistant', content: '' }, null));
               }
               res.write(chunkFrame(id, created, activeModel, { content: text }, null));
-            },
-          });
+            } else if (chunk.type === 'done') {
+              result = chunk.result;
+            }
+          }
+          // The stream always terminates with a `done` chunk on success.
+          const finalResult = result!;
           // Opening the response is the point of no return: after this, an
           // upstream failure must terminate this stream instead of changing
           // providers behind a partially delivered answer.
@@ -219,15 +230,15 @@ async function streamRoutedChat(
             headersSent = true;
             res.write(chunkFrame(id, created, activeModel, { role: 'assistant', content: '' }, null));
           }
-          if (result.toolCalls && result.toolCalls.length) {
-            res.write(chunkFrame(id, created, activeModel, { tool_calls: result.toolCalls }, null));
+          if (finalResult.toolCalls && finalResult.toolCalls.length) {
+            res.write(chunkFrame(id, created, activeModel, { tool_calls: finalResult.toolCalls }, null));
           }
-          res.write(chunkFrame(id, created, activeModel, {}, finishReasonFor(result)));
-          if (includeUsage && result.usage) {
-            res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model: activeModel, choices: [], usage: result.usage })}\n\n`);
+          res.write(chunkFrame(id, created, activeModel, {}, finishReasonFor(finalResult)));
+          if (includeUsage && finalResult.usage) {
+            res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model: activeModel, choices: [], usage: finalResult.usage })}\n\n`);
           }
           res.end('data: [DONE]\n\n');
-          return result;
+          return finalResult;
         } catch (error) {
           if (headersSent && error && (typeof error === 'object' || typeof error === 'function')) {
             (error as any).brainrouterStreamStarted = true;
