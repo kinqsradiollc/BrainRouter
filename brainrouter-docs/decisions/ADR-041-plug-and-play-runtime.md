@@ -550,16 +550,34 @@ decision record checks only A41-0; it makes no implementation claim.
   `pre-execute` / `post-execute`, with the transcript ("model-visible means logged") assertion.
 - [ ] **A41-9 — Universal disposables + scoped contexts.** Every registrar returns a handle;
   extension unload unwinds in reverse order; `host.scope(sessionKey)` + capability presets; roles
-  consume presets.
+  consume presets. *Shipped: the universal-disposable handles (`Disposable` from every `register*`,
+  reverse-order unwind in `disposeExtensionHost`), the capability presets (`capabilityPresets.ts`),
+  and roles-consume-presets. **Deferred (consumer-gated):** `host.scope(sessionKey)`. No extension
+  registers per-session contributions today, so a `scope()` that buckets registrations and a
+  consumer that disposes it at session end would be an export with no live caller — the
+  `inert-value-sweep` ceiling rejects that, and a hollow consumer would be ceremony. Awaits a genuine
+  per-session extension-registration use case (e.g. a session-scoped tool or provider) to force it.*
 - [ ] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
   resolver; `local` default; worktree/container backends re-expressed as worlds.
 - [ ] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
   overlays targeting rows by id, `--dump-composition`, and the default loop driver registered as a
-  replaceable row.
+  replaceable row. *Shipped: the four host profiles, `--dump-composition`, and the default
+  loop-driver-as-a-replaceable-row (#1536 — `resolveRuntime` applies `applyLoopDriver`, the dump
+  surfaces the `loopDriver` id). **Deferred (consumer-gated):** overlay-by-id (layered overlays that
+  target composition rows by id). No host profile needs to overlay another by row id today, so the
+  overlay resolver would have no caller. Awaits a profile that legitimately layers onto a base by
+  row id (e.g. a `test` or `minimal` profile derived from `local`).*
 - [ ] **A41-12 — Remote seam bindings + service profiles.** Typed remote binding for
   remote-capable seams (boot error for the rest); one existing subsystem (the provider gateway is
   the natural first, per ADR-043) re-expressed as a service profile; its Docker image reduced to
-  "loader + profile"; dev compose regenerated from profile sets.
+  "loader + profile"; dev compose regenerated from profile sets. *Shipped: service profiles and the
+  typed remote-binding gate `assertRemoteBindable` (#1526), wired into `EgressTunnelService.start()`
+  so a non-remote-bindable seam fails loud at boot. **Deferred (consumer-gated):** reducing a service
+  image to "loader + profile" and regenerating dev-compose from profile sets are build/ops changes
+  with no runtime consumer inside core — the profile is already the source of truth; restructuring
+  the Dockerfiles and the compose generator around it is an ops decision, not a code seam, and doing
+  it speculatively changes no behavior. Awaits the ops call to restructure the images around the
+  profile loader.*
 - [ ] **A41-13 — Parity wave W1** (spill store + policy, tool-result pruner, token meter,
   permission presets, persistent terminals) — each as an extension, no core edits.
 - [x] **A41-14 — Parity wave W2** (session fork + lineage, session query tools, session
@@ -571,7 +589,12 @@ decision record checks only A41-0; it makes no implementation claim.
   and the `run_code` Code Mode flagship shipped.*
 - [ ] **A41-16 — Parity wave W4** (out-of-process SDK, generated drift-checked catalogs,
   session-native reminder unification, self-modification evaluation — evaluation may conclude
-  "no").
+  "no"). *Build complete, shipping: out-of-process typed SDK (#1543 — the `@kinqs/brainrouter-core/sdk`
+  entry point over the existing runner client), generated drift-checked tool catalog (#1542 —
+  `brainrouter-docs/generated/tool-catalog.md` + a regen-or-fail test), session-native reminder
+  unification (#1544 — a `remind` tool + a per-session store + a pure catch-up projection delivered
+  at the turn boundary), and the self-modification item **evaluated → not adopted** (§D13.1). Flip to
+  `[x]` once the three PRs merge.*
 
 ---
 
