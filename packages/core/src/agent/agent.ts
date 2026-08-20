@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -199,6 +200,7 @@ import { gitChurnSignal } from '../git/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/result/resultHandoff.js';
+import { SpillStore } from '../util/result/spillStore.js';
 import { runExtractResult } from '../tool/result/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
@@ -1037,7 +1039,15 @@ export class Agent implements IAgent {
   private readonly sessionTitleModelTimeoutMs?: number;
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
   // MEM-22 — retention is configurable via cli.offloadRetentionMs / cli.offloadMaxEntries.
-  public readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
+  // ADR-041 A41-13 (W1) — back the in-memory offload cache with a bounded disk
+  // spill tier, so a large result evicted (LRU) or expired (TTL) survives in a
+  // cold tier and `extract_result` can still recover it instead of "not found".
+  public readonly resultCache = new ResultCache(
+    getCliKnobs().offloadRetentionMs,
+    getCliKnobs().offloadMaxEntries,
+    undefined,
+    new SpillStore(path.join(os.tmpdir(), 'brainrouter-offload')),
+  );
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   public triedModelFallback = false;
   /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
