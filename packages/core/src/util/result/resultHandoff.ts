@@ -21,6 +21,7 @@
  */
 
 import { estimateTokens } from "../tokens/tokenEstimate.js";
+import type { SpillStore } from "./spillStore.js";
 
 /** ~6k chars ≈ 1.5k tokens — small reports stay inline, big blobs hand off. */
 export const RESULT_HANDOFF_THRESHOLD_CHARS = 6000;
@@ -131,6 +132,11 @@ export class ResultCache {
     private readonly ttlMs: number = RESULT_CACHE_TTL_MS,
     private readonly maxEntries: number = 64,
     private readonly now: () => number = () => Date.now(),
+    // ADR-041 A41-13 (W1) — an optional disk-backed cold tier. When present, an
+    // entry evicted (LRU) or expired (TTL) from memory is spilled here rather than
+    // lost, and `get` recovers a spilled ref (promoting it back to memory). Absent
+    // (the default) keeps the pure in-memory behavior byte-for-byte.
+    private readonly spill?: SpillStore,
   ) {}
 
   put(resultRef: string, text: string): void {
@@ -144,17 +150,29 @@ export class ResultCache {
 
   get(resultRef: string): string | undefined {
     const entry = this.entries.get(resultRef);
-    if (!entry) return undefined;
+    if (!entry) return this.recoverFromSpill(resultRef);
     const t = this.now();
     if (entry.expiresAt <= t) {
       this.entries.delete(resultRef);
-      return undefined;
+      if (this.spill) this.spill.spill(resultRef, entry.text); // cold-tier it, then recover below
+      return this.recoverFromSpill(resultRef);
     }
     // A use protects the ref: bump LRU recency AND slide the TTL window, so a
     // ref the model keeps expanding never expires out from under it (MEM-22).
     entry.lastAccess = t;
     entry.expiresAt = t + this.ttlMs;
     return entry.text;
+  }
+
+  /** ADR-041 A41-13 — pull a ref back from the disk cold tier (if any) and promote
+   * it to a fresh in-memory entry, dropping the disk copy. */
+  private recoverFromSpill(resultRef: string): string | undefined {
+    if (!this.spill) return undefined;
+    const text = this.spill.retrieve(resultRef);
+    if (text === undefined) return undefined;
+    this.spill.drop(resultRef);
+    this.put(resultRef, text); // promote back to the hot tier with a fresh TTL
+    return text;
   }
 
   has(resultRef: string): boolean {
@@ -190,6 +208,7 @@ export class ResultCache {
     let bytes = 0;
     for (const [ref, entry] of candidates) {
       if (evicted >= count) break;
+      if (this.spill) this.spill.spill(ref, entry.text); // cold-tier it before dropping from memory
       this.entries.delete(ref);
       evicted++;
       bytes += entry.text.length;
