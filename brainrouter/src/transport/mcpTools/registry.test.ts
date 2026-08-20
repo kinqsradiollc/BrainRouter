@@ -1,0 +1,62 @@
+/**
+ * ADR-041 A41-7 — the MCP tool-handler registry seam. Proves the strangler
+ * dispatch on the first batch migrated out of the mcpServer.ts switch (skill /
+ * persona / reference / template / workspace-profile tools). The full round-trip
+ * (parse → handler → MCP result bytes) is covered end-to-end by
+ * mcpServer.knowledge.test.ts and mcpServer.profile-recommend.test.ts, which now
+ * exercise these tools THROUGH this registry.
+ */
+import { describe, expect, it } from "vitest";
+import {
+  mcpToolHandler,
+  registeredMcpToolNames,
+  registerMcpTool,
+  type McpToolContext,
+} from "./index.js";
+
+const MIGRATED = [
+  "list_skills",
+  "get_skill",
+  "search_skills",
+  "create_skill",
+  "update_skill",
+  "get_persona",
+  "get_reference",
+  "list_template_docs",
+  "get_template_doc",
+  "workspace_profile_recommend",
+];
+
+describe("A41-7 MCP tool registry", () => {
+  it("registers every tool in the first migrated batch", () => {
+    for (const name of MIGRATED) {
+      expect(mcpToolHandler(name), `${name} has a registered handler`).toBeTypeOf("function");
+      expect(registeredMcpToolNames().has(name), `${name} is in the registered set`).toBe(true);
+    }
+  });
+
+  it("returns undefined for a tool still living in the switch (or unknown)", () => {
+    // memory_recall is deliberately NOT migrated yet — it must fall through to the switch.
+    expect(mcpToolHandler("memory_recall")).toBeUndefined();
+    expect(mcpToolHandler("definitely_not_a_tool")).toBeUndefined();
+  });
+
+  it("refuses a duplicate registration — a tool has one home", () => {
+    expect(() => registerMcpTool("list_skills", async () => ({}))).toThrow(/Duplicate MCP tool handler/);
+  });
+
+  it("gates create_skill / update_skill on the admin flag, byte-identically to the former switch", async () => {
+    // The admin gate throws BEFORE touching the registry, so a bare host suffices.
+    const ctx = (isAdmin: boolean): McpToolContext => ({
+      args: {},
+      invokedName: "create_skill",
+      host: { registry: {} as never, isAdmin },
+    });
+    await expect(mcpToolHandler("create_skill")!(ctx(false))).rejects.toThrow(
+      /Admin access required for this tool/,
+    );
+    await expect(mcpToolHandler("update_skill")!(ctx(false))).rejects.toThrow(
+      /Admin access required for this tool/,
+    );
+  });
+});

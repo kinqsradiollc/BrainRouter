@@ -27,21 +27,12 @@ import type { SessionDeliveryHub } from '../services/sessionDeliveryHub.js';
 // Import tools — grouped per domain; each barrel re-exports its modules' public
 // surface (schemas + handlers). See tools/<domain>/index.ts.
 import {
-  listSkills, listSkillsSchema,
-  getSkill, getSkillSchema,
-  searchSkills, searchSkillsSchema,
-  createSkill, createSkillSchema,
-  updateSkill, updateSkillSchema,
+  // list/get/search/create/update skill migrated to ./mcpTools/skills.js (A41-7).
   memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
   memoryExtractSkillToolSchema, handleMemoryExtractSkill,
   memorySkillOutcomeToolSchema, handleMemorySkillOutcome,
 } from '../tools/skills/index.js';
-import {
-  getPersona, getPersonaSchema,
-  getReference, getReferenceSchema,
-  listTemplateDocs, listTemplateDocsSchema,
-  getTemplateDoc, getTemplateDocSchema,
-} from '../tools/docs/index.js';
+// persona/reference/template-doc read tools migrated to ./mcpTools/docs.js (A41-7).
 import {
   memoryRecallToolSchema, handleMemoryRecall,
   memorySearchToolSchema, handleMemorySearch,
@@ -124,8 +115,13 @@ import {
   knowledgeSearchToolSchema, handleKnowledgeSearch,
 } from '../tools/knowledge/index.js';
 import {
-  workspaceProfileRecommendToolSchema, handleWorkspaceProfileRecommend,
+  // handleWorkspaceProfileRecommend migrated to ./mcpTools/workspace.js (A41-7).
+  workspaceProfileRecommendToolSchema,
 } from '../tools/workspace/index.js';
+// ADR-041 A41-7 — the MCP tool-handler registry (strangler seam). Importing the
+// barrel registers every migrated tool; the CallTool dispatcher consults
+// `mcpToolHandler(name)` BEFORE the switch, so un-migrated tools fall through.
+import { mcpToolHandler, type McpToolHost } from './mcpTools/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 const HostLearningRequestSchema = RequestSchema.extend({
@@ -485,25 +481,15 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
       // in an IIFE so each case's `return` flows to one metrics recording point.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const __result: any = await (async () => {
+      // ADR-041 A41-7 — strangler dispatch: a migrated tool (registered in
+      // ./mcpTools) is served from the registry BEFORE the switch; the closure deps
+      // it needs travel on `host`. Un-migrated tools fall through to the switch.
+      const __migrated = mcpToolHandler(request.params.name);
+      if (__migrated) {
+        const host: McpToolHost = { registry, isAdmin };
+        return await __migrated({ args: request.params.arguments, invokedName: request.params.name, host });
+      }
       switch (request.params.name) {
-        case 'list_skills':   return await listSkills(registry, listSkillsSchema.parse(request.params.arguments));
-        case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
-        case 'search_skills': return await searchSkills(registry, searchSkillsSchema.parse(request.params.arguments));
-        case 'get_persona':   return await getPersona(registry, getPersonaSchema.parse(request.params.arguments));
-        case 'workspace_profile_recommend':
-          return await handleWorkspaceProfileRecommend(registry, request.params.arguments);
-        case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
-        case 'list_template_docs': return await listTemplateDocs(registry, listTemplateDocsSchema.parse(request.params.arguments));
-        case 'get_template_doc':   return await getTemplateDoc(registry, getTemplateDocSchema.parse(request.params.arguments));
-        case 'create_skill':
-        case 'update_skill':
-          if (!isAdmin) {
-            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
-          }
-          if (request.params.name === "create_skill") {
-            return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
-          }
-          return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
         case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
