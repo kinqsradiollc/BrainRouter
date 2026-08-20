@@ -175,6 +175,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'notebook_edit', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
+  { name: 'run_code', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'kill_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'terminal_list', accessTier: 'shell', actionKind: 'read_only', parallelSafe: true, availability: 'terminal-use' },
   { name: 'terminal_read', accessTier: 'shell', actionKind: 'read_only', parallelSafe: true, availability: 'terminal-use' },

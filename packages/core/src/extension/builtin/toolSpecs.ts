@@ -295,6 +295,17 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'run_code',
+    description: 'Code Mode: run ONE JavaScript program that calls your tools as async bindings — `await agent.read_file({path})`, `await agent.run_command({command})`, `agent.call(name, args)` — instead of many separate tool-call turns. Use it to compose several tool calls with real control flow (loops, conditionals, aggregation). Every tool call is re-authorized exactly as if you called it directly; the program runs under a compute + wall-clock budget with an output cap. Return a value to report a result. Off by default (cli.codeMode.enabled) and unavailable while the sandbox is enforced.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'The async JavaScript program body. `agent` (tool bindings) and `console` are in scope; `return` a value to report it.' }
+      },
+      required: ['source']
+    }
+  },
+  {
     name: 'terminal_list',
     description: 'List live native terminal sessions owned by the current Desktop workspace. Use terminal_read with an id to inspect visible shell output. Only available to the top-level local Desktop agent.',
     inputSchema: {

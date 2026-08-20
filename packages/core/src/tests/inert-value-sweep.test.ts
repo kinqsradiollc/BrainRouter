@@ -218,6 +218,14 @@ const KNOWN_UNWIRED = new Map<string, string>([
     + 'subpath consumer is invisible to it — the module is wired, the scan just '
     + 'cannot see the wire. Verified by reading that file, not assumed.',
   ],
+  [
+    'exec/codeMode/runCodeChild.ts',
+    'ADR-041 A41-15. The Code Mode child ENTRYPOINT: codeModeRunner.ts spawns it as '
+    + "a subprocess via `node <new URL('./runCodeChild.js', import.meta.url)>`, so it "
+    + 'is deliberately imported by nobody — it is executed, not linked. Reached at '
+    + 'runtime, invisible to a static import scan by design (like any worker/child '
+    + 'entry). Verified by reading codeModeRunner.ts.',
+  ],
 ]);
 
 test('E1 — the documented-orphan list is honest in both directions', () => {

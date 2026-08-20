@@ -25,6 +25,7 @@ import type { EffortLevel } from '../../../session/preferences/preferencesStore.
 import type { WorkspaceScope } from '../../../agent/fs/workspaceFs.js';
 import type { ShellPort } from '../../../agent/shell/shellPort.js';
 import type { McpConnectorClient } from '../../../connectors/index.js';
+import type { CodeRunnerPort } from '../../../exec/codeMode/codeRunnerPort.js';
 
 /**
  * The Agent surface a migrated builtin handler may read. Empty at D8 Phase 1 —
@@ -148,6 +149,10 @@ export interface BuiltinToolHost {
   readonly sandboxEnforceWhenSilent: boolean;
   /** The shell capability for exec (default wraps runShell/startBackgroundShell) — agent.ts:1291. (D8 Phase 41) */
   readonly shellPort?: ShellPort;
+  /** ADR-041 A41-15 — the Code Mode runner (default local subprocess). Optional so
+   *  a D10 ExecutionWorld can back it with a container/remote runner; run_code falls
+   *  back to the default when unset. */
+  readonly codeRunnerPort?: CodeRunnerPort;
   /** The pentest Docker/proxy sandbox descriptor — agent.ts:1210. (D8 Phase 41) */
   readonly pentestSandbox?: { image: string; network: string; proxyUrl: string };
 }
@@ -165,6 +170,15 @@ export interface BuiltinToolContext {
   readonly fsPort: FilesystemPort;
   /** Present only for nested-MCP tools that authorize a target mid-call. */
   readonly authorizeMcpTarget?: (name: string, args: Record<string, unknown>, descriptor: unknown) => void;
+  /**
+   * ADR-041 A41-15 — Code Mode's sub-dispatch: run_code hands each
+   * `agent.<tool>(args)` from the program to this closure, which re-gates it
+   * through the FULL D8 pipeline (authorize + parent-token assert) and returns the
+   * tool result. Present only for trusted first-party builtins (it flows through
+   * the same trusted `builtinRuntime.invoke` path as `authorizeMcpTarget`, so a
+   * user-extension tool can never receive it — CWE-266).
+   */
+  readonly codeModeDispatch?: (tool: string, args: Record<string, unknown>) => Promise<string>;
 }
 
 export type BuiltinToolHandler = (ctx: BuiltinToolContext) => Promise<string>;

@@ -1693,6 +1693,22 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
                   authorizeNamedTool(targetName, targetArgs, false, descriptor);
                   this.assertInheritedExecutionAuthorityCurrent();
                 },
+                // ADR-041 A41-15 — Code Mode sub-dispatch. Each `agent.<tool>()` a
+                // run_code program makes re-enters the SAME guarded path a direct
+                // model tool-call's local branch takes: full authorize + parent-token
+                // assert, then executeLocalTool. The nested runtime deliberately omits
+                // codeModeDispatch, so `run_code` called from within a program is
+                // refused (the depth cap).
+                codeModeDispatch: async (targetTool: string, targetToolArgs: Record<string, unknown>) => {
+                  authorizeNamedTool(targetTool, targetToolArgs as Record<string, any>, false, undefined);
+                  this.assertInheritedExecutionAuthorityCurrent();
+                  return this.executeLocalTool(targetTool, targetToolArgs as Record<string, any>, {
+                    authorizeMcpTarget: (nestedName, nestedArgs, nestedDescriptor) => {
+                      authorizeNamedTool(nestedName, nestedArgs as Record<string, any>, false, nestedDescriptor);
+                      this.assertInheritedExecutionAuthorityCurrent();
+                    },
+                  });
+                },
                 buildOrchestrationContext,
                 refreshActiveSkillTools,
                 markChildOutputDelivered: () => {

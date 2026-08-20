@@ -818,6 +818,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
     offloadMaxEntries: c.offloadMaxEntries ?? 64,
+    // ADR-041 A41-15 — Code Mode, default OFF; budget overrides pass through and
+    // are clamped by resolveCodeModeBudget at use.
+    codeMode: { ...(c.codeMode ?? {}), enabled: c.codeMode?.enabled === true },
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
     fleetMaxConcurrentJobs: Math.max(0, Math.floor(c.fleetMaxConcurrentJobs ?? 4)),
