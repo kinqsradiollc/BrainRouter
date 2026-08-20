@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { runtimeCompositionSnapshot } from '@kinqs/brainrouter-core/runtime';
+import { runtimeCompositionSnapshot, resolveHostProfile, hostProfileIds, type HostProfileSurfaces } from '@kinqs/brainrouter-core/runtime';
 
 /**
  * ADR-041 A41-11 — `brainrouter dump-composition`. Prints what the runtime is
@@ -13,8 +13,37 @@ export function registerDumpCompositionCommand(program: Command): void {
     .command('dump-composition')
     .description('Print the composed runtime — agent tools, providers, extensions, and slash commands.')
     .option('--json', 'Emit the machine-readable JSON snapshot instead of a human summary')
-    .action((opts: { json?: boolean }) => {
+    .option('--profile <host>', `Show a host profile (${hostProfileIds().join(' | ')}) — which surfaces that host composes`)
+    .action((opts: { json?: boolean; profile?: string }) => {
       const snapshot = runtimeCompositionSnapshot();
+      // ADR-041 A41-11 — a host profile names which composition surfaces a host
+      // activates; render it against the live registries so declared and actual
+      // sit side by side.
+      if (opts.profile) {
+        const profile = resolveHostProfile(opts.profile);
+        if (!profile) {
+          console.error(`Unknown host profile "${opts.profile}". Known: ${hostProfileIds().join(', ')}.`);
+          process.exitCode = 1;
+          return;
+        }
+        const live: Partial<Record<keyof HostProfileSurfaces, number>> = {
+          agentTools: snapshot.builtinTools.length,
+          slashCommands: snapshot.slashCommands.length,
+          providers: snapshot.providers.length,
+        };
+        if (opts.json) {
+          console.log(JSON.stringify({ profile, live }, null, 2));
+          return;
+        }
+        console.log(`Host profile: ${profile.host}\n  ${profile.description}\n`);
+        console.log('  Surfaces:');
+        for (const [name, on] of Object.entries(profile.surfaces)) {
+          const count = live[name as keyof HostProfileSurfaces];
+          const liveNote = on && count !== undefined ? `  (${count} in this process)` : '';
+          console.log(`    ${on ? '✓' : '·'} ${name}${liveNote}`);
+        }
+        return;
+      }
       if (opts.json) {
         console.log(JSON.stringify(snapshot, null, 2));
         return;
