@@ -22,6 +22,7 @@ import {
   buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,
   type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
 } from './nativeProviders.js';
+import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
 
 export interface ChatCompletionPayload {
   model: string;
@@ -939,6 +940,107 @@ async function callNativeProvider(
     : normalizeGeminiOutput(data, endpoint, config.model);
 }
 
+/** Read a Response body as an async iterable of decoded text chunks (for SSE). */
+async function* readResponseTextChunks(res: Response): AsyncIterable<string> {
+  const reader = (res.body as any).getReader();
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) yield decoder.decode(value, { stream: true });
+    }
+  } finally {
+    try { reader.releaseLock?.(); } catch { /* already released */ }
+  }
+}
+
+/**
+ * ADR-041 A41-5 — the streaming native call. Same request as `callNativeProvider`,
+ * but asks for SSE (Anthropic: `stream: true`; Gemini: the `:streamGenerateContent`
+ * surface with `alt=sse`) and feeds the body to the provider-native parser, which
+ * emits deltas live and returns the same `NativeOutput` shape as the whole-response
+ * path. It throws on a setup/HTTP failure so the caller can fall back before any
+ * delta has been emitted.
+ */
+async function callNativeProviderStream(
+  format: NativeRequestFormat,
+  config: LLMConfig,
+  endpoint: string,
+  apiKey: string,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions,
+  handlers: NativeStreamHandlers,
+): Promise<NativeOutput> {
+  const buildInput = buildNativeInput(format, config, messages, tools, options);
+  const spec = nativeRequestSpec(format, endpoint, config.model, apiKey);
+  let url = spec.url;
+  let body: any;
+  if (format === 'anthropic-messages') {
+    body = buildAnthropicMessagesPayload(buildInput);
+    body.stream = true;
+  } else {
+    body = buildGeminiGeneratePayload(buildInput);
+    // Gemini streams from a distinct method + SSE framing, not a body flag.
+    url = spec.url.replace(':generateContent', ':streamGenerateContent?alt=sse');
+  }
+
+  const prefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    requestFormat: format,
+    prefixFingerprint,
+    promptMessages: buildInput.messages.length,
+    toolCount: tools.length,
+    stream: true,
+  });
+
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const release = await acquireLLMSlot();
+  let res: Response;
+  try {
+    options.beforeProviderRequest?.();
+    res = await fetch(url, { method: 'POST', headers: spec.headers, body: JSON.stringify(body), signal: fetchSignal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      if (options.signal?.aborted) throw new InterruptError();
+      throw new Error(`LLM stream request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    release();
+  }
+
+  if (!res.ok || !res.body) {
+    const errText = res.body ? await readResponseText(res, options.maxResponseBytes) : '';
+    const apiErr: any = new Error(`${format} stream API error: ${res.status} ${res.statusText} - ${errText}`);
+    apiErr.status = res.status;
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+    throw apiErr;
+  }
+
+  const parse = format === 'anthropic-messages' ? parseAnthropicMessageStream : parseGeminiStream;
+  try {
+    return await parse(readResponseTextChunks(res), handlers, endpoint, config.model);
+  } catch (err: any) {
+    // After the 200 the timeout is cleared, so the only signal that can abort the
+    // body read is the user's Stop — which rejects reader.read() with a raw
+    // AbortError. Map it to InterruptError so the caller PROPAGATES the Stop
+    // instead of mistaking it for a stream failure and issuing a second call.
+    // (Mirrors the OpenAI-compat path's mid-stream abort guard.)
+    if (err instanceof InterruptError) throw err;
+    if (err?.name === 'AbortError' && options.signal?.aborted) throw new InterruptError();
+    throw err;
+  }
+}
+
 export async function callOpenAI(
   config: LLMConfig,
   messages: any[],
@@ -1207,13 +1309,30 @@ export async function callOpenAIStream(
   }
 
   const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
-  // NATIVE formats don't stream here — issue the non-streaming native call and
-  // surface its text as a single delta so the UI still paints. (Provider-native
-  // SSE is a future enhancement; correctness first while these are opt-in.)
+  // ADR-041 A41-5 — NATIVE formats stream their own SSE. Emit deltas live; if the
+  // stream fails before anything was PAINTED (no text/reasoning delta yet — a
+  // setup/HTTP error or a parser fault, or a network drop on a tool-only stream),
+  // degrade to the proven non-streaming path so an opt-in native adapter never
+  // regresses below today's behavior. Once text/reasoning has painted, a failure
+  // surfaces instead — re-running non-streaming would double-paint. A user Stop is
+  // an InterruptError (mapped in callNativeProviderStream) and always propagates,
+  // never a fallback that would fire a second call on a cancelled turn.
   if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
-    const result = await callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
-    if (result.content) handlers.onTextDelta?.(result.content);
-    return result;
+    let paintedAny = false;
+    const streamHandlers: NativeStreamHandlers = {
+      onTextDelta: (t) => { paintedAny = true; handlers.onTextDelta?.(t); },
+      onReasoningDelta: (t) => { paintedAny = true; handlers.onReasoningDelta?.(t); },
+    };
+    try {
+      return await callNativeProviderStream(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options, streamHandlers);
+    } catch (err) {
+      if (err instanceof InterruptError) throw err;
+      if ((err as any)?.name === 'AbortError' && options.signal?.aborted) throw new InterruptError();
+      if (paintedAny) throw err;
+      const result = await callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
+      if (result.content) handlers.onTextDelta?.(result.content);
+      return result;
+    }
   }
   const body: any = requestFormat === 'responses'
     ? buildResponsesPayload(effectiveConfig, messages, tools, options)
