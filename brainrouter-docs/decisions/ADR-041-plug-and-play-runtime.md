@@ -1,6 +1,6 @@
 # ADR-041 — Plug-and-play runtime: swappable providers, capability ports, and product-wide registries
 
-**Status:** Accepted — in phased implementation (foundational runtime seams shipped to `release/0.4.21`, 2026-08). **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims). **Remaining:** D5 (product-wide registry pattern), D7 (extension-host consolidation), D9 (session-scoped reversible registrations), D11 (composition-from-configuration + dumpable tree), D12 (services-are-profiles), and the D13 feature-parity program + D14 glass-box capstone (both specified — see the D13/D14 waves doc — with the parity features themselves not yet built).
+**Status:** Accepted — in phased implementation (foundational runtime seams shipped to `release/0.4.21`, 2026-08). **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D5 (product-wide registry pattern — the `McpTool` / `Command` / `Panel` / `ApiRoute` registries), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims); D7/D9 (universal disposables + capability presets + roles-consume-presets shipped; the `host.scope(sessionKey)` session-scoping mechanism awaits a per-session registration consumer); D11 (the four host profiles + `dump-composition` shipped; overlay-by-id + the default loop-driver-as-a-replaceable-row remain); D12 (service profiles + the typed remote-binding gate `assertRemoteBindable`, wired into the egress-tunnel boot, shipped; reducing a service image to "loader + profile" and regenerating dev-compose from profile sets remain); D13 (W1 parity capabilities are all present in core — the spill store, the last gap, is now a disk cold tier on `ResultCache`; the "each as an extension" repackaging remains. W2: the runtime-invariants registry, session fork lineage, and per-message feedback shipped; session query tools + session references remain). **Remaining:** D13 W3/W4 (external-agent subagent providers, Code Mode, out-of-process typed SDK, unified generated catalogs, session-native reminder unification, and a self-modification *evaluation* that may conclude "no") + the D14 glass-box capstone. D13/D14's waves are tracked as their own slice series.
 
 **Builds on:** ADR-029 (one workspace, many surfaces), the existing `ExtensionHost` and
 `ProviderDefinition` system.
@@ -494,25 +494,25 @@ at runtime can contribute a panel without a rebuild or a code change in `panelCa
 Each row is a separate pull request. A checked row requires its own evidence. Merging the accepted
 decision record checks only A41-0; it makes no implementation claim.
 
-- [ ] **A41-0 — Accept this decision.** ADR and index only; no runtime claims.
-- [ ] **A41-1 — Extract IAgent interface.** Pull the interface out of the concrete `Agent` class.
+- [x] **A41-0 — Accept this decision.** ADR and index only; no runtime claims.
+- [x] **A41-1 — Extract IAgent interface.** Pull the interface out of the concrete `Agent` class.
   Pure type seam — no behaviour change, no new methods. Hosts switch imports from `Agent` to `IAgent`.
-- [ ] **A41-2 — Live provider registry.** Replace `PROVIDER_REGISTRY: ReadonlyMap` with
+- [x] **A41-2 — Live provider registry.** Replace `PROVIDER_REGISTRY: ReadonlyMap` with
   `ProviderRegistry` class. Rewire `ExtensionHost.registerProvider` to call
   `ProviderRegistry.register()`. All existing consumers read through the new class with the same API.
-- [ ] **A41-3 — Capability ports.** Extract `FilesystemPort`, `ShellPort`, `SubprocessPort` from
+- [x] **A41-3 — Capability ports.** Extract `FilesystemPort`, `ShellPort`, `SubprocessPort` from
   `invokeBuiltinToolRuntime`. Wire default implementations. Register on `ExtensionHost`.
-- [ ] **A41-4 — Phase hooks and extension host evolution.** Add `registerPhaseHook()` and
+- [x] **A41-4 — Phase hooks and extension host evolution.** Add `registerPhaseHook()` and
   `registerDisposable()` to `ExtensionHost`. Wire `beforePhase` / `afterPhase` into the agent turn
   loop. Unify provider registration through `ProviderRegistry`.
 - [ ] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
   OpenAI SSE adapter. Switch core consumers to `StreamChunk`. Add native provider streaming paths.
-- [ ] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
+- [x] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
   `MemoryEngine`. Remove `as unknown as *Store` casts.
-- [ ] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
+- [x] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
   `ApiRouteRegistry` — four surfaces, one PR per surface or one combined PR if the pattern is small
   enough.
-- [ ] **A41-8 — Guarded tool pipeline; the switch dissolves.** Lift approval/policy/sandbox/guards
+- [x] **A41-8 — Guarded tool pipeline; the switch dissolves.** Lift approval/policy/sandbox/guards
   into the shared pipeline; builtin tools re-register as registry entries; `McpToolRegistry`
   becomes a projection. Waterfall `next()` semantics land on `pre-step` / `provider-call` /
   `pre-execute` / `post-execute`, with the transcript ("model-visible means logged") assertion.
