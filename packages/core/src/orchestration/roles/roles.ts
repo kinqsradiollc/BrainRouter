@@ -3,21 +3,32 @@ import {
   domainNeutralRolePrompt,
   type ActiveProfilePromptContext,
 } from './rolePromptSelection.js';
+import { presetAccess, type CapabilityPresetName } from './capabilityPresets.js';
 
 export type { ActiveProfilePromptContext } from './rolePromptSelection.js';
+export { CAPABILITY_PRESETS, presetAccess, type CapabilityPreset, type CapabilityPresetName } from './capabilityPresets.js';
 
 export type AccessMode = 'read' | 'write' | 'shell';
 
 export interface AgentRole {
   name: string;
   description: string;
+  /**
+   * ADR-041 A41-9 — the capability preset this built-in role consumes.
+   * `defaultAccess` (and `forceSandbox`) are DERIVED from it via `presetAccess()`,
+   * so the access tier is named once in `capabilityPresets.ts` rather than
+   * restated per role. Optional: a dynamically-built role (a spawn/continuation
+   * with a bespoke access grant) sets `defaultAccess` directly and omits this.
+   */
+  preset?: CapabilityPresetName;
   defaultAccess: AccessMode;
   promptOverlay: string;
   /**
    * HONK-H0 — a fleet/background executor role. When true, a child spawned in
    * this role runs with the OS sandbox + network-deny + secret-env scrubbing
    * FORCED on, un-opt-out-able by `cli.sandboxEnforceWhenSilent`. For unattended
-   * fleet runs where no human is watching the blast radius.
+   * fleet runs where no human is watching the blast radius. Derived from the
+   * role's preset (`sandboxed-executor`).
    */
   forceSandbox?: boolean;
 }
@@ -41,7 +52,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   explorer: {
     name: 'explorer',
     description: 'Read-only codebase investigator. Returns findings and key files.',
-    defaultAccess: 'read',
+    preset: 'readonly',
+    ...presetAccess('readonly'),
     promptOverlay: [
       '## Role: Explorer',
       'You are a read-only investigator. Do not edit files or run shell commands.',
@@ -60,7 +72,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   architect: {
     name: 'architect',
     description: 'Design alternatives and tradeoffs. No file writes.',
-    defaultAccess: 'read',
+    preset: 'readonly',
+    ...presetAccess('readonly'),
     promptOverlay: [
       '## Role: Architect',
       'You design solutions; you do not write production code.',
@@ -77,7 +90,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   reviewer: {
     name: 'reviewer',
     description: 'Code review stance; findings first. Read-only.',
-    defaultAccess: 'read',
+    preset: 'readonly',
+    ...presetAccess('readonly'),
     promptOverlay: [
       '## Role: Reviewer',
       'You review changes critically. Findings first; severity-ordered (blocker, major, minor, nit).',
@@ -94,7 +108,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   worker: {
     name: 'worker',
     description: 'Implementation-focused. May edit files when granted write access.',
-    defaultAccess: 'write',
+    preset: 'implementer',
+    ...presetAccess('implementer'),
     promptOverlay: [
       '## Role: Worker',
       'You implement a single bounded task. Keep edits minimal and scoped.',
@@ -115,7 +130,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   verifier: {
     name: 'verifier',
     description: 'Runs tests and checks; reports pass/fail with evidence.',
-    defaultAccess: 'shell',
+    preset: 'executor',
+    ...presetAccess('executor'),
     promptOverlay: [
       '## Role: Verifier',
       'You verify that recent changes work. Run the smallest useful set of tests/typechecks.',
@@ -131,8 +147,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   fleet: {
     name: 'fleet',
     description: 'Unattended fleet executor. Implements a self-contained task end-to-end in an isolated, sandboxed worktree; its work is delivered as a PR.',
-    defaultAccess: 'shell',
-    forceSandbox: true,
+    preset: 'sandboxed-executor',
+    ...presetAccess('sandboxed-executor'),
     promptOverlay: [
       '## Role: Fleet executor (unattended)',
       'You run UNATTENDED — no human will approve or notice a risky step. You execute one self-contained task end-to-end in an isolated git worktree.',
@@ -147,7 +163,8 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
   intake: {
     name: 'intake',
     description: 'Requirements intake. Turns a vague ask into a structured requirement, then hands a self-contained packet to an executor.',
-    defaultAccess: 'read',
+    preset: 'readonly',
+    ...presetAccess('readonly'),
     promptOverlay: [
       '## Role: Requirements intake',
       'You turn a vague ask into a precise, self-contained unit of work, then hand it off to an executor. You do NOT implement — your job is to make the next agent able to run with zero back-references.',
