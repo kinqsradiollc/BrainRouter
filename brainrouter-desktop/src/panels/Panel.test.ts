@@ -7,7 +7,9 @@ test('panel inventory has unique ids and exposes Project knowledge', () => {
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(
     PANEL_DEFS.find((panel) => panel.id === 'knowledge'),
-    { id: 'knowledge', title: 'Project knowledge', icon: 'brain' },
+    // ADR-041 A41-7 — each panel row now carries its taxonomy `group` (folded in
+    // from the former separate GROUP_OF map, so the two can no longer drift).
+    { id: 'knowledge', title: 'Project knowledge', icon: 'brain', group: 'knowledge' },
   );
   assert.ok(MANUAL_PANEL_DEFS.some((panel) => panel.id === 'knowledge'));
 });
