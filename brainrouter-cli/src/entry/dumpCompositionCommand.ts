@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { runtimeCompositionSnapshot, resolveHostProfile, hostProfileIds, type HostProfileSurfaces } from '@kinqs/brainrouter-core/runtime';
+import { runtimeCompositionSnapshot, resolveHostProfile, hostProfileIds, type HostProfileSurfaces, SERVICE_PROFILES, serviceProfileIds } from '@kinqs/brainrouter-core/runtime';
 
 /**
  * ADR-041 A41-11 — `brainrouter dump-composition`. Prints what the runtime is
@@ -14,8 +14,23 @@ export function registerDumpCompositionCommand(program: Command): void {
     .description('Print the composed runtime — agent tools, providers, extensions, and slash commands.')
     .option('--json', 'Emit the machine-readable JSON snapshot instead of a human summary')
     .option('--profile <host>', `Show a host profile (${hostProfileIds().join(' | ')}) — which surfaces that host composes`)
-    .action((opts: { json?: boolean; profile?: string }) => {
+    .option('--services', 'List the registered service profiles (runnable services + remote-bindability)')
+    .action((opts: { json?: boolean; profile?: string; services?: boolean }) => {
       const snapshot = runtimeCompositionSnapshot();
+      // ADR-041 A41-12 — the service profiles: runnable services described declaratively.
+      if (opts.services) {
+        const services = serviceProfileIds().map((id) => SERVICE_PROFILES[id as keyof typeof SERVICE_PROFILES]);
+        if (opts.json) {
+          console.log(JSON.stringify(services, null, 2));
+          return;
+        }
+        console.log('Service profiles\n');
+        for (const svc of services) {
+          console.log(`  ${svc.id}  (${svc.transport}:${svc.defaultPort}${svc.remoteCapable ? ', remote-bindable' : ''})`);
+          console.log(`    ${svc.description}`);
+        }
+        return;
+      }
       // ADR-041 A41-11 — a host profile names which composition surfaces a host
       // activates; render it against the live registries so declared and actual
       // sit side by side.
