@@ -6,35 +6,10 @@ import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import type { ReplContext } from '../commands/_context.js';
-// Category dispatch — extracted slash-command handlers. Each module exports
-// a tryHandleX(ctx) that returns true iff it matched the command. Walked
-// in order; first match wins, no match falls through to the legacy switch.
-import { tryHandleMemoryCommand } from '../commands/memory/index.js';
-import { tryHandleLearningCommand } from '../commands/learning/index.js';
-import { tryHandleUiCommand } from '../commands/ui/index.js';
-import { tryHandleWorkflowCommand } from '../commands/workflow/index.js';
-import { tryHandleObsCommand } from '../commands/obs/index.js';
-import { tryHandleBrainCommand } from '../commands/brain/index.js';
-import { tryHandleOrchestrationCommand } from '../commands/orchestration/index.js';
-import { tryHandleSessionCommand } from '../commands/session/index.js';
-import { tryHandleGuardCommand } from '../commands/guard/index.js';
-import { tryHandleExtensionCommand } from '../commands/extension/index.js';
-import { tryHandleMcpCommand } from '../commands/mcp/index.js';
-import { tryHandleInitCommand } from '../commands/init/index.js';
-import { tryHandleConfigCommand } from '../commands/config/index.js';
-import { tryHandleLoginCommand } from '../commands/login/index.js';
-import { tryHandleScheduleCommand } from '../commands/schedule/index.js';
-import { tryHandleReleaseNotesCommand } from '../commands/releaseNotes/index.js';
-import { tryHandleRequirementCommand } from '../commands/requirement/index.js';
-import { tryHandleTrackCommand } from '../commands/track/index.js';
-import { tryHandleAnnotationCommand } from '../commands/annotation/index.js';
-import { tryHandleArtifactCommand } from '../commands/artifact/index.js';
-// ADR-038 D5 — the personal planner is USER-scoped, so /planner takes no workspace.
-import { tryHandlePlannerCommand } from '../commands/planner/index.js';
-import { tryHandleRunsCommand } from '../commands/runs/index.js';
-import { tryHandleAtlasCommand } from '../commands/atlas/index.js';
-import { tryHandleAttachmentCommand } from '../commands/attachment/index.js';
-import { tryHandleReviewsCommand } from '../commands/reviews/index.js';
+// ADR-041 A41-7 — the builtin slash-command handlers now live in an ordered,
+// walked registry (dispatchRegistry.ts) instead of a hand-written if-chain here.
+// Adding a command category is a one-line array insertion there.
+import { dispatchBuiltinCommand } from '../commands/dispatchRegistry.js';
 import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../../runtime/commands/customCommands.js';
 
 /**
@@ -127,39 +102,12 @@ export async function handleSlashCommand(
   rl: readline.Interface,
   ctx: ReplContext,
 ) {
-  // Category dispatch — each extracted module returns true iff it matched
-  // the command. New categories should be added here as they're extracted
-  // from the giant switch below. Long-term goal: shrink the switch to
-  // nothing so this dispatch is the only entrypoint.
+  // Category dispatch — walk the builtin handler registry first-match-wins. The
+  // order (init/config/login first so they shadow the legacy ui.ts fallbacks) is
+  // encoded in BUILTIN_COMMAND_HANDLERS; adding a category is an insertion there,
+  // not a new branch here.
   const cmdCtx = { command, args, agent, mcpClient, config, rl, repl: ctx };
-  // 0.3.7 wizard / config / login dispatchers run first so they shadow
-  // the legacy /init + /config handlers in ui.ts (which still ship
-  // their old behaviour as fallbacks but are now superseded).
-  if (await tryHandleInitCommand(cmdCtx)) return;
-  if (await tryHandleConfigCommand(cmdCtx)) return;
-  if (await tryHandleLoginCommand(cmdCtx)) return;
-  if (await tryHandleMemoryCommand(cmdCtx)) return;
-  if (await tryHandleLearningCommand(cmdCtx)) return;
-  if (await tryHandleUiCommand(cmdCtx)) return;
-  if (await tryHandleWorkflowCommand(cmdCtx)) return;
-  if (await tryHandleRequirementCommand(cmdCtx)) return;
-  if (await tryHandleTrackCommand(cmdCtx)) return;
-  if (await tryHandleAnnotationCommand(cmdCtx)) return;
-  if (await tryHandleArtifactCommand(cmdCtx)) return;
-  if (await tryHandlePlannerCommand(cmdCtx)) return;
-  if (await tryHandleRunsCommand(cmdCtx)) return;
-  if (await tryHandleAtlasCommand(cmdCtx)) return;
-  if (await tryHandleAttachmentCommand(cmdCtx)) return;
-  if (await tryHandleReviewsCommand(cmdCtx)) return;
-  if (await tryHandleScheduleCommand(cmdCtx)) return;
-  if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
-  if (await tryHandleObsCommand(cmdCtx)) return;
-  if (await tryHandleBrainCommand(cmdCtx)) return;
-  if (await tryHandleOrchestrationCommand(cmdCtx)) return;
-  if (await tryHandleSessionCommand(cmdCtx)) return;
-  if (await tryHandleGuardCommand(cmdCtx)) return;
-  if (await tryHandleExtensionCommand(cmdCtx)) return;
-  if (await tryHandleMcpCommand(cmdCtx)) return;
+  if (await dispatchBuiltinCommand(cmdCtx)) return;
 
   // CC-P4.1 — user-defined markdown slash commands. A file at
   // .brainrouter/commands/<name>.md turns /<name> into a prompt template
