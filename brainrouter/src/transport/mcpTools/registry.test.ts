@@ -46,11 +46,19 @@ const MIGRATED = [
   "connector_run",
   "knowledge_list",
   "knowledge_search",
+  // batch 4 — session_* messaging (the switch is now fully dissolved)
+  "session_register",
+  "session_heartbeat",
+  "session_unregister",
+  "session_list",
+  "session_send",
+  "session_inbox_read",
+  "session_inbox_ack",
+  "session_receipts",
+  "session_receipts_ack",
+  "session_delegate_task",
+  "session_delegations",
 ];
-
-// Tools that deliberately REMAIN in the mcpServer.ts switch: session_* close over
-// the per-connection delivery hub + connection claim (the next, final slice).
-const STILL_IN_SWITCH = ["session_register", "session_send", "session_heartbeat", "session_delegations"];
 
 describe("A41-7 MCP tool registry", () => {
   it("registers every tool in the first migrated batch", () => {
@@ -60,11 +68,11 @@ describe("A41-7 MCP tool registry", () => {
     }
   });
 
-  it("returns undefined for a tool still living in the switch (or unknown)", () => {
-    for (const name of STILL_IN_SWITCH) {
-      expect(mcpToolHandler(name), `${name} must fall through to the switch`).toBeUndefined();
-    }
+  it("returns undefined for an unknown tool (the switch is fully dissolved)", () => {
+    // A41-7 COMPLETE for the MCP surface: every real tool is registered, so an
+    // unknown name resolves to no handler and the dispatcher throws MethodNotFound.
     expect(mcpToolHandler("definitely_not_a_tool")).toBeUndefined();
+    expect(mcpToolHandler("memory_recall")).toBeTypeOf("function"); // was the last switch-only example
   });
 
   it("refuses a duplicate registration — a tool has one home", () => {
@@ -76,7 +84,13 @@ describe("A41-7 MCP tool registry", () => {
     const ctx = (isAdmin: boolean): McpToolContext => ({
       args: {},
       invokedName: "create_skill",
-      host: { registry: {} as never, isAdmin, defaultUserId: "u", defaultOrgId: undefined, connectorWorkspaceRoot: "/tmp", knowledgeActor: null },
+      host: {
+        registry: {} as never, isAdmin, defaultUserId: "u", defaultOrgId: undefined,
+        connectorWorkspaceRoot: "/tmp", knowledgeActor: null,
+        connectionId: undefined, sessionDeliveryHub: undefined,
+        authorizeOwnedSession: undefined, validateDeliveryClaim: undefined,
+        sessionNotify: async () => {},
+      },
     });
     await expect(mcpToolHandler("create_skill")!(ctx(false))).rejects.toThrow(
       /Admin access required for this tool/,

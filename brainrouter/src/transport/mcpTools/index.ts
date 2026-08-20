@@ -8,6 +8,7 @@ import './workspace.js';
 import './memory.js';
 import './connectors.js';
 import './knowledge.js';
+import './session.js';
 
 export {
   type McpToolHost,

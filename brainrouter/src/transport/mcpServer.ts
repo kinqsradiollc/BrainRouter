@@ -64,17 +64,18 @@ import {
   memoryReflectSessionToolSchema,
 } from '../tools/governance/index.js';
 import {
-  sessionRegisterToolSchema, handleSessionRegister,
-  sessionHeartbeatToolSchema, handleSessionHeartbeat,
-  sessionUnregisterToolSchema, handleSessionUnregister,
-  sessionListToolSchema, handleSessionList,
-  sessionSendToolSchema, handleSessionSend,
-  sessionInboxReadToolSchema, handleSessionInboxRead,
-  sessionInboxAckToolSchema, handleSessionInboxAck,
-  sessionReceiptsToolSchema, handleSessionReceipts,
-  sessionReceiptsAckToolSchema, handleSessionReceiptsAck,
-  sessionDelegateTaskToolSchema, handleSessionDelegateTask,
-  sessionDelegationsToolSchema, handleSessionDelegations,
+  // session_* handlers migrated to ./mcpTools/session.js (A41-7); descriptors stay.
+  sessionRegisterToolSchema,
+  sessionHeartbeatToolSchema,
+  sessionUnregisterToolSchema,
+  sessionListToolSchema,
+  sessionSendToolSchema,
+  sessionInboxReadToolSchema,
+  sessionInboxAckToolSchema,
+  sessionReceiptsToolSchema,
+  sessionReceiptsAckToolSchema,
+  sessionDelegateTaskToolSchema,
+  sessionDelegationsToolSchema,
   memoryResolveSessionToolSchema,
 } from '../tools/sessions/index.js';
 import {
@@ -484,122 +485,27 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
       // in an IIFE so each case's `return` flows to one metrics recording point.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const __result: any = await (async () => {
-      // ADR-041 A41-7 — strangler dispatch: a migrated tool (registered in
-      // ./mcpTools) is served from the registry BEFORE the switch; the closure deps
-      // it needs travel on `host`. Un-migrated tools fall through to the switch.
+      // ADR-041 A41-7 — the CallTool dispatch is now a pure McpToolRegistry lookup:
+      // the 98-case switch has been fully dissolved into ./mcpTools/* registrations.
+      // The per-connection closure deps a handler needs travel on `host` (session_*
+      // rebuild their hub/claim/notify closures from these five session fields).
       const __migrated = mcpToolHandler(request.params.name);
-      if (__migrated) {
-        const host: McpToolHost = { registry, isAdmin, defaultUserId, defaultOrgId, connectorWorkspaceRoot, knowledgeActor };
-        return await __migrated({ args: request.params.arguments, invokedName: request.params.name, host });
+      if (!__migrated) {
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
-      switch (request.params.name) {
-        // memory_* / atlas_* / fleet_* tools migrated to ./mcpTools/memory.js (A41-7);
-        // session_* remain here (they close over the delivery hub + connection claim).
-        case 'session_register': return await handleSessionRegister(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          onRegistered: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey, messageWakeVersion, registrationAttemptId) => {
-                const committed = options.sessionDeliveryHub!.commitReservation({
-                  connectionId: options.connectionId!,
-                  orgId,
-                  userId,
-                  sessionKey,
-                  ...(messageWakeVersion === 1
-                    ? {
-                        notify: (wake) => server.notification({
-                          method: SESSION_MESSAGE_NOTIFICATION_METHOD,
-                          params: wake,
-                        } as any),
-                      }
-                    : {}),
-                }, registrationAttemptId);
-                if (!committed) {
-                  throw new Error('the session registration reservation is no longer current');
-                }
-              }
-            : undefined,
-          authorizeRegistration: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey, registrationAttemptId) => options.sessionDeliveryHub!.reserve(
-                options.connectionId!,
-                orgId,
-                userId,
-                sessionKey,
-                registrationAttemptId,
-              )
-            : undefined,
-          onRegistrationFailed: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey, registrationAttemptId) => options.sessionDeliveryHub!.releaseReservation(
-                options.connectionId!,
-                orgId,
-                userId,
-                sessionKey,
-                registrationAttemptId,
-              )
-            : undefined,
-        });
-        case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          onUnregistered: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey) => options.sessionDeliveryHub!.unbind(
-                orgId,
-                userId,
-                sessionKey,
-                options.connectionId,
-              )
-            : undefined,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'session_send': return await handleSessionSend(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          onPersisted: options?.sessionDeliveryHub
-            ? (rows) => options.sessionDeliveryHub!.notifyPersisted(rows, validateDeliveryClaim)
-            : undefined,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_receipts': return await handleSessionReceipts(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_receipts_ack': return await handleSessionReceiptsAck(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
-        case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
-        // vulnerability_intelligence, connector_* and knowledge_* migrated to
-        // ./mcpTools/ (A41-7). memory_* / atlas_* / fleet_* migrated to memory.js.
-        default:
-          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
-      }
+      const host: McpToolHost = {
+        registry, isAdmin, defaultUserId, defaultOrgId, connectorWorkspaceRoot, knowledgeActor,
+        connectionId: options?.connectionId,
+        sessionDeliveryHub: options?.sessionDeliveryHub,
+        authorizeOwnedSession,
+        validateDeliveryClaim,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        sessionNotify: (wake: any) => server.notification({
+          method: SESSION_MESSAGE_NOTIFICATION_METHOD,
+          params: wake,
+        } as any),
+      };
+      return await __migrated({ args: request.params.arguments, invokedName: request.params.name, host });
       })();
       recordToolCall(request.params.name, !(__result && __result.isError), Date.now() - __startedAt);
       return __result;

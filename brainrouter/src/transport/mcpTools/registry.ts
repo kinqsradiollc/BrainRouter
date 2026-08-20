@@ -13,6 +13,7 @@
 
 import type { Registry } from '../../registry.js';
 import type { KnowledgeActor } from '../../knowledge/contracts/actor.js';
+import type { SessionDeliveryHub } from '../../services/sessionDeliveryHub.js';
 
 /**
  * The per-connection surface a migrated MCP tool handler may read — the closure
@@ -36,6 +37,22 @@ export interface McpToolHost {
   readonly connectorWorkspaceRoot: string;
   /** The org/role actor knowledge tools require (null outside a tenant context) — mcpServer.ts:203. */
   readonly knowledgeActor: KnowledgeActor | null;
+  // ── session messaging (session_* tools) ────────────────────────────────────
+  /** The MCP transport's stable connection id (undefined for stdio) — mcpServer.ts:178. */
+  readonly connectionId: string | undefined;
+  /** The delivery hub that binds sessions to this connection (undefined for stdio) — mcpServer.ts:179. */
+  readonly sessionDeliveryHub: SessionDeliveryHub | undefined;
+  /** Gate: this connection owns the (org,user,session) claim (undefined when unclaimable) — mcpServer.ts:218. */
+  readonly authorizeOwnedSession:
+    | ((orgId: string | null, userId: string, sessionKey: string) => Promise<boolean>)
+    | undefined;
+  /** Validates a delivery target still owns its active-session claim (undefined for stdio) — mcpServer.ts:209. */
+  readonly validateDeliveryClaim:
+    | ((binding: { connectionId: string; orgId: string | null; userId: string; sessionKey: string }) => Promise<boolean>)
+    | undefined;
+  /** Push a session-message wake over this MCP connection (wraps server.notification) — mcpServer.ts:511. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly sessionNotify: (wake: any) => Promise<void>;
 }
 
 /** Everything a migrated MCP tool handler receives — the shared closure the switch dispatched inline. */
