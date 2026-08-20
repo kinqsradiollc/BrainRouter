@@ -10,7 +10,7 @@ import { setQuestion, readLedger, appendEvidence } from '../../../research/resea
 import { listConnectors } from '../../../connectors/index.js';
 import { runExtractResult } from '../../../tool/result/extractResult.js';
 import { listWorktreesStructured } from '../../../worktree/concurrentWorktrees.js';
-import { listTranscripts } from '../../../session/transcript/sessionStore.js';
+import { listTranscripts, readTranscriptEntries, redactTranscriptEntry } from '../../../session/transcript/sessionStore.js';
 import path from 'node:path';
 import type { BuiltinToolHandler } from './registry.js';
 
@@ -32,6 +32,34 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
       current: s.sessionKey === host.sessionKey || undefined,
     }));
     return JSON.stringify({ workspaceRoot: host.workspaceRoot, count: sessions.length, sessions }, null, 2);
+  },
+
+  // ADR-041 A41-14 (W2) — session query: read the recent transcript of ANOTHER
+  // session in this workspace (found via session_list), REDACTED. Read-only, and
+  // `readTranscriptEntries` never escapes the workspace's own sessions dir. Every
+  // entry passes through `redactTranscriptEntry`, so a sibling session's secrets
+  // are never surfaced into this agent's context.
+  session_read: async ({ args, host }) => {
+    const target = String(args.sessionKey ?? '').trim();
+    if (!target) throw new Error('session_read requires a `sessionKey` (get one from session_list).');
+    const limit = typeof args.limit === 'number' && Number.isFinite(args.limit)
+      ? Math.max(1, Math.min(100, Math.floor(args.limit)))
+      : 30;
+    const entries = readTranscriptEntries(host.workspaceRoot, target, limit).map((entry) => {
+      const redacted = redactTranscriptEntry(entry);
+      const content = typeof redacted.content === 'string'
+        ? redacted.content
+        : redacted.content !== undefined
+          ? JSON.stringify(redacted.content)
+          : '';
+      return {
+        role: redacted.role,
+        ...(redacted.name ? { name: redacted.name } : {}),
+        timestamp: redacted.timestamp,
+        content,
+      };
+    });
+    return JSON.stringify({ sessionKey: target, count: entries.length, entries }, null, 2);
   },
 
   research_brief: async ({ args, host }) => {

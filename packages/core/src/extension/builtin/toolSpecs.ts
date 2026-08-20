@@ -527,6 +527,18 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'session_read',
+    description: 'Read the recent transcript of another conversation in this workspace (get its sessionKey from session_list). Returns redacted role/name/timestamp/content entries, oldest→newest. Read-only; scoped to this workspace; secrets are redacted. Use it to recall what a sibling session decided or did.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionKey: { type: 'string', description: 'The session to read (from session_list).' },
+        limit: { type: 'number', description: 'Max recent entries to return (default 30, max 100).' }
+      },
+      required: ['sessionKey']
+    }
+  },
+  {
     name: 'list_mcp_resources',
     description: 'List resources provided by MCP servers. Resources are structured context such as files, schemas, or app data; prefer them over web search when available.',
     inputSchema: {
