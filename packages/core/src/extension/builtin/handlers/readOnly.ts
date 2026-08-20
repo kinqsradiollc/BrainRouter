@@ -10,7 +10,8 @@ import { setQuestion, readLedger, appendEvidence } from '../../../research/resea
 import { listConnectors } from '../../../connectors/index.js';
 import { runExtractResult } from '../../../tool/result/extractResult.js';
 import { listWorktreesStructured } from '../../../worktree/concurrentWorktrees.js';
-import { listTranscripts, readTranscriptEntries, redactTranscriptEntry } from '../../../session/transcript/sessionStore.js';
+import { listTranscripts, readTranscriptEntries, redactTranscriptEntry, loadTranscript, redactText } from '../../../session/transcript/sessionStore.js';
+import { searchTranscript } from '../../../session/transcript/transcriptSearch.js';
 import path from 'node:path';
 import type { BuiltinToolHandler } from './registry.js';
 
@@ -60,6 +61,30 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
       };
     });
     return JSON.stringify({ sessionKey: target, count: entries.length, entries }, null, 2);
+  },
+
+  // ADR-041 A41-14 (W2) — session query: search ACROSS this workspace's
+  // conversations for `query`, returning the sessions that match with a few
+  // redacted snippets each. Read-only; scoped to the workspace; snippets pass
+  // through redactText so a match on a secret is never surfaced verbatim.
+  session_search: async ({ args, host }) => {
+    const query = String(args.query ?? '').trim();
+    if (!query) throw new Error('session_search requires a non-empty `query`.');
+    const perSession = typeof args.limit === 'number' && Number.isFinite(args.limit)
+      ? Math.max(1, Math.min(20, Math.floor(args.limit)))
+      : 5;
+    const results: Array<{ sessionKey: string; title: string | null; matches: unknown[] }> = [];
+    // Scan the most-recent sessions (cap the fan-out); each match snippet is redacted.
+    for (const summary of listTranscripts(host.workspaceRoot, { limit: 100 })) {
+      const matches = searchTranscript(loadTranscript(host.workspaceRoot, summary.sessionKey), query, { limit: perSession });
+      if (matches.length === 0) continue;
+      results.push({
+        sessionKey: summary.sessionKey,
+        title: summary.firstUserMessage ?? null,
+        matches: matches.map((m) => ({ role: m.role, timestamp: m.timestamp, count: m.count, snippet: redactText(m.snippet) })),
+      });
+    }
+    return JSON.stringify({ query, sessionsMatched: results.length, results }, null, 2);
   },
 
   research_brief: async ({ args, host }) => {
