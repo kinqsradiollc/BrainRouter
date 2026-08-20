@@ -137,4 +137,27 @@ describe('EgressTunnelService (C6a)', () => {
     expect(Buffer.concat(received).toString('utf8')).toBe('tls-record-1');
     duplex.destroy();
   });
+
+  it('transportForAccount resolves the online device from (org,user) alone', async () => {
+    service = new EgressTunnelService({
+      config: { enabled: true, controlPort: 0, relayPort: 0, host: '127.0.0.1' },
+      store,
+      ping: async () => true,
+    });
+    await service.start();
+    // No device online yet → no transport.
+    expect(service.transportForAccount(ORG, USER, 'key_1')).toBeUndefined();
+
+    await spawnStubDevice(service.boundControlPort);
+    const transport = service.transportForAccount(ORG, USER, 'key_1');
+    expect(transport).toBeDefined();
+
+    const duplex = await transport!.open({ host: 'api.provider.test', port: 443 });
+    const received: Buffer[] = [];
+    duplex.on('data', (chunk: Buffer) => received.push(chunk));
+    duplex.write(Buffer.from('acct-bytes'));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(Buffer.concat(received).toString('utf8')).toBe('acct-bytes');
+    duplex.destroy();
+  });
 });

@@ -208,6 +208,28 @@ export class EgressControlChannel {
   }
 
   /**
+   * The deviceIds of THIS (org,user)'s devices that currently hold a live control
+   * connection. Scoped to one account (never a fleet enumeration) so the gateway
+   * can resolve which of a requesting user's own devices can relay their traffic.
+   */
+  onlineDevicesFor(orgId: string, userId: string): string[] {
+    const devices: string[] = [];
+    for (const [key, socket] of this.#online) {
+      if (socket.readyState !== WebSocket.OPEN) continue;
+      let tuple: unknown;
+      try {
+        tuple = JSON.parse(key);
+      } catch {
+        continue;
+      }
+      if (Array.isArray(tuple) && tuple[0] === orgId && tuple[1] === userId && typeof tuple[2] === 'string') {
+        devices.push(tuple[2]);
+      }
+    }
+    return devices;
+  }
+
+  /**
    * Push a dial instruction to a specific enrolled device. Returns whether it was
    * delivered (the device is online) — a false lets the opener fail fast so the
    * S4a fallback ladder drops to direct server egress.
