@@ -1,6 +1,6 @@
 # ADR-041 — Plug-and-play runtime: swappable providers, capability ports, and product-wide registries
 
-**Status:** Accepted — in phased implementation (foundational runtime seams shipped to `release/0.4.21`, 2026-08). **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D5 (product-wide registry pattern — the `McpTool` / `Command` / `Panel` / `ApiRoute` registries), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims); D7/D9 (universal disposables + capability presets + roles-consume-presets shipped; the `host.scope(sessionKey)` session-scoping mechanism awaits a per-session registration consumer); D11 (the four host profiles + `dump-composition` shipped; overlay-by-id + the default loop-driver-as-a-replaceable-row remain); D12 (service profiles + the typed remote-binding gate `assertRemoteBindable`, wired into the egress-tunnel boot, shipped; reducing a service image to "loader + profile" and regenerating dev-compose from profile sets remain); D13 (W1 parity capabilities are all present in core — the spill store, the last gap, is now a disk cold tier on `ResultCache`; the "each as an extension" repackaging remains. W2: the runtime-invariants registry, session fork lineage, and per-message feedback shipped; session query tools + session references remain). **Remaining:** D13 W3/W4 (external-agent subagent providers, Code Mode, out-of-process typed SDK, unified generated catalogs, session-native reminder unification, and a self-modification *evaluation* that may conclude "no") + the D14 glass-box capstone. D13/D14's waves are tracked as their own slice series.
+**Status:** Accepted — in phased implementation (foundational runtime seams shipped to `release/0.4.21`, 2026-08). **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D5 (product-wide registry pattern — the `McpTool` / `Command` / `Panel` / `ApiRoute` registries), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims); D7/D9 (universal disposables + capability presets + roles-consume-presets shipped; the `host.scope(sessionKey)` session-scoping mechanism awaits a per-session registration consumer); D11 (the four host profiles + `dump-composition` shipped; overlay-by-id + the default loop-driver-as-a-replaceable-row remain); D12 (service profiles + the typed remote-binding gate `assertRemoteBindable`, wired into the egress-tunnel boot, shipped; reducing a service image to "loader + profile" and regenerating dev-compose from profile sets remain); D13 (W1 parity capabilities are all present in core — the spill store, the last gap, is now a disk cold tier on `ResultCache`; the "each as an extension" repackaging remains. W2: the runtime-invariants registry, session fork lineage, and per-message feedback shipped; session query tools + session references remain). **Remaining:** D13 W3/W4 — external-agent subagent providers **shipped** (external-CLI-backed workers over the `SubprocessPort` seam, on the interrupt cascade); still open are Code Mode, the out-of-process typed SDK, unified generated catalogs, and session-native reminder unification. The self-modification item was **evaluated → not adopted** (see §D13.1: it inverts the ADR-037/043/D8 security posture, its D9 disposal precondition is unmet, and extensions + presets + Code Mode already cover the need). Plus the D14 glass-box capstone. D13/D14's waves are tracked as their own slice series.
 
 **Builds on:** ADR-029 (one workspace, many surfaces), the existing `ExtensionHost` and
 `ProviderDefinition` system.
@@ -386,6 +386,38 @@ the D14 transparency plane. W3 — delegation (continuable children, external-ag
 Mode). W4 — platform (SDK, generated catalogs, reminder unification, self-modification
 evaluation). Each wave lands only on the D1–D12 surfaces; a parity feature that would require
 patching core is a signal the runtime work is incomplete, not a license to patch.
+
+### D13.1 — Runtime self-modification: evaluated → **not adopted**
+
+The W4 "self-modification" item was, by design, an *evaluation* that could conclude "no". It does.
+
+**Decision: BrainRouter does not expose runtime self-modification** (approval-gated tools letting the
+agent define / run / retract dynamic plugins in its own live runtime). Reasons, in order:
+
+1. **Its own precondition is unmet.** The row conditions any exposure on "the D9 disposal story plus
+   org-policy gating." D9's `host.scope(sessionKey)` session-scoped *reversible* registration is not
+   built (it awaits a per-session registration consumer), so the retractability that would make a
+   dynamic plugin safely disposable does not yet exist. Without provable retraction, a self-registered
+   plugin is a permanent modification, not a scoped effect.
+2. **It inverts this program's security posture.** ADR-037 (credentials the page cannot read), ADR-043
+   (provider TLS + credentials stay server-side), and D8's guarded pipeline all exist so that a
+   prompt-injected or compromised agent *cannot* escalate. Runtime self-modification is precisely an
+   escalation primitive: one injected instruction could register a plugin that exfiltrates data or
+   sidesteps the sandbox. It would become the single highest-value injection target and defeat the
+   boundaries the rest of this ADR builds.
+3. **The legitimate need is already served.** Controlled extensibility exists — `ExtensionHost`
+   registers tools/providers/hooks *at an access tier the sandbox and exec-policy still gate* (an
+   extension registers AT a tier; it cannot bypass it), capability presets scope what a session may do,
+   and **Code Mode** (W3) gives the model a sandboxed, budgeted way to *compose tool calls as code*
+   without mutating its own runtime. These cover the "do something custom" case without a self-mutation
+   primitive.
+4. **Cost/benefit.** The benefit over extensions + Code Mode is marginal; the cost — a first-class
+   escalation surface plus the org-policy and disposal machinery it demands — is high.
+
+**Reconsider only if all of:** (a) D9 session-scoped reversible registration ships (a plugin is provably
+retractable), (b) an **org-admin-controlled** policy gate exists (the agent cannot self-authorize), and
+(c) a concrete use-case emerges that extensions + Code Mode cannot serve. Absent those, the controlled
+extension / preset / Code-Mode path is the answer.
 
 ### D14 — The glass box: a human can watch, inspect, and replay the whole process
 
