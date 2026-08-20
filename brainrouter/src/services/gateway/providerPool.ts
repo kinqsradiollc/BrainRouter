@@ -11,6 +11,9 @@ import * as providerCfg from "../../memory/store/postgres/queries/providerConfig
 import * as modelPolicy from "../../memory/store/postgres/queries/modelPolicyQueries.js";
 import * as tenancy from "../../memory/store/postgres/queries/tenancyQueries.js";
 import * as users from "../../memory/store/postgres/queries/userStatsQueries.js";
+import * as remoteAccess from "../../memory/store/postgres/queries/remoteAccessQueries.js";
+import { getSetting } from "../../memory/store/postgres/queries/emailAuthQueries.js";
+import type { DeviceSessionRecord } from "../../remote/store.js";
 import { resolveProviderConfig } from "../../providers/resolver.js";
 import type { ProviderStore } from "../../providers/store.js";
 import type { ProviderKind, ResolvedProviderConfig } from "../../providers/types.js";
@@ -166,6 +169,16 @@ export class GatewayProviderService {
 
   recordUsage(event: GatewayUsageEvent): Promise<void> {
     return recordGatewayUsage(this.exec, event);
+  }
+
+  /** ADR-043 C6b — device-session lookup for the egress control channel's hello auth. */
+  getDeviceSessionByTokenHash(orgId: string, userId: string, tokenHash: string): Promise<DeviceSessionRecord | null> {
+    return remoteAccess.getDeviceSessionByTokenHash(this.exec, orgId, userId, tokenHash);
+  }
+
+  /** ADR-043 C6b — read a per-org system-settings value (e.g. the egress opt-in flag). */
+  getOrgSetting<T = unknown>(key: string): Promise<T | null> {
+    return getSetting<T>(this.exec, key);
   }
 
   async ping(): Promise<boolean> {
