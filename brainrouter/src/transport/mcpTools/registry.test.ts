@@ -15,6 +15,7 @@ import {
 } from "./index.js";
 
 const MIGRATED = [
+  // batch 1 — skills / docs / workspace
   "list_skills",
   "get_skill",
   "search_skills",
@@ -25,7 +26,25 @@ const MIGRATED = [
   "list_template_docs",
   "get_template_doc",
   "workspace_profile_recommend",
+  // batch 2 — memory / atlas / fleet (direct, multi-case blocks, atlas, admin-gated)
+  "memory_recall",
+  "memory_search",
+  "memory_capture_turn",
+  "memory_get", // governance block
+  "memory_task_state", // engineering block
+  "memory_hook_status", // hook block
+  "memory_working_reset", // working block
+  "memory_persona",
+  "memory_stats",
+  "atlas_put",
+  "fleet_snapshot_get",
+  "memory_register_skill_hints",
+  "memory_skill_outcome",
 ];
+
+// Tools that deliberately REMAIN in the mcpServer.ts switch (session_* close over
+// the delivery hub; connector_*/knowledge_* need workspace/actor context).
+const STILL_IN_SWITCH = ["session_register", "connector_list", "knowledge_search", "vulnerability_intelligence"];
 
 describe("A41-7 MCP tool registry", () => {
   it("registers every tool in the first migrated batch", () => {
@@ -36,8 +55,9 @@ describe("A41-7 MCP tool registry", () => {
   });
 
   it("returns undefined for a tool still living in the switch (or unknown)", () => {
-    // memory_recall is deliberately NOT migrated yet — it must fall through to the switch.
-    expect(mcpToolHandler("memory_recall")).toBeUndefined();
+    for (const name of STILL_IN_SWITCH) {
+      expect(mcpToolHandler(name), `${name} must fall through to the switch`).toBeUndefined();
+    }
     expect(mcpToolHandler("definitely_not_a_tool")).toBeUndefined();
   });
 
@@ -50,7 +70,7 @@ describe("A41-7 MCP tool registry", () => {
     const ctx = (isAdmin: boolean): McpToolContext => ({
       args: {},
       invokedName: "create_skill",
-      host: { registry: {} as never, isAdmin },
+      host: { registry: {} as never, isAdmin, defaultUserId: "u", defaultOrgId: undefined },
     });
     await expect(mcpToolHandler("create_skill")!(ctx(false))).rejects.toThrow(
       /Admin access required for this tool/,

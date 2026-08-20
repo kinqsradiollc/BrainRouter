@@ -27,6 +27,10 @@ export interface McpToolHost {
   readonly registry: Registry;
   /** Whether this connection is an admin — gates create_skill/update_skill; mcpServer.ts:200. */
   readonly isAdmin: boolean;
+  /** The authenticated user id the memory tools scope to (STDIO_DEFAULT_USER_ID fallback) — mcpServer.ts:199. */
+  readonly defaultUserId: string;
+  /** The authenticated org id (undefined outside a tenant context) — mcpServer.ts:203. */
+  readonly defaultOrgId: string | undefined;
 }
 
 /** Everything a migrated MCP tool handler receives — the shared closure the switch dispatched inline. */

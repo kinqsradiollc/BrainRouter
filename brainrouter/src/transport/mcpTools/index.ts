@@ -5,6 +5,7 @@
 import './skills.js';
 import './docs.js';
 import './workspace.js';
+import './memory.js';
 
 export {
   type McpToolHost,

@@ -26,39 +26,42 @@ import type { SessionDeliveryHub } from '../services/sessionDeliveryHub.js';
 
 // Import tools — grouped per domain; each barrel re-exports its modules' public
 // surface (schemas + handlers). See tools/<domain>/index.ts.
+// A41-7: the memory / atlas / fleet / skill-crud / persona / reference / template
+// tool HANDLERS moved to ./mcpTools/* (registered there); only the ListTools
+// descriptor schemas (and the handlers still living in this switch —
+// vulnerability_intelligence, host-learning, session_*, connector_*, knowledge_*)
+// are imported here.
 import {
-  // list/get/search/create/update skill migrated to ./mcpTools/skills.js (A41-7).
-  memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
-  memoryExtractSkillToolSchema, handleMemoryExtractSkill,
-  memorySkillOutcomeToolSchema, handleMemorySkillOutcome,
+  memoryRegisterSkillHintsToolSchema,
+  memoryExtractSkillToolSchema,
+  memorySkillOutcomeToolSchema,
 } from '../tools/skills/index.js';
-// persona/reference/template-doc read tools migrated to ./mcpTools/docs.js (A41-7).
 import {
-  memoryRecallToolSchema, handleMemoryRecall,
-  memorySearchToolSchema, handleMemorySearch,
-  memoryRetrieveToolSchema, handleMemoryRetrieve,
-  memoryFindRelatedToolSchema, handleMemoryFindRelated,
-  memoryGraphQueryToolSchema, handleMemoryGraphQuery,
-  memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics,
+  memoryRecallToolSchema,
+  memorySearchToolSchema,
+  memoryRetrieveToolSchema,
+  memoryFindRelatedToolSchema,
+  memoryGraphQueryToolSchema,
+  memoryGraphAnalyticsToolSchema,
   vulnerabilityIntelligenceToolSchema, handleVulnerabilityIntelligence,
 } from '../tools/recall/index.js';
 import {
-  memoryCaptureTurnToolSchema, handleMemoryCaptureTurn,
-  memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact,
-  memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation,
-  memoryRecordLessonToolSchema, handleMemoryRecordLesson,
-  memoryCreateRequirementToolSchema, handleMemoryCreateRequirement,
+  memoryCaptureTurnToolSchema,
+  memoryCaptureArtifactToolSchema,
+  memoryCaptureAnnotationToolSchema,
+  memoryRecordLessonToolSchema,
+  memoryCreateRequirementToolSchema,
 } from '../tools/capture/index.js';
 import {
-  memoryGovernanceToolSchemas, handleMemoryGovernanceTool, handleHostLearningRequest,
-  memoryEngineeringToolSchemas, handleMemoryEngineeringTool,
-  memoryExplainToolSchema, handleMemoryExplainRecall,
-  memoryHookToolSchemas, handleMemoryHookTool,
-  memoryContradictionsToolSchema, handleMemoryContradictions,
-  memoryMarkCitedToolSchema, handleMemoryMarkCited,
-  memoryProvenanceToolSchema, handleMemoryProvenance,
-  memoryReflectToolSchema, handleMemoryReflect,
-  memoryReflectSessionToolSchema, handleMemoryReflectSession,
+  memoryGovernanceToolSchemas, handleHostLearningRequest,
+  memoryEngineeringToolSchemas,
+  memoryExplainToolSchema,
+  memoryHookToolSchemas,
+  memoryContradictionsToolSchema,
+  memoryMarkCitedToolSchema,
+  memoryProvenanceToolSchema,
+  memoryReflectToolSchema,
+  memoryReflectSessionToolSchema,
 } from '../tools/governance/index.js';
 import {
   sessionRegisterToolSchema, handleSessionRegister,
@@ -72,35 +75,35 @@ import {
   sessionReceiptsAckToolSchema, handleSessionReceiptsAck,
   sessionDelegateTaskToolSchema, handleSessionDelegateTask,
   sessionDelegationsToolSchema, handleSessionDelegations,
-  memoryResolveSessionToolSchema, handleMemoryResolveSession,
+  memoryResolveSessionToolSchema,
 } from '../tools/sessions/index.js';
 import {
-  memoryAgentStatusToolSchema, handleMemoryAgentStatus,
-  memoryAgentRunToolSchema, handleMemoryAgentRun,
-  memoryJobRetryToolSchema, handleMemoryJobRetry,
-  memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview,
+  memoryAgentStatusToolSchema,
+  memoryAgentRunToolSchema,
+  memoryJobRetryToolSchema,
+  memoryBlackboardReviewToolSchema,
 } from '../tools/agents/index.js';
 import {
-  memoryConsolidateToolSchema, handleMemoryConsolidate,
-  memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk,
-  memoryReindexSourceToolSchema, handleMemoryReindexSource,
-  memoryPruneSourcesToolSchema, handleMemoryPruneSources,
-  memoryVaultExportToolSchema, handleMemoryVaultExport,
+  memoryConsolidateToolSchema,
+  memoryFetchSourceChunkToolSchema,
+  memoryReindexSourceToolSchema,
+  memoryPruneSourcesToolSchema,
+  memoryVaultExportToolSchema,
 } from '../tools/sources/index.js';
 import {
-  memoryPersonaToolSchema, handleMemoryPersona,
-  memoryPersonaRefreshToolSchema, handleMemoryPersonaRefresh,
-  memoryWorkingToolSchemas, handleMemoryWorkingTool,
-  memoryCompressToolSchema, handleMemoryCompress,
-  memoryTreeWalkToolSchema, handleMemoryTreeWalk,
-  memoryStatsToolSchema, handleMemoryStats,
+  memoryPersonaToolSchema,
+  memoryPersonaRefreshToolSchema,
+  memoryWorkingToolSchemas,
+  memoryCompressToolSchema,
+  memoryTreeWalkToolSchema,
+  memoryStatsToolSchema,
 } from '../tools/working/index.js';
 import {
-  atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet,
-  atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery,
-  atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich,
-  fleetSnapshotPutToolSchema, handleFleetSnapshotPut,
-  fleetSnapshotGetToolSchema, handleFleetSnapshotGet,
+  atlasPutToolSchema, atlasGetToolSchema,
+  atlasListToolSchema, atlasQueryToolSchema,
+  atlasImpactToolSchema, atlasEnrichToolSchema,
+  fleetSnapshotPutToolSchema,
+  fleetSnapshotGetToolSchema,
   connectorListToolSchema, handleConnectorList,
   connectorRunToolSchema, handleConnectorRun,
 } from '../tools/atlas/index.js';
@@ -486,14 +489,12 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
       // it needs travel on `host`. Un-migrated tools fall through to the switch.
       const __migrated = mcpToolHandler(request.params.name);
       if (__migrated) {
-        const host: McpToolHost = { registry, isAdmin };
+        const host: McpToolHost = { registry, isAdmin, defaultUserId, defaultOrgId };
         return await __migrated({ args: request.params.arguments, invokedName: request.params.name, host });
       }
       switch (request.params.name) {
-        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
-        case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
+        // memory_* / atlas_* / fleet_* tools migrated to ./mcpTools/memory.js (A41-7);
+        // session_* remain here (they close over the delivery hub + connection claim).
         case 'session_register': return await handleSessionRegister(request.params.arguments, {
           defaultUserId,
           defaultOrgId,
@@ -594,114 +595,9 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
         });
         case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
         case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
-        case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'vulnerability_intelligence': return await handleVulnerabilityIntelligence(request.params.arguments);
-        case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
-        case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
-        case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
-        case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments, { defaultUserId });
-        case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments, { defaultUserId });
-        case 'memory_get':
-        case 'memory_update':
-        case 'memory_evidence_add':
-        case 'memory_evidence_get':
-        case 'memory_export':
-        case 'memory_import':
-        case 'memory_governance_delete':
-        case 'memory_audit':
-        case 'memory_diagnostics':
-        case 'memory_verify_anchors':
-          return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_debug_trace_save':
-        case 'memory_debug_trace_search':
-        case 'memory_failed_attempts':
-        case 'memory_file_history':
-        case 'memory_task_state':
-        case 'memory_task_update':
-        case 'memory_handover':
-        case 'memory_verify':
-          return await handleMemoryEngineeringTool(request.params.name, request.params.arguments, { defaultUserId });
-        case 'memory_explain_recall':
-          return await handleMemoryExplainRecall(request.params.arguments, { defaultUserId });
-        case 'memory_hook_register':
-        case 'memory_hook_status':
-          return await handleMemoryHookTool(request.params.name, request.params.arguments, { defaultUserId });
-        case 'memory_working_context':
-        case 'memory_working_offload':
-        case 'memory_working_reset':
-          return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
-        case 'memory_consolidate':
-          return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
-        case 'memory_agent_status':
-          return await handleMemoryAgentStatus(request.params.arguments, { defaultUserId });
-        case 'memory_provenance':
-          return await handleMemoryProvenance(request.params.arguments, { defaultUserId });
-        case 'memory_fetch_source_chunk':
-          return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
-        case 'memory_find_related':
-          return await handleMemoryFindRelated(request.params.arguments, { defaultUserId });
-        case 'memory_reindex_source':
-          return await handleMemoryReindexSource(request.params.arguments, { defaultUserId });
-        case 'memory_record_lesson':
-          return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_create_requirement':
-          return await handleMemoryCreateRequirement(request.params.arguments, { defaultUserId });
-        case 'memory_capture_artifact':
-          return await handleMemoryCaptureArtifact(request.params.arguments, { defaultUserId });
-        case 'atlas_put':
-          return await handleAtlasPut(request.params.arguments, { defaultUserId });
-        case 'atlas_get':
-          return await handleAtlasGet(request.params.arguments, { defaultUserId });
-        case 'atlas_list':
-          return await handleAtlasList(request.params.arguments, { defaultUserId });
-        case 'atlas_query':
-          return await handleAtlasQuery(request.params.arguments, { defaultUserId });
-        case 'atlas_impact':
-          return await handleAtlasImpact(request.params.arguments, { defaultUserId });
-        case 'atlas_enrich':
-          return await handleAtlasEnrich(request.params.arguments, { defaultUserId });
-        case 'fleet_snapshot_put':
-          return await handleFleetSnapshotPut(request.params.arguments, { defaultUserId });
-        case 'fleet_snapshot_get':
-          return await handleFleetSnapshotGet(request.params.arguments, { defaultUserId });
-        case 'memory_capture_annotation':
-          return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
-        case 'memory_extract_skill':
-          return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
-        case 'memory_skill_outcome':
-          // Skill reliability is a GLOBAL registry (no per-user scope), so
-          // recording outcomes / re-ranking it is an admin-only governance
-          // action — an arbitrary caller must not be able to demote everyone's
-          // skills or inflate a bad one (CWE-639). Automatic scoring is driven
-          // by trusted internal turn-outcome signals, not this tool.
-          if (!isAdmin) {
-            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
-          }
-          return await handleMemorySkillOutcome(request.params.arguments);
-        case 'memory_graph_analytics':
-          return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
-        case 'memory_reflect':
-          return await handleMemoryReflect(request.params.arguments, { defaultUserId });
-        case 'memory_reflect_session':
-          return await handleMemoryReflectSession(request.params.arguments, { defaultUserId });
-        case 'memory_blackboard_review':
-          return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
-        case 'memory_tree_walk':
-          return await handleMemoryTreeWalk(request.params.arguments, { defaultUserId });
-        case 'memory_vault_export':
-          return await handleMemoryVaultExport(request.params.arguments, { defaultUserId });
-        case 'memory_prune_sources':
-          return await handleMemoryPruneSources(request.params.arguments, { defaultUserId });
-        case 'memory_agent_run':
-          return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
-        case 'memory_job_retry':
-          return await handleMemoryJobRetry(request.params.arguments, { defaultUserId });
-        case 'memory_compress':
-          return await handleMemoryCompress(request.params.arguments, { defaultUserId });
-        case 'memory_retrieve':
-          return await handleMemoryRetrieve(request.params.arguments, { defaultUserId });
-        case 'memory_stats':
-          return await handleMemoryStats(request.params.arguments, { defaultUserId });
+        // memory_get … memory_stats (governance / engineering / hook / working blocks,
+        // atlas_*, fleet_*, memory_skill_outcome) all migrated to ./mcpTools/memory.js (A41-7).
         case 'connector_list':
           return await handleConnectorList(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot });
         case 'connector_run':
