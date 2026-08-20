@@ -40,11 +40,17 @@ const MIGRATED = [
   "fleet_snapshot_get",
   "memory_register_skill_hints",
   "memory_skill_outcome",
+  // batch 3 — vulnerability intelligence + connector + knowledge (actor-gated)
+  "vulnerability_intelligence",
+  "connector_list",
+  "connector_run",
+  "knowledge_list",
+  "knowledge_search",
 ];
 
-// Tools that deliberately REMAIN in the mcpServer.ts switch (session_* close over
-// the delivery hub; connector_*/knowledge_* need workspace/actor context).
-const STILL_IN_SWITCH = ["session_register", "connector_list", "knowledge_search", "vulnerability_intelligence"];
+// Tools that deliberately REMAIN in the mcpServer.ts switch: session_* close over
+// the per-connection delivery hub + connection claim (the next, final slice).
+const STILL_IN_SWITCH = ["session_register", "session_send", "session_heartbeat", "session_delegations"];
 
 describe("A41-7 MCP tool registry", () => {
   it("registers every tool in the first migrated batch", () => {
@@ -70,7 +76,7 @@ describe("A41-7 MCP tool registry", () => {
     const ctx = (isAdmin: boolean): McpToolContext => ({
       args: {},
       invokedName: "create_skill",
-      host: { registry: {} as never, isAdmin, defaultUserId: "u", defaultOrgId: undefined },
+      host: { registry: {} as never, isAdmin, defaultUserId: "u", defaultOrgId: undefined, connectorWorkspaceRoot: "/tmp", knowledgeActor: null },
     });
     await expect(mcpToolHandler("create_skill")!(ctx(false))).rejects.toThrow(
       /Admin access required for this tool/,

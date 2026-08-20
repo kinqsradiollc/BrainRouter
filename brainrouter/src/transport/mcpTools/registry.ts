@@ -12,6 +12,7 @@
 // dispatch is a registry lookup wrapped in the SAME IDOR-guard + metrics envelope.
 
 import type { Registry } from '../../registry.js';
+import type { KnowledgeActor } from '../../knowledge/contracts/actor.js';
 
 /**
  * The per-connection surface a migrated MCP tool handler may read — the closure
@@ -31,6 +32,10 @@ export interface McpToolHost {
   readonly defaultUserId: string;
   /** The authenticated org id (undefined outside a tenant context) — mcpServer.ts:203. */
   readonly defaultOrgId: string | undefined;
+  /** Workspace root for connector file-state (connectors.json); cwd fallback — mcpServer.ts:230. */
+  readonly connectorWorkspaceRoot: string;
+  /** The org/role actor knowledge tools require (null outside a tenant context) — mcpServer.ts:203. */
+  readonly knowledgeActor: KnowledgeActor | null;
 }
 
 /** Everything a migrated MCP tool handler receives — the shared closure the switch dispatched inline. */

@@ -13,6 +13,7 @@ import {
   handleMemoryFindRelated,
   handleMemoryGraphQuery,
   handleMemoryGraphAnalytics,
+  handleVulnerabilityIntelligence,
 } from '../../tools/recall/index.js';
 import {
   handleMemoryCaptureTurn,
@@ -158,6 +159,7 @@ registerMcpTool('fleet_snapshot_get', (ctx) => handleFleetSnapshotGet(ctx.args, 
 // ── (args) only ──────────────────────────────────────────────────────────────
 registerMcpTool('memory_register_skill_hints', (ctx) => handleMemoryRegisterSkillHints(ctx.args));
 registerMcpTool('memory_resolve_session', (ctx) => handleMemoryResolveSession(ctx.args));
+registerMcpTool('vulnerability_intelligence', (ctx) => handleVulnerabilityIntelligence(ctx.args));
 
 // ── admin-gated (args): skill reliability is a GLOBAL registry — recording
 // outcomes / re-ranking is an admin-only governance action (CWE-639). Gate

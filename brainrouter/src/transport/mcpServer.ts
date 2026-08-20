@@ -43,7 +43,7 @@ import {
   memoryFindRelatedToolSchema,
   memoryGraphQueryToolSchema,
   memoryGraphAnalyticsToolSchema,
-  vulnerabilityIntelligenceToolSchema, handleVulnerabilityIntelligence,
+  vulnerabilityIntelligenceToolSchema,
 } from '../tools/recall/index.js';
 import {
   memoryCaptureTurnToolSchema,
@@ -104,18 +104,18 @@ import {
   atlasImpactToolSchema, atlasEnrichToolSchema,
   fleetSnapshotPutToolSchema,
   fleetSnapshotGetToolSchema,
-  connectorListToolSchema, handleConnectorList,
-  connectorRunToolSchema, handleConnectorRun,
+  connectorListToolSchema,
+  connectorRunToolSchema,
 } from '../tools/atlas/index.js';
 import {
-  knowledgeListToolSchema, handleKnowledgeList,
-  knowledgeBaseCreateToolSchema, handleKnowledgeBaseCreate,
-  knowledgeIngestToolSchema, handleKnowledgeIngest,
-  knowledgeIngestDocxToolSchema, handleKnowledgeIngestDocx,
-  knowledgeIngestPdfToolSchema, handleKnowledgeIngestPdf,
-  knowledgeStatusToolSchema, handleKnowledgeStatus,
-  knowledgeRetryToolSchema, handleKnowledgeRetry,
-  knowledgeSearchToolSchema, handleKnowledgeSearch,
+  knowledgeListToolSchema,
+  knowledgeBaseCreateToolSchema,
+  knowledgeIngestToolSchema,
+  knowledgeIngestDocxToolSchema,
+  knowledgeIngestPdfToolSchema,
+  knowledgeStatusToolSchema,
+  knowledgeRetryToolSchema,
+  knowledgeSearchToolSchema,
 } from '../tools/knowledge/index.js';
 import {
   // handleWorkspaceProfileRecommend migrated to ./mcpTools/workspace.js (A41-7).
@@ -489,7 +489,7 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
       // it needs travel on `host`. Un-migrated tools fall through to the switch.
       const __migrated = mcpToolHandler(request.params.name);
       if (__migrated) {
-        const host: McpToolHost = { registry, isAdmin, defaultUserId, defaultOrgId };
+        const host: McpToolHost = { registry, isAdmin, defaultUserId, defaultOrgId, connectorWorkspaceRoot, knowledgeActor };
         return await __migrated({ args: request.params.arguments, invokedName: request.params.name, host });
       }
       switch (request.params.name) {
@@ -595,37 +595,8 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
         });
         case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
         case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
-        case 'vulnerability_intelligence': return await handleVulnerabilityIntelligence(request.params.arguments);
-        // memory_get … memory_stats (governance / engineering / hook / working blocks,
-        // atlas_*, fleet_*, memory_skill_outcome) all migrated to ./mcpTools/memory.js (A41-7).
-        case 'connector_list':
-          return await handleConnectorList(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot });
-        case 'connector_run':
-          return await handleConnectorRun(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot, defaultUserId });
-        case 'knowledge_list':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeList(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_base_create':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeBaseCreate(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_ingest':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeIngest(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_ingest_docx':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeIngestDocx(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_ingest_pdf':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeIngestPdf(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_status':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeStatus(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_retry':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeRetry(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_search':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeSearch(request.params.arguments, { actor: knowledgeActor });
+        // vulnerability_intelligence, connector_* and knowledge_* migrated to
+        // ./mcpTools/ (A41-7). memory_* / atlas_* / fleet_* migrated to memory.js.
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
