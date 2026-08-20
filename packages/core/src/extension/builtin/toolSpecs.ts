@@ -539,6 +539,18 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'session_search',
+    description: 'Search across this workspace\'s conversations for a text query. Returns the matching sessions with a few redacted snippets each (role, timestamp, snippet, match count). Read-only; scoped to this workspace; snippets are redacted. Use it to find which past session discussed something.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The text to search for (case-insensitive).' },
+        limit: { type: 'number', description: 'Max snippets per matching session (default 5, max 20).' }
+      },
+      required: ['query']
+    }
+  },
+  {
     name: 'list_mcp_resources',
     description: 'List resources provided by MCP servers. Resources are structured context such as files, schemas, or app data; prefer them over web search when available.',
     inputSchema: {
