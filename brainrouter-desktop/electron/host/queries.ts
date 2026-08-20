@@ -598,6 +598,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     fanoutManager, remoteWorktrees,
     mobileRelay,
     remoteAccess,
+    egressTunnel,
     modelsCacheByKey,
     isoNow,
     runReview,
@@ -4904,6 +4905,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // enrollment + outbound broker connections. The account bearer and the
       // rotating device refresh token never reach the renderer or the wire.
       'remote-access-status': () => ({ enrolled: remoteAccess.isEnrolled(), deviceId: remoteAccess.deviceId() }),
+      // ADR-043 D4 — true only while this device is actively holding an egress
+      // control channel to the gateway (i.e. it can relay provider traffic).
+      'egress-tunnel-status': () => ({ active: egressTunnel.isReady() }),
       'remote-access-enroll': async () => {
         const result = await remoteAccess.enroll();
         return { ok: true, deviceId: result.deviceId };

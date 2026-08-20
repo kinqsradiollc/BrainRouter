@@ -1579,7 +1579,7 @@ async function main(): Promise<void> {
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
     captureRequirementNote, captureAnnotationNote, captureAnnotationExportNote, captureArtifactNote,
-    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, remoteAccess, modelsCacheByKey,
+    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, remoteAccess, egressTunnel, modelsCacheByKey,
     getPrCache: () => prCache, setPrCache: (v) => { prCache = v; },
     getPrStatusMapCache: () => prStatusMapCache, setPrStatusMapCache: (v) => { prStatusMapCache = v; },
     readTranscriptCached, isoNow, collectWorkingDiff,
