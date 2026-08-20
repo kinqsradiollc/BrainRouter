@@ -466,6 +466,18 @@ export interface CliAccountIdentity {
   email?: string;
 }
 
+/** ADR-041 A41-15 — Code Mode (`run_code`) config. `enabled` is default-false; the
+ *  budget fields are optional overrides over the runner's defaults. */
+export interface CodeModeKnobs {
+  enabled?: boolean;
+  wallClockMs?: number;
+  heartbeatGraceMs?: number;
+  computeMs?: number;
+  maxOutputChars?: number;
+  maxToolCalls?: number;
+  maxInFlight?: number;
+}
+
 export interface CliKnobs {
   /** Who is signed in. See `CliAccountIdentity`. */
   account?: CliAccountIdentity;
@@ -921,6 +933,8 @@ export interface CliKnobs {
   offloadRetentionMs?: number;
   /** MEM-22: max cached offload results before the reclaimer evicts the least-recently-used. Default 64. */
   offloadMaxEntries?: number;
+  /** ADR-041 A41-15 — Code Mode (`run_code`) knobs. Default OFF (a new execution surface). */
+  codeMode?: CodeModeKnobs;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
   /**
@@ -1308,6 +1322,8 @@ export interface ResolvedCliKnobs {
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
   offloadMaxEntries: number;
+  /** ADR-041 A41-15 — resolved Code Mode knobs (`enabled` always a boolean). */
+  codeMode: CodeModeKnobs & { enabled: boolean };
   maxSpawnDepth: number;
   maxConcurrentChildren: number;
   fleetMaxConcurrentJobs: number;

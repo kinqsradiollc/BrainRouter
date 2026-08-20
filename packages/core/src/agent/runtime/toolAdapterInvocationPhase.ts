@@ -67,6 +67,9 @@ export async function invokeAuthorizedToolAdapter(input: {
     args: Record<string, unknown>,
     descriptor: unknown,
   ): void;
+  /** ADR-041 A41-15 — Code Mode sub-dispatch, forwarded to executeLocalTool so
+   *  run_code can re-enter the guarded pipeline for each `agent.<tool>()` call. */
+  codeModeDispatch?(tool: string, args: Record<string, unknown>): Promise<string>;
   buildOrchestrationContext(
     executionLaunch?: OrchestrationContext['executionLaunch'],
   ): OrchestrationContext;
@@ -218,6 +221,7 @@ async function invokeLocalAdapter(
     const resultText = await agent.executeLocalTool(name, args, {
       orchestrationRuntime: runtime.port,
       authorizeMcpTarget: input.authorizeNestedMcpTarget,
+      codeModeDispatch: input.codeModeDispatch,
       lifecycleRuntime: {
         afterInvoke: (kind, toolArgs) => {
           if (kind === 'track-automation') {

@@ -23,6 +23,10 @@ export async function invokeBuiltinToolRuntime(
     args: Record<string, unknown>,
     descriptor: unknown,
   ) => void,
+  // ADR-041 A41-15 — Code Mode sub-dispatch, threaded like authorizeMcpTarget: it
+  // only reaches here via the trusted `builtinRuntime.invoke` path (agent.ts), so a
+  // user-extension tool can never obtain it (CWE-266). Only `run_code` reads it.
+  codeModeDispatch?: (tool: string, args: Record<string, unknown>) => Promise<string>,
 ): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
     // The Agent might have been constructed with a workspace different from
@@ -62,6 +66,7 @@ export async function invokeBuiltinToolRuntime(
         readOnlyGuard,
         fsPort,
         authorizeMcpTarget,
+        codeModeDispatch,
       });
     }
     throw new Error(`Unknown local tool: ${name}`);

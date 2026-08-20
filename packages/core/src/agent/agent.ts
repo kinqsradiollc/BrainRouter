@@ -2633,6 +2633,9 @@ export class Agent implements IAgent {
       args: Record<string, unknown>,
       descriptor: unknown,
     ): void;
+    // ADR-041 A41-15 — Code Mode sub-dispatch, forwarded to run_code only via the
+    // trusted builtinRuntime path below (CWE-266 — never to a user extension).
+    codeModeDispatch?(tool: string, args: Record<string, unknown>): Promise<string>;
   }): Promise<string> {
     // HONK-L3 — re-nest args the local model emitted against a flattened schema
     // (dot-notation keys → nested objects) before any executor sees them.
@@ -2668,6 +2671,7 @@ export class Agent implements IAgent {
             toolName,
             toolArgs,
             runtime?.authorizeMcpTarget,
+            runtime?.codeModeDispatch,
           ),
         }
         : undefined,

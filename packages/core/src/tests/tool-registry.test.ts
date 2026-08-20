@@ -61,7 +61,7 @@ test('CODEX-TOOL-REGISTRY exposure tiers match the reviewed allowed sets exactly
   // terminal, and computer control plus connector_run.
   assert.deepEqual([...write].filter((t) => !read.has(t)).sort(), ['apply_patch', 'edit_file', 'notebook_edit', 'write_file']);
   assert.deepEqual([...shell].filter((t) => !write.has(t)).sort(), [
-    'computer_use', 'connector_run', 'kill_command', 'run_command',
+    'computer_use', 'connector_run', 'kill_command', 'run_code', 'run_command',
     'terminal_list', 'terminal_read', 'terminal_write',
   ]);
 
