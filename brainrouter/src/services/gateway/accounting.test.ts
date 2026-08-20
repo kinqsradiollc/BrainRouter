@@ -141,6 +141,7 @@ describe('model gateway shared accounting', () => {
         totalTokens: 10,
       },
       costMicrousd: null,
+      egressMode: 'server',
     });
 
     expect(run).toHaveBeenNthCalledWith(
@@ -153,7 +154,7 @@ describe('model gateway shared accounting', () => {
     expect(usageSql).not.toMatch(/prompt|response|bearer|provider_key|api_key/i);
     expect(usageParams).toEqual([
       'req_test', 'org-1', 'user-1', null, 'gpt-public', 'high', 'provider:pc-1',
-      25, 200, 7, 3, 2, 10, null,
+      25, 200, 7, 3, 2, 10, null, 'server',
     ]);
   });
 });

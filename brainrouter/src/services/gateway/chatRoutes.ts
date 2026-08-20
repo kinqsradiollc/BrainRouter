@@ -219,6 +219,8 @@ interface GatewayAuditState {
   status: number;
   usage: GatewayTokenUsage | null;
   permitAcquired: boolean;
+  /** ADR-043 C7 (D4) — the egress path taken: 'server' (default) or 'client-tunnel'. */
+  egressMode: string;
 }
 
 function usageEvent(
@@ -241,6 +243,7 @@ function usageEvent(
     httpStatus: audit.status,
     usage: audit.usage,
     costMicrousd: null,
+    egressMode: audit.egressMode,
   };
 }
 
@@ -613,6 +616,7 @@ export function registerGatewayDataPlane(
         status: 500,
         usage: null,
         permitAcquired: false,
+        egressMode: 'server',
       };
       if (parsed.stream && !resolved.model.capabilities.streaming) {
         throw new GatewayRequestError(
@@ -648,6 +652,8 @@ export function registerGatewayDataPlane(
       if (!releaseShaperSlot) { audit.status = 429; return; }
       phase = 'upstream';
       const upstreamOptions = await selectUpstreamForRequest(options, audit.auth, resolved.provider);
+      // A fresh options object (not the shared base) means the edge tunnel engaged.
+      audit.egressMode = upstreamOptions !== options.upstream ? 'client-tunnel' : 'server';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'chat-completions'),
         {
@@ -729,6 +735,7 @@ export function registerGatewayDataPlane(
         status: 500,
         usage: null,
         permitAcquired: false,
+        egressMode: 'server',
       };
       if (!resolved.model.capabilities.responses) {
         throw new GatewayRequestError(
@@ -771,6 +778,8 @@ export function registerGatewayDataPlane(
       if (!releaseShaperSlot) { audit.status = 429; return; }
       phase = 'upstream';
       const upstreamOptions = await selectUpstreamForRequest(options, audit.auth, resolved.provider);
+      // A fresh options object (not the shared base) means the edge tunnel engaged.
+      audit.egressMode = upstreamOptions !== options.upstream ? 'client-tunnel' : 'server';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'responses'),
         {

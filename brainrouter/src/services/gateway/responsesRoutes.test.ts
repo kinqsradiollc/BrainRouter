@@ -256,6 +256,7 @@ describe('hosted Responses data plane', () => {
       httpStatus: 200,
       usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 2, totalTokens: 10 },
       costMicrousd: null,
+      egressMode: 'server',
     });
     expect(JSON.stringify(recordUsage.mock.calls)).not.toMatch(/Weather|provider-secret|account-token/);
     expect(releaseRequest).toHaveBeenCalledWith('org-1', 'req_responses_123');
