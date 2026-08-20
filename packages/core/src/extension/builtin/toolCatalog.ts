@@ -62,6 +62,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'session_reference', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
