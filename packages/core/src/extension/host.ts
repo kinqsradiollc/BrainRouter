@@ -20,6 +20,7 @@ import {
   type AgentPhaseName,
   type PhaseHookHandler,
   type PanelContribution,
+  type ExtensionDisposer,
 } from './registry.js';
 import { registerBuiltinCapability } from './builtin/capabilities.js';
 import type { ExtensionSource } from './manifest.js';
@@ -53,17 +54,28 @@ export interface ExtensionToolDef {
   handle(args: Record<string, unknown>, runtime?: ExtensionToolRuntimeContext): Promise<string> | string;
 }
 
+/**
+ * ADR-041 A41-9 — the handle every registrar returns. Disposing it unwinds
+ * exactly that one contribution (by identity, via the registry disposer). An
+ * extension may dispose its own contributions mid-activation; the host also
+ * collects every handle so an unload can unwind them in reverse registration
+ * order (`disposeExtensionHost`).
+ */
+export interface Disposable {
+  dispose(): void;
+}
+
 export interface ExtensionHost {
   /** Register an agent tool at an access tier (same contract as native tools). */
-  registerTool(def: ExtensionToolDef): void;
+  registerTool(def: ExtensionToolDef): Disposable;
   /** Register an OpenAI-compatible provider definition in code. */
-  registerProvider(def: ProviderDefinition): void;
+  registerProvider(def: ProviderDefinition): Disposable;
   /** Attach a typed lifecycle handler (in-process analogue of a shell hook). */
-  registerHook(handler: ExtensionHookHandler): void;
+  registerHook(handler: ExtensionHookHandler): Disposable;
   /** ADR-041 D4b — attach an agent phase hook (turn-start/provider-call/tool-execution/turn-end). */
-  registerPhaseHook(phase: AgentPhaseName, handler: PhaseHookHandler): void;
+  registerPhaseHook(phase: AgentPhaseName, handler: PhaseHookHandler): Disposable;
   /** Contribute a serializable UI panel descriptor the desktop renderer maps to a view. */
-  registerPanel(descriptor: PanelContribution): void;
+  registerPanel(descriptor: PanelContribution): Disposable;
   /** Structured logger scoped to the extension name. */
   readonly log: (msg: string, fields?: Record<string, unknown>) => void;
   readonly workspaceRoot: string;
@@ -102,6 +114,12 @@ class ExtensionToolExecutor implements LocalToolExecutor {
   }
 }
 
+// ADR-041 A41-9 — every disposer a host hands out, in registration order, so an
+// unload can unwind them in REVERSE (a later contribution that shadowed an earlier
+// one is removed first). Held off the host object itself (WeakMap) so the public
+// ExtensionHost shape stays exactly the typed contribution surface.
+const hostDisposers = new WeakMap<ExtensionHost, ExtensionDisposer[]>();
+
 /** Build a host bound to one extension; its registrations are attributed to `name`. */
 export function createExtensionHost(
   name: string,
@@ -109,6 +127,20 @@ export function createExtensionHost(
   version: string,
   options: { source?: ExtensionSource; required?: boolean } = {},
 ): ExtensionHost {
+  const disposers: ExtensionDisposer[] = [];
+  // Track a disposer and hand the extension a Disposable that both removes the
+  // contribution AND forgets the tracked disposer, so a double-unload is a no-op.
+  const track = (disposer: ExtensionDisposer): Disposable => {
+    disposers.push(disposer);
+    return {
+      dispose: () => {
+        const i = disposers.indexOf(disposer);
+        if (i < 0) return; // already disposed
+        disposers.splice(i, 1);
+        disposer();
+      },
+    };
+  };
   const host: ExtensionHost & Partial<BuiltinExtensionHost> = {
     workspaceRoot,
     version,
@@ -126,17 +158,37 @@ export function createExtensionHost(
         ...(def.runtimePort === 'browser-control' ? { runtimePort: 'browser-control', availability: 'browser-use' } : {}),
         ...(def.runtimePort === 'session-input' ? { runtimePort: 'session-input', availability: 'root-agent' } : {}),
       };
-      registerExtensionTool(entry, new ExtensionToolExecutor(def), name, { required: false });
+      return track(registerExtensionTool(entry, new ExtensionToolExecutor(def), name, { required: false }));
     },
-    registerProvider: (def) => registerExtensionProvider(def, name),
-    registerHook: (handler) => registerExtensionHook(handler, name),
-    registerPhaseHook: (phase, handler) => registerExtensionPhaseHook(phase, handler, name),
-    registerPanel: (descriptor) => registerExtensionPanel(descriptor, name),
+    registerProvider: (def) => track(registerExtensionProvider(def, name)),
+    registerHook: (handler) => track(registerExtensionHook(handler, name)),
+    registerPhaseHook: (phase, handler) => track(registerExtensionPhaseHook(phase, handler, name)),
+    registerPanel: (descriptor) => track(registerExtensionPanel(descriptor, name)),
   };
+  hostDisposers.set(host, disposers);
   // The public host never contains this port. Arbitrary user/workspace code can
   // register argument-only tools, but cannot obtain the Agent runtime bridge.
   if (options.source === 'builtin' && options.required) {
     host.registerCoreCapability = (capability) => registerBuiltinCapability(capability);
   }
   return host;
+}
+
+/**
+ * ADR-041 A41-9 — unload a host's contributions, unwinding in REVERSE registration
+ * order (LIFO): the last thing registered is the first removed, so a contribution
+ * that shadowed an earlier one is torn down before the thing it shadowed. Idempotent
+ * — a second call is a no-op. Returns the number of contributions disposed.
+ */
+export function disposeExtensionHost(host: ExtensionHost): number {
+  const disposers = hostDisposers.get(host);
+  if (!disposers || disposers.length === 0) return 0;
+  const count = disposers.length;
+  // Splice to empty as we go so a disposer that re-enters (or a concurrent
+  // individual dispose) cannot double-run.
+  while (disposers.length > 0) {
+    const disposer = disposers.pop()!;
+    disposer();
+  }
+  return count;
 }

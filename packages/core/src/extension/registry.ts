@@ -64,28 +64,57 @@ export function commitExtensionReload(): void {
 }
 export function abortExtensionReload(): void { staging = null; syncExtensionProviders(); }
 
-export function registerExtensionTool(entry: LocalToolEntry, executor: LocalToolExecutor, from: string, options: { required?: boolean } = {}): void {
+// ADR-041 A41-9 — every registrar returns a disposer that removes EXACTLY its own
+// contribution, by object identity. Identity (not name/id) is what makes it safe:
+// a later re-registration under the same name replaces this contribution, and
+// disposing this stale handle must never remove that newer one. The object
+// reference survives a reload commit (active = staging swaps arrays, not objects),
+// so a disposer captured before commit still finds its contribution after.
+export type ExtensionDisposer = () => void;
+function disposeContribution<T>(pick: (s: ContributionState) => T[], item: T, opts: { syncProviders?: boolean } = {}): void {
+  for (const state of [active, staging]) {
+    if (!state) continue;
+    const arr = pick(state);
+    const i = arr.indexOf(item);
+    if (i >= 0) {
+      arr.splice(i, 1);
+      markActiveMutation(state);
+      if (opts.syncProviders && state === active) syncExtensionProviders();
+    }
+  }
+}
+
+export function registerExtensionTool(entry: LocalToolEntry, executor: LocalToolExecutor, from: string, options: { required?: boolean } = {}): ExtensionDisposer {
   const state = target();
   const idx = state.tools.findIndex((tool) => tool.entry.name === entry.name);
   const existing = idx >= 0 ? state.tools[idx] : undefined;
   const required = options.required === true;
   if (existing?.required && !required) throw new Error(`Tool "${entry.name}" is owned by required core extension "${existing.from}" and cannot be shadowed by "${from}".`);
   if (idx >= 0) state.tools.splice(idx, 1);
-  state.tools.push({ entry, executor, from, required });
+  const contribution: ToolContribution = { entry, executor, from, required };
+  state.tools.push(contribution);
   markActiveMutation(state);
+  return () => disposeContribution((s) => s.tools, contribution);
 }
-export function registerExtensionProvider(def: ProviderDefinition, from: string): void {
-  const state = target(); const idx = state.providers.findIndex((item) => item.def.id === def.id); if (idx >= 0) state.providers.splice(idx, 1); state.providers.push({ def, from }); markActiveMutation(state);
+export function registerExtensionProvider(def: ProviderDefinition, from: string): ExtensionDisposer {
+  const state = target(); const idx = state.providers.findIndex((item) => item.def.id === def.id); if (idx >= 0) state.providers.splice(idx, 1);
+  const contribution: ProviderContribution = { def, from };
+  state.providers.push(contribution); markActiveMutation(state);
   if (state === active) syncExtensionProviders(); // reload path syncs on commit
+  return () => disposeContribution((s) => s.providers, contribution, { syncProviders: true });
 }
-export function registerExtensionHook(handler: ExtensionHookHandler, from: string): void {
-  const state = target(); state.hooks.push({ handler, from }); markActiveMutation(state);
+export function registerExtensionHook(handler: ExtensionHookHandler, from: string): ExtensionDisposer {
+  const state = target(); const contribution: HookContribution = { handler, from }; state.hooks.push(contribution); markActiveMutation(state);
+  return () => disposeContribution((s) => s.hooks, contribution);
 }
-export function registerExtensionPhaseHook(phase: AgentPhaseName, handler: PhaseHookHandler, from: string): void {
-  const state = target(); state.phaseHooks.push({ phase, handler, from }); markActiveMutation(state);
+export function registerExtensionPhaseHook(phase: AgentPhaseName, handler: PhaseHookHandler, from: string): ExtensionDisposer {
+  const state = target(); const contribution: PhaseHookContribution = { phase, handler, from }; state.phaseHooks.push(contribution); markActiveMutation(state);
+  return () => disposeContribution((s) => s.phaseHooks, contribution);
 }
-export function registerExtensionPanel(panel: PanelContribution, from: string): void {
-  const state = target(); const idx = state.panels.findIndex((item) => item.panel.id === panel.id); if (idx >= 0) state.panels.splice(idx, 1); state.panels.push({ panel, from }); markActiveMutation(state);
+export function registerExtensionPanel(panel: PanelContribution, from: string): ExtensionDisposer {
+  const state = target(); const idx = state.panels.findIndex((item) => item.panel.id === panel.id); if (idx >= 0) state.panels.splice(idx, 1);
+  const contribution: PanelContributionEntry = { panel, from }; state.panels.push(contribution); markActiveMutation(state);
+  return () => disposeContribution((s) => s.panels, contribution);
 }
 
 export function extensionToolEntries(): LocalToolEntry[] { return active.tools.map((tool) => tool.entry); }

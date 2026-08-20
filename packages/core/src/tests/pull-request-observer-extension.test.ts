@@ -88,11 +88,11 @@ test('pull-request observer registers one privileged, audited read tool', async 
     workspaceRoot: '/tmp/workspace',
     version: 'test',
     log: () => {},
-    registerTool: (definition) => tools.set(definition.name, definition),
-    registerProvider: () => {},
-    registerHook: () => {},
-    registerPhaseHook: () => {},
-    registerPanel: () => {},
+    registerTool: (definition) => { tools.set(definition.name, definition); return { dispose() {} }; },
+    registerProvider: () => ({ dispose() {} }),
+    registerHook: () => ({ dispose() {} }),
+    registerPhaseHook: () => ({ dispose() {} }),
+    registerPanel: () => ({ dispose() {} }),
   };
 
   await (await loadExtension()).activate(host);
