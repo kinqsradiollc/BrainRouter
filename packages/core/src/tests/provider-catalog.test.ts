@@ -42,6 +42,18 @@ test('findProviderByEndpoint resolves the new cloud providers by their endpoint'
   assert.equal(findProviderByEndpoint('https://api.groq.com/openai/v1/')?.id, 'groq');
 });
 
+test('ADR-043: the activated cloud providers declare the edge-egress tunnel capability', () => {
+  // The gateway reads egress config via findProviderByEndpoint — so activation is
+  // proven by the def it resolves declaring clientTunnel in a tunnelling mode.
+  for (const endpoint of ['https://api.openai.com/v1', 'https://api.anthropic.com/v1']) {
+    const def = findProviderByEndpoint(endpoint);
+    assert.equal(def?.egressCapabilities?.clientTunnel, true, `${endpoint} must declare clientTunnel`);
+    assert.equal(def?.egressMode, 'auto', `${endpoint} must be egressMode 'auto'`);
+  }
+  // A provider that has NOT been activated stays server-only (no accidental tunnelling).
+  assert.equal(findProviderByEndpoint('https://api.groq.com/openai/v1')?.egressCapabilities?.clientTunnel, undefined);
+});
+
 test('azure (empty endpoint) is NOT endpoint-matchable — it resolves by provider id only', () => {
   assert.equal(findProviderByEndpoint(''), undefined);
   assert.equal(findProviderByEndpoint(undefined), undefined);

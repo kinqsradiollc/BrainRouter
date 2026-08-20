@@ -23,4 +23,10 @@ export const openai: ProviderDefinition = {
   // (e.g. gpt-4o, gpt-5-chat-latest), so it MUST gate by the reasoning-model
   // allowlist. Every other OpenAI-compatible provider defaults to 'any'.
   effortModelGate: 'reasoning-only',
+  // ADR-043 — this cloud provider is reachable over the edge egress tunnel
+  // (server-terminated TLS, the device relays only ciphertext). `auto` means the
+  // gateway prefers the tunnel ONLY when the org has opted in AND a device is
+  // online; otherwise it dials directly — so this is byte-neutral by default.
+  egressMode: 'auto',
+  egressCapabilities: { clientTunnel: true },
 };
