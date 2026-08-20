@@ -517,6 +517,16 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'session_list',
+    description: 'List the other conversations in this workspace (session key, title, turn count, last-modified time, and — for a forked session — which session it branched from). Read-only; scoped to this workspace. Use it to find a sibling session to reference or continue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max sessions to return, newest first (default 50, max 200).' }
+      }
+    }
+  },
+  {
     name: 'list_mcp_resources',
     description: 'List resources provided by MCP servers. Resources are structured context such as files, schemas, or app data; prefer them over web search when available.',
     inputSchema: {

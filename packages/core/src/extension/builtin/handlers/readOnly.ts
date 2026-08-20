@@ -10,10 +10,30 @@ import { setQuestion, readLedger, appendEvidence } from '../../../research/resea
 import { listConnectors } from '../../../connectors/index.js';
 import { runExtractResult } from '../../../tool/result/extractResult.js';
 import { listWorktreesStructured } from '../../../worktree/concurrentWorktrees.js';
+import { listTranscripts } from '../../../session/transcript/sessionStore.js';
 import path from 'node:path';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
+  // ADR-041 A41-14 (W2) — session query: list the other conversations in this
+  // workspace, so the agent can find and reason about its siblings (and, via the
+  // A41-14 fork lineage, which one a session branched from). Read-only + workspace-
+  // scoped: it never reaches outside `host.workspaceRoot`.
+  session_list: async ({ args, host }) => {
+    const limit = typeof args.limit === 'number' && Number.isFinite(args.limit)
+      ? Math.max(1, Math.min(200, Math.floor(args.limit)))
+      : 50;
+    const sessions = listTranscripts(host.workspaceRoot, { limit }).map((s) => ({
+      sessionKey: s.sessionKey,
+      title: s.firstUserMessage ?? null,
+      turns: s.turnCount,
+      modifiedAt: s.modifiedAt,
+      ...(s.parentSessionKey ? { forkedFrom: s.parentSessionKey } : {}),
+      current: s.sessionKey === host.sessionKey || undefined,
+    }));
+    return JSON.stringify({ workspaceRoot: host.workspaceRoot, count: sessions.length, sessions }, null, 2);
+  },
+
   research_brief: async ({ args, host }) => {
     if (typeof args.question === 'string' && args.question.trim()) {
       setQuestion(host.workspaceRoot, host.sessionKey, args.question);
