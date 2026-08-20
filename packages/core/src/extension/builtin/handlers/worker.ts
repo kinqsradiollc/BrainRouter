@@ -4,15 +4,17 @@
 // export. Body verbatim (this.workspaceRoot -> ctx.host.workspaceRoot).
 
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../../worker/workerStore.js';
-import { waitWorker, spawnWorkerThread } from '../../../orchestration/agents/workerTools.js';
+import { waitWorker } from '../../../orchestration/agents/workerTools.js';
 import { acknowledgeCompletions } from '../../../session/completion/completionInbox.js';
-import type { SubprocessPort } from '../../../agent/subprocess/subprocessPort.js';
+import { defaultSubprocessPort } from '../../../agent/subprocess/externalCliSubprocess.js';
 import type { BuiltinToolHandler } from './registry.js';
 
-// ADR-041 D3 — default subprocess port: wraps `spawnWorkerThread` verbatim, so
-// the local worker-spawn path is byte-identical. An execution world (D10) injects
-// a port that spawns the worker in a container/remote. (Moved here with its sole consumer.)
-const nodeSubprocessPort: SubprocessPort = { spawnWorker: spawnWorkerThread };
+// ADR-041 D3 + A41-15 — the default subprocess port. For an ordinary role this is
+// `spawnWorkerThread` byte-for-byte; when the role names a declared external agent
+// (`cli.agents.hosted`) it spawns via that external CLI instead (A41-15). An
+// execution world (D10) can still inject `host.subprocessPort` to spawn elsewhere.
+// Referenced lazily at the call site (not aliased at module load) to avoid a
+// circular-import temporal dead zone through the hosted-CLI runtime.
 
 export const workerHandlers: Record<string, BuiltinToolHandler> = {
   read_worker_summary: async ({ args, host }) => {
@@ -49,7 +51,7 @@ export const workerHandlers: Record<string, BuiltinToolHandler> = {
         if (!goal) throw new Error('spawn_worker_thread requires a goal.');
         // ADR-041 D3 — spawn via the injected subprocess port (default wraps
         // spawnWorkerThread; an execution world can spawn in a container/remote).
-        const worker = (host.subprocessPort ?? nodeSubprocessPort).spawnWorker(host.mcpClient, host.llmConfig, {
+        const worker = (host.subprocessPort ?? defaultSubprocessPort).spawnWorker(host.mcpClient, host.llmConfig, {
           workspaceRoot: host.workspaceRoot,
           launchCwd: host.launchCwd,
           role: String(args.role ?? 'worker'),
