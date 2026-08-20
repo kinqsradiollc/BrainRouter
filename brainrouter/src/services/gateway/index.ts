@@ -43,15 +43,25 @@ function main(): void {
     store: { getDeviceSessionByTokenHash: (o, u, h) => svc.getDeviceSessionByTokenHash(o, u, h) },
     ping: () => svc.ping(),
   });
-  // Short-TTL cache so a burst of eligible requests does not re-read the same
-  // per-org opt-in row every time (the value changes rarely).
+  // Short-TTL caches so a burst of eligible requests does not re-read the same
+  // rows every time (the values change rarely). Both fail open — a throwing read
+  // is caught upstream and the request takes direct server egress.
   const optInCache = new Map<string, { value: boolean; expires: number }>();
+  const killCache = { killed: false, expires: 0 };
   const OPT_IN_TTL_MS = 30_000;
   const egressSelection: GatewayEgressSelection | undefined = egressConfig.enabled
     ? {
         transportForAccount: (orgId, userId, keyId) => egressService.transportForAccount(orgId, userId, keyId),
         orgOptIn: async (orgId) => {
           const now = Date.now();
+          // ADR-043 C7 (D2) — the global kill-switch force-disables the tunnel for
+          // EVERY org without a restart (an ops lever above per-org consent).
+          if (killCache.expires <= now) {
+            const kill = await svc.getOrgSetting<{ killed?: boolean }>(`egress:clientTunnelKill`);
+            killCache.killed = kill?.killed === true;
+            killCache.expires = now + OPT_IN_TTL_MS;
+          }
+          if (killCache.killed) return false;
           const cached = optInCache.get(orgId);
           if (cached && cached.expires > now) return cached.value;
           const setting = await svc.getOrgSetting<{ enabled?: boolean }>(`egress:clientTunnelOptIn:${orgId}`);
