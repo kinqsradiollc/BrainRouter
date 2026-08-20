@@ -59,6 +59,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // update_plan / artifact_write: read tier, read_only, serialized (not parallel).
   { name: 'research_note', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'research_brief', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
