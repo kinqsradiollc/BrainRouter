@@ -388,6 +388,20 @@ export interface PentestRun {
   findingsDetail?: ReviewJob["findingsDetail"];
 }
 
+/** ADR-041 D14 — the resolved runtime composition ("what is running"). Mirrors
+ *  core's `RuntimeCompositionSnapshot`. `executionWorld` is optional so the panel
+ *  stays forward-compatible with the backend before A41-10 lands. */
+export interface RuntimeComposition {
+  builtinTools: string[];
+  migratedBuiltinTools: string[];
+  extensions: { tools: string[]; providers: string[]; hooks: number; panels: string[] };
+  providers: string[];
+  slashCommands: string[];
+  invariants: { areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>; violations: number };
+  loopDriver: string;
+  executionWorld?: string;
+}
+
 export const adminApi = {
   listProviders: (orgId?: string) =>
     authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean; inherited?: boolean; source?: ScopeSource }>("/api/admin/providers", { orgId }),
@@ -458,6 +472,8 @@ export const adminApi = {
     return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
   },
   getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
+  // ADR-041 D14 — the runtime composition snapshot ("what is running").
+  getRuntimeComposition: (orgId?: string) => authFetch<RuntimeComposition>("/api/admin/runtime/composition", { orgId }),
   getReviewPrActivity: (repo: string, number: number, orgId?: string) => {
     const [owner, name] = repo.split("/");
     return authFetch<{ reviews: ReviewJob[]; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/activity`, { orgId });

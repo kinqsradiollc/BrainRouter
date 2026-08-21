@@ -222,6 +222,7 @@ import {
   listTranscripts,
   loadTranscript,
   readTranscriptTail,
+  readRequestTrace,
   transcriptSizeBytes,
   deleteSession,
   forkSession,
@@ -1216,6 +1217,14 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
         const limit = typeof args.limit === 'number' ? args.limit : 60;
         return { records: readTrajectory(workspaceRoot, key, limit), enabled: getCliKnobs().traceTrajectory === true };
+      },
+      // ADR-041 D14 — the request-header trace for the Request Inspector panel:
+      // what the model actually saw on each recent request (empty unless
+      // `cli.traceRequests` is on).
+      'request-trace:read': (args) => {
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
+        const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 20;
+        return { records: readRequestTrace(workspaceRoot, key, limit) };
       },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in

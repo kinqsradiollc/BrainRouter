@@ -22,6 +22,7 @@ import { isConnectivityError, isRetryableServerError } from '../../storage/check
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from '../guards/toolCallRecovery.js';
 import { resolveEffortForTurn } from '../support/effortRouting.js';
+import { recordRequestTrace, clampExcerpt } from '../../session/trace/requestTraceStore.js';
 import {
   abortableDelay,
   callOpenAI,
@@ -109,6 +110,28 @@ export async function invokeModelPhase(
       agent.chatHistory,
       getCliKnobs(),
     );
+    // ADR-041 D14 — capture the request header (what the model actually saw) when
+    // `cli.traceRequests` is on. Best-effort and off the turn's critical path: a
+    // failure here can never affect the request, and with the knob off (the
+    // default) not a byte is written.
+    if (getCliKnobs().traceRequests === true) {
+      try {
+        const systemText = requestMessages
+          .filter((m: any) => m?.role === 'system' && typeof m.content === 'string')
+          .map((m: any) => m.content as string)
+          .join('\n\n');
+        recordRequestTrace(agent.workspaceRoot, agent.sessionKey, {
+          at: new Date().toISOString(),
+          model: agent.llmConfig.model,
+          endpoint: typeof (agent.llmConfig as any).endpoint === 'string' ? (agent.llmConfig as any).endpoint : undefined,
+          effort: effort == null ? undefined : String(effort),
+          messageCount: requestMessages.length,
+          systemChars: systemText.length,
+          systemExcerpt: clampExcerpt(systemText),
+          toolNames: (allTools ?? []).map((t: any) => t?.name).filter((n: any): n is string => typeof n === 'string'),
+        });
+      } catch { /* trace is advisory — never break a turn */ }
+    }
     const streamRequested = Boolean(
       callbacks.onAssistantDelta || callbacks.onReasoningDelta,
     ) && getCliKnobs().disableStream !== true;

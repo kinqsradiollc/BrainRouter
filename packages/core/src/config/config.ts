@@ -739,6 +739,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,
     traceTrajectory: c.traceTrajectory === true,
+    traceRequests: c.traceRequests ?? false,
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     fallbackModel: c.fallbackModel ?? null,

@@ -609,6 +609,9 @@ export interface CliKnobs {
   llmMaxConcurrent?: number;
   /** Disable streaming (SSE). Default false. */
   disableStream?: boolean;
+  /** ADR-041 D14 — capture a per-request header (rendered prompt excerpt, tools,
+   * model, route) to the session's request-trace.jsonl for `/inspect`. Default false. */
+  traceRequests?: boolean;
   /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
@@ -1267,6 +1270,7 @@ export interface ResolvedCliKnobs {
   llmMaxConcurrent: number;
   disableStream: boolean;
   traceTrajectory: boolean;
+  traceRequests: boolean;
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fallbackModel: string | null;

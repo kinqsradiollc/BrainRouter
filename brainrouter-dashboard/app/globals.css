@@ -3693,3 +3693,21 @@ a.review-detail__check:hover .review-detail__check-name { color: var(--text); }
   .thread-card-log li { display: flex; flex-wrap: wrap; gap: 8px; color: var(--text-secondary); font: 11px var(--font-mono); }
   .thread-card-log b { color: var(--text); font-weight: 560; }
 }
+
+/* ADR-041 D14 — Runtime composition panel (/runtime). */
+.runtime-page { display: flex; flex-direction: column; gap: 16px; }
+.runtime-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; align-items: start; }
+.runtime-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.runtime-section-title { font-size: 0.95rem; font-weight: 600; margin: 0; }
+.runtime-count { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 0.85rem; }
+.runtime-note { color: var(--text-muted); font-size: 0.82rem; margin: 0 0 10px; }
+.runtime-muted { color: var(--text-muted); }
+.runtime-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.runtime-chip { display: inline-block; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface-raised); font-size: 0.78rem; line-height: 1.5; }
+.runtime-kv { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.runtime-kv > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.runtime-kv dt { color: var(--text-muted); font-size: 0.85rem; }
+.runtime-kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.runtime-ok { color: var(--br-color-status-success, #4ade80); }
+.runtime-bad { color: var(--danger); font-weight: 600; }
+.runtime-invariants { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 0.82rem; }
