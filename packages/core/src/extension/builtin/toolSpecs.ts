@@ -744,6 +744,22 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'remind',
+    description: 'Schedule a session-local reminder that is delivered to you at a later turn boundary (never mid-turn). Use it to carry an intention across turns — "check the build in 10 minutes", "every hour, re-read the goal". action:"set" needs a message plus EXACTLY ONE of: at (absolute ISO time), in (relative duration like "30m", "2h", "1d", "90s"), or every (a 5-field cron rule, recurring). Delivery is catch-up: a missed window fires once, a recurring rule delivers only its latest due occurrence. Reminders are per-session (they do not wake an idle session and are gone when it ends). action:"list" shows this session\'s reminders; action:"cancel" removes one by id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['set', 'list', 'cancel'], description: 'set a new reminder, list this session\'s reminders, or cancel one by id.' },
+        message: { type: 'string', description: 'For set — the text delivered when the reminder fires.' },
+        at: { type: 'string', description: 'For set — an absolute ISO timestamp (one-shot). Mutually exclusive with in / every.' },
+        in: { type: 'string', description: 'For set — a relative delay: "90s", "30m", "2h", "1d" (one-shot). Mutually exclusive with at / every.' },
+        every: { type: 'string', description: 'For set — a 5-field cron expression for a recurring reminder. Mutually exclusive with at / in.' },
+        id: { type: 'string', description: 'For cancel — the reminder id returned by set.' }
+      },
+      required: ['action']
+    }
+  },
+  {
     name: 'wait_until',
     description: 'Block until a workspace condition holds or the timeout elapses: a file exists, or a file contains a text marker. Use after starting background work (a worker, a detached build writing a log) to wait for its artifact instead of polling manually. Returns { satisfied, waitedMs }.',
     inputSchema: {

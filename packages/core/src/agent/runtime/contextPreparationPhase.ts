@@ -26,6 +26,16 @@ import {
   drainCompletions,
   formatCompletionFeedback,
 } from '../../session/completion/completionInbox.js';
+import {
+  loadReminders,
+  collectDueReminders,
+  renderReminderSystemMessage,
+  removeReminder,
+  advanceReminder,
+  setReminderEnabled,
+} from '../../session/reminders/index.js';
+import { getSessionStateFile } from '../../storage/store.js';
+import fs from 'node:fs';
 import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { buildPendingChildStatusHint } from '../../util/agentloop/childResume.js';
 import {
@@ -210,6 +220,7 @@ export async function prepareTurnContextPhase(
     input.carriedPendingChildIds,
   );
   appendCompletionFeedback(agent);
+  appendDueReminders(agent);
 
   return { prompt, fanOutHinted };
 }
@@ -408,4 +419,47 @@ function appendCompletionFeedback(agent: Agent): void {
   const message = { role: 'system', content: feedback };
   agent.chatHistory.push(message);
   agent.recordTranscript(message);
+}
+
+/**
+ * ADR-041 A41-16 — deliver session-native reminders that have come due, at the
+ * turn boundary. This tap runs during pre-turn context assembly (the inter-turn
+ * maintenance point: end-of-turn-(T-1) ≡ start-of-turn-T), so a reminder that
+ * becomes due mid-turn is materialized by the NEXT turn — never injected into an
+ * in-flight one. Delivery is recorded durably (recordTranscript) BEFORE the store
+ * is advanced/removed, with no await between, so a crash re-delivers next turn
+ * (coalesced) rather than losing the reminder: at-least-once. Byte-neutral default
+ * — with no reminders.json the fast path is a single stat and nothing else.
+ */
+function appendDueReminders(agent: Agent): void {
+  if (!fs.existsSync(getSessionStateFile(agent.workspaceRoot, agent.sessionKey, 'reminders.json'))) return;
+  const outcomes = collectDueReminders(loadReminders(agent.workspaceRoot, agent.sessionKey), Date.now());
+  if (outcomes.length === 0) return;
+  const body = renderReminderSystemMessage(outcomes);
+  if (body) {
+    const message = { role: 'system', content: body };
+    agent.chatHistory.push(message);
+    agent.recordTranscript(message);
+  }
+  // Commit strictly AFTER the durable record — no await between.
+  for (const outcome of outcomes) {
+    switch (outcome.kind) {
+      case 'fire-once':
+        removeReminder(agent.workspaceRoot, agent.sessionKey, outcome.record.id);
+        break;
+      case 'fire-recurring':
+        advanceReminder(agent.workspaceRoot, agent.sessionKey, outcome.record.id, outcome.nextFireAt, new Date().toISOString());
+        break;
+      case 'disable':
+        setReminderEnabled(agent.workspaceRoot, agent.sessionKey, outcome.record.id, false);
+        console.warn(`[reminders] disabling corrupt reminder ${outcome.record.id}: ${outcome.reason}`);
+        break;
+      default: {
+        // Exhaustiveness: a new ReminderOutcome variant must be committed here, not
+        // silently skipped (which would re-deliver it every turn).
+        const _exhaustive: never = outcome;
+        void _exhaustive;
+      }
+    }
+  }
 }
