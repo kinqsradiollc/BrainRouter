@@ -36,6 +36,7 @@ import { tryHandleRunsCommand } from './runs/index.js';
 import { tryHandleAtlasCommand } from './atlas/index.js';
 import { tryHandleAttachmentCommand } from './attachment/index.js';
 import { tryHandleReviewsCommand } from './reviews/index.js';
+import { tryHandleTrajectoryCommand } from './trajectory/index.js';
 import { tryHandleInspectCommand } from './inspect/index.js';
 
 /** A category handler: returns true iff it recognized and handled the command. */
@@ -63,6 +64,7 @@ export const BUILTIN_COMMAND_HANDLERS: readonly CommandHandler[] = [
   tryHandleAtlasCommand,
   tryHandleAttachmentCommand,
   tryHandleReviewsCommand,
+  tryHandleTrajectoryCommand,
   tryHandleScheduleCommand,
   tryHandleInspectCommand,
   tryHandleReleaseNotesCommand,
