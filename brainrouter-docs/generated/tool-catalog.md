@@ -5,7 +5,7 @@
 
 # BrainRouter tool catalog
 
-86 built-in agent tools, by access tier and action kind.
+87 built-in agent tools, by access tier and action kind.
 
 | Tool | Tier | Action kind | Parallel-safe | Description |
 |------|------|-------------|---------------|-------------|
@@ -52,6 +52,7 @@
 | `read_mcp_resource` | read | read_only | yes | Read a specific resource from an MCP server by server id and URI. |
 | `read_worker_summary` | read | read_only | no | Read a worker thread's rolling summary (summary.md) without waiting for it to finish. |
 | `reconcile_steer` | read | read_only | no | Classify one pending Steer receipt before acting on it. |
+| `remind` | read | read_only | no | Schedule a session-local reminder that is delivered to you at a later turn boundary (never mid-turn). |
 | `repeat_request` | read | network | no | Replay a captured request through the authorized pentest proxy, optionally with a safe mutation. |
 | `research_brief` | read | read_only | no | Emit a report-ready markdown research brief from the session ledger: every finding plus an explicit "Uncertainty & conflicts" section (corroborated vs single-source vs conflicting). |
 | `research_note` | read | read_only | no | Record one claim with structured source provenance in the durable session research ledger. |
