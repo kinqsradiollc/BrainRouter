@@ -249,6 +249,7 @@ import {
   getSessionRuntime,
   setSessionRuntime,
   readTrajectory,
+  deriveShadowedTrajectory,
 } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
 import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from '../fsRead.js';
@@ -1216,7 +1217,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'trajectory:read': (args) => {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
         const limit = typeof args.limit === 'number' ? args.limit : 60;
-        return { records: readTrajectory(workspaceRoot, key, limit), enabled: getCliKnobs().traceTrajectory === true };
+        return { records: deriveShadowedTrajectory(readTrajectory(workspaceRoot, key, limit)), enabled: getCliKnobs().traceTrajectory === true };
       },
       // ADR-041 D14 — the request-header trace for the Request Inspector panel:
       // what the model actually saw on each recent request (empty unless

@@ -8,6 +8,7 @@
  */
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
+import { recordTrajectoryEvent } from '../../session/trace/trajectoryStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { parseHookDecision } from '../../hooks/hooksStore.js';
@@ -115,6 +116,20 @@ export async function prepareTurnContextPhase(
             keptMessages: agent.chatHistory.length,
             summary: compacted.summary,
           });
+        }
+        // ADR-041 D14 (#4) — log-only compaction bracket: marks where context was
+        // dropped so the ledger can distinguish "what the model knew" from "what
+        // happened". Opt-in, best-effort, never on the model's context path.
+        if (compacted && getCliKnobs().traceTrajectory === true) {
+          try {
+            recordTrajectoryEvent(agent.workspaceRoot, agent.sessionKey, {
+              event: 'compaction',
+              label: 'compaction (auto)',
+              droppedMessages: Math.max(0, beforeLen - agent.chatHistory.length),
+              keptMessages: agent.chatHistory.length,
+              detail: compacted.summary,
+            });
+          } catch { /* trace is advisory — never break a turn */ }
         }
         agent.lastSeenPromptTokens = undefined;
       } catch {

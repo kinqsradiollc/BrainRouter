@@ -10,6 +10,7 @@ import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { commandWritesFiles } from '../guards/verificationGate.js';
 import { assessMcpToolApproval } from '../guards/mcpApproval.js';
 import { getCliKnobs } from '../../config/config.js';
+import { recordTrajectoryEvent } from '../../session/trace/trajectoryStore.js';
 import {
   externalDirectoryDecision,
   resolveToolPolicy,
@@ -336,6 +337,18 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
       decision: policy.decision,
       reason: policy.reason,
     });
+    // ADR-041 D14 (#4) — log-only: record the approval decision in the trajectory
+    // ledger so "the human sees more than the model, and knows the difference".
+    // Opt-in, best-effort, never on the model's context path.
+    if (getCliKnobs().traceTrajectory === true) {
+      try {
+        recordTrajectoryEvent(agent.workspaceRoot, agent.sessionKey, {
+          event: 'approval',
+          label: `${name} → ${policy.decision}`,
+          detail: policy.reason,
+        });
+      } catch { /* trace is advisory — never break a turn */ }
+    }
   }
 
   if (policy.decision === 'deny') {
