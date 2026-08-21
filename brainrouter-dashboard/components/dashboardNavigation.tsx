@@ -120,6 +120,7 @@ export const SETTINGS_NAV_GROUPS: DashboardNavGroup[] = [
   {
     label: "Advanced",
     items: [
+      { href: "/runtime", label: "Runtime", adminOnly: true, keywords: "composition what is running tools providers extensions plugins loop driver execution world invariants" },
       { href: "/brand", label: "Brand studio", adminOnly: true },
       { href: "/admin-orgs", label: "Administration", adminOnly: true },
     ],
