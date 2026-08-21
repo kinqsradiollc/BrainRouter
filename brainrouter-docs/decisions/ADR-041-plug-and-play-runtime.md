@@ -466,6 +466,27 @@ trace; the CLI gets the text projection of the same ledger. One rule binds all o
 renders the log; it never keeps private state the log cannot reproduce** — a reload, a replay, or
 another surface must show the same process.
 
+**Shipped so far (D14 as a slice series):** four of the five commitments have their first vertical.
+*Commitment #5 — composition transparency* (#1548): `runtimeCompositionSnapshot()` is served over
+HTTP (`GET /api/admin/runtime/composition`) and rendered as the dashboard `/runtime` panel — built-in
+tools, the D8-migrated handler set, providers, extensions, slash commands, the invariant areas with
+any live violations, and the active loop-driver / execution-world rows (*what is running*).
+*Commitment #1 — every request is inspectable* (#1549): a per-request header (model, route, effort,
+message/tool counts, the exact tools, and a bounded excerpt of the *rendered* system prompt) is
+captured — opt-in via `cli.traceRequests`, log-only in a session sidecar so it never touches the
+transcript/replay — and rendered on two surfaces: the desktop **Request Inspector** panel (via
+`PanelRegistry`, reading the local trace the backend can't see) and the CLI `/inspect` text
+projection. *Commitments #2 (trajectory ledger) + #3 (render intents)* (#1550): a second log-only
+session sidecar records one STEP per model call — model, wall-clock duration, prompt/completion
+tokens, and the tools the step requested, each tagged with a **render intent** (terminal / diff /
+read / search / web / text) computed from its wire name and logged with the call. Opt-in via
+`cli.traceTrajectory`; rendered as the desktop **Trajectory** panel (via `PanelRegistry`) and the CLI
+`/trajectory` projection. The record carries the #4 `visibility` field (populated `model-visible`).
+Remaining: the model-visible / **log-only / shadowed-by-compaction** record markers' distinct emit
+points (#4, at the approval / command / compaction sites), and the ledger's fuller surface — turn-
+grouping of steps, the fixed timeline overview with TTFT-vs-decode spans, and tool-result durations
+(measured at the batch-execution site) — which land on the transcript surface.
+
 ---
 
 ## 3. Ownership
@@ -537,8 +558,14 @@ decision record checks only A41-0; it makes no implementation claim.
 - [x] **A41-4 — Phase hooks and extension host evolution.** Add `registerPhaseHook()` and
   `registerDisposable()` to `ExtensionHost`. Wire `beforePhase` / `afterPhase` into the agent turn
   loop. Unify provider registration through `ProviderRegistry`.
-- [ ] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
+- [x] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
   OpenAI SSE adapter. Switch core consumers to `StreamChunk`. Add native provider streaming paths.
+  *Merged in #1546: the `StreamChunk` union + the OpenAI-SSE adapter + the gateway /
+  model-phase consumers landed earlier; the last gap — native providers falling back to a
+  non-streaming call — is closed. `anthropic-messages` and `gemini-generate` now stream their own SSE
+  (`agent/transport/nativeProviderStream.ts`), accumulated back into the canonical envelope so the
+  streamed `NativeOutput` is identical to the whole-response path; opt-in/default-off, with a
+  fall-back-to-non-streaming-before-first-paint and a mid-stream-abort→InterruptError guard.*
 - [x] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
   `MemoryEngine`. Remove `as unknown as *Store` casts.
 - [x] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
@@ -550,18 +577,57 @@ decision record checks only A41-0; it makes no implementation claim.
   `pre-execute` / `post-execute`, with the transcript ("model-visible means logged") assertion.
 - [ ] **A41-9 — Universal disposables + scoped contexts.** Every registrar returns a handle;
   extension unload unwinds in reverse order; `host.scope(sessionKey)` + capability presets; roles
-  consume presets.
-- [ ] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
-  resolver; `local` default; worktree/container backends re-expressed as worlds.
+  consume presets. *Shipped: the universal-disposable handles (`Disposable` from every `register*`,
+  reverse-order unwind in `disposeExtensionHost`), the capability presets (`capabilityPresets.ts`),
+  and roles-consume-presets. **Deferred (consumer-gated):** `host.scope(sessionKey)`. No extension
+  registers per-session contributions today, so a `scope()` that buckets registrations and a
+  consumer that disposes it at session end would be an export with no live caller — the
+  `inert-value-sweep` ceiling rejects that, and a hollow consumer would be ceremony. Awaits a genuine
+  per-session extension-registration use case (e.g. a session-scoped tool or provider) to force it.*
+- [x] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
+  resolver; `local` default; worktree/container backends re-expressed as worlds. *Merged in #1547:
+  the `local` world is now LIVE and the Agent's default — `runtime/localWorld.ts` binds the three
+  node ports (`nodeFilesystemPort` / `nodeShellPort` / `defaultSubprocessPort`) as one unit, the
+  constructor resolves ports through it, and `--dump-composition` reports the active world. Byte-
+  identical (every port consumer is a `?? node*Port` fall-through; nothing branches on definedness).
+  **Deferred:** worktree/container-as-worlds — all four runtime backends
+  (process/worktree/container/hosted) share the same host node ports and `exec/runtime/sandbox`
+  command path (worktree differs by cwd, container by bind-mount with its in-container loop explicitly
+  deferred, hosted is an out-of-process CLI), so no port-level backend exists to express as a distinct
+  world yet. Awaits one.*
 - [ ] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
   overlays targeting rows by id, `--dump-composition`, and the default loop driver registered as a
-  replaceable row.
+  replaceable row. *Shipped: the four host profiles, `--dump-composition`, and the default
+  loop-driver-as-a-replaceable-row (#1536 — `resolveRuntime` applies `applyLoopDriver`, the dump
+  surfaces the `loopDriver` id). **Deferred (consumer-gated):** overlay-by-id (layered overlays that
+  target composition rows by id). No host profile needs to overlay another by row id today, so the
+  overlay resolver would have no caller. Awaits a profile that legitimately layers onto a base by
+  row id (e.g. a `test` or `minimal` profile derived from `local`).*
 - [ ] **A41-12 — Remote seam bindings + service profiles.** Typed remote binding for
   remote-capable seams (boot error for the rest); one existing subsystem (the provider gateway is
   the natural first, per ADR-043) re-expressed as a service profile; its Docker image reduced to
-  "loader + profile"; dev compose regenerated from profile sets.
+  "loader + profile"; dev compose regenerated from profile sets. *Shipped: service profiles and the
+  typed remote-binding gate `assertRemoteBindable` (#1526), wired into `EgressTunnelService.start()`
+  so a non-remote-bindable seam fails loud at boot. **Deferred (consumer-gated):** reducing a service
+  image to "loader + profile" and regenerating dev-compose from profile sets are build/ops changes
+  with no runtime consumer inside core — the profile is already the source of truth; restructuring
+  the Dockerfiles and the compose generator around it is an ops decision, not a code seam, and doing
+  it speculatively changes no behavior. Awaits the ops call to restructure the images around the
+  profile loader.*
 - [ ] **A41-13 — Parity wave W1** (spill store + policy, tool-result pruner, token meter,
-  permission presets, persistent terminals) — each as an extension, no core edits.
+  permission presets, persistent terminals) — each as an extension, no core edits. *All five
+  capabilities are present in core (the spill store, the last gap, shipped as a `ResultCache` disk
+  cold tier in #1525). **Deferred (consumer-gated), same reasoning as A41-9/11/12:** the "each as an
+  extension" repackaging is not buildable "with no core edits." The `ExtensionHost` registers
+  tools / providers / hooks / phase-hooks / panels only, and neither the extension-tool runtime
+  context nor the phase-hook context can reach the per-agent turn-loop state (the in-flight message
+  array, the result cache, token accounting) that the spill store / pruner / meter / presets operate
+  on — they are wired directly into the `Agent`. Re-expressing any of them as an extension needs
+  either widening the host (a core edit — and the added registration surface would be an export the
+  loop does not consume, which the `inert-value-sweep` ceiling rejects) or deleting the direct wiring
+  (also a core edit). Persistent terminals are the one already delivered through the host — bundled in
+  the required `shell` built-in extension — so there is no zero-core-edit build here. Awaits a host
+  surface (a capability/middleware registrar reaching turn-loop state) that a real consumer forces.*
 - [x] **A41-14 — Parity wave W2** (session fork + lineage, session query tools, session
   references, message feedback, runtime-invariants registry). *Shipped: invariants registry,
   fork lineage, per-message feedback, and the `session_list` / `session_read` / `session_search` /
@@ -569,9 +635,13 @@ decision record checks only A41-0; it makes no implementation claim.
 - [x] **A41-15 — Parity wave W3** (continuable children + send/interrupt/report, external-agent
   subagent providers, Code Mode). *Continuable children existed; external-agent subagent providers
   and the `run_code` Code Mode flagship shipped.*
-- [ ] **A41-16 — Parity wave W4** (out-of-process SDK, generated drift-checked catalogs,
+- [x] **A41-16 — Parity wave W4** (out-of-process SDK, generated drift-checked catalogs,
   session-native reminder unification, self-modification evaluation — evaluation may conclude
-  "no").
+  "no"). *Merged: out-of-process typed SDK (#1543 — the `@kinqs/brainrouter-core/sdk`
+  entry point over the existing runner client), generated drift-checked tool catalog (#1542 —
+  `brainrouter-docs/generated/tool-catalog.md` + a regen-or-fail test), session-native reminder
+  unification (#1544 — a `remind` tool + a per-session store + a pure catch-up projection delivered
+  at the turn boundary), and the self-modification item **evaluated → not adopted** (§D13.1).*
 
 ---
 
