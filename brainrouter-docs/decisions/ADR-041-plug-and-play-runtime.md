@@ -466,6 +466,20 @@ trace; the CLI gets the text projection of the same ledger. One rule binds all o
 renders the log; it never keeps private state the log cannot reproduce** — a reload, a replay, or
 another surface must show the same process.
 
+**Shipped so far (D14 as a slice series):** two of the five commitments have their first vertical.
+*Commitment #5 — composition transparency* (#1548): `runtimeCompositionSnapshot()` is served over
+HTTP (`GET /api/admin/runtime/composition`) and rendered as the dashboard `/runtime` panel — built-in
+tools, the D8-migrated handler set, providers, extensions, slash commands, the invariant areas with
+any live violations, and the active loop-driver / execution-world rows (*what is running*).
+*Commitment #1 — every request is inspectable* (#1549): a per-request header (model, route, effort,
+message/tool counts, the exact tools, and a bounded excerpt of the *rendered* system prompt) is
+captured — opt-in via `cli.traceRequests`, log-only in a session sidecar so it never touches the
+transcript/replay — and rendered on two surfaces: the desktop **Request Inspector** panel (via
+`PanelRegistry`, reading the local trace the backend can't see) and the CLI `/inspect` text
+projection. Remaining: the full turn-trajectory ledger (#2), semantic render-intents (#3), and the
+model-visible / log-only / shadowed-by-compaction record markers (#4) — these grow the inspector into
+the ledger and land on the transcript surface.
+
 ---
 
 ## 3. Ownership
@@ -539,6 +553,13 @@ decision record checks only A41-0; it makes no implementation claim.
   loop. Unify provider registration through `ProviderRegistry`.
 - [ ] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
   OpenAI SSE adapter. Switch core consumers to `StreamChunk`. Add native provider streaming paths.
+  *Complete, shipping #1546: the `StreamChunk` union + the OpenAI-SSE adapter + the gateway /
+  model-phase consumers landed earlier; the last gap — native providers falling back to a
+  non-streaming call — is closed. `anthropic-messages` and `gemini-generate` now stream their own SSE
+  (`agent/transport/nativeProviderStream.ts`), accumulated back into the canonical envelope so the
+  streamed `NativeOutput` is identical to the whole-response path; opt-in/default-off, with a
+  fall-back-to-non-streaming-before-first-paint and a mid-stream-abort→InterruptError guard. Flip to
+  `[x]` when #1546 merges.*
 - [x] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
   `MemoryEngine`. Remove `as unknown as *Store` casts.
 - [x] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
@@ -558,7 +579,16 @@ decision record checks only A41-0; it makes no implementation claim.
   `inert-value-sweep` ceiling rejects that, and a hollow consumer would be ceremony. Awaits a genuine
   per-session extension-registration use case (e.g. a session-scoped tool or provider) to force it.*
 - [ ] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
-  resolver; `local` default; worktree/container backends re-expressed as worlds.
+  resolver; `local` default; worktree/container backends re-expressed as worlds. *Shipping #1547:
+  the `local` world is now LIVE and the Agent's default — `runtime/localWorld.ts` binds the three
+  node ports (`nodeFilesystemPort` / `nodeShellPort` / `defaultSubprocessPort`) as one unit, the
+  constructor resolves ports through it, and `--dump-composition` reports the active world. Byte-
+  identical (every port consumer is a `?? node*Port` fall-through; nothing branches on definedness).
+  **Deferred:** worktree/container-as-worlds — all four runtime backends
+  (process/worktree/container/hosted) share the same host node ports and `exec/runtime/sandbox`
+  command path (worktree differs by cwd, container by bind-mount with its in-container loop explicitly
+  deferred, hosted is an out-of-process CLI), so no port-level backend exists to express as a distinct
+  world yet. Awaits one. Flip to `[x]` when #1547 merges.*
 - [ ] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
   overlays targeting rows by id, `--dump-composition`, and the default loop driver registered as a
   replaceable row. *Shipped: the four host profiles, `--dump-composition`, and the default
