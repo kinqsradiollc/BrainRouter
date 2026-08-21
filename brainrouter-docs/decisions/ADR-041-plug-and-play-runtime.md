@@ -466,7 +466,7 @@ trace; the CLI gets the text projection of the same ledger. One rule binds all o
 renders the log; it never keeps private state the log cannot reproduce** — a reload, a replay, or
 another surface must show the same process.
 
-**Shipped so far (D14 as a slice series):** two of the five commitments have their first vertical.
+**Shipped so far (D14 as a slice series):** four of the five commitments have their first vertical.
 *Commitment #5 — composition transparency* (#1548): `runtimeCompositionSnapshot()` is served over
 HTTP (`GET /api/admin/runtime/composition`) and rendered as the dashboard `/runtime` panel — built-in
 tools, the D8-migrated handler set, providers, extensions, slash commands, the invariant areas with
@@ -476,9 +476,16 @@ message/tool counts, the exact tools, and a bounded excerpt of the *rendered* sy
 captured — opt-in via `cli.traceRequests`, log-only in a session sidecar so it never touches the
 transcript/replay — and rendered on two surfaces: the desktop **Request Inspector** panel (via
 `PanelRegistry`, reading the local trace the backend can't see) and the CLI `/inspect` text
-projection. Remaining: the full turn-trajectory ledger (#2), semantic render-intents (#3), and the
-model-visible / log-only / shadowed-by-compaction record markers (#4) — these grow the inspector into
-the ledger and land on the transcript surface.
+projection. *Commitments #2 (trajectory ledger) + #3 (render intents)* (#1550): a second log-only
+session sidecar records one STEP per model call — model, wall-clock duration, prompt/completion
+tokens, and the tools the step requested, each tagged with a **render intent** (terminal / diff /
+read / search / web / text) computed from its wire name and logged with the call. Opt-in via
+`cli.traceTrajectory`; rendered as the desktop **Trajectory** panel (via `PanelRegistry`) and the CLI
+`/trajectory` projection. The record carries the #4 `visibility` field (populated `model-visible`).
+Remaining: the model-visible / **log-only / shadowed-by-compaction** record markers' distinct emit
+points (#4, at the approval / command / compaction sites), and the ledger's fuller surface — turn-
+grouping of steps, the fixed timeline overview with TTFT-vs-decode spans, and tool-result durations
+(measured at the batch-execution site) — which land on the transcript surface.
 
 ---
 
@@ -609,7 +616,19 @@ decision record checks only A41-0; it makes no implementation claim.
   it speculatively changes no behavior. Awaits the ops call to restructure the images around the
   profile loader.*
 - [ ] **A41-13 — Parity wave W1** (spill store + policy, tool-result pruner, token meter,
-  permission presets, persistent terminals) — each as an extension, no core edits.
+  permission presets, persistent terminals) — each as an extension, no core edits. *All five
+  capabilities are present in core (the spill store, the last gap, shipped as a `ResultCache` disk
+  cold tier in #1525). **Deferred (consumer-gated), same reasoning as A41-9/11/12:** the "each as an
+  extension" repackaging is not buildable "with no core edits." The `ExtensionHost` registers
+  tools / providers / hooks / phase-hooks / panels only, and neither the extension-tool runtime
+  context nor the phase-hook context can reach the per-agent turn-loop state (the in-flight message
+  array, the result cache, token accounting) that the spill store / pruner / meter / presets operate
+  on — they are wired directly into the `Agent`. Re-expressing any of them as an extension needs
+  either widening the host (a core edit — and the added registration surface would be an export the
+  loop does not consume, which the `inert-value-sweep` ceiling rejects) or deleting the direct wiring
+  (also a core edit). Persistent terminals are the one already delivered through the host — bundled in
+  the required `shell` built-in extension — so there is no zero-core-edit build here. Awaits a host
+  surface (a capability/middleware registrar reaching turn-loop state) that a real consumer forces.*
 - [x] **A41-14 — Parity wave W2** (session fork + lineage, session query tools, session
   references, message feedback, runtime-invariants registry). *Shipped: invariants registry,
   fork lineage, per-message feedback, and the `session_list` / `session_read` / `session_search` /
