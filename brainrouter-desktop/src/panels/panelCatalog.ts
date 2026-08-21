@@ -17,7 +17,7 @@
 // keeping them out of this union is what stops a new call site opening a tab
 // that nothing renders.
 // `peers` arrives with ADR-034 (messages that arrive) and IS a member.
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs' | 'request-trace';
 
 /**
  * ADR-028 G3 — panel groups.
@@ -50,6 +50,8 @@ export interface PanelDef {
 
 export const PANEL_DEFS: readonly PanelDef[] = [
   { id: 'context', title: 'Context', icon: 'layout-right', group: 'environment' },
+  // ADR-041 D14 — the request inspector: what the model saw on each request.
+  { id: 'request-trace', title: 'Requests', icon: 'bolt', group: 'understand' },
   { id: 'files', title: 'Files', icon: 'folder', group: 'code' },
   { id: 'file', title: 'File', icon: 'file', group: 'code' },
   { id: 'editor', title: 'Editor', icon: 'file', group: 'code' },
