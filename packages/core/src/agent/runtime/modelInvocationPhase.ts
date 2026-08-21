@@ -2,7 +2,7 @@
 // callback order remain unchanged.
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
-import { recordTrajectoryStep } from '../../session/trace/trajectoryStore.js';
+import { recordTrajectoryStep, recordTrajectoryEvent } from '../../session/trace/trajectoryStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import {
   buildRootContextEnvelope,
@@ -398,6 +398,18 @@ export async function invokeModelPhase(
               keptMessages: agent.chatHistory.length,
               summary: compacted.summary,
             });
+          }
+          // ADR-041 D14 (#4) — log-only compaction bracket (reactive path).
+          if (compacted && getCliKnobs().traceTrajectory === true) {
+            try {
+              recordTrajectoryEvent(agent.workspaceRoot, agent.sessionKey, {
+                event: 'compaction',
+                label: 'compaction (reactive)',
+                droppedMessages: Math.max(0, beforeLength - agent.chatHistory.length),
+                keptMessages: agent.chatHistory.length,
+                detail: compacted.summary,
+              });
+            } catch { /* trace is advisory — never break a turn */ }
           }
           response = await invokeLlmResilient();
         } catch (retryError: any) {

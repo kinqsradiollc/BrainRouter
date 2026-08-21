@@ -16,11 +16,16 @@
  * tracing is on or off. Every disk op is best-effort: the ledger is metadata and
  * must never break a turn.
  *
- * Not yet in this vertical (documented follow-ups): turn-grouping of steps, the
+ * D14 #4 extends this into a discriminated union: alongside the model-visible
+ * STEP records, the ledger now interleaves LOG-ONLY event records — tool-approval
+ * decisions and compaction brackets — by shared `seq`, and `deriveShadowedTrajectory`
+ * marks steps before the latest compaction as `shadowed` at read time. So the
+ * human sees more than the model, and the two are separately answerable.
+ *
+ * Not yet in this store (documented follow-ups): turn-grouping of steps, the
  * fixed timeline overview with TTFT-vs-decode spans, tool-result durations
- * (measured at the batch-execution site), and the distinct log-only / shadowed
- * emit points (approvals, compaction) that populate the visibility field beyond
- * `model-visible`.
+ * (measured at the batch-execution site), and PRECISE per-step shadowing (needs
+ * message→seq stamping; the read-time overlay here is the coarse, honest form).
  */
 
 import fs from 'node:fs';
@@ -49,10 +54,11 @@ export type RenderIntent = 'terminal' | 'diff' | 'read' | 'search' | 'web' | 'te
 const RENDER_INTENTS: readonly RenderIntent[] = ['terminal', 'diff', 'read', 'search', 'web', 'text'];
 
 /**
- * Whether a record entered model context. This vertical only emits
- * `model-visible` step records; the `log-only` (commands / approvals / feedback)
- * and `shadowed` (dropped by compaction) markers are later emit points, but the
- * field is carried now so the reader and the UI legend are stable.
+ * Whether a record entered model context (D14 #4). `model-visible` = a step the
+ * model produced; `log-only` = an event rendered to the human but never in model
+ * context (an approval, a compaction bracket); `shadowed` = a step whose context
+ * a later compaction dropped — derived at read time from the compaction markers
+ * (see `deriveShadowedTrajectory`), never written back into the append-only log.
  */
 export type RecordVisibility = 'model-visible' | 'log-only' | 'shadowed';
 const VISIBILITIES: readonly RecordVisibility[] = ['model-visible', 'log-only', 'shadowed'];
@@ -65,7 +71,9 @@ export interface TrajectoryToolRef {
 
 /** One step in the trajectory: a single model call and what it produced. */
 export interface TrajectoryStep {
-  /** Monotonic per-session step index (survives self-trim). */
+  /** Discriminant. Absent on records written before D14 #4 — read as `step`. */
+  kind: 'step';
+  /** Monotonic per-session index (survives self-trim). */
   seq: number;
   /** The model that answered. */
   model: string;
@@ -83,9 +91,35 @@ export interface TrajectoryStep {
   tools: TrajectoryToolRef[];
   /** Bounded excerpt of the step's assistant text (empty on a pure tool turn). */
   excerpt?: string;
-  /** This vertical always records `model-visible`. */
+  /** `model-visible`, or `shadowed` once a later compaction dropped its context. */
   visibility: RecordVisibility;
 }
+
+/** A log-only event interleaved with the steps (D14 #4): approval or compaction. */
+export type TrajectoryEventKind = 'approval' | 'compaction';
+const EVENT_KINDS: readonly TrajectoryEventKind[] = ['approval', 'compaction'];
+
+export interface TrajectoryEvent {
+  kind: 'event';
+  /** Monotonic per-session index, shared with steps so ordering is total. */
+  seq: number;
+  /** ISO timestamp when the event happened. */
+  at: string;
+  /** Which log-only event this is. */
+  event: TrajectoryEventKind;
+  /** A short human label (e.g. `edit_file → ask` or `compaction`). */
+  label: string;
+  /** Optional detail (approval reason, or a compaction summary excerpt). */
+  detail?: string;
+  /** Compaction only: messages dropped / kept by the compaction. */
+  droppedMessages?: number;
+  keptMessages?: number;
+  /** Always `log-only` — the human sees this, the model never did. */
+  visibility: 'log-only';
+}
+
+/** Either kind of ledger record. */
+export type TrajectoryRecord = TrajectoryStep | TrajectoryEvent;
 
 /** The fields the runtime supplies for one step; the store derives the rest. */
 export interface TrajectoryStepInput {
@@ -101,6 +135,16 @@ export interface TrajectoryStepInput {
   text?: string;
 }
 
+/** The fields the runtime supplies for one log-only event. */
+export interface TrajectoryEventInput {
+  event: TrajectoryEventKind;
+  label: string;
+  at?: string;
+  detail?: string;
+  droppedMessages?: number;
+  keptMessages?: number;
+}
+
 function trajectoryPath(workspaceRoot: string, sessionKey: string): string {
   return path.join(getSessionStateDir(workspaceRoot, sessionKey), TRAJECTORY_FILE);
 }
@@ -112,6 +156,8 @@ const isRenderIntent = (v: unknown): v is RenderIntent =>
   typeof v === 'string' && (RENDER_INTENTS as readonly string[]).includes(v);
 const isVisibility = (v: unknown): v is RecordVisibility =>
   typeof v === 'string' && (VISIBILITIES as readonly string[]).includes(v);
+const isEventKind = (v: unknown): v is TrajectoryEventKind =>
+  typeof v === 'string' && (EVENT_KINDS as readonly string[]).includes(v);
 
 /** Map a tool's wire name to its render intent. Pure; unknown names → `text`. */
 function renderIntentForTool(name: string): RenderIntent {
@@ -200,6 +246,7 @@ export function recordTrajectoryStep(
   try {
     const file = trajectoryPath(workspaceRoot, sessionKey);
     const record: TrajectoryStep = {
+      kind: 'step',
       seq: nextSeq(file),
       model: input.model,
       at: input.at ?? new Date().toISOString(),
@@ -225,21 +272,75 @@ export function recordTrajectoryStep(
 }
 
 /**
- * The most recent `limit` steps, newest first. Torn or malformed lines are
- * skipped. Empty when the session has no trajectory ledger yet.
+ * Append one log-only event (D14 #4) — an approval decision or a compaction
+ * bracket — to the ledger, interleaved with the steps by `seq`. Best-effort, same
+ * append/trim/heal path as a step; returns false rather than throwing.
  */
-export function readTrajectory(workspaceRoot: string, sessionKey: string, limit = 30): TrajectoryStep[] {
+export function recordTrajectoryEvent(
+  workspaceRoot: string,
+  sessionKey: string,
+  input: TrajectoryEventInput,
+): boolean {
+  try {
+    const file = trajectoryPath(workspaceRoot, sessionKey);
+    const record: TrajectoryEvent = {
+      kind: 'event',
+      seq: nextSeq(file),
+      at: input.at ?? new Date().toISOString(),
+      event: input.event,
+      label: input.label,
+      visibility: 'log-only',
+      ...(input.detail?.trim() ? { detail: clampExcerpt(input.detail.trim()) } : {}),
+      ...(typeof input.droppedMessages === 'number' && Number.isFinite(input.droppedMessages)
+        ? { droppedMessages: Math.max(0, Math.round(input.droppedMessages)) }
+        : {}),
+      ...(typeof input.keptMessages === 'number' && Number.isFinite(input.keptMessages)
+        ? { keptMessages: Math.max(0, Math.round(input.keptMessages)) }
+        : {}),
+    };
+    const prefix = needsLeadingNewline(file) ? '\n' : '';
+    fs.appendFileSync(file, `${prefix}${JSON.stringify(record)}\n`, 'utf8');
+    trimIfNeeded(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The most recent `limit` records (steps and log-only events interleaved),
+ * newest first. Torn or malformed lines are skipped; a record whose `kind` is
+ * `event` is validated on the event arm, everything else on the step arm (a
+ * record written before D14 #4 has no `kind` and reads as a step).
+ */
+export function readTrajectory(workspaceRoot: string, sessionKey: string, limit = 30): TrajectoryRecord[] {
   let raw: string;
   try {
     raw = fs.readFileSync(trajectoryPath(workspaceRoot, sessionKey), 'utf8');
   } catch {
     return [];
   }
-  const out: TrajectoryStep[] = [];
+  const out: TrajectoryRecord[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     try {
-      const rec = JSON.parse(line) as Partial<TrajectoryStep>;
+      const rec = JSON.parse(line) as Record<string, unknown>;
+      if (rec.kind === 'event') {
+        if (typeof rec.seq === 'number' && typeof rec.at === 'string' && isEventKind(rec.event) && typeof rec.label === 'string') {
+          out.push({
+            kind: 'event',
+            seq: rec.seq,
+            at: rec.at,
+            event: rec.event,
+            label: rec.label,
+            visibility: 'log-only',
+            ...(typeof rec.detail === 'string' ? { detail: rec.detail } : {}),
+            ...(typeof rec.droppedMessages === 'number' ? { droppedMessages: rec.droppedMessages } : {}),
+            ...(typeof rec.keptMessages === 'number' ? { keptMessages: rec.keptMessages } : {}),
+          });
+        }
+        continue;
+      }
       if (
         typeof rec.seq === 'number'
         && typeof rec.model === 'string'
@@ -247,10 +348,11 @@ export function readTrajectory(workspaceRoot: string, sessionKey: string, limit 
         && Array.isArray(rec.tools)
       ) {
         out.push({
+          kind: 'step',
           seq: rec.seq,
           model: rec.model,
           at: rec.at,
-          tools: rec.tools
+          tools: (rec.tools as unknown[])
             .filter((t): t is TrajectoryToolRef => !!t && typeof (t as TrajectoryToolRef).name === 'string')
             .map((t) => ({ name: t.name, intent: isRenderIntent(t.intent) ? t.intent : 'text' })),
           visibility: isVisibility(rec.visibility) ? rec.visibility : 'model-visible',
@@ -267,4 +369,26 @@ export function readTrajectory(workspaceRoot: string, sessionKey: string, limit 
   }
   const clamped = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 30;
   return out.slice(Math.max(0, out.length - clamped)).reverse();
+}
+
+/**
+ * Overlay `shadowed` visibility onto step records that precede the most recent
+ * compaction marker — their context was (likely) dropped, so "what the model
+ * knew" and "what happened" become separately answerable (D14 #4). Pure and
+ * order-agnostic. This is the COARSE, honest read-time rule: compaction keeps a
+ * recent tail and reports only counts, and steps do not carry the seq of the
+ * messages they produced, so some steps flagged here may in truth still be in
+ * context. Precise per-step shadowing needs message→seq stamping (a later slice);
+ * this marks the boundary rather than inventing a false-precise per-message map.
+ */
+export function deriveShadowedTrajectory(records: TrajectoryRecord[]): TrajectoryRecord[] {
+  let latestCompactionSeq = -1;
+  for (const r of records) {
+    if (r.kind === 'event' && r.event === 'compaction' && r.seq > latestCompactionSeq) latestCompactionSeq = r.seq;
+  }
+  if (latestCompactionSeq < 0) return records;
+  return records.map((r) =>
+    (r.kind === 'step' && r.seq < latestCompactionSeq && r.visibility === 'model-visible')
+      ? { ...r, visibility: 'shadowed' as const }
+      : r);
 }
