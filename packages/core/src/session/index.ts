@@ -16,6 +16,7 @@ export * from './transcript/transcriptSearch.js';
 export * from './transcript/chapterMarks.js';
 export * from './completion/completionInbox.js';
 export * from './feedback/messageFeedback.js';
+export * from './trace/requestTraceStore.js';
 export * from './preferences/permissionModes.js';
 export * from './input/inputDelivery.js';
 export * from './input/heldSessionMessages.js';
