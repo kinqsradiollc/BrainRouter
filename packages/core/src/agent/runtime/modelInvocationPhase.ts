@@ -252,28 +252,6 @@ export async function invokeModelPhase(
   const providerAttemptStartedAt = new Date().toISOString();
   try {
     response = await invokeLlmResilient();
-    // ADR-041 D14 (#2/#3) — record this model call as one step in the session's
-    // trajectory ledger: model, wall-clock duration, token usage, and the tools
-    // the step requested (each with a render intent). Opt-in and log-only, so a
-    // replay is byte-identical whether it is on or off; fully guarded so a trace
-    // write can never affect the turn.
-    if (getCliKnobs().traceTrajectory === true) {
-      try {
-        recordTrajectoryStep(agent.workspaceRoot, agent.sessionKey, {
-          model: agent.llmConfig.model,
-          at: providerAttemptStartedAt,
-          durationMs: Date.now() - Date.parse(providerAttemptStartedAt),
-          tokensIn: response.usage?.prompt_tokens,
-          tokensOut: response.usage?.completion_tokens,
-          toolNames: (response.toolCalls ?? [])
-            .map((tc: any) => tc?.function?.name ?? tc?.name)
-            .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0),
-          text: response.content,
-        });
-      } catch {
-        /* never break a turn on a metadata write */
-      }
-    }
   } catch (error: any) {
     if (isInterrupt(error) || agent.interruptRequested) {
       agent.interruptRequested = false;
@@ -442,5 +420,32 @@ export async function invokeModelPhase(
   }
 
   if (!response) throw new Error('LLM Execution failed: no response returned.');
+
+  // ADR-041 D14 (#2/#3) — record this model call as one step in the session's
+  // trajectory ledger, keyed off the FINALIZED response so a step is recorded no
+  // matter which attempt produced it (first try, reconnect, router/model
+  // fallback, or a post-compaction retry) — a glass box must not go blank on the
+  // exact turns something went wrong. `at` is the step's start (before the first
+  // attempt), so `durationMs` is the whole step's wall-clock, recovery included.
+  // Opt-in and log-only, so a replay is byte-identical whether it is on or off;
+  // fully guarded so a trace write can never affect the turn.
+  if (getCliKnobs().traceTrajectory === true) {
+    try {
+      recordTrajectoryStep(agent.workspaceRoot, agent.sessionKey, {
+        model: agent.llmConfig.model,
+        at: providerAttemptStartedAt,
+        durationMs: Date.now() - Date.parse(providerAttemptStartedAt),
+        tokensIn: response.usage?.prompt_tokens,
+        tokensOut: response.usage?.completion_tokens,
+        toolNames: (response.toolCalls ?? [])
+          .map((tc: any) => tc?.function?.name ?? tc?.name)
+          .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0),
+        text: response.content,
+      });
+    } catch {
+      /* never break a turn on a metadata write */
+    }
+  }
+
   return { kind: 'response', response };
 }

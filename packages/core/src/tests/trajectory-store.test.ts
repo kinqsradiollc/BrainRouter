@@ -72,16 +72,23 @@ test('D14 — seq is monotonic across steps', () => {
   assert.deepEqual(seqsNewestFirst, [3, 2, 1, 0]);
 });
 
-test('D14 — self-trims to the ceiling while keeping seq monotonic beyond it', () => {
+test('D14 — does NOT rewrite on every append past the cap (trim slack)', () => {
   const ws = tmpWs();
-  // Push well past MAX_RECORDS (500) so a trim must fire.
-  for (let i = 0; i < 520; i += 1) recordTrajectoryStep(ws, 'sess:a', { model: 'm', toolNames: [] });
+  // Just past MAX_RECORDS (500) but within the slack window (+100): no trim yet.
+  for (let i = 0; i < 560; i += 1) recordTrajectoryStep(ws, 'sess:a', { model: 'm', toolNames: [] });
+  assert.equal(readTrajectory(ws, 'sess:a', 10_000).length, 560, 'within the slack window nothing is trimmed');
+});
+
+test('D14 — self-trims past the slack window while keeping seq monotonic beyond it', () => {
+  const ws = tmpWs();
+  // Push past MAX_RECORDS + TRIM_SLACK (600) so at least one trim must fire.
+  for (let i = 0; i < 650; i += 1) recordTrajectoryStep(ws, 'sess:a', { model: 'm', toolNames: [] });
   const all = readTrajectory(ws, 'sess:a', 10_000);
-  assert.equal(all.length, 500, 'file self-trimmed to the ceiling');
-  assert.equal(all[0].seq, 519, 'newest kept record keeps its original monotonic seq');
-  // A step recorded AFTER the trim continues the sequence — it never collides.
+  assert.ok(all.length >= 500 && all.length <= 600, `bounded by [MAX, MAX+SLACK], got ${all.length}`);
+  assert.equal(all[0].seq, 649, 'newest kept record keeps its original monotonic seq');
+  // A step recorded AFTER a trim continues the sequence — it never collides.
   recordTrajectoryStep(ws, 'sess:a', { model: 'after-trim', toolNames: [] });
-  assert.equal(readTrajectory(ws, 'sess:a', 1)[0].seq, 520);
+  assert.equal(readTrajectory(ws, 'sess:a', 1)[0].seq, 650);
 });
 
 test('D14 — a torn/truncated final line is skipped, not fatal', () => {

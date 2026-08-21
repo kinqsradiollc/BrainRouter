@@ -30,6 +30,13 @@ import { getSessionStateDir } from '../../storage/store.js';
 const TRAJECTORY_FILE = 'trajectory.jsonl';
 /** Self-trim ceiling; the newest records are kept when the file grows past it. */
 const MAX_RECORDS = 500;
+/**
+ * Trim only once the file exceeds the ceiling by this much, then down to the
+ * ceiling — so a session past the cap rewrites the whole file once per `SLACK`
+ * appends, not on every append (a synchronous full-file rewrite on the model
+ * response path would stall the event loop in a shared host).
+ */
+const TRIM_SLACK = 100;
 const MAX_EXCERPT_CHARS = 2000;
 
 /**
@@ -64,9 +71,9 @@ export interface TrajectoryStep {
   model: string;
   /** Reasoning effort in force for the call, when known. */
   effort?: string;
-  /** ISO timestamp when the call started. */
+  /** ISO timestamp when the step started (before the first attempt). */
   at: string;
-  /** Wall-clock duration of the model call in ms. */
+  /** Total wall-clock for the step in ms, including any reconnect / fallback recovery. */
   durationMs?: number;
   /** Prompt tokens the request carried, when the provider reported usage. */
   tokensIn?: number;
@@ -164,11 +171,15 @@ function needsLeadingNewline(file: string): boolean {
   }
 }
 
-/** Rewrite the file keeping only the newest MAX_RECORDS lines. Best-effort. */
+/**
+ * Rewrite the file keeping only the newest MAX_RECORDS lines — but only once it
+ * has grown past MAX_RECORDS + TRIM_SLACK, so the rewrite amortizes to once per
+ * TRIM_SLACK appends instead of firing on every append past the cap. Best-effort.
+ */
 function trimIfNeeded(file: string): void {
   try {
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim());
-    if (lines.length <= MAX_RECORDS) return;
+    if (lines.length <= MAX_RECORDS + TRIM_SLACK) return;
     const kept = lines.slice(lines.length - MAX_RECORDS);
     fs.writeFileSync(file, `${kept.join('\n')}\n`, 'utf8');
   } catch {
@@ -254,6 +265,6 @@ export function readTrajectory(workspaceRoot: string, sessionKey: string, limit 
       /* skip malformed / torn line */
     }
   }
-  const clamped = Math.max(1, Math.floor(limit));
+  const clamped = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 30;
   return out.slice(Math.max(0, out.length - clamped)).reverse();
 }
