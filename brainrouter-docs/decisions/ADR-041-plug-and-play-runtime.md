@@ -558,15 +558,14 @@ decision record checks only A41-0; it makes no implementation claim.
 - [x] **A41-4 — Phase hooks and extension host evolution.** Add `registerPhaseHook()` and
   `registerDisposable()` to `ExtensionHost`. Wire `beforePhase` / `afterPhase` into the agent turn
   loop. Unify provider registration through `ProviderRegistry`.
-- [ ] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
+- [x] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
   OpenAI SSE adapter. Switch core consumers to `StreamChunk`. Add native provider streaming paths.
-  *Complete, shipping #1546: the `StreamChunk` union + the OpenAI-SSE adapter + the gateway /
+  *Merged in #1546: the `StreamChunk` union + the OpenAI-SSE adapter + the gateway /
   model-phase consumers landed earlier; the last gap — native providers falling back to a
   non-streaming call — is closed. `anthropic-messages` and `gemini-generate` now stream their own SSE
   (`agent/transport/nativeProviderStream.ts`), accumulated back into the canonical envelope so the
   streamed `NativeOutput` is identical to the whole-response path; opt-in/default-off, with a
-  fall-back-to-non-streaming-before-first-paint and a mid-stream-abort→InterruptError guard. Flip to
-  `[x]` when #1546 merges.*
+  fall-back-to-non-streaming-before-first-paint and a mid-stream-abort→InterruptError guard.*
 - [x] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
   `MemoryEngine`. Remove `as unknown as *Store` casts.
 - [x] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
@@ -585,8 +584,8 @@ decision record checks only A41-0; it makes no implementation claim.
   consumer that disposes it at session end would be an export with no live caller — the
   `inert-value-sweep` ceiling rejects that, and a hollow consumer would be ceremony. Awaits a genuine
   per-session extension-registration use case (e.g. a session-scoped tool or provider) to force it.*
-- [ ] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
-  resolver; `local` default; worktree/container backends re-expressed as worlds. *Shipping #1547:
+- [x] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
+  resolver; `local` default; worktree/container backends re-expressed as worlds. *Merged in #1547:
   the `local` world is now LIVE and the Agent's default — `runtime/localWorld.ts` binds the three
   node ports (`nodeFilesystemPort` / `nodeShellPort` / `defaultSubprocessPort`) as one unit, the
   constructor resolves ports through it, and `--dump-composition` reports the active world. Byte-
@@ -595,7 +594,7 @@ decision record checks only A41-0; it makes no implementation claim.
   (process/worktree/container/hosted) share the same host node ports and `exec/runtime/sandbox`
   command path (worktree differs by cwd, container by bind-mount with its in-container loop explicitly
   deferred, hosted is an out-of-process CLI), so no port-level backend exists to express as a distinct
-  world yet. Awaits one. Flip to `[x]` when #1547 merges.*
+  world yet. Awaits one.*
 - [ ] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
   overlays targeting rows by id, `--dump-composition`, and the default loop driver registered as a
   replaceable row. *Shipped: the four host profiles, `--dump-composition`, and the default
@@ -636,14 +635,13 @@ decision record checks only A41-0; it makes no implementation claim.
 - [x] **A41-15 — Parity wave W3** (continuable children + send/interrupt/report, external-agent
   subagent providers, Code Mode). *Continuable children existed; external-agent subagent providers
   and the `run_code` Code Mode flagship shipped.*
-- [ ] **A41-16 — Parity wave W4** (out-of-process SDK, generated drift-checked catalogs,
+- [x] **A41-16 — Parity wave W4** (out-of-process SDK, generated drift-checked catalogs,
   session-native reminder unification, self-modification evaluation — evaluation may conclude
-  "no"). *Build complete, shipping: out-of-process typed SDK (#1543 — the `@kinqs/brainrouter-core/sdk`
+  "no"). *Merged: out-of-process typed SDK (#1543 — the `@kinqs/brainrouter-core/sdk`
   entry point over the existing runner client), generated drift-checked tool catalog (#1542 —
   `brainrouter-docs/generated/tool-catalog.md` + a regen-or-fail test), session-native reminder
   unification (#1544 — a `remind` tool + a per-session store + a pure catch-up projection delivered
-  at the turn boundary), and the self-modification item **evaluated → not adopted** (§D13.1). Flip to
-  `[x]` once the three PRs merge.*
+  at the turn boundary), and the self-modification item **evaluated → not adopted** (§D13.1).*
 
 ---
 
