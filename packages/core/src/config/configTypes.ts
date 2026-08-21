@@ -610,6 +610,15 @@ export interface CliKnobs {
   /** Disable streaming (SSE). Default false. */
   disableStream?: boolean;
   /**
+   * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
+   * the session bucket): one step record per model call (model, duration, token
+   * usage, and the tools it requested with their render intents). Log-only —
+   * never enters the transcript or model context, so a replay is byte-identical
+   * whether it is on or off. Read by the desktop Trajectory panel and CLI
+   * `/trajectory`. Default false.
+   */
+  traceTrajectory?: boolean;
+  /**
    * WF-COST-GATE — confirm before any agent runs a WORKFLOW (`run_workflow`).
    * Workflows fan out many child agents and cost far more tokens than a plain
    * spawn, so this gate is ALWAYS-ON by default (independent of /mode, /yolo,
@@ -1257,6 +1266,7 @@ export interface ResolvedCliKnobs {
   llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
+  traceTrajectory: boolean;
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fallbackModel: string | null;

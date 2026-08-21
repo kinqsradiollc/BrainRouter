@@ -247,6 +247,7 @@ import {
   listChapters,
   getSessionRuntime,
   setSessionRuntime,
+  readTrajectory,
 } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
 import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from '../fsRead.js';
@@ -1206,6 +1207,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
         // OOM-safe: recap summarizes recent state — a bounded tail is enough.
         return buildRecap({ entries: readTranscriptTail(workspaceRoot, key, 2000), sessionKey: key });
+      },
+      // ADR-041 D14 (#2) — the trajectory ledger for the active session. Reads the
+      // LOCAL session sidecar (the desktop runs on the user's machine, so it can
+      // see what a server-side brain cannot). `enabled` mirrors the opt-in knob so
+      // an empty ledger can say whether tracing is off or just hasn't filled yet.
+      'trajectory:read': (args) => {
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
+        const limit = typeof args.limit === 'number' ? args.limit : 60;
+        return { records: readTrajectory(workspaceRoot, key, limit), enabled: getCliKnobs().traceTrajectory === true };
       },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in

@@ -21,6 +21,7 @@ export { AttachmentsPanel } from './workspace/AttachmentsPanel.js';
 export { ServersPanel } from './workspace/ServersPanel.js';
 export { PeersPanel } from './workspace/PeersPanel.js';
 export { RunsPanel } from './workspace/RunsPanel.js';
+export { TrajectoryPanel } from './workspace/TrajectoryPanel.js';
 export { TasksPanel, type FinishedTask } from './planning/TasksPanel.js';
 export { TaskDetailPanel } from './planning/TaskDetailPanel.js';
 export { SchedulePanel } from './planning/SchedulePanel.js';

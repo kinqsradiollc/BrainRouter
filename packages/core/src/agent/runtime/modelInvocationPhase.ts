@@ -2,6 +2,7 @@
 // callback order remain unchanged.
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
+import { recordTrajectoryStep } from '../../session/trace/trajectoryStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import {
   buildRootContextEnvelope,
@@ -251,6 +252,28 @@ export async function invokeModelPhase(
   const providerAttemptStartedAt = new Date().toISOString();
   try {
     response = await invokeLlmResilient();
+    // ADR-041 D14 (#2/#3) — record this model call as one step in the session's
+    // trajectory ledger: model, wall-clock duration, token usage, and the tools
+    // the step requested (each with a render intent). Opt-in and log-only, so a
+    // replay is byte-identical whether it is on or off; fully guarded so a trace
+    // write can never affect the turn.
+    if (getCliKnobs().traceTrajectory === true) {
+      try {
+        recordTrajectoryStep(agent.workspaceRoot, agent.sessionKey, {
+          model: agent.llmConfig.model,
+          at: providerAttemptStartedAt,
+          durationMs: Date.now() - Date.parse(providerAttemptStartedAt),
+          tokensIn: response.usage?.prompt_tokens,
+          tokensOut: response.usage?.completion_tokens,
+          toolNames: (response.toolCalls ?? [])
+            .map((tc: any) => tc?.function?.name ?? tc?.name)
+            .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0),
+          text: response.content,
+        });
+      } catch {
+        /* never break a turn on a metadata write */
+      }
+    }
   } catch (error: any) {
     if (isInterrupt(error) || agent.interruptRequested) {
       agent.interruptRequested = false;

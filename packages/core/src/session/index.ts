@@ -21,3 +21,4 @@ export * from './input/inputDelivery.js';
 export * from './input/heldSessionMessages.js';
 export * from './messaging/index.js';
 export * from './sessionTitle.js';
+export * from './trace/trajectoryStore.js';

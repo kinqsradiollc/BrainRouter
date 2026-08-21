@@ -17,7 +17,7 @@
 // keeping them out of this union is what stops a new call site opening a tab
 // that nothing renders.
 // `peers` arrives with ADR-034 (messages that arrive) and IS a member.
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs' | 'trajectory';
 
 /**
  * ADR-028 G3 — panel groups.
@@ -70,6 +70,7 @@ export const PANEL_DEFS: readonly PanelDef[] = [
   // ADR-028 F7/G4 — the Understand group. Kept OUT of the crowded default set:
   // opened when you invoke a comprehension review, never sitting there.
   { id: 'comprehension', title: 'Understand', icon: 'brain', group: 'understand' },
+  { id: 'trajectory', title: 'Trajectory', icon: 'activity', group: 'understand' },
 
   { id: 'requirements', title: 'Requirements', icon: 'tasks', group: 'knowledge' },
   { id: 'annotations', title: 'Annotations', icon: 'review', group: 'knowledge' },
