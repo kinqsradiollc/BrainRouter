@@ -1,6 +1,6 @@
 # ADR-045 — A context window you can size, and a ceiling you cannot cross
 
-**Status:** PROPOSED — awaiting owner acceptance. · **Builds on:** ADR-041 (plug-and-play runtime —
+**Status:** ACCEPTED — approved by the owner (2026-08-24); not yet implemented. · **Builds on:** ADR-041 (plug-and-play runtime —
 the config/provider seams and the golden-rule that every knob lives in `cli.*`), ADR-010/017 (org /
 team / RBAC tenancy), and the per-org recall-settings pattern (`system_settings` KV +
 `/api/admin/recall-settings`). · **Supersedes:** nothing.

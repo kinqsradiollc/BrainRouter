@@ -35,10 +35,10 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **041** | **Plug-and-play runtime** | **✅ Implemented (glass-box capstone)** — 13/17 §5 board rows + all D8, W1–W4, and the D14 glass box (#1548–#1551); only 4 consumer/ops-gated seams (A41-9/11/12/13) deferred | **0.4.21** |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | **043** | **Egress at the user's edge** | **✅ Implemented (live edge tunnel, end-to-end)** | **0.4.21** |
-| 044 | Web pages the agent can actually read | 📝 Proposed (HTML→markdown + memory-native ingest; wires the unwired ADR-027 D10 scaffolding) | — |
-| 045 | A context window you can size (+ tier ceiling) | 📝 Proposed (configurable model window: cli.* knob + desktop setting + server-enforced org/tier cap + local clamp) | — |
+| 044 | Web pages the agent can actually read | 🗓️ Accepted — not yet built (HTML→markdown + memory-native ingest; wires the unwired ADR-027 D10 scaffolding) | 0.4.22+ |
+| 045 | A context window you can size (+ tier ceiling) | 🗓️ Accepted — not yet built (configurable model window: cli.* knob + desktop setting + server-enforced org/tier cap + local clamp) | 0.4.22+ |
 | **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S5)** — extends the A41-14 registry with a tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel. S6 opportunistic. | **0.4.22** |
-| 047 | Providers as data, agents as engines, playbooks, a vetted install | 📝 Proposed (declarative providers + agent-as-engine + playbooks + allowlist/advisory install gate) | — |
+| 047 | Providers as data, agents as engines, playbooks, a vetted install | 🗓️ Accepted — not yet built (declarative providers + agent-as-engine + playbooks + allowlist/advisory install gate) | 0.4.22+ |
 
 ## In flight / next
 
@@ -53,4 +53,4 @@ active era is tracked below. Status lives authoritatively in each ADR's own
   - **Sequence (engine-independent value first):** Slice 1 — the D2 verifier + a D4 SSRF barrier pack (`fetchUpstreamWithPolicy`, `policyBoundFetch`, `validateUpstreamTarget`) + the §6 replay corpus behind the existing seam, proving "fixed code stays fixed" at HEAD (`modelProbe.ts` must not re-report); **most urgent: capture the must-NOT-report false-positive set (5 path-guard sinks + 2 non-repro ReDoS) as committed ground truth** — it lives only as counts in the ADR and cannot be rebuilt from git later. Slice 2 — implement `RepositoryAssuranceImpactPort.assemble` (`packages/core/src/review/ports/analysis.ts:38`) to pull the **existing** code-scanning API (`GET /code-scanning/alerts` + the SARIF from `/code-scanning/analyses/{id}`) and map path-problem results → `AssuranceImpactPacket.sourceToSinkPaths`, swapping the placeholder at `repositoryContextComposition.ts:43`. No engine to stand up — CodeQL is already producing SARIF. Slices 3–6 — barrier pack as versioned data + precision suite selection; D6 path-hops (extend the flattened `AssuranceSourceToSinkPath`, `packages/types/src/review/analysis.ts:96`); D5 async DB scheduling + "not analyzed" honesty; D7 own-failure-mode queries.
   - **Licensing:** green for this-repo-only; deferred (red, needs a decision first) for any customer-facing offering.
 
-Legend: ✅ Implemented · 🟡 Partial / in progress · 📝 Proposed
+Legend: ✅ Implemented · 🟡 Partial / in progress · 🗓️ Accepted, not yet built · 📝 Proposed

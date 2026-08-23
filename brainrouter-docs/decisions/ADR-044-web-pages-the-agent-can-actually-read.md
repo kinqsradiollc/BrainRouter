@@ -1,6 +1,6 @@
 # ADR-044 — Web pages the agent can actually read
 
-**Status:** PROPOSED — awaiting owner acceptance. · **Builds on:** ADR-030 (documents the
+**Status:** ACCEPTED — approved by the owner (2026-08-24); not yet implemented. · **Builds on:** ADR-030 (documents the
 agent can actually read — the `DocumentArtifact` shape, the note landing, the untrusted-content
 fence), ADR-029 (notes + the `brainrouter://` address space + the C4 untrusted-content boundary),
 ADR-027 D10 (which already wrote — but never wired — the HTML→markdown and page-readiness logic),
