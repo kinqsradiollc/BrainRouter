@@ -15,7 +15,7 @@ import {
   holdSessionMessage,
   listHeldSessionMessages,
   markHeldSessionMessageApplied,
-  rejectHeldSessionMessage,
+  declineHeldSessionMessage,
   type LocalSessionMessage,
   type PeerSessionSenderDetails,
   type PeerSessionSteeringInput,
@@ -126,7 +126,7 @@ test('missing interaction port leaves the durable row held with remote provenanc
   });
 });
 
-test('dismissed approval stays held while explicit rejection remains terminal', async () => {
+test('dismissed approval stays held while an explicit decline remains terminal', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(TEST_ROOT, 'dismissed-'));
   let prompts = 0;
   const agent = {
@@ -141,9 +141,9 @@ test('dismissed approval stays held while explicit rejection remains terminal', 
   const incoming = message('dismissed-receipt');
   assert.equal(await admitPeerMessageForAgent(agent, incoming, { transport: 'remote' }), 'held');
   assert.equal(listHeldSessionMessages(workspaceRoot, incoming.targetSessionKey)[0]?.status, 'held');
-  rejectHeldSessionMessage(workspaceRoot, incoming.targetSessionKey, incoming.id);
-  assert.equal(await admitPeerMessageForAgent(agent, incoming, { transport: 'remote' }), 'rejected');
-  assert.equal(prompts, 1, 'a rejected replay never opens another approval prompt');
+  declineHeldSessionMessage(workspaceRoot, incoming.targetSessionKey, incoming.id);
+  assert.equal(await admitPeerMessageForAgent(agent, incoming, { transport: 'remote' }), 'declined');
+  assert.equal(prompts, 1, 'a terminalized replay never opens another approval prompt');
 });
 
 test('literal CLI No is durably declined and exact terminal replay never prompts twice', async () => {
