@@ -1,0 +1,438 @@
+/**
+ * The empty-session view should orient a person to their next concrete move,
+ * not simulate a marketing landing page. This module owns only the home
+ * surface: a clear primary lane, compact utility lanes, and workspace signals.
+ * It keeps the existing actions, keyboard behavior, and responsive container.
+ */
+
+html[data-visual-system="v2"] .home {
+  width: min(920px, calc(100% - clamp(32px, 6vw, 88px)));
+  max-width: none;
+}
+
+html[data-visual-system="v2"] .home-kicker-row {
+  min-height: 24px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .home-kicker {
+  gap: 7px;
+  color: var(--shell-text-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+html[data-visual-system="v2"] .home-kicker i {
+  width: 5px;
+  height: 5px;
+  background: var(--shell-focus);
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .home-kicker strong {
+  color: var(--shell-text-secondary);
+  font-weight: 550;
+  letter-spacing: 0;
+}
+
+html[data-visual-system="v2"] .home-kicker-row .whatsnew {
+  padding: 2px 0;
+  color: var(--shell-text-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+html[data-visual-system="v2"] .home-kicker-row .whatsnew:hover,
+html[data-visual-system="v2"] .home-kicker-row .whatsnew:focus-visible {
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .home-greet {
+  max-width: 680px;
+  margin: 22px 0 24px;
+}
+
+html[data-visual-system="v2"] .home-greet h1 {
+  max-width: none;
+  color: var(--shell-text);
+  font-family: var(--font);
+  font-size: clamp(28px, 3.3vw, 38px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+}
+
+html[data-visual-system="v2"] .home-greet p {
+  max-width: 62ch;
+  margin-top: 9px;
+  color: var(--shell-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+html[data-visual-system="v2"] .home-mode-grid {
+  grid-template-columns: 1fr;
+  grid-template-rows: none;
+  gap: 0;
+  overflow: hidden;
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--r-lg);
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button,
+html[data-visual-system="v2"] .home-mode-grid > button.primary,
+html[data-visual-system="v2"] .home-mode-grid > button.tone-build {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-rows: minmax(20px, auto) minmax(18px, auto);
+  column-gap: 10px;
+  min-height: 70px;
+  padding: 10px 14px;
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--shell-divider);
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button.primary {
+  grid-row: auto;
+  min-height: 82px;
+  padding: 12px 14px;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button::after {
+  display: none;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button:hover,
+html[data-visual-system="v2"] .home-mode-grid > button:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button.primary:hover,
+html[data-visual-system="v2"] .home-mode-grid > button.primary:focus-visible {
+  color: var(--accent-fg);
+  background: var(--accent);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button em {
+  display: none;
+  color: var(--shell-text-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button > span {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  width: 28px;
+  height: 28px;
+  color: var(--shell-text-secondary);
+  background: var(--shell-interaction-subtle);
+  border: 0;
+  border-radius: 50%;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button.primary > span {
+  width: 30px;
+  height: 30px;
+  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent-fg) 16%, transparent);
+  border: 0;
+}
+
+html[data-visual-system="v2"] .home-mode-grid strong,
+html[data-visual-system="v2"] .home-mode-grid > button.primary strong {
+  grid-column: 2;
+  grid-row: 1;
+  margin-top: 0;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button.primary strong {
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+html[data-visual-system="v2"] .home-mode-grid small,
+html[data-visual-system="v2"] .home-mode-grid > button.primary small {
+  grid-column: 2;
+  grid-row: 2;
+  max-width: 34ch;
+  margin-top: 0;
+  color: var(--shell-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button.primary small {
+  max-width: 36ch;
+  color: color-mix(in srgb, var(--accent-fg) 78%, transparent);
+  font-size: 11px;
+}
+
+html[data-visual-system="v2"] .home-mode-grid b {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--shell-text-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 520;
+  letter-spacing: 0.02em;
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button:hover b,
+html[data-visual-system="v2"] .home-mode-grid > button:focus-visible b {
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .home-mode-grid > button.primary b,
+html[data-visual-system="v2"] .home-mode-grid > button.primary:hover b,
+html[data-visual-system="v2"] .home-mode-grid > button.primary:focus-visible b {
+  color: var(--accent-fg);
+}
+
+html[data-visual-system="v2"] .home-context-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 20px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--r-md);
+}
+
+html[data-visual-system="v2"] .home-context-label {
+  display: none;
+  align-items: center;
+  padding-inline: 0;
+  color: var(--shell-text-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 520;
+  letter-spacing: 0.05em;
+}
+
+html[data-visual-system="v2"] .home-context-strip button {
+  min-height: 62px;
+  padding: 10px 12px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  color: var(--shell-text-secondary);
+  border-left: 1px solid var(--shell-divider);
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .home-context-strip button > .ic,
+html[data-visual-system="v2"] .home-context-strip button > b {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .home-context-strip button:hover,
+html[data-visual-system="v2"] .home-context-strip button:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  transform: none;
+}
+
+html[data-visual-system="v2"] .home-context-strip button strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+html[data-visual-system="v2"] .home-context-strip button small {
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+html[data-visual-system="v2"] .home-lower-grid {
+  gap: 12px;
+  margin-top: 20px;
+  overflow: visible;
+  background: transparent;
+  border-top: 0;
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .home-recent-panel,
+html[data-visual-system="v2"] .home-view-panel {
+  max-height: 156px;
+  padding: 14px;
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--r-md);
+}
+
+html[data-visual-system="v2"] .home-view-panel {
+  padding-inline-start: 14px;
+  border-inline-start: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .home-panel-head {
+  min-height: 20px;
+  margin-bottom: 8px;
+}
+
+html[data-visual-system="v2"] .home-panel-head > span {
+  color: var(--shell-text-secondary);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 520;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+html[data-visual-system="v2"] .home-recent {
+  padding: 8px 0;
+  color: var(--shell-text-secondary);
+  border-top-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .home-recent:hover,
+html[data-visual-system="v2"] .home-recent:focus-visible {
+  color: var(--shell-text);
+  background: transparent;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .home-view-links {
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .home-view-links button {
+  min-height: 34px;
+  justify-content: center;
+  padding-inline: 8px;
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+  border: 0;
+  border-radius: 0;
+  font-size: 10px;
+}
+
+html[data-visual-system="v2"] .home-view-links button > .ic {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .home-view-links button:hover,
+html[data-visual-system="v2"] .home-view-links button:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: transparent;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .home-signal-row {
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .home-signal-row b {
+  color: var(--shell-text-secondary);
+}
+
+@container center (max-width: 760px) {
+  html[data-visual-system="v2"] .home {
+    width: calc(100% - 28px);
+  }
+
+  html[data-visual-system="v2"] .home-mode-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  html[data-visual-system="v2"] .home-mode-grid > button.primary {
+    grid-row: auto;
+    grid-column: auto;
+    min-height: 82px;
+  }
+
+  html[data-visual-system="v2"] .home-context-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  html[data-visual-system="v2"] .home-context-label {
+    display: none;
+  }
+
+  html[data-visual-system="v2"] .home-context-strip button:first-of-type {
+    border-left: 0;
+  }
+}
+
+@container center (max-width: 520px) {
+  html[data-visual-system="v2"] .home-greet h1 {
+    font-size: 30px;
+  }
+
+  html[data-visual-system="v2"] .home-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-visual-system="v2"] .home-mode-grid > button,
+  html[data-visual-system="v2"] .home-mode-grid > button.primary {
+    grid-column: auto;
+    min-height: 72px;
+  }
+
+  html[data-visual-system="v2"] .home-mode-grid > button.primary strong {
+    margin-top: 0;
+    font-size: 14px;
+  }
+
+  html[data-visual-system="v2"] .home-context-strip {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-visual-system="v2"] .home-context-strip button {
+    border-top: 1px solid var(--shell-divider);
+    border-left: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] .home-mode-grid,
+  html[data-visual-system="v2"] .home-context-strip,
+  html[data-visual-system="v2"] .home-lower-grid {
+    border-color: CanvasText;
+  }
+
+  html[data-visual-system="v2"] .home-mode-grid > button:hover,
+  html[data-visual-system="v2"] .home-mode-grid > button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}

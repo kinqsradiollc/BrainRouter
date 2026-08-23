@@ -855,6 +855,15 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       { number: 517, title: 'feat(desktop): native cross-platform installers (DESK-6 packaging)', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/517', headRefName: 'feat/desktop-packaging', baseRefName: 'release/0.4.16', isDraft: false, author: { login: 'luannn010' }, updatedAt: '2026-06-21T14:28:00Z', body: 'Native cross-platform installers (mac/win/linux) via electron-builder.' },
       { number: 513, title: 'docs(spec): typed extension API + audited self-update brief', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/513', headRefName: 'docs/typed-extension-api-spec', baseRefName: 'main', isDraft: false, author: { login: 'anhdang' }, updatedAt: '2026-06-21T10:19:00Z', body: 'Spec for a typed extension API and an audited self-update mechanism.' },
     ] }),
+    // Keep each sidebar session's PR marker available during browser QA. The
+    // host supplies this all-states view from `gh`; the fixture deliberately
+    // contains open, draft, merged, and conflict states for the same renderer.
+    'git-pr-status-map': () => ({ prs: [
+      { number: 395, state: 'OPEN', headRefName: 'release/0.4.15', isDraft: false, mergeable: 'MERGEABLE', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/395' },
+      { number: 394, state: 'OPEN', headRefName: 'feat/reranker-blend', isDraft: true, mergeable: 'MERGEABLE', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/394' },
+      { number: 389, state: 'MERGED', headRefName: 'fix/recall-logs', isDraft: false, mergeable: 'UNKNOWN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/389' },
+      { number: 388, state: 'OPEN', headRefName: 'fix/flaky-test', isDraft: false, mergeable: 'CONFLICTING', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/388' },
+    ] }),
     'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, mergeable: 'MERGEABLE', author: { login: 'anhdang' } } }),
     'git-pr-checks': () => ({ checks: [
       { name: 'Build & Test (Node 22.x)', bucket: 'pass', workflow: 'CI', link: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/1', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:03:06Z' },
@@ -1056,6 +1065,43 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       };
     },
     'session-info': () => ({ sessionKey: 'dev:demo', model: resolvedModel(S.activeSession), workspaceRoot: S.wsCurrent, username: 'Anh Dang', accountSignedIn: true, accountEmail: 'anh@example.test' }),
+    // Browser preview exposes the same credential-free account catalog shape
+    // as the host. The dev user is signed in but has no managed catalog, which
+    // leaves BYOK model selection usable without inventing an account model.
+    'account-model-catalog': () => ({
+      signedIn: true,
+      provider: { id: 'brainrouter', label: 'BrainRouter', readOnly: true },
+      revision: 'dev-catalog-1',
+      etag: 'dev-catalog-1',
+      models: [],
+      stale: false,
+      refreshedAt: '2026-08-23T00:00:00.000Z',
+    }),
+    // The preview has no tenant-partitioned store to rebind, but it still
+    // acknowledges the app-wide organization selection lifecycle.
+    'account-set-active-org': () => ({ ok: true, changed: false }),
+    // The preview owns no edge control channel. Returning an explicit inactive
+    // status makes the chrome badge correctly remain absent without surfacing
+    // a fake query failure during every browser QA session.
+    'egress-tunnel-status': () => ({ active: false }),
+    // Tool availability is deliberately quiet in the browser harness: it
+    // cannot inspect the developer's machine, so a ready plan avoids inventing
+    // a provisioning prompt while preserving the host response contract.
+    'tooling-check': () => ({ plan: { kind: 'ready' }, statuses: [] }),
+    // Keep the Settings → Tools surface usable in the browser preview. These
+    // records mirror the host query's public shape; only the live host decides
+    // which locally installed and MCP-provided tools are actually available.
+    'tool-catalog': () => ({
+      builtin: [
+        { name: 'read_file', description: 'Read a workspace file.', protected: true },
+        { name: 'grep_search', description: 'Search the workspace.', protected: true },
+        { name: 'run_command', description: 'Run a workspace command.', protected: false },
+        { name: 'write_file', description: 'Write an approved workspace file.', protected: false },
+      ],
+      mcp: [
+        { server: 'workspace', name: 'mcp_workspace_search' },
+      ],
+    }),
     'home-stats': () => {
       const perDay: Record<string, number> = {};
       const today = new Date();

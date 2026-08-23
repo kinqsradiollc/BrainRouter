@@ -9,6 +9,7 @@ html[data-visual-system="v2"] .activity-bar {
 html[data-visual-system="v2"] .ab-btn {
   width: var(--control-size);
   height: var(--control-size);
+  position: relative;
   border-radius: var(--shell-control-radius);
   color: var(--shell-text-muted);
 }
@@ -19,16 +20,20 @@ html[data-visual-system="v2"] .ab-btn:hover {
 }
 
 html[data-visual-system="v2"] .ab-modes {
-  gap: 3px;
-  margin-top: 5px;
-  padding-top: 7px;
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-color: var(--shell-divider);
 }
 
 html[data-visual-system="v2"] .ab-mode.active {
-  color: var(--shell-text);
-  background: var(--shell-interaction-selected);
-  box-shadow: inset 0 0 0 1px var(--shell-divider);
+  color: var(--accent-fg);
+  background: var(--shell-focus);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .ab-mode.active::before {
+  display: none;
 }
 
 html[data-visual-system="v2"] .ab-org-avatar {
@@ -55,7 +60,7 @@ html[data-visual-system="v2"] .ab-org-item:hover {
 }
 
 html[data-visual-system="v2"] .rail {
-  padding: 0 var(--shell-sidebar-padding) 10px;
+  padding: 0 var(--shell-sidebar-padding) 12px;
   background: var(--shell-chrome);
   border-color: var(--shell-divider);
 }
@@ -67,8 +72,8 @@ html[data-visual-system="v2"] .rail-grip:active {
 }
 
 html[data-visual-system="v2"] .rail-top {
-  height: 40px;
-  padding: 0 4px 0 6px;
+  height: 44px;
+  padding: 0 2px;
 }
 
 html[data-visual-system="v2"][data-os="mac"] .rail-top {
@@ -80,23 +85,32 @@ html[data-visual-system="v2"] .rail-card {
 }
 
 html[data-visual-system="v2"] .rail-action.primary {
-  height: 34px;
-  color: var(--shell-text);
-  background: var(--shell-elevated);
-  border-color: var(--shell-divider-strong);
-  border-radius: var(--shell-control-radius);
+  height: 36px;
+  color: var(--accent-fg);
+  background: var(--shell-focus);
+  border-color: transparent;
+  border-radius: var(--shell-row-radius);
   box-shadow: none;
+  font-weight: 600;
 }
 
 html[data-visual-system="v2"] .rail-action.primary:hover {
-  color: var(--shell-text);
-  background: var(--shell-interaction-hover);
-  border-color: var(--shell-divider-strong);
+  color: var(--accent-fg);
+  background: var(--shell-focus);
+  border-color: transparent;
+  box-shadow: 0 7px 16px var(--shell-focus-soft);
   transform: none;
 }
 
 html[data-visual-system="v2"] .projects-head {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
   color: var(--shell-text-muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 550;
+  letter-spacing: 0.07em;
 }
 
 html[data-visual-system="v2"] .project-row,
@@ -114,7 +128,15 @@ html[data-visual-system="v2"] .session:hover {
 html[data-visual-system="v2"] .project-row.active,
 html[data-visual-system="v2"] .project-session.active,
 html[data-visual-system="v2"] .session.active {
-  background: var(--shell-interaction-selected);
+  position: relative;
+  background: var(--shell-focus-soft);
+  box-shadow: inset 3px 0 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .project-row.active,
+html[data-visual-system="v2"] .project-session.active {
+  color: var(--shell-text);
+  font-weight: 560;
 }
 
 html[data-visual-system="v2"] .account-row {
@@ -128,6 +150,7 @@ html[data-visual-system="v2"] .account-row:hover {
 
 html[data-visual-system="v2"] .avatar {
   color: var(--shell-text);
-  background: var(--shell-elevated);
+  background: var(--shell-interaction-subtle);
   border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-control-radius);
 }

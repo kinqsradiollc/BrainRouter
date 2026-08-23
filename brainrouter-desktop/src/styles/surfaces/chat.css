@@ -7,27 +7,28 @@
  */
 
 html[data-visual-system="v2"] .chat {
-  padding-block: 20px 12px;
+  padding-block: 24px 16px;
   color: var(--shell-text);
   background: var(--shell-canvas);
 }
 
 html[data-visual-system="v2"] .chat .row {
-  margin-bottom: 20px;
+  margin-bottom: 22px;
   animation-duration: var(--motion-fast);
 }
 
 html[data-visual-system="v2"] .chat .assistant {
   color: var(--shell-text);
-  line-height: 1.62;
+  line-height: 1.65;
 }
 
 html[data-visual-system="v2"] .chat .user {
-  padding: 8px 12px;
+  padding: 9px 12px;
   color: var(--shell-text);
-  background: var(--shell-interaction-subtle);
-  border-color: var(--shell-divider);
-  border-radius: 10px 10px 3px 10px;
+  background: var(--user-bubble);
+  border-color: var(--user-border);
+  border-inline-start: 1px solid var(--user-border);
+  border-radius: var(--r-md);
   box-shadow: none;
 }
 
@@ -99,14 +100,40 @@ html[data-visual-system="v2"] .think-block {
 html[data-visual-system="v2"] .delivery-row {
   max-width: var(--content-w);
   padding: 9px 11px;
-  background: var(--shell-interaction-subtle);
+  background: var(--shell-panel);
   border: 1px solid var(--shell-divider);
-  border-inline-start: 2px solid var(--shell-text-muted);
+  border-inline-start: 2px solid var(--shell-focus);
   border-radius: var(--shell-row-radius);
 }
 
 html[data-visual-system="v2"] .delivery-row:has(.delivery-badge.steer) {
   border-inline-start-color: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .goal-banner {
+  top: 8px;
+  padding: 8px 10px;
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-inline-start: 0;
+  border-radius: var(--r-md);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-visual-system="v2"] .goal-pill {
+  color: var(--shell-focus);
+  background: var(--shell-focus-soft);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .goal-text {
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .goal-act {
+  border-radius: var(--shell-control-radius);
 }
 
 html[data-visual-system="v2"] .delivery-source {
