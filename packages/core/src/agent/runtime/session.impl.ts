@@ -38,7 +38,8 @@ import {
 } from '../../session/transcript/sessionStore.js';
 import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
-import { sanitizeToolCallPairing } from '../guards/toolCallRecovery.js';
+import { deriveModelRequest } from '../guards/toolCallRecovery.js';
+import { reportPairingRepair } from '../../runtime/invariantReports.js';
 import { appendDeveloperPromptLayer } from '../transport/llmTransport.js';
 import { scheduleLearningCheckpoint } from './learningPhase.js';
 
@@ -428,7 +429,7 @@ export function loadHistory(this: Agent, entries: TranscriptReplayEntry[]): numb
     // persisted leaves an orphaned call. Sending that on the next turn fails
     // every request with `400 ... tool call result does not follow tool call
     // (2013)` — bricking the resumed session. Repair the pairing once on load.
-    this.chatHistory = [this.createSystemMessage(), ...sanitizeToolCallPairing(replay)];
+    this.chatHistory = [this.createSystemMessage(), ...deriveModelRequest(replay, reportPairingRepair)];
     this.restoreAppliedPeerDeliveries(entries);
     this.initialized = true;
     // DESK-5t — the resumed history is a DIFFERENT session; the prior

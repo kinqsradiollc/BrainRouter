@@ -397,7 +397,13 @@ export interface RuntimeComposition {
   extensions: { tools: string[]; providers: string[]; hooks: number; panels: string[] };
   providers: string[];
   slashCommands: string[];
-  invariants: { areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>; violations: number };
+  invariants: {
+    areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>;
+    violations: number;
+    // ADR-046 D2 — tripwire firings this process (advisory, separate from violations).
+    // Optional so the panel stays forward-compatible with a backend before this lands.
+    runtimeReports?: Array<{ id: string; count: number }>;
+  };
   loopDriver: string;
   executionWorld?: string;
 }
