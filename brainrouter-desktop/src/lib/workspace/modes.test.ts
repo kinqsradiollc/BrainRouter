@@ -1,4 +1,4 @@
-/** DESK-MODES-1 — regression guards for the mode contract the shell presents. */
+/** Regression guards for the mode contract the shell presents. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -9,7 +9,7 @@ import {
   workspaceModeDefinition,
 } from './modes.js';
 
-test('DESK-MODES-1: every switchable mode has one visible semantic definition', () => {
+test('every switchable mode has one visible semantic definition', () => {
   assert.deepEqual(WORKSPACE_MODE_DEFINITIONS.map((definition) => definition.id), WORKSPACE_MODE_IDS);
   for (const mode of WORKSPACE_MODE_IDS) {
     const definition = workspaceModeDefinition(mode);
@@ -20,14 +20,14 @@ test('DESK-MODES-1: every switchable mode has one visible semantic definition', 
   }
 });
 
-test('DESK-MODES-1: every cross-mode reference target reaches its owning mode', () => {
+test('every cross-mode reference target reaches its owning mode', () => {
   for (const mode of WORKSPACE_MODE_IDS) {
     assert.equal(modeForWorkspaceReference(mode), mode, `${mode} must be routable from a reference`);
   }
   assert.equal(modeForWorkspaceReference('unknown'), null);
 });
 
-test('DESK-MODES-1: Chat and Code state their access consequence without replacing the conversation', () => {
+test('Chat and Code state their access consequence without replacing the conversation', () => {
   const chat = describeModeTransition('code', 'chat');
   const code = describeModeTransition('chat', 'code');
   assert.equal(chat.changed, true);
@@ -37,7 +37,7 @@ test('DESK-MODES-1: Chat and Code state their access consequence without replaci
   assert.match(code.message, /workspace tools/i);
 });
 
-test('DESK-MODES-1: selecting the current mode is a no-op', () => {
+test('selecting the current mode is a no-op', () => {
   const transition = describeModeTransition('planner', 'planner');
   assert.equal(transition.changed, false);
   assert.equal(transition.message, workspaceModeDefinition('planner').summary);

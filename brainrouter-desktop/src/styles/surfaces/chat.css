@@ -12,6 +12,52 @@ html[data-visual-system="v2"] .chat {
   background: var(--shell-canvas);
 }
 
+html[data-visual-system="v2"] .mode-context {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+  border-bottom: 1px solid var(--shell-divider);
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+html[data-visual-system="v2"] .mode-context > .ic {
+  flex: none;
+  color: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .mode-context-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: none;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .mode-context-title strong {
+  font-weight: 650;
+}
+
+html[data-visual-system="v2"] .mode-context-title span {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .mode-context-title span::before {
+  content: '·';
+  margin-inline-end: 6px;
+}
+
+html[data-visual-system="v2"] .mode-context-copy {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 html[data-visual-system="v2"] .chat .row {
   margin-bottom: 22px;
   animation-duration: var(--motion-fast);
@@ -191,6 +237,13 @@ html[data-visual-system="v2"] .jump-latest:focus-visible,
 html[data-visual-system="v2"] .workline-think > summary:focus-visible {
   outline: 2px solid var(--shell-focus);
   outline-offset: 2px;
+}
+
+@media (max-width: 620px) {
+  html[data-visual-system="v2"] .mode-context {
+    gap: 6px;
+    padding-inline: 12px;
+  }
 }
 
 @container center (max-width: 620px) {

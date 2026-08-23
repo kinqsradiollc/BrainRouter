@@ -1,6 +1,4 @@
 /**
- * DESK-MODES-1 — one source of truth for workbench mode semantics.
- *
  * The active mode changes agent access, data freshness, scope, and which
  * workspace chrome is available. Keeping that contract in a pure module lets
  * the rail, transition feedback, and cross-mode links agree on what changed.
