@@ -857,6 +857,14 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
         senderDeviceId: '77777777-7777-4777-8777-777777777777',
       },
       status: 'pending', createdAt: new Date(receivedAt).toISOString(),
+      // Pin the TTL to the sender deadline (createdAt + MAX_AGE) so the held
+      // record's expiry is derived from this captured `receivedAt`, NOT from the
+      // real `Date.now()` the fake transport stamps onto the message at hold time.
+      // Without this, a >1ms gap between capturing `receivedAt` and the transport's
+      // real clock pushes the receiver-deadline expiry (receivedAt_real + MAX_AGE)
+      // just past the advanced fake clock, so the message intermittently fails to
+      // expire — the source of this test's flake (documented root cause).
+      expiresAt: new Date(receivedAt + HELD_SESSION_MESSAGE_MAX_AGE_MS).toISOString(),
     };
     const service = new DesktopSessionMessaging({
       workspaceRoot: root,

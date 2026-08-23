@@ -10,7 +10,7 @@ import {
   // `StackPanel` is deliberately absent: ADR-028 G5 folded it into the `stack`
   // case below, which renders checks and findings as sections of one answer.
   // `PeersPanel` arrives with ADR-034.
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, PeersPanel, RunsPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, PeersPanel, RunsPanel, TrajectoryPanel, RequestTracePanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
@@ -166,6 +166,8 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         />);
       case 'peers': return <PeersPanel />;
       case 'runs': return <RunsPanel />;
+      case 'trajectory': return <TrajectoryPanel />;
+      case 'request-trace': return <RequestTracePanel />;
       case 'files': return <FilesPanel workspaceKey={activeRoot} files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
         onGrep={(gq) => q('q-grep', 'search-content', { q: gq })}
         onRefresh={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}

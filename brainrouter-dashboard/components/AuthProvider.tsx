@@ -1,8 +1,8 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { getClient } from "../lib/client";
-import { getRefreshToken, isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, setRefreshToken, signOut, clearAll } from "../lib/client-auth";
+import { getClient, getAccessToken, setAccessToken, refreshAccessToken } from "../lib/client";
+import { setApiKey, signOut, clearAll, setAuthedFlag } from "../lib/client-auth";
 import { authFetch } from "../lib/adminApi";
 import { STATIC_PRESENTATION } from "../lib/presentation";
 import { clearDashboardQueries } from "../lib/dashboardQuery";
@@ -47,22 +47,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Presentation mode: never hit the auth API — there is no session.
     if (STATIC_PRESENTATION) {
       setIsAuthenticated(false);
+      setAuthedFlag(false);
       setUser(null);
       setIsLoading(false);
       return;
     }
-    if (!checkIsAuthenticated()) {
-      setIsAuthenticated(false);
-      setUser(null);
-      setIsLoading(false);
-      return;
+    // ADR-037 D-2 — hydrate the in-memory access token from the httpOnly refresh
+    // cookie (the access token is lost on reload; the cookie is the durable
+    // credential). No cookie ⇒ refresh fails ⇒ /api/auth/me 401 ⇒ not authed.
+    if (!getAccessToken()) {
+      await refreshAccessToken();
     }
-
-    // A locally valid access/refresh credential is enough to render the shell.
-    // Validate and hydrate the profile in the background so a slow or offline
-    // account endpoint cannot hide every dashboard page behind a global loader.
-    setIsAuthenticated(true);
-    setIsLoading(false);
 
     try {
       const data = await authFetch<AuthUser>("/api/auth/me");
@@ -73,19 +68,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin: data.isAdmin,
       });
       setIsAuthenticated(true);
+      setAuthedFlag(true);
     } catch (err) {
       const status = typeof err === "object" && err !== null && "status" in err ? Number((err as { status?: number }).status) : 0;
-      if ((status === 401 || status === 403) && (!getRefreshToken() || !checkIsAuthenticated())) {
+      if (status === 401 || status === 403) {
+        // No valid session cookie — sign out cleanly.
         clearAll();
         clearDashboardQueries();
         setIsAuthenticated(false);
+        setAuthedFlag(false);
         setUser(null);
       } else {
-        // Network/timeout failures are transient. Keep the locally valid
-        // session usable; individual pages surface their own retry state.
-        setIsAuthenticated(checkIsAuthenticated());
+        // Network/timeout is transient — let individual pages surface a retry.
+        console.error("Failed to fetch user:", err);
       }
-      console.error("Failed to fetch user:", err);
     } finally {
       setIsLoading(false);
     }
@@ -94,8 +90,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (jwt: string, apiKey?: string, rememberMe = false, refreshToken?: string) => {
     setIsLoading(true);
     clearDashboardQueries();
-    setJwt(jwt, rememberMe);
-    if (refreshToken) setRefreshToken(refreshToken);
+    // ADR-037 D1 — the access token lives in memory; the server set the
+    // br_refresh + br_csrf cookies on the login response. The API key is legacy
+    // (D-3 removes it). rememberMe/refreshToken are no longer stored client-side.
+    void rememberMe;
+    void refreshToken;
+    setAccessToken(jwt);
     if (apiKey) setApiKey(apiKey);
     await fetchUser();
   };
@@ -111,9 +111,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearDashboardQueries();
     setUser(null);
     setIsAuthenticated(false);
+    setAuthedFlag(false);
   };
 
   useEffect(() => {
+    // ADR-037 D5 — one-time cookie migration: abandon any legacy localStorage
+    // access/refresh tokens (the session is a cookie now). This signs out a
+    // pre-cutover session so it re-authenticates into the cookie flow, and stops
+    // the old script-readable values being an XSS target on return.
+    try {
+      if (typeof window !== "undefined" && !localStorage.getItem("brainrouter_cookie_migrated_v1")) {
+        localStorage.removeItem("brainrouter_jwt");
+        localStorage.removeItem("brainrouter_refresh");
+        localStorage.setItem("brainrouter_cookie_migrated_v1", "1");
+      }
+      // ADR-037 D4 — the API key must never sit in storage; purge any legacy copy.
+      localStorage.removeItem("brainrouter_api_key");
+    } catch { /* ignore */ }
     fetchUser();
   }, []);
 

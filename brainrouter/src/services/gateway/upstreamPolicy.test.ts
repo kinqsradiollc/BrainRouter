@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   fetchUpstreamWithPolicy,
+  createPinnedUndiciDispatcher,
+  directDialer,
+  type EdgeDialer,
   type UpstreamDispatcherHandle,
   type UpstreamFetchInit,
 } from './upstreamPolicy.js';
@@ -145,3 +148,26 @@ describe('SSRF-safe upstream transport', () => {
     })).rejects.toThrow(/allowlist/i);
   });
 });
+
+describe('ADR-043 S2 — EdgeDialer seam (D6)', () => {
+  it('directDialer is the exported default and is byte-identical to the pinned dispatcher', () => {
+    expect(directDialer).toBe(createPinnedUndiciDispatcher);
+  });
+
+  it('a custom EdgeDialer is selected over the default when provided (seam is live)', async () => {
+    let dialed = false;
+    const customDialer: EdgeDialer = (target) => {
+      dialed = true;
+      return { dispatcher: undefined, close: () => {} };
+    };
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+    await fetchUpstreamWithPolicy('https://api.example.com/v1', {}, {
+      resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+      dispatcherFactory: customDialer,
+      fetchImpl,
+    });
+    expect(dialed).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+});
+

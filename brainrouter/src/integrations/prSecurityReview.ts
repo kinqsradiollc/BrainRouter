@@ -49,6 +49,8 @@ import type { AssuranceSourceLocation } from '@kinqs/brainrouter-types/review';
 import { redactSensitiveMemoryText } from '../memory/util/redaction.js';
 import { createBundleRepositoryContextResolver } from '../reviews/repository-context/prompt.js';
 import { REVIEW_CONTEXT_BUDGET_BYTES } from '../reviews/benchmark/reviewContextBudget.js';
+import { fetchCodeqlSourceToSinkPaths } from '../reviews/impact/codeqlSarifFetch.js';
+import type { CodeqlPathProvider } from '../reviews/impact/codeqlAugmentedAssembler.js';
 import {
   changedSourceLocations,
   splitDiffForReview,
@@ -127,6 +129,12 @@ export interface PrReviewDeps {
        */
       takeAuthorizationHeader(): string;
     };
+    /**
+     * ADR-039 S2 — optional CodeQL taint-path provider for this revision (GitHub
+     * only). Supplied ⇒ the impact assembler is augmented with CodeQL source→sink
+     * paths as review candidates; omitted ⇒ TS-index only.
+     */
+    codeqlPaths?: CodeqlPathProvider;
   }) => void | Promise<void>;
   /** Resolve bounded, exact-head repository context after changed anchors exist. */
   prepareRepositoryContext?: (input: {
@@ -770,6 +778,21 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
         policy: { ...policy },
         headSha,
         checkout: checkoutAccess(forge, apiBase, repo, token),
+        // ADR-039 S2 — CodeQL code scanning is GitHub-only. Supply the taint-path
+        // provider for the PR head (analyses are keyed refs/pull/N/head) so its
+        // source→sink paths join the review candidates on the same footing.
+        ...(forge !== "gitlab"
+          ? {
+              codeqlPaths: (): ReturnType<CodeqlPathProvider> =>
+                fetchCodeqlSourceToSinkPaths({
+                  apiBase,
+                  repo,
+                  ref: `refs/pull/${input.prNumber}/head`,
+                  token,
+                  fetchImpl: deps.fetchImpl as never,
+                }),
+            }
+          : {}),
       });
     } catch (error) {
       return unavailable(

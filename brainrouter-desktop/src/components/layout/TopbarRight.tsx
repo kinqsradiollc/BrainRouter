@@ -10,6 +10,7 @@ import { Icon } from '../../icons.js';
 import type { PopId } from '../../types.js';
 import type { SettingsSection } from '../../lib/commands/commands.js';
 import { sideRailFullscreenTitle } from '../../lib/panels/sideRailLayout.js';
+import { EgressTunnelBadge } from './EgressTunnelBadge.js';
 import type { PanelId } from '../../panels/index.js';
 import {
   groupWorkspaceViews,
@@ -63,6 +64,7 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
   const showEnv = isCode && !homeMode;
   return (
     <span className="topbar-right" style={offRail ? { right: sideWidth + 12 } : undefined}>
+      <EgressTunnelBadge />
       {showEnv ? (
         <button type="button" className={`app-switcher${envOpen ? ' active' : ''}`} title="Environment"
           aria-label="Environment" aria-expanded={envOpen} onClick={() => {

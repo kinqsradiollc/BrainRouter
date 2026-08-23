@@ -66,7 +66,7 @@ import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tena
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { connectorManageRouter } from './api/routes/connectors/manage.js';
 import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
-import { providersRouter, agentModelsRouter, recallSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
+import { providersRouter, agentModelsRouter, recallSettingsRouter, egressSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter, runtimeCompositionRouter } from './api/routes/admin/index.js';
 import { modelsRouter } from './api/routes/models/index.js';
 import { remoteRouter } from './api/routes/remote/index.js';
 import {
@@ -91,7 +91,7 @@ import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/r
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
 import { GatewayProviderService } from './services/gateway/providerPool.js';
 import { bindGatewayDataPlane } from './services/gateway/server.js';
-import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
+import { securityHeaders, corsMiddleware, resolveCorsAllowlist, corsCredentialsBootError, csrfOriginGuard } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
@@ -245,6 +245,10 @@ if (USE_HTTP) {
   // In dev, any localhost origin is allowed so the dashboard "just works"; in
   // production only BRAINROUTER_CORS_ORIGIN is reflected.
   app.use(corsMiddleware(resolveCorsAllowlist(), { production: IS_PRODUCTION }));
+  // ADR-037 D2 — CSRF Origin guard for cookie-session requests. Inert until
+  // the dashboard flips to cookie transport (B3 ships before D-2); bearer /
+  // no-cookie callers pass through unchanged.
+  app.use(csrfOriginGuard(resolveCorsAllowlist(), { production: IS_PRODUCTION }));
 
   // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
@@ -265,6 +269,13 @@ if (USE_HTTP) {
   }
   if (USING_FALLBACK_JWT_SECRET) {
     console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
+  }
+  // ADR-037 D3 — a `*` CORS origin combined with credentials would hand an
+  // authenticated session to every origin. Refuse it at boot, loudly.
+  const corsBootErr = corsCredentialsBootError(resolveCorsAllowlist());
+  if (corsBootErr) {
+    console.error(`[BrainRouter] FATAL: ${corsBootErr}`);
+    throw new Error(corsBootErr);
   }
 
   // Metrics — Prometheus text (default) or JSON (`?format=json` / Accept: json).
@@ -353,63 +364,75 @@ if (USE_HTTP) {
   app.use("/api/auth/forgot-password", authRateLimit);
   app.use("/api/auth/reset-password", authRateLimit);
   app.use("/api/auth/resend-verification", authRateLimit);
-  app.use("/api/auth", authRouter);
-  app.use("/api/users", usersRouter);
-  app.use("/api/orgs", orgsRouter);
-  app.use("/api/orgs", projectsRouter);
-  app.use("/api/orgs", githubReposRouter);
-  app.use("/api/connectors", githubConnectorRouter);
-  app.use("/api/admin/connectors", githubConnectorAdminRouter);
-  app.use("/api/admin/providers", providersRouter);
-  app.use("/api/admin/models", adminModelsRouter);
-  app.use("/api/models", modelsRouter);
-  app.use("/api/knowledge", knowledgeBasesRouter);
-  app.use("/api/knowledge", knowledgeDistillationRouter);
-  app.use("/api/knowledge", knowledgeDocumentsRouter);
-  app.use("/api/knowledge", knowledgeSearchRouter);
-  app.use("/api/remote", remoteRouter);
-  app.use("/api/admin/agent-models", agentModelsRouter);
-  app.use("/api/admin/recall-settings", recallSettingsRouter);
-  app.use("/api/admin/integrations", integrationsRouter);
-  app.use("/api/connectors", connectorOauthRouter);
-  app.use("/api/connectors", connectorManageRouter);
-  app.use("/api/admin/reviews", reviewsRouter);
-  app.use("/api/admin/pentests", pentestsRouter);
-  app.use("/api/admin/email", adminEmailRouter);
-  app.use("/api/admin/orgs", adminOrgsRouter);
-  // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).
-  app.use("/api/triggers", triggersRouter);
-  app.use("/api/memories", memoriesRouter);
-  app.use("/api/learned-behaviors", learnedBehaviorsRouter);
-  app.use("/api/scenes", scenesRouter);
-  app.use("/api/persona", personaRouter);
-  app.use("/api/sessions", sessionsRouter);
-  app.use("/api/meetings", meetingsRouter);
-  app.use("/api/public/meetings", publicMeetingsRouter);
-  app.use("/api/track", trackRouter);
-  // ADR-028 Part D — per-user planner sync (migration 051).
-  app.use("/api/planner", plannerRouter);
-  // ADR-029 Part D — per-user notes sync (migration 052).
-  app.use("/api/notes", notesRouter);
-  // ADR-029 Q5 — resolution is server-side, because the dashboard has no local
-  // store to resolve a reference against.
-  app.use("/api/workspace", workspaceRouter);
-  app.use("/api/teams", teamsRouter);
-  app.use("/api/chat/threads", chatThreadsRouter);
-  // Human-facing public share page — the /m/<token> link minted for a public meeting.
-  app.use("/m", publicSharePageRouter);
-  app.use("/api/vulnerabilities", vulnerabilitiesRouter);
-  app.use("/api/vulnerability", vulnerabilitiesRouter);
-  app.use("/api/contradictions", contradictionsRouter);
-  app.use("/api/stats", statsRouter);
-  app.use("/api/brain", brainRouter);
-  app.use("/api/graph", graphRouter);
-  app.use("/api", governanceRouter);
-  app.use("/api/evidence", evidenceRouter);
-  app.use("/api/fleet", fleetRouter);
-  app.use("/api/hooks", hooksRouter);
-  app.use("/api/working", workingRouter);
-  app.use("/api/skills", skillsRouter);
+  // ADR-041 A41-7 — the API route registry. Mount ORDER is load-bearing and is
+  // preserved verbatim by this array's order: siblings sharing a prefix
+  // (…/orgs, …/knowledge, …/connectors) are matched in array order, and the broad
+  // "/api" governanceRouter must stay AFTER the specific /api/* routes. Adding a
+  // route is one entry here, not a new `app.use` line. The order-critical
+  // middleware (security/CORS/CSRF/json/rate-limit above, error handlers below)
+  // stays inline — only the pure route mounts live in the registry.
+  const apiRoutes: ReadonlyArray<readonly [string, express.RequestHandler]> = [
+    ["/api/auth", authRouter],
+    ["/api/users", usersRouter],
+    ["/api/orgs", orgsRouter],
+    ["/api/orgs", projectsRouter],
+    ["/api/orgs", githubReposRouter],
+    ["/api/connectors", githubConnectorRouter],
+    ["/api/admin/connectors", githubConnectorAdminRouter],
+    ["/api/admin/providers", providersRouter],
+    ["/api/admin/models", adminModelsRouter],
+    ["/api/models", modelsRouter],
+    ["/api/knowledge", knowledgeBasesRouter],
+    ["/api/knowledge", knowledgeDistillationRouter],
+    ["/api/knowledge", knowledgeDocumentsRouter],
+    ["/api/knowledge", knowledgeSearchRouter],
+    ["/api/remote", remoteRouter],
+    ["/api/admin/agent-models", agentModelsRouter],
+    ["/api/admin/recall-settings", recallSettingsRouter],
+    ["/api/admin/runtime", runtimeCompositionRouter],
+    ["/api/admin/egress-settings", egressSettingsRouter],
+    ["/api/admin/integrations", integrationsRouter],
+    ["/api/connectors", connectorOauthRouter],
+    ["/api/connectors", connectorManageRouter],
+    ["/api/admin/reviews", reviewsRouter],
+    ["/api/admin/pentests", pentestsRouter],
+    ["/api/admin/email", adminEmailRouter],
+    ["/api/admin/orgs", adminOrgsRouter],
+    // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).
+    ["/api/triggers", triggersRouter],
+    ["/api/memories", memoriesRouter],
+    ["/api/learned-behaviors", learnedBehaviorsRouter],
+    ["/api/scenes", scenesRouter],
+    ["/api/persona", personaRouter],
+    ["/api/sessions", sessionsRouter],
+    ["/api/meetings", meetingsRouter],
+    ["/api/public/meetings", publicMeetingsRouter],
+    ["/api/track", trackRouter],
+    // ADR-028 Part D — per-user planner sync (migration 051).
+    ["/api/planner", plannerRouter],
+    // ADR-029 Part D — per-user notes sync (migration 052).
+    ["/api/notes", notesRouter],
+    // ADR-029 Q5 — resolution is server-side, because the dashboard has no local
+    // store to resolve a reference against.
+    ["/api/workspace", workspaceRouter],
+    ["/api/teams", teamsRouter],
+    ["/api/chat/threads", chatThreadsRouter],
+    // Human-facing public share page — the /m/<token> link minted for a public meeting.
+    ["/m", publicSharePageRouter],
+    ["/api/vulnerabilities", vulnerabilitiesRouter],
+    ["/api/vulnerability", vulnerabilitiesRouter],
+    ["/api/contradictions", contradictionsRouter],
+    ["/api/stats", statsRouter],
+    ["/api/brain", brainRouter],
+    ["/api/graph", graphRouter],
+    ["/api", governanceRouter],
+    ["/api/evidence", evidenceRouter],
+    ["/api/fleet", fleetRouter],
+    ["/api/hooks", hooksRouter],
+    ["/api/working", workingRouter],
+    ["/api/skills", skillsRouter],
+  ];
+  for (const [path, router] of apiRoutes) app.use(path, router);
   } // end serveRest
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream).

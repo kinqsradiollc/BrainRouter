@@ -18,4 +18,9 @@ export const anthropic: ProviderDefinition = {
   envKey: 'ANTHROPIC_API_KEY',
   local: false,
   pickerVisible: true,
+  // ADR-043 — reachable over the edge egress tunnel (server-terminated TLS; the
+  // device relays only ciphertext). `auto` prefers the tunnel ONLY when the org
+  // opted in AND a device is online; byte-neutral by default.
+  egressMode: 'auto',
+  egressCapabilities: { clientTunnel: true },
 };

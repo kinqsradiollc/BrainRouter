@@ -175,4 +175,18 @@ describe("isTransientConnectionBody", () => {
       expect(isTransientConnectionBody(body)).toBe(false);
     }
   });
+
+  it("ADR-039: routes through an injected fetchImpl and preserves the retry loop", async () => {
+    const calls: string[] = []; let attempt = 0;
+    const injected = vi.fn(async (input: string | URL | Request, _i: RequestInit): Promise<Response> => {
+      calls.push(String(input)); attempt += 1;
+      return attempt === 1 ? new Response("busy", { status: 503 })
+        : new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const res = await fetchWithExternalRetry("http://provider.example/v1/embeddings", { method: "POST" },
+      { label: "embed", maxRetries: 3, baseDelayMs: 1, maxDelayMs: 2 }, injected);
+    expect(res.status).toBe(200);
+    expect(injected).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual(["http://provider.example/v1/embeddings", "http://provider.example/v1/embeddings"]);
+  });
 });

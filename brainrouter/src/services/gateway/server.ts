@@ -5,6 +5,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import {
   corsMiddleware,
   resolveCorsAllowlist,
+  corsCredentialsBootError,
   securityHeaders,
 } from "../../api/middleware/securityHeaders.js";
 import { GatewayAuthError, type GatewayAuthContext } from "./auth.js";
@@ -115,6 +116,9 @@ function registerGatewayHttpDataPlane(
   options: GatewayAppOptions,
 ): void {
   const origins = [...(options.audioStreaming?.allowedOrigins ?? resolveCorsAllowlist())];
+  // ADR-037 D3 — the wildcard+credentials hole must not reopen on the gateway port.
+  const gwCorsErr = corsCredentialsBootError(origins);
+  if (gwCorsErr) throw new Error(gwCorsErr);
   const production = options.audioStreaming?.production;
   app.use(
     "/v1",

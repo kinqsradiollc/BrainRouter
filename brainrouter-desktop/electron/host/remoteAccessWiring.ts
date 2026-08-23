@@ -23,7 +23,9 @@ import {
 } from '../remoteAccessClient.js';
 import type { MobileRelayServer } from './mobileRelayServer.js';
 
-function fileSecrets(file: string): RemoteSecretsPort {
+/** 0600 JSON-file secrets port (shared with the egress tunnel client so it reads
+ * the same enrolled-device creds). Exported for {@link ./egressTunnelWiring.ts}. */
+export function fileSecrets(file: string): RemoteSecretsPort {
   const read = (): Record<string, string> => {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>; } catch { return {}; }
   };

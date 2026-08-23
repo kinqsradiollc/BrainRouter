@@ -26,6 +26,99 @@ export function isPathInside(parent: string, candidate: string): boolean {
 }
 
 /**
+ * ADR-042 D1 — a session's workspace is a set of attached roots, not one root.
+ * A `WorkspaceScope` carries the identity-anchoring PRIMARY root (prompts, memory
+ * bucket, code index — unchanged) plus zero or more ATTACHED roots (worktrees of
+ * the same repo, entered explicitly). A path resolves when it is inside ANY root;
+ * everything else keeps the verbatim escape error. This is a widening of the
+ * jail's door list, never a removal of the jail.
+ */
+export interface WorkspaceScope {
+  /** The identity anchor — relative paths resolve against it; unchanged semantics. */
+  readonly primaryRoot: string;
+  /** Additional roots the session may read/write (ADR-042: same-repo worktrees). */
+  readonly attachedRoots: readonly string[];
+  /**
+   * ADR-042 D6 — roots attached READ-ONLY (a worktree a live foreign session
+   * owns). Readable like any other root; writes into them are excluded from the
+   * write set here and refused with the owner named at the tool layer.
+   */
+  readonly readOnlyRoots?: readonly string[];
+}
+
+/** A single-root scope — the default that keeps every pre-ADR-042 caller unchanged. */
+export function singleRootScope(primaryRoot: string): WorkspaceScope {
+  return { primaryRoot, attachedRoots: [] };
+}
+
+/** All roots of a scope, primary first (the relative-path anchor). */
+function scopeRoots(scope: WorkspaceScope): string[] {
+  return [scope.primaryRoot, ...scope.attachedRoots];
+}
+
+/**
+ * ADR-042 D1 — resolve `inputPath` against a whole {@link WorkspaceScope}: inside
+ * the primary or any attached root. Relative paths resolve against the primary
+ * (the anchor); absolute paths as-is. The result must sit inside at least one
+ * root — the DEEPEST matching one wins (E14), so root-relative semantics (the
+ * read-before-edit ledger) bind to the worktree, not a parent that contains it.
+ * A single-root scope is byte-identical to the pre-ADR-042 behavior, including the
+ * escape messages — which is exactly what {@link resolveWorkspacePath} delegates.
+ */
+export function resolveWorkspacePathInScope(
+  scope: WorkspaceScope,
+  inputPath: string,
+  options: { forWrite?: boolean } = {},
+): string {
+  // ADR-042 D6 — writes resolve against the writable set (primary + read/write
+  // worktrees); reads may also reach read-only attached worktrees. Empty
+  // readOnlyRoots ⇒ identical sets ⇒ byte-identical to the pre-D6 behavior.
+  const writeRoots = scopeRoots(scope);
+  const roots = options.forWrite ? writeRoots : [...writeRoots, ...(scope.readOnlyRoots ?? [])];
+  if (typeof inputPath !== 'string' || inputPath.trim() === '') {
+    throw new Error('Path must be a non-empty string.');
+  }
+  const realRoots = roots.map((r) => fs.realpathSync(r));
+  const anchor = realRoots[0];
+  const resolved = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(anchor, inputPath);
+  const checkPath = options.forWrite ? path.dirname(resolved) : resolved;
+  const existingCheckPath = fs.existsSync(checkPath) ? fs.realpathSync(checkPath) : checkPath;
+
+  // The deepest root that contains BOTH the resolved path and its (realpath'd)
+  // existence check — deepest so a nested worktree wins over its parent (E14).
+  const containing = realRoots
+    .filter((r) => isPathInside(r, existingCheckPath) && isPathInside(r, resolved))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!containing) {
+    throw new Error(`Path escapes workspace root: ${inputPath}`);
+  }
+
+  // For writes we only canonicalize the PARENT above (the file may not exist
+  // yet), so a pre-existing symlink AT the final path would be silently followed
+  // by fs.writeFileSync — letting a write escape through `workspace/evil -> /etc`.
+  // Reject writing through a symlink whose ultimate target leaves EVERY root
+  // (live links resolve via realpath; dangling links fall back to the readlink
+  // target). In-scope symlinks are allowed.
+  if (options.forWrite) {
+    let linkStat: fs.Stats | undefined;
+    try { linkStat = fs.lstatSync(resolved); } catch { linkStat = undefined; }
+    if (linkStat?.isSymbolicLink()) {
+      let target: string;
+      try {
+        target = fs.realpathSync(resolved);
+      } catch {
+        target = path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
+      }
+      if (!realRoots.some((r) => isPathInside(r, target))) {
+        throw new Error(`Path escapes workspace root via symlink: ${inputPath}`);
+      }
+    }
+  }
+
+  return resolved;
+}
+
+/**
  * Resolve a workspace-relative path against the given workspaceRoot. Throws
  * if the result escapes the workspace.
  *
@@ -34,6 +127,7 @@ export function isPathInside(parent: string, candidate: string): boolean {
  *
  * For backwards compatibility, the workspaceRoot parameter may be omitted; it
  * then falls back to process.cwd(). New code should always pass it explicitly.
+ * Multi-root callers use {@link resolveWorkspacePathInScope}.
  */
 export function resolveWorkspacePath(
   workspaceRootOrPath: string = '.',
@@ -55,44 +149,9 @@ export function resolveWorkspacePath(
     inputPath = workspaceRootOrPath;
     options = inputPathOrOptions ?? {};
   }
-
-  if (typeof inputPath !== 'string' || inputPath.trim() === '') {
-    throw new Error('Path must be a non-empty string.');
-  }
-
-  const root = fs.realpathSync(workspaceRoot);
-  const resolved = path.resolve(root, inputPath);
-  const checkPath = options.forWrite ? path.dirname(resolved) : resolved;
-  const existingCheckPath = fs.existsSync(checkPath) ? fs.realpathSync(checkPath) : checkPath;
-
-  if (!isPathInside(root, existingCheckPath) || !isPathInside(root, resolved)) {
-    throw new Error(`Path escapes workspace root: ${inputPath}`);
-  }
-
-  // For writes we only canonicalize the PARENT above (the file may not exist
-  // yet), so a pre-existing symlink AT the final path would be silently followed
-  // by fs.writeFileSync — letting a write escape the workspace through
-  // `workspace/evil -> /etc/anything`. Reject writing through a symlink whose
-  // ultimate target leaves the root (live links resolve via realpath; dangling
-  // links fall back to the readlink target). In-workspace symlinks are allowed.
-  if (options.forWrite) {
-    let linkStat: fs.Stats | undefined;
-    try { linkStat = fs.lstatSync(resolved); } catch { linkStat = undefined; }
-    if (linkStat?.isSymbolicLink()) {
-      let target: string;
-      try {
-        target = fs.realpathSync(resolved);
-      } catch {
-        target = path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
-      }
-      if (!isPathInside(root, target)) {
-        throw new Error(`Path escapes workspace root via symlink: ${inputPath}`);
-      }
-    }
-  }
-
-  return resolved;
+  return resolveWorkspacePathInScope(singleRootScope(workspaceRoot), inputPath, options);
 }
+
 
 function globToRegexSource(pattern: string): string {
   let source = '';

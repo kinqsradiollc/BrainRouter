@@ -1,6 +1,15 @@
 /**
  * DESK-5f — pure panel identity and presentation catalog. Kept free of React
  * and panel implementations so layout/recommendation models are Node-testable.
+ *
+ * ADR-041 A41-7 — this catalog IS the PanelRegistry: one array, one row per
+ * panel, each row carrying its full identity (id + title + icon + group). The
+ * group used to live in a SEPARATE `GROUP_OF` map that could silently drift from
+ * `PANEL_DEFS` — a panel present in one but not the other. Folding `group` into
+ * the row makes registration a single edit and `groupOf` a derived lookup, so the
+ * two can no longer disagree. The React component stays OUT of the row on purpose
+ * (see the module header): the renderer maps id → component in the React layer,
+ * which is what keeps this catalog Node-testable.
  */
 // ADR-028 G5 — `review` and `ci` are NOT members: they were retired into the
 // one `stack` (Pull request) panel. They survive only as keys in
@@ -8,54 +17,7 @@
 // keeping them out of this union is what stops a new call site opening a tab
 // that nothing renders.
 // `peers` arrives with ADR-034 (messages that arrive) and IS a member.
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs';
-
-export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
-  { id: 'context', title: 'Context', icon: 'layout-right' },
-  { id: 'files', title: 'Files', icon: 'folder' },
-  { id: 'file', title: 'File', icon: 'file' },
-  { id: 'editor', title: 'Editor', icon: 'file' },
-  { id: 'diff', title: 'Changes', icon: 'diff' },
-  { id: 'terminal', title: 'Terminal', icon: 'terminal' },
-  { id: 'tools', title: 'Tool calls', icon: 'bolt' },
-  { id: 'tasks', title: 'Tasks', icon: 'tasks' },
-  { id: 'task-detail', title: 'Task', icon: 'tasks' },
-  { id: 'plan', title: 'Plan', icon: 'plan' },
-  { id: 'search', title: 'Search session', icon: 'search' },
-  { id: 'schedule', title: 'Schedules', icon: 'clock' },
-  { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
-  // ADR-028 G5 — ONE panel for the pull request. `stack`, `review` and `ci`
-  // answered facets of a single question — can this land, and if not what is
-  // stopping it — and `ci` was already titled "PR / Checks". Four tabs meant
-  // assembling the real answer yourself from three of them.
-  { id: 'stack', title: 'Pull request', icon: 'branch' },
-  // ADR-028 F7/G4 — the Understand group. Kept OUT of the crowded default set:
-  // opened when you invoke a comprehension review, never sitting there.
-  { id: 'comprehension', title: 'Understand', icon: 'brain' },
-
-  { id: 'requirements', title: 'Requirements', icon: 'tasks' },
-  { id: 'annotations', title: 'Annotations', icon: 'review' },
-  { id: 'artifacts', title: 'Artifacts', icon: 'file' },
-  { id: 'attachments', title: 'Attachments', icon: 'file' },
-
-  { id: 'atlas', title: 'Atlas', icon: 'atlas' },
-  { id: 'workflows', title: 'Workflows', icon: 'bolt' },
-  { id: 'memory', title: 'Saved knowledge', icon: 'pin' },
-  { id: 'knowledge', title: 'Project knowledge', icon: 'brain' },
-  { id: 'prototype', title: 'Prototype', icon: 'bolt' },
-  { id: 'servers', title: 'Servers', icon: 'globe' },
-  { id: 'peers', title: 'Peers', icon: 'bubble' },
-  { id: 'runs', title: 'Runs', icon: 'activity' },
-  { id: 'browser', title: 'Browser', icon: 'globe' },
-];
-
-const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([
-  'file',
-  'task-detail',
-]);
-
-export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((panel) => !HIDDEN_MANUAL_PANEL_IDS.has(panel.id));
-
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs' | 'trajectory' | 'request-trace';
 
 /**
  * ADR-028 G3 — panel groups.
@@ -78,6 +40,63 @@ export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((panel) => !HIDDEN_MANUAL_PAN
  */
 export type PanelGroup = 'code' | 'work' | 'knowledge' | 'understand' | 'environment';
 
+/** A registered panel: its identity, presentation, and taxonomy group. */
+export interface PanelDef {
+  id: PanelId;
+  title: string;
+  icon: string;
+  group: PanelGroup;
+}
+
+export const PANEL_DEFS: readonly PanelDef[] = [
+  { id: 'context', title: 'Context', icon: 'layout-right', group: 'environment' },
+  // ADR-041 D14 — the request inspector: what the model saw on each request.
+  { id: 'request-trace', title: 'Requests', icon: 'bolt', group: 'understand' },
+  { id: 'files', title: 'Files', icon: 'folder', group: 'code' },
+  { id: 'file', title: 'File', icon: 'file', group: 'code' },
+  { id: 'editor', title: 'Editor', icon: 'file', group: 'code' },
+  { id: 'diff', title: 'Changes', icon: 'diff', group: 'code' },
+  { id: 'terminal', title: 'Terminal', icon: 'terminal', group: 'code' },
+  { id: 'tools', title: 'Tool calls', icon: 'bolt', group: 'environment' },
+  { id: 'tasks', title: 'Tasks', icon: 'tasks', group: 'work' },
+  { id: 'task-detail', title: 'Task', icon: 'tasks', group: 'work' },
+  { id: 'plan', title: 'Plan', icon: 'plan', group: 'work' },
+  { id: 'search', title: 'Search session', icon: 'search', group: 'code' },
+  { id: 'schedule', title: 'Schedules', icon: 'clock', group: 'work' },
+  { id: 'worktrees', title: 'Worktrees', icon: 'branch', group: 'work' },
+  // ADR-028 G5 — ONE panel for the pull request. `stack`, `review` and `ci`
+  // answered facets of a single question — can this land, and if not what is
+  // stopping it — and `ci` was already titled "PR / Checks". Four tabs meant
+  // assembling the real answer yourself from three of them.
+  { id: 'stack', title: 'Pull request', icon: 'branch', group: 'work' },
+  // ADR-028 F7/G4 — the Understand group. Kept OUT of the crowded default set:
+  // opened when you invoke a comprehension review, never sitting there.
+  { id: 'comprehension', title: 'Understand', icon: 'brain', group: 'understand' },
+  { id: 'trajectory', title: 'Trajectory', icon: 'activity', group: 'understand' },
+
+  { id: 'requirements', title: 'Requirements', icon: 'tasks', group: 'knowledge' },
+  { id: 'annotations', title: 'Annotations', icon: 'review', group: 'knowledge' },
+  { id: 'artifacts', title: 'Artifacts', icon: 'file', group: 'knowledge' },
+  { id: 'attachments', title: 'Attachments', icon: 'file', group: 'knowledge' },
+
+  { id: 'atlas', title: 'Atlas', icon: 'atlas', group: 'environment' },
+  { id: 'workflows', title: 'Workflows', icon: 'bolt', group: 'work' },
+  { id: 'memory', title: 'Saved knowledge', icon: 'pin', group: 'knowledge' },
+  { id: 'knowledge', title: 'Project knowledge', icon: 'brain', group: 'knowledge' },
+  { id: 'prototype', title: 'Prototype', icon: 'bolt', group: 'environment' },
+  { id: 'servers', title: 'Servers', icon: 'globe', group: 'environment' },
+  { id: 'peers', title: 'Peers', icon: 'bubble', group: 'environment' },
+  { id: 'runs', title: 'Runs', icon: 'activity', group: 'work' },
+  { id: 'browser', title: 'Browser', icon: 'globe', group: 'environment' },
+];
+
+const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([
+  'file',
+  'task-detail',
+]);
+
+export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((panel) => !HIDDEN_MANUAL_PANEL_IDS.has(panel.id));
+
 export const PANEL_GROUPS: ReadonlyArray<readonly [PanelGroup, string]> = [
   ['code', 'Code'],
   ['work', 'Work'],
@@ -86,20 +105,13 @@ export const PANEL_GROUPS: ReadonlyArray<readonly [PanelGroup, string]> = [
   ['environment', 'Environment'],
 ];
 
-const GROUP_OF: Partial<Record<PanelId, PanelGroup>> = {
-  files: 'code', file: 'code', editor: 'code', diff: 'code', search: 'code', terminal: 'code',
-  plan: 'work', tasks: 'work', 'task-detail': 'work', stack: 'work', worktrees: 'work',
-  schedule: 'work', workflows: 'work', runs: 'work',
-  memory: 'knowledge', knowledge: 'knowledge', artifacts: 'knowledge',
-  annotations: 'knowledge', requirements: 'knowledge', attachments: 'knowledge',
-  comprehension: 'understand',
-  tools: 'environment', servers: 'environment', peers: 'environment', browser: 'environment',
-  context: 'environment', atlas: 'environment', prototype: 'environment',
-};
+// Derived from PANEL_DEFS — the single source of truth. Built once so `groupOf`
+// is an O(1) lookup in the hot filter paths below.
+const GROUP_OF: ReadonlyMap<PanelId, PanelGroup> = new Map(PANEL_DEFS.map((d) => [d.id, d.group]));
 
 /** Which group a panel belongs to. Unmapped ids fall to Environment. */
 export function groupOf(id: PanelId): PanelGroup {
-  return GROUP_OF[id] ?? 'environment';
+  return GROUP_OF.get(id) ?? 'environment';
 }
 
 /** The panels in a group, in catalog order. */

@@ -11,4 +11,17 @@ export const nodeWorktreeAwarenessHost: WorktreeAwarenessHost = {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
   },
+  isDirty(worktreePath): boolean {
+    try {
+      const out = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+        cwd: worktreePath,
+        encoding: 'utf8',
+        timeout: 2_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return out.trim().length > 0;
+    } catch {
+      return false;
+    }
+  },
 };

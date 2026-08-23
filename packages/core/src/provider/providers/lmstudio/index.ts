@@ -160,14 +160,21 @@ export function deriveLmStudioModelsUrl(endpoint: string): string {
  * Returns `null` when the call fails (network error, non-LM-Studio
  * endpoint, server not running) so callers can fall through cleanly.
  */
-export async function fetchLmStudioModels(endpoint: string): Promise<LmStudioModelInfo[] | null> {
+export async function fetchLmStudioModels(
+  endpoint: string,
+  // ADR-039 — the probe path (modelProbe) injects a policy-bound, DNS-pinned fetch
+  // here so a BYOK `baseUrl` cannot reach loopback/RFC1918/metadata via this native
+  // enrichment call (the "fourth path"). Defaults to global fetch for the local
+  // cache-refresh caller, whose endpoint is the operator's own configured host.
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = fetch,
+): Promise<LmStudioModelInfo[] | null> {
   if (!isLmStudioEndpoint(endpoint)) return null;
   const url = deriveLmStudioModelsUrl(endpoint);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4_000);
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,

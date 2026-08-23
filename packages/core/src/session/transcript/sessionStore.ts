@@ -284,6 +284,16 @@ export function forkSession(workspaceRoot: string, sessionKey: string, upToTs?: 
   const forkKey = `${prefix}:fork-${randomUUID().slice(0, 8)}`;
   const destDir = getSessionStateDir(workspaceRoot, forkKey); // creates the dir
   const destPath = path.join(destDir, TRANSCRIPT_FILE);
+  // ADR-041 A41-14 (W2) — stamp the fork's lineage into its own bucket so it
+  // travels with the session. Best-effort: a lineage write must never fail the fork.
+  try {
+    const lineage: SessionLineage = {
+      parentSessionKey: sessionKey,
+      forkedAt: new Date().toISOString(),
+      ...(upToTs == null ? {} : { branchedAtTs: upToTs }),
+    };
+    fs.writeFileSync(path.join(destDir, LINEAGE_FILE), `${JSON.stringify(lineage)}\n`, 'utf8');
+  } catch { /* best-effort — lineage is metadata, not the fork itself */ }
   if (upToTs == null) {
     fs.copyFileSync(src, destPath); // whole-conversation fork
   } else {
@@ -327,6 +337,45 @@ export interface TranscriptSummary {
   firstUserMessage?: string;
   /** Absolute path to the session bucket (new layout) or undefined for legacy. */
   sessionDir?: string;
+  /**
+   * ADR-041 A41-14 (W2) — the session this one was forked from, when it has a
+   * lineage record. Undefined for a root session (never forked) or a legacy
+   * transcript with no bucket. Lets any session list show "forked from …".
+   */
+  parentSessionKey?: string;
+}
+
+/**
+ * ADR-041 A41-14 (W2) — a fork's lineage: which session it branched from, when,
+ * and (for a mid-conversation branch) the timestamp it was cut at. Written into
+ * the fork's bucket at fork time so lineage travels with the session, not a
+ * central index that can drift.
+ */
+export interface SessionLineage {
+  /** The session this one was forked from. */
+  parentSessionKey: string;
+  /** ISO time the fork was taken. */
+  forkedAt: string;
+  /** For a mid-conversation branch (`upToTs`), the cut point; absent for a whole-conversation fork. */
+  branchedAtTs?: number;
+}
+
+const LINEAGE_FILE = 'lineage.json';
+
+/** Read a session bucket's lineage record, or null when the session is a root (or legacy). */
+export function readSessionLineage(sessionDir: string): SessionLineage | null {
+  try {
+    const raw = fs.readFileSync(path.join(sessionDir, LINEAGE_FILE), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<SessionLineage>;
+    if (typeof parsed.parentSessionKey === 'string' && typeof parsed.forkedAt === 'string') {
+      return {
+        parentSessionKey: parsed.parentSessionKey,
+        forkedAt: parsed.forkedAt,
+        ...(typeof parsed.branchedAtTs === 'number' ? { branchedAtTs: parsed.branchedAtTs } : {}),
+      };
+    }
+  } catch { /* no lineage record — a root session */ }
+  return null;
 }
 
 /**
@@ -418,6 +467,7 @@ function summarizeTranscript(filePath: string, sessionKey: string, sessionDir?: 
       } catch { /* skip malformed */ }
     }
   } catch { /* unreadable file */ }
+  const parentSessionKey = sessionDir ? readSessionLineage(sessionDir)?.parentSessionKey : undefined;
   return {
     sessionKey,
     fileName: path.basename(filePath),
@@ -425,6 +475,7 @@ function summarizeTranscript(filePath: string, sessionKey: string, sessionDir?: 
     turnCount,
     firstUserMessage,
     sessionDir,
+    ...(parentSessionKey ? { parentSessionKey } : {}),
   };
 }
 

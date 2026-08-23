@@ -60,6 +60,15 @@ export function createSpawnAgentTool() {
         wait: { type: 'boolean', description: 'If true, block until the child completes and return its final output. Default: false.' },
         timeoutMs: { type: 'integer', description: 'Optional parent wait timeout in milliseconds when wait=true. 0 or omitted waits until completion; timeout returns an envelope and leaves the child running.' },
         workdir: { type: 'string', description: 'Optional workspace-relative child launch directory. Must exist; invalid values fall back to the parent CWD.' },
+        attachTo: {
+          type: 'object',
+          description: 'ADR-042 — resume an EXISTING git worktree of this repo for the child instead of minting a fresh isolated copy. Give a worktree path or branch (from worktree_list). Refused if a live session owns it or it is not listed, unless fallback is "create".',
+          properties: {
+            path: { type: 'string', description: 'Worktree path to resume.' },
+            branch: { type: 'string', description: 'Branch name whose worktree to resume.' },
+            fallback: { type: 'string', enum: ['create'], description: 'If the target is not resumable, mint a fresh worktree instead of failing.' },
+          },
+        },
         seedRecordIds: {
           type: 'array',
           items: { type: 'string' },

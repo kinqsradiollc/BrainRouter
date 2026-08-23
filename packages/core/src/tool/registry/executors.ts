@@ -68,12 +68,24 @@ export function localToolSpecsFromExecutors(context?: LocalToolAvailabilityConte
     .map((executor) => executor.spec());
 }
 
-export function assertLocalToolExecutorInvariants(): void {
+/**
+ * Pure form of the executor↔registry drift invariant: returns a violation message
+ * per broken executor (empty = all hold). Side-effect free, so the ADR-041 A41-14
+ * runtime-invariants registry can run it and collect breaks without throwing.
+ */
+export function checkLocalToolExecutorInvariants(): string[] {
+  const violations: string[] = [];
   for (const executor of localToolExecutors()) {
     const entry = registryEntry(executor.toolName());
-    if (!entry) throw new Error(`${executor.toolName()}: executor has no registry entry.`);
-    if (executor.accessTier() !== entry.accessTier) throw new Error(`${executor.toolName()}: executor accessTier drifted from registry.`);
-    if (executor.actionKind() !== entry.actionKind) throw new Error(`${executor.toolName()}: executor actionKind drifted from registry.`);
-    if (executor.supportsParallelToolCalls() !== entry.parallelSafe) throw new Error(`${executor.toolName()}: executor parallel-safety drifted from registry.`);
+    if (!entry) { violations.push(`${executor.toolName()}: executor has no registry entry.`); continue; }
+    if (executor.accessTier() !== entry.accessTier) violations.push(`${executor.toolName()}: executor accessTier drifted from registry.`);
+    if (executor.actionKind() !== entry.actionKind) violations.push(`${executor.toolName()}: executor actionKind drifted from registry.`);
+    if (executor.supportsParallelToolCalls() !== entry.parallelSafe) violations.push(`${executor.toolName()}: executor parallel-safety drifted from registry.`);
   }
+  return violations;
+}
+
+export function assertLocalToolExecutorInvariants(): void {
+  const violations = checkLocalToolExecutorInvariants();
+  if (violations.length > 0) throw new Error(violations[0]);
 }

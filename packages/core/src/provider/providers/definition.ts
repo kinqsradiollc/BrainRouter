@@ -127,6 +127,31 @@ export interface ProviderDefinition {
    * providers leave this unset; they use the `local` blank-key path.
    */
   defaultApiKey?: string;
+
+  /**
+   * ADR-043 (egress at the user's edge) — which non-default egress paths this
+   * provider's upstream traffic is *allowed* to take. Consumed by the gateway's
+   * dialer selection (ADR-043 S3–S5); unread by core routing, so the default
+   * (server-side egress) is byte-identical until a per-org policy opts in.
+   *  - `vendableToken` — the vendor accepts a short-lived token the client can
+   *    use to call it directly (the vended-token path).
+   *  - `clientTunnel`  — traffic may be routed via the user's edge over the relay
+   *    substrate (the client-tunnel path).
+   */
+  egressCapabilities?: { vendableToken?: boolean; clientTunnel?: boolean };
+
+  /**
+   * ADR-043 — per-provider egress mode. Omitted ⇒ `'server'` (dial upstream from
+   * the gateway, as today).
+   *  - `'server'`        — gateway dials the vendor (current behaviour).
+   *  - `'client-tunnel'` — route via the user's edge over the relay.
+   *  - `'vended-token'`  — hand the client a short-lived token to call the vendor.
+   *  - `'auto'`          — let the gateway pick from `egressCapabilities` + policy.
+   * A mode other than `'server'` is honoured only when `egressCapabilities`
+   * permits it and a per-org policy has opted in; otherwise the gateway falls
+   * back to `'server'`.
+   */
+  egressMode?: "server" | "client-tunnel" | "vended-token" | "auto";
 }
 
 /**

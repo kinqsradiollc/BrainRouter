@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchHtmlViaInAppBrowser, fetchViaInAppBrowser } from '../extension/builtin/runtime.js';
+import { fetchHtmlViaInAppBrowser, fetchViaInAppBrowser } from '../websearch/inAppBrowser.js';
 
 function stubPort(handlers: Record<string, (cmd: any) => any>) {
   const calls: string[] = [];

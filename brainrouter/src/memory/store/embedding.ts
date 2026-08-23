@@ -1,5 +1,6 @@
 import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
+import { policyBoundFetch } from "../../providers/policyFetch.js";
 import { acquireEmbeddingSlot } from "../llm/llm-semaphore.js";
 import { resolveEmbeddingsUrl } from "../../providers/wireFormat.js";
 import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
@@ -105,7 +106,7 @@ export class EmbeddingService {
         signal: requestTimeoutSignal(this.timeoutMs),
       }, {
         label: "Embedding API",
-      });
+      }, policyBoundFetch());
 
       if (!res.ok) {
         const err = await res.text().catch(() => "(no body)");

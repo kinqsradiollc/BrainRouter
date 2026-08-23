@@ -222,6 +222,7 @@ import {
   listTranscripts,
   loadTranscript,
   readTranscriptTail,
+  readRequestTrace,
   transcriptSizeBytes,
   deleteSession,
   forkSession,
@@ -247,6 +248,8 @@ import {
   listChapters,
   getSessionRuntime,
   setSessionRuntime,
+  readTrajectory,
+  deriveShadowedTrajectory,
 } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
 import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from '../fsRead.js';
@@ -598,6 +601,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     fanoutManager, remoteWorktrees,
     mobileRelay,
     remoteAccess,
+    egressTunnel,
     modelsCacheByKey,
     isoNow,
     runReview,
@@ -1205,6 +1209,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
         // OOM-safe: recap summarizes recent state — a bounded tail is enough.
         return buildRecap({ entries: readTranscriptTail(workspaceRoot, key, 2000), sessionKey: key });
+      },
+      // ADR-041 D14 (#2) — the trajectory ledger for the active session. Reads the
+      // LOCAL session sidecar (the desktop runs on the user's machine, so it can
+      // see what a server-side brain cannot). `enabled` mirrors the opt-in knob so
+      // an empty ledger can say whether tracing is off or just hasn't filled yet.
+      'trajectory:read': (args) => {
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
+        const limit = typeof args.limit === 'number' ? args.limit : 60;
+        return { records: deriveShadowedTrajectory(readTrajectory(workspaceRoot, key, limit)), enabled: getCliKnobs().traceTrajectory === true };
+      },
+      // ADR-041 D14 — the request-header trace for the Request Inspector panel:
+      // what the model actually saw on each recent request (empty unless
+      // `cli.traceRequests` is on).
+      'request-trace:read': (args) => {
+        const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
+        const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 20;
+        return { records: readRequestTrace(workspaceRoot, key, limit) };
       },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in
@@ -4904,6 +4925,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // enrollment + outbound broker connections. The account bearer and the
       // rotating device refresh token never reach the renderer or the wire.
       'remote-access-status': () => ({ enrolled: remoteAccess.isEnrolled(), deviceId: remoteAccess.deviceId() }),
+      // ADR-043 D4 — true only while this device is actively holding an egress
+      // control channel to the gateway (i.e. it can relay provider traffic).
+      'egress-tunnel-status': () => ({ active: egressTunnel.isReady() }),
       'remote-access-enroll': async () => {
         const result = await remoteAccess.enroll();
         return { ok: true, deviceId: result.deviceId };

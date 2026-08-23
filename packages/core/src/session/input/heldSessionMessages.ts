@@ -699,18 +699,6 @@ export function approveHeldSessionMessage(
   });
 }
 
-export function rejectHeldSessionMessage(
-  workspaceRoot: string,
-  sessionKey: string,
-  messageId: string,
-  now = Date.now(),
-): HeldSessionMessageRecord {
-  // The returned record is the authoritative compare-and-set result. Expiry
-  // can win while a prompt is open, in which case callers must report expired
-  // rather than the requested rejection.
-  return terminalizeHeldSessionMessage(workspaceRoot, sessionKey, messageId, 'rejected', now);
-}
-
 /** Record an explicit human refusal while preserving the compact local status. */
 export function declineHeldSessionMessage(
   workspaceRoot: string,

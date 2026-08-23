@@ -380,6 +380,15 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
         childId: record.id,
         access,
         mode: getCliKnobs().childWorkspaceIsolation,
+        // ADR-042 D7 — resume an existing feature worktree instead of minting.
+        attachTo: args.attachTo && typeof args.attachTo === 'object'
+          ? {
+              path: typeof args.attachTo.path === 'string' ? args.attachTo.path : undefined,
+              branch: typeof args.attachTo.branch === 'string' ? args.attachTo.branch : undefined,
+              fallback: args.attachTo.fallback === 'create' ? 'create' as const : undefined,
+            }
+          : undefined,
+        selfSessionKey: ctx.parentSessionKey,
       });
   const childWorkspaceRoot = childWorkspace.workspaceRoot;
   const childLaunchCwd = childWorkspace.launchCwd;

@@ -218,6 +218,14 @@ const KNOWN_UNWIRED = new Map<string, string>([
     + 'subpath consumer is invisible to it — the module is wired, the scan just '
     + 'cannot see the wire. Verified by reading that file, not assumed.',
   ],
+  [
+    'exec/codeMode/runCodeChild.ts',
+    'ADR-041 A41-15. The Code Mode child ENTRYPOINT: codeModeRunner.ts spawns it as '
+    + "a subprocess via `node <new URL('./runCodeChild.js', import.meta.url)>`, so it "
+    + 'is deliberately imported by nobody — it is executed, not linked. Reached at '
+    + 'runtime, invisible to a static import scan by design (like any worker/child '
+    + 'entry). Verified by reading codeModeRunner.ts.',
+  ],
 ]);
 
 test('E1 — the documented-orphan list is honest in both directions', () => {
@@ -568,21 +576,17 @@ function deadExports(): string[] {
  *
  * It caught nine of this ADR's own decisions the first time it ran.
  *
- * **It rose once, on purpose, and this is the record of it.** ADR-028's
- * retirements took it 273 → 270. Merging ADR-034 (messages that arrive) put it
- * back to 273 with three exports that compile, typecheck, are covered by tests,
- * and are called by nothing on a user path:
- *
- * - `session/input/heldSessionMessages.ts :: rejectHeldSessionMessage` (3 test refs)
- * - `session/messaging/routes.ts :: findSessionRouteByKey` (5 test refs)
- * - `session/sessionTitle.ts :: resolveSessionTitle` (5 test refs) — a second
- *   variant of `resolveSessionTitleDecision`, which IS the one `agent.ts` calls
- *
- * They are named rather than absorbed because an unexplained ceiling rise is
- * how a ratchet stops meaning anything, and because deleting another decision's
- * tested behaviour inside a merge commit is not the merge's call to make. Each
- * must be wired or deleted; when that happens this comment goes and the number
- * falls with it.
+ * **It rose once, on purpose — now REPAID.** ADR-028's retirements took it
+ * 273 → 270; merging ADR-034 (messages that arrive) put it back to 273 with three
+ * exports that compiled, typechecked, were covered by tests, and were called by
+ * nothing on a user path — named rather than absorbed because an unexplained
+ * ceiling rise is how a ratchet stops meaning anything. The pre-release
+ * wire-or-delete pass repaid all three: `findSessionRouteByKey` was WIRED into the
+ * desktop send-path exact-key lookup (`sessionMessaging.ts`), and
+ * `resolveSessionTitle` (a bare `resolveSessionTitleDecision().title` wrapper) and
+ * `rejectHeldSessionMessage` (a `rejected` held-store terminal the local
+ * recipient lifecycle never produces — only the remote transport does) were
+ * DELETED with their tests redirected to the surviving twins.
  *
  * **The A40-5 and A40-6 rises are REPAID.** Those two slices took it 273 → 279
  * while their reducer and durable store had no caller. A40-7's adapter wired
@@ -620,7 +624,7 @@ function deadExports(): string[] {
  * gained a production caller: `readRunDetail` reduces a run's retained event journal
  * so `/runs <id>` rebuilds the map from disk instead of reporting `unavailable`.
  */
-const DEAD_EXPORT_CEILING = 278;
+const DEAD_EXPORT_CEILING = 275;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

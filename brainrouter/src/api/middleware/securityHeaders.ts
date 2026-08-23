@@ -39,6 +39,22 @@ export function resolveCorsAllowlist(env: NodeJS.ProcessEnv = process.env): stri
   return raw.split(",").map((o) => o.trim()).filter(Boolean);
 }
 
+/**
+ * ADR-037 D3 — `*` must never combine with credentials. corsMiddleware sets
+ * Access-Control-Allow-Credentials on every reflected origin, so a `*` allowlist
+ * hands an authenticated session to every site on the internet (latent today
+ * with bearer tokens; live the moment the session becomes a cookie). Refuse it
+ * at boot, loudly, rather than serve it. Returns an error message, or null when
+ * the allowlist is safe. A wildcard origin is compatible with anonymous APIs and
+ * with nothing else.
+ */
+export function corsCredentialsBootError(allowlist: string[] = resolveCorsAllowlist()): string | null {
+  if (allowlist.includes("*")) {
+    return "BRAINROUTER_CORS_ORIGIN='*' combines a wildcard origin with credentialed CORS (Access-Control-Allow-Credentials: true), which would hand an authenticated session to every origin. Set BRAINROUTER_CORS_ORIGIN to an explicit comma-separated allowlist (e.g. https://app.example.com).";
+  }
+  return null;
+}
+
 /** A local dev origin: http(s)://localhost or 127.0.0.1 on any port. */
 const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
 
@@ -73,7 +89,7 @@ export function corsMiddleware(allowlist: string[] = resolveCorsAllowlist(), opt
       res.setHeader("Access-Control-Expose-Headers", EXPOSED_HEADERS);
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, X-BrainRouter-Org, X-BrainRouter-Session");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, X-BrainRouter-Org, X-BrainRouter-Session, X-BrainRouter-Csrf");
     if (req.method === "OPTIONS") {
       res.sendStatus(allowed || !origin ? 204 : 403);
       return;
@@ -97,6 +113,46 @@ export function securityHeaders(opts: { production?: boolean } = {}) {
     res.setHeader("Cross-Origin-Resource-Policy", "same-site");
     if (opts.production) {
       res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+    next();
+  };
+}
+
+/** Read one named cookie from the raw Cookie header (no cookie-parser dependency). */
+export function readCookie(req: { headers: { cookie?: string } }, name: string): string | undefined {
+  const raw = req.headers.cookie;
+  if (!raw) return undefined;
+  for (const part of raw.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    if (part.slice(0, idx).trim() === name) {
+      try { return decodeURIComponent(part.slice(idx + 1).trim()); } catch { return part.slice(idx + 1).trim(); }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * ADR-037 D2 — CSRF Origin guard. With a SameSite=None session cookie, the
+ * browser attaches it to state-changing requests from ANY site, so every such
+ * request must be defended. This is the first defence: a POST/PUT/PATCH/DELETE
+ * that carries the `br_refresh` session cookie must present an allowlisted
+ * Origin, or it is refused 403. Requests WITHOUT the cookie — bearer / no-Origin
+ * callers (the desktop app, server-to-server, the MCP client) — pass through
+ * unchanged, so this is inert until the dashboard flips to cookie transport.
+ * (The double-submit token on /api/auth/refresh is the second defence.)
+ */
+export function csrfOriginGuard(allowlist: string[] = resolveCorsAllowlist(), opts: { production?: boolean } = {}) {
+  const devPermissive = !(opts.production ?? process.env.NODE_ENV === "production");
+  const STATE_CHANGING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!STATE_CHANGING.has(req.method)) { next(); return; }
+    // Only ambient (cookie) credentials carry CSRF risk. No cookie ⇒ not a
+    // browser session request ⇒ nothing to defend here.
+    if (!readCookie(req, "br_refresh")) { next(); return; }
+    if (!isOriginAllowed(req.headers.origin, allowlist, devPermissive)) {
+      res.status(403).json({ error: "Cross-origin state-changing request refused: missing or disallowed Origin (CSRF)." });
+      return;
     }
     next();
   };

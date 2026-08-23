@@ -26,106 +26,106 @@ import type { SessionDeliveryHub } from '../services/sessionDeliveryHub.js';
 
 // Import tools — grouped per domain; each barrel re-exports its modules' public
 // surface (schemas + handlers). See tools/<domain>/index.ts.
+// A41-7: the memory / atlas / fleet / skill-crud / persona / reference / template
+// tool HANDLERS moved to ./mcpTools/* (registered there); only the ListTools
+// descriptor schemas (and the handlers still living in this switch —
+// vulnerability_intelligence, host-learning, session_*, connector_*, knowledge_*)
+// are imported here.
 import {
-  listSkills, listSkillsSchema,
-  getSkill, getSkillSchema,
-  searchSkills, searchSkillsSchema,
-  createSkill, createSkillSchema,
-  updateSkill, updateSkillSchema,
-  memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
-  memoryExtractSkillToolSchema, handleMemoryExtractSkill,
-  memorySkillOutcomeToolSchema, handleMemorySkillOutcome,
+  memoryRegisterSkillHintsToolSchema,
+  memoryExtractSkillToolSchema,
+  memorySkillOutcomeToolSchema,
 } from '../tools/skills/index.js';
 import {
-  getPersona, getPersonaSchema,
-  getReference, getReferenceSchema,
-  listTemplateDocs, listTemplateDocsSchema,
-  getTemplateDoc, getTemplateDocSchema,
-} from '../tools/docs/index.js';
-import {
-  memoryRecallToolSchema, handleMemoryRecall,
-  memorySearchToolSchema, handleMemorySearch,
-  memoryRetrieveToolSchema, handleMemoryRetrieve,
-  memoryFindRelatedToolSchema, handleMemoryFindRelated,
-  memoryGraphQueryToolSchema, handleMemoryGraphQuery,
-  memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics,
-  vulnerabilityIntelligenceToolSchema, handleVulnerabilityIntelligence,
+  memoryRecallToolSchema,
+  memorySearchToolSchema,
+  memoryRetrieveToolSchema,
+  memoryFindRelatedToolSchema,
+  memoryGraphQueryToolSchema,
+  memoryGraphAnalyticsToolSchema,
+  vulnerabilityIntelligenceToolSchema,
 } from '../tools/recall/index.js';
 import {
-  memoryCaptureTurnToolSchema, handleMemoryCaptureTurn,
-  memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact,
-  memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation,
-  memoryRecordLessonToolSchema, handleMemoryRecordLesson,
-  memoryCreateRequirementToolSchema, handleMemoryCreateRequirement,
+  memoryCaptureTurnToolSchema,
+  memoryCaptureArtifactToolSchema,
+  memoryCaptureAnnotationToolSchema,
+  memoryRecordLessonToolSchema,
+  memoryCreateRequirementToolSchema,
 } from '../tools/capture/index.js';
 import {
-  memoryGovernanceToolSchemas, handleMemoryGovernanceTool, handleHostLearningRequest,
-  memoryEngineeringToolSchemas, handleMemoryEngineeringTool,
-  memoryExplainToolSchema, handleMemoryExplainRecall,
-  memoryHookToolSchemas, handleMemoryHookTool,
-  memoryContradictionsToolSchema, handleMemoryContradictions,
-  memoryMarkCitedToolSchema, handleMemoryMarkCited,
-  memoryProvenanceToolSchema, handleMemoryProvenance,
-  memoryReflectToolSchema, handleMemoryReflect,
-  memoryReflectSessionToolSchema, handleMemoryReflectSession,
+  memoryGovernanceToolSchemas, handleHostLearningRequest,
+  memoryEngineeringToolSchemas,
+  memoryExplainToolSchema,
+  memoryHookToolSchemas,
+  memoryContradictionsToolSchema,
+  memoryMarkCitedToolSchema,
+  memoryProvenanceToolSchema,
+  memoryReflectToolSchema,
+  memoryReflectSessionToolSchema,
 } from '../tools/governance/index.js';
 import {
-  sessionRegisterToolSchema, handleSessionRegister,
-  sessionHeartbeatToolSchema, handleSessionHeartbeat,
-  sessionUnregisterToolSchema, handleSessionUnregister,
-  sessionListToolSchema, handleSessionList,
-  sessionSendToolSchema, handleSessionSend,
-  sessionInboxReadToolSchema, handleSessionInboxRead,
-  sessionInboxAckToolSchema, handleSessionInboxAck,
-  sessionReceiptsToolSchema, handleSessionReceipts,
-  sessionReceiptsAckToolSchema, handleSessionReceiptsAck,
-  sessionDelegateTaskToolSchema, handleSessionDelegateTask,
-  sessionDelegationsToolSchema, handleSessionDelegations,
-  memoryResolveSessionToolSchema, handleMemoryResolveSession,
+  // session_* handlers migrated to ./mcpTools/session.js (A41-7); descriptors stay.
+  sessionRegisterToolSchema,
+  sessionHeartbeatToolSchema,
+  sessionUnregisterToolSchema,
+  sessionListToolSchema,
+  sessionSendToolSchema,
+  sessionInboxReadToolSchema,
+  sessionInboxAckToolSchema,
+  sessionReceiptsToolSchema,
+  sessionReceiptsAckToolSchema,
+  sessionDelegateTaskToolSchema,
+  sessionDelegationsToolSchema,
+  memoryResolveSessionToolSchema,
 } from '../tools/sessions/index.js';
 import {
-  memoryAgentStatusToolSchema, handleMemoryAgentStatus,
-  memoryAgentRunToolSchema, handleMemoryAgentRun,
-  memoryJobRetryToolSchema, handleMemoryJobRetry,
-  memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview,
+  memoryAgentStatusToolSchema,
+  memoryAgentRunToolSchema,
+  memoryJobRetryToolSchema,
+  memoryBlackboardReviewToolSchema,
 } from '../tools/agents/index.js';
 import {
-  memoryConsolidateToolSchema, handleMemoryConsolidate,
-  memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk,
-  memoryReindexSourceToolSchema, handleMemoryReindexSource,
-  memoryPruneSourcesToolSchema, handleMemoryPruneSources,
-  memoryVaultExportToolSchema, handleMemoryVaultExport,
+  memoryConsolidateToolSchema,
+  memoryFetchSourceChunkToolSchema,
+  memoryReindexSourceToolSchema,
+  memoryPruneSourcesToolSchema,
+  memoryVaultExportToolSchema,
 } from '../tools/sources/index.js';
 import {
-  memoryPersonaToolSchema, handleMemoryPersona,
-  memoryPersonaRefreshToolSchema, handleMemoryPersonaRefresh,
-  memoryWorkingToolSchemas, handleMemoryWorkingTool,
-  memoryCompressToolSchema, handleMemoryCompress,
-  memoryTreeWalkToolSchema, handleMemoryTreeWalk,
-  memoryStatsToolSchema, handleMemoryStats,
+  memoryPersonaToolSchema,
+  memoryPersonaRefreshToolSchema,
+  memoryWorkingToolSchemas,
+  memoryCompressToolSchema,
+  memoryTreeWalkToolSchema,
+  memoryStatsToolSchema,
 } from '../tools/working/index.js';
 import {
-  atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet,
-  atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery,
-  atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich,
-  fleetSnapshotPutToolSchema, handleFleetSnapshotPut,
-  fleetSnapshotGetToolSchema, handleFleetSnapshotGet,
-  connectorListToolSchema, handleConnectorList,
-  connectorRunToolSchema, handleConnectorRun,
+  atlasPutToolSchema, atlasGetToolSchema,
+  atlasListToolSchema, atlasQueryToolSchema,
+  atlasImpactToolSchema, atlasEnrichToolSchema,
+  fleetSnapshotPutToolSchema,
+  fleetSnapshotGetToolSchema,
+  connectorListToolSchema,
+  connectorRunToolSchema,
 } from '../tools/atlas/index.js';
 import {
-  knowledgeListToolSchema, handleKnowledgeList,
-  knowledgeBaseCreateToolSchema, handleKnowledgeBaseCreate,
-  knowledgeIngestToolSchema, handleKnowledgeIngest,
-  knowledgeIngestDocxToolSchema, handleKnowledgeIngestDocx,
-  knowledgeIngestPdfToolSchema, handleKnowledgeIngestPdf,
-  knowledgeStatusToolSchema, handleKnowledgeStatus,
-  knowledgeRetryToolSchema, handleKnowledgeRetry,
-  knowledgeSearchToolSchema, handleKnowledgeSearch,
+  knowledgeListToolSchema,
+  knowledgeBaseCreateToolSchema,
+  knowledgeIngestToolSchema,
+  knowledgeIngestDocxToolSchema,
+  knowledgeIngestPdfToolSchema,
+  knowledgeStatusToolSchema,
+  knowledgeRetryToolSchema,
+  knowledgeSearchToolSchema,
 } from '../tools/knowledge/index.js';
 import {
-  workspaceProfileRecommendToolSchema, handleWorkspaceProfileRecommend,
+  // handleWorkspaceProfileRecommend migrated to ./mcpTools/workspace.js (A41-7).
+  workspaceProfileRecommendToolSchema,
 } from '../tools/workspace/index.js';
+// ADR-041 A41-7 — the MCP tool-handler registry (strangler seam). Importing the
+// barrel registers every migrated tool; the CallTool dispatcher consults
+// `mcpToolHandler(name)` BEFORE the switch, so un-migrated tools fall through.
+import { mcpToolHandler, type McpToolHost } from './mcpTools/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 const HostLearningRequestSchema = RequestSchema.extend({
@@ -485,268 +485,27 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
       // in an IIFE so each case's `return` flows to one metrics recording point.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const __result: any = await (async () => {
-      switch (request.params.name) {
-        case 'list_skills':   return await listSkills(registry, listSkillsSchema.parse(request.params.arguments));
-        case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
-        case 'search_skills': return await searchSkills(registry, searchSkillsSchema.parse(request.params.arguments));
-        case 'get_persona':   return await getPersona(registry, getPersonaSchema.parse(request.params.arguments));
-        case 'workspace_profile_recommend':
-          return await handleWorkspaceProfileRecommend(registry, request.params.arguments);
-        case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
-        case 'list_template_docs': return await listTemplateDocs(registry, listTemplateDocsSchema.parse(request.params.arguments));
-        case 'get_template_doc':   return await getTemplateDoc(registry, getTemplateDocSchema.parse(request.params.arguments));
-        case 'create_skill':
-        case 'update_skill':
-          if (!isAdmin) {
-            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
-          }
-          if (request.params.name === "create_skill") {
-            return await createSkill(registry, createSkillSchema.parse(request.params.arguments));
-          }
-          return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
-        case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
-        case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
-        case 'session_register': return await handleSessionRegister(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          onRegistered: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey, messageWakeVersion, registrationAttemptId) => {
-                const committed = options.sessionDeliveryHub!.commitReservation({
-                  connectionId: options.connectionId!,
-                  orgId,
-                  userId,
-                  sessionKey,
-                  ...(messageWakeVersion === 1
-                    ? {
-                        notify: (wake) => server.notification({
-                          method: SESSION_MESSAGE_NOTIFICATION_METHOD,
-                          params: wake,
-                        } as any),
-                      }
-                    : {}),
-                }, registrationAttemptId);
-                if (!committed) {
-                  throw new Error('the session registration reservation is no longer current');
-                }
-              }
-            : undefined,
-          authorizeRegistration: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey, registrationAttemptId) => options.sessionDeliveryHub!.reserve(
-                options.connectionId!,
-                orgId,
-                userId,
-                sessionKey,
-                registrationAttemptId,
-              )
-            : undefined,
-          onRegistrationFailed: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey, registrationAttemptId) => options.sessionDeliveryHub!.releaseReservation(
-                options.connectionId!,
-                orgId,
-                userId,
-                sessionKey,
-                registrationAttemptId,
-              )
-            : undefined,
-        });
-        case 'session_heartbeat': return await handleSessionHeartbeat(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_unregister': return await handleSessionUnregister(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          onUnregistered: options?.sessionDeliveryHub && options.connectionId
-            ? (orgId, userId, sessionKey) => options.sessionDeliveryHub!.unbind(
-                orgId,
-                userId,
-                sessionKey,
-                options.connectionId,
-              )
-            : undefined,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_list': return await handleSessionList(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'session_send': return await handleSessionSend(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          onPersisted: options?.sessionDeliveryHub
-            ? (rows) => options.sessionDeliveryHub!.notifyPersisted(rows, validateDeliveryClaim)
-            : undefined,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_inbox_read': return await handleSessionInboxRead(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_inbox_ack': return await handleSessionInboxAck(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_receipts': return await handleSessionReceipts(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_receipts_ack': return await handleSessionReceiptsAck(request.params.arguments, {
-          defaultUserId,
-          defaultOrgId,
-          claimToken: options?.connectionId,
-          authorizeSession: authorizeOwnedSession,
-        });
-        case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
-        case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
-        case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'vulnerability_intelligence': return await handleVulnerabilityIntelligence(request.params.arguments);
-        case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
-        case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
-        case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
-        case 'memory_graph_query': return await handleMemoryGraphQuery(request.params.arguments, { defaultUserId });
-        case 'memory_mark_cited': return await handleMemoryMarkCited(request.params.arguments, { defaultUserId });
-        case 'memory_get':
-        case 'memory_update':
-        case 'memory_evidence_add':
-        case 'memory_evidence_get':
-        case 'memory_export':
-        case 'memory_import':
-        case 'memory_governance_delete':
-        case 'memory_audit':
-        case 'memory_diagnostics':
-        case 'memory_verify_anchors':
-          return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_debug_trace_save':
-        case 'memory_debug_trace_search':
-        case 'memory_failed_attempts':
-        case 'memory_file_history':
-        case 'memory_task_state':
-        case 'memory_task_update':
-        case 'memory_handover':
-        case 'memory_verify':
-          return await handleMemoryEngineeringTool(request.params.name, request.params.arguments, { defaultUserId });
-        case 'memory_explain_recall':
-          return await handleMemoryExplainRecall(request.params.arguments, { defaultUserId });
-        case 'memory_hook_register':
-        case 'memory_hook_status':
-          return await handleMemoryHookTool(request.params.name, request.params.arguments, { defaultUserId });
-        case 'memory_working_context':
-        case 'memory_working_offload':
-        case 'memory_working_reset':
-          return await handleMemoryWorkingTool(request.params.name, request.params.arguments, { defaultUserId });
-        case 'memory_consolidate':
-          return await handleMemoryConsolidate(request.params.arguments, { defaultUserId });
-        case 'memory_agent_status':
-          return await handleMemoryAgentStatus(request.params.arguments, { defaultUserId });
-        case 'memory_provenance':
-          return await handleMemoryProvenance(request.params.arguments, { defaultUserId });
-        case 'memory_fetch_source_chunk':
-          return await handleMemoryFetchSourceChunk(request.params.arguments, { defaultUserId });
-        case 'memory_find_related':
-          return await handleMemoryFindRelated(request.params.arguments, { defaultUserId });
-        case 'memory_reindex_source':
-          return await handleMemoryReindexSource(request.params.arguments, { defaultUserId });
-        case 'memory_record_lesson':
-          return await handleMemoryRecordLesson(request.params.arguments, { defaultUserId, defaultOrgId });
-        case 'memory_create_requirement':
-          return await handleMemoryCreateRequirement(request.params.arguments, { defaultUserId });
-        case 'memory_capture_artifact':
-          return await handleMemoryCaptureArtifact(request.params.arguments, { defaultUserId });
-        case 'atlas_put':
-          return await handleAtlasPut(request.params.arguments, { defaultUserId });
-        case 'atlas_get':
-          return await handleAtlasGet(request.params.arguments, { defaultUserId });
-        case 'atlas_list':
-          return await handleAtlasList(request.params.arguments, { defaultUserId });
-        case 'atlas_query':
-          return await handleAtlasQuery(request.params.arguments, { defaultUserId });
-        case 'atlas_impact':
-          return await handleAtlasImpact(request.params.arguments, { defaultUserId });
-        case 'atlas_enrich':
-          return await handleAtlasEnrich(request.params.arguments, { defaultUserId });
-        case 'fleet_snapshot_put':
-          return await handleFleetSnapshotPut(request.params.arguments, { defaultUserId });
-        case 'fleet_snapshot_get':
-          return await handleFleetSnapshotGet(request.params.arguments, { defaultUserId });
-        case 'memory_capture_annotation':
-          return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
-        case 'memory_extract_skill':
-          return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
-        case 'memory_skill_outcome':
-          // Skill reliability is a GLOBAL registry (no per-user scope), so
-          // recording outcomes / re-ranking it is an admin-only governance
-          // action — an arbitrary caller must not be able to demote everyone's
-          // skills or inflate a bad one (CWE-639). Automatic scoring is driven
-          // by trusted internal turn-outcome signals, not this tool.
-          if (!isAdmin) {
-            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
-          }
-          return await handleMemorySkillOutcome(request.params.arguments);
-        case 'memory_graph_analytics':
-          return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
-        case 'memory_reflect':
-          return await handleMemoryReflect(request.params.arguments, { defaultUserId });
-        case 'memory_reflect_session':
-          return await handleMemoryReflectSession(request.params.arguments, { defaultUserId });
-        case 'memory_blackboard_review':
-          return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
-        case 'memory_tree_walk':
-          return await handleMemoryTreeWalk(request.params.arguments, { defaultUserId });
-        case 'memory_vault_export':
-          return await handleMemoryVaultExport(request.params.arguments, { defaultUserId });
-        case 'memory_prune_sources':
-          return await handleMemoryPruneSources(request.params.arguments, { defaultUserId });
-        case 'memory_agent_run':
-          return await handleMemoryAgentRun(request.params.arguments, { defaultUserId });
-        case 'memory_job_retry':
-          return await handleMemoryJobRetry(request.params.arguments, { defaultUserId });
-        case 'memory_compress':
-          return await handleMemoryCompress(request.params.arguments, { defaultUserId });
-        case 'memory_retrieve':
-          return await handleMemoryRetrieve(request.params.arguments, { defaultUserId });
-        case 'memory_stats':
-          return await handleMemoryStats(request.params.arguments, { defaultUserId });
-        case 'connector_list':
-          return await handleConnectorList(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot });
-        case 'connector_run':
-          return await handleConnectorRun(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot, defaultUserId });
-        case 'knowledge_list':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeList(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_base_create':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeBaseCreate(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_ingest':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeIngest(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_ingest_docx':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeIngestDocx(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_ingest_pdf':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeIngestPdf(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_status':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeStatus(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_retry':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeRetry(request.params.arguments, { actor: knowledgeActor });
-        case 'knowledge_search':
-          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
-          return await handleKnowledgeSearch(request.params.arguments, { actor: knowledgeActor });
-        default:
-          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
+      // ADR-041 A41-7 — the CallTool dispatch is now a pure McpToolRegistry lookup:
+      // the 98-case switch has been fully dissolved into ./mcpTools/* registrations.
+      // The per-connection closure deps a handler needs travel on `host` (session_*
+      // rebuild their hub/claim/notify closures from these five session fields).
+      const __migrated = mcpToolHandler(request.params.name);
+      if (!__migrated) {
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
+      const host: McpToolHost = {
+        registry, isAdmin, defaultUserId, defaultOrgId, connectorWorkspaceRoot, knowledgeActor,
+        connectionId: options?.connectionId,
+        sessionDeliveryHub: options?.sessionDeliveryHub,
+        authorizeOwnedSession,
+        validateDeliveryClaim,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        sessionNotify: (wake: any) => server.notification({
+          method: SESSION_MESSAGE_NOTIFICATION_METHOD,
+          params: wake,
+        } as any),
+      };
+      return await __migrated({ args: request.params.arguments, invokedName: request.params.name, host });
       })();
       recordToolCall(request.params.name, !(__result && __result.isError), Date.now() - __startedAt);
       return __result;

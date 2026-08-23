@@ -401,3 +401,56 @@ describe('hosted Chat Completions data plane', () => {
     await expect(aborted).resolves.toBeUndefined();
   });
 });
+
+describe('ADR-043 S1b — proactive rate-shaping (concurrency cap + release)', () => {
+  const chatBody = () => JSON.stringify({ model: 'gpt-5.6-sol', messages: [{ role: 'user', content: 'hi' }] });
+  const okUpstream = () => new Response(JSON.stringify({
+    id: 'chatcmpl-ok',
+    object: 'chat.completion',
+    created: 1783987200,
+    model: 'provider/internal-gpt-5.6',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  it('refuses a request past the per-key concurrency cap with 429, then re-admits once the slot releases', async () => {
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    let entered = 0;
+    const fetchImpl = vi.fn(async (_url: URL, _init: UpstreamFetchInit) => {
+      entered += 1;
+      await gate; // hold the concurrency slot in-flight until released
+      return okUpstream();
+    });
+
+    const options: GatewayAppOptions = { ...upstreamOptions(fetchImpl), rateShaper: { maxConcurrentPerKey: 1 } };
+    const baseUrl = await start(service(), options);
+    const send = () => fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer account-token', 'content-type': 'application/json' },
+      body: chatBody(),
+    });
+
+    // Request 1 acquires the only slot and blocks in the upstream.
+    const p1 = send();
+    await vi.waitFor(() => expect(entered).toBe(1));
+
+    // Request 2 finds the cap full and is refused fast — no second upstream dial.
+    const r2 = await send();
+    expect(r2.status).toBe(429);
+    expect(r2.headers.get('retry-after')).toBeTruthy();
+    const b2 = await r2.json();
+    expect(b2.error.code).toBe('gateway_concurrency');
+    expect(entered).toBe(1);
+
+    // Let request 1 finish; its `finally` must release the slot.
+    openGate();
+    const r1 = await p1;
+    expect(r1.status).toBe(200);
+
+    // Request 3 now succeeds — proving the slot was released, not leaked.
+    const r3 = await send();
+    expect(r3.status).toBe(200);
+    expect(entered).toBe(2);
+  });
+});

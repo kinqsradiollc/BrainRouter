@@ -63,10 +63,12 @@ export interface IssueInput {
   rawToken: string;
   expiresAt: Date;
   now?: Date;
+  /** Pre-chosen session id — lets a caller rotate an old token onto a known successor id. */
+  id?: string;
 }
 
 export async function issueRefreshSession(input: IssueInput): Promise<string> {
-  const id = `rs_${randomUUID().replace(/-/g, "")}`;
+  const id = input.id ?? `rs_${randomUUID().replace(/-/g, "")}`;
   await input.store.insert({
     id,
     userId: input.userId,

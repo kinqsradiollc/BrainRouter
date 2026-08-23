@@ -466,6 +466,18 @@ export interface CliAccountIdentity {
   email?: string;
 }
 
+/** ADR-041 A41-15 — Code Mode (`run_code`) config. `enabled` is default-false; the
+ *  budget fields are optional overrides over the runner's defaults. */
+export interface CodeModeKnobs {
+  enabled?: boolean;
+  wallClockMs?: number;
+  heartbeatGraceMs?: number;
+  computeMs?: number;
+  maxOutputChars?: number;
+  maxToolCalls?: number;
+  maxInFlight?: number;
+}
+
 export interface CliKnobs {
   /** Who is signed in. See `CliAccountIdentity`. */
   account?: CliAccountIdentity;
@@ -597,6 +609,18 @@ export interface CliKnobs {
   llmMaxConcurrent?: number;
   /** Disable streaming (SSE). Default false. */
   disableStream?: boolean;
+  /** ADR-041 D14 — capture a per-request header (rendered prompt excerpt, tools,
+   * model, route) to the session's request-trace.jsonl for `/inspect`. Default false. */
+  traceRequests?: boolean;
+  /**
+   * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
+   * the session bucket): one step record per model call (model, duration, token
+   * usage, and the tools it requested with their render intents). Log-only —
+   * never enters the transcript or model context, so a replay is byte-identical
+   * whether it is on or off. Read by the desktop Trajectory panel and CLI
+   * `/trajectory`. Default false.
+   */
+  traceTrajectory?: boolean;
   /**
    * WF-COST-GATE — confirm before any agent runs a WORKFLOW (`run_workflow`).
    * Workflows fan out many child agents and cost far more tokens than a plain
@@ -921,6 +945,8 @@ export interface CliKnobs {
   offloadRetentionMs?: number;
   /** MEM-22: max cached offload results before the reclaimer evicts the least-recently-used. Default 64. */
   offloadMaxEntries?: number;
+  /** ADR-041 A41-15 — Code Mode (`run_code`) knobs. Default OFF (a new execution surface). */
+  codeMode?: CodeModeKnobs;
   /** Maximum spawn depth. Default 3. */
   maxSpawnDepth?: number;
   /**
@@ -1243,6 +1269,8 @@ export interface ResolvedCliKnobs {
   llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;
+  traceTrajectory: boolean;
+  traceRequests: boolean;
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fallbackModel: string | null;
@@ -1308,6 +1336,8 @@ export interface ResolvedCliKnobs {
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
   offloadMaxEntries: number;
+  /** ADR-041 A41-15 — resolved Code Mode knobs (`enabled` always a boolean). */
+  codeMode: CodeModeKnobs & { enabled: boolean };
   maxSpawnDepth: number;
   maxConcurrentChildren: number;
   fleetMaxConcurrentJobs: number;

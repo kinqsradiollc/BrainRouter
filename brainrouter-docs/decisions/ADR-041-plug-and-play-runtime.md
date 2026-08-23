@@ -1,6 +1,6 @@
 # ADR-041 — Plug-and-play runtime: swappable providers, capability ports, and product-wide registries
 
-**Status:** PROPOSED
+**Status:** Accepted — implemented (shipped to `release/0.4.21`, 2026-08). The plug-and-play runtime is complete through its D14 glass-box capstone: **13 of the 17 §5 delivery-board rows are checked**, and all five D14 transparency commitments have their first vertical on release. The four remaining rows are documented consumer/ops-gated seams (§5) that each await a forcing consumer or an owner decision, not further implementation. **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D5 (product-wide registry pattern — the `McpTool` / `Command` / `Panel` / `ApiRoute` registries), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims); D7/D9 (universal disposables + capability presets + roles-consume-presets shipped; the `host.scope(sessionKey)` session-scoping mechanism awaits a per-session registration consumer); D11 (the four host profiles + `dump-composition` shipped; overlay-by-id + the default loop-driver-as-a-replaceable-row remain); D12 (service profiles + the typed remote-binding gate `assertRemoteBindable`, wired into the egress-tunnel boot, shipped; reducing a service image to "loader + profile" and regenerating dev-compose from profile sets remain); D13 (W1 parity capabilities are all present in core — the spill store, the last gap, is now a disk cold tier on `ResultCache`; the "each as an extension" repackaging remains. W2: the runtime-invariants registry, session fork lineage, per-message feedback, and the full session query/reference plane shipped). **Complete rows:** D13 **W2 and W3 are complete rows** — W2 shipped the runtime-invariants registry, session fork lineage, per-message feedback, and the full `session_list` / `read` / `search` / `reference` plane; W3 shipped external-agent subagent providers (external-CLI-backed workers over the `SubprocessPort` seam, on the interrupt cascade) and the **Code Mode** flagship (`run_code`: a sandbox-parity subprocess whose every `agent.<tool>()` re-enters the D8 pipeline, default-off, ≤ `run_command` in every mode). W1's capabilities are all present in core; only its "each as an extension" repackaging remains. **W4 shipped:** the out-of-process typed SDK, unified generated catalogs, and session-native reminder unification (the self-modification item was **evaluated → not adopted** — §D13.1). **D14 (the glass box) shipped:** composition transparency (dashboard `/runtime`), per-request inspection, the turn-trajectory ledger with semantic render intents, and log-only + shadowed-by-compaction record markers — each a log-only session sidecar read by desktop panels and the CLI. **Deferred (consumer/ops-gated, documented in §5):** only the four build-on-top seams — A41-9 `host.scope(sessionKey)`, A41-11 overlay-by-id, A41-12 service-image "loader + profile" + compose-gen, and A41-13 (W1 capabilities repackaged "each as an extension", proven unbuildable without either a core edit or a dead export) — each awaiting a forcing consumer or an owner decision. D13/D14's waves are tracked as their own slice series.
 
 **Builds on:** ADR-029 (one workspace, many surfaces), the existing `ExtensionHost` and
 `ProviderDefinition` system.
@@ -38,7 +38,9 @@ observe-only hooks, and the tree a given surface boots is composed from layered 
 can be dumped and patched without touching core.** D1–D7 build the registries; D8–D11 make them a
 plugin system.
 
-Eleven decisions, eleven implementation slices after acceptance. Each slice is one pull request.
+Twelve decisions, a feature-parity program (D13), and its transparency capstone (D14 — the human
+can watch, inspect, and replay the whole process). Each implementation slice is one pull request;
+D13/D14's waves are tracked as their own slice series.
 
 ---
 
@@ -303,6 +305,188 @@ process boundary**. Concretely:
 This is "microservice-ready, not microservice-mandatory": the monolith stays the product; the
 profiles make the cut lines real and load-tested instead of aspirational.
 
+### D13 — Feature-parity program: every capability of the studied reference harness, as extensions
+
+A deep study of the reference harness architecture (docs + package tree) yields a capability
+inventory that D1–D12 make adoptable **as extensions on the new runtime rather than core edits** —
+each parity feature is itself a proof that the plugin system works. The matrix below is the
+program of record; every row lands as one or more PRs registered through the D7/D8/D9 surfaces.
+
+**Execution capabilities**
+
+| Capability | BrainRouter today | Action |
+|---|---|---|
+| **Code Mode** — the model writes one program against generated tool bindings (`run_code`); worker treated as a hostile peer; dual budgets (event-loop-utilization compute meter + wall clock), output caps; sub-dispatches carry a parent token through the tool pipeline | none | **Adopt (flagship).** Rides D8: sub-dispatches enter the same guarded pipeline; containment stated as bash-equivalent, not a security boundary. |
+| **Persistent PTY terminals** — `terminal_open/send/read/signal/list/close`; exact-owner fencing; one active send; sessions survive plugin reload; background sends ride the jobs seam | no PTY (a known CLI-orchestration gap) | **Adopt.** Fills the standing PTY gap; complements one-shot `run_command` rather than replacing it. |
+| **Spill store + spill policy** — oversized tool output persisted whole; model sees bounded head/tail + opaque locator + retrieval hint; policy is a post-execute plugin, best-effort | truncation only | **Adopt.** Compose with the existing redaction chokepoint before persistence. |
+| **Jobs seam** — kind-extensible background jobs (`job_list/output/kill`), owner isolation, completion notices, per-owner concurrency cap | durable background tasks + fleet queue (separate vocabularies) | **Unify** under one job vocabulary; existing systems become kinds. |
+| **Sandbox honesty** — enforcement reported as `full`/`partial` fact; per-backend denial *dialects* (never a cross-backend union); runner-failure checked before denial; per-call policy, not per-provider | sandbox on/off, fail-closed | **Adopt principles** into the exec guard + D10 worlds. |
+
+**Session capabilities**
+
+| Capability | BrainRouter today | Action |
+|---|---|---|
+| **Event-sourced transcript** — append-only typed event log as the single source of truth; derived, frozen message history; surface `replace` ops for compaction; "model-visible ⟺ logged" runtime invariant | transcript + history array + pairing sanitizer | **Adopt as direction** (extends D4's invariant): new model-visible inputs become typed transcript events; surface-replace becomes the one compaction mutation. |
+| **Session fork + lineage** — fork at a turn boundary (rejects mid-turn), parent/seed headers, descendant-forest tracing | none | **Adopt.** |
+| **Session query tools** — `session_search`, `session_event_search`, `session_trace`, `session_event_read` over live-preferred corpus; FTS provider; opt-in, not default-mounted | host-side transcript search only | **Adopt** as opt-in agent tools, workspace-authorized. |
+| **Session references** — @-mention another session as bounded, explicitly *untrusted* snapshot context (id-authoritative, budget-capped, no recursive propagation) | session-scoped artifacts/annotations | **Adopt**; compose with memory recall. |
+| **Crash recovery + format refusal** — orphan turns closed with a synthetic `interrupted` end, never truncated; unknown/newer log formats refused with direction ("upgrade" vs "no downgrade path") instead of silently gutted | partial | **Adopt.** |
+| **Message feedback** — editable per-message rating/note sidecar (never model-visible) + log-only `/feedback`; optional telemetry release | none | **Adopt** — becomes a signal source for the ADR-020 self-improvement loop. |
+| **Title pinning** — an explicit user rename permanently stops automatic title generation | auto titles | **Adopt rule.** |
+
+**Context management**
+
+| Capability | BrainRouter today | Action |
+|---|---|---|
+| **KV-cache-aware compaction** — summarization replays the conversation's own system prompt/tools/messages verbatim + one appended instruction, reusing the provider's warm prefix; a `purpose: 'compaction'` flag on the call | compaction without prefix reuse | **Adopt technique.** |
+| **Model-free pruning pre-pass** — over-budget tool results rewritten to head+marker+tail before any summarization; idempotent; may resolve pressure with no model call | none | **Adopt.** |
+| **Token meter service** — replay-aware measurement folded from the durable log, shared by all pressure-sensitive consumers | per-surface context ring (with known staleness bugs) | **Adopt** — one accounting authority also retires the pinned-100% bug class. |
+| **Cache-safe dynamic context** — dynamic prompt material logged as durable snapshots only when changed, so the static prefix stays byte-stable across turns | per-turn re-render | **Adopt.** |
+
+**Delegation and orchestration**
+
+| Capability | BrainRouter today | Action |
+|---|---|---|
+| **Continuable children** — durable child session + process-local activation; `send_message` enqueues a FIFO turn; `interrupt_agent`; cold resume folds the descriptor without any provider dispatch | fleet spawn + federation inbox | **Adopt**, mapped onto the existing federation/session machinery. |
+| **Report/settled provenance split** — what the child *said* (relay) vs what the manager *observed happen* (notice) are distinct message sources, never merged | children return text | **Adopt.** |
+| **External-agent child providers** — other CLI agents driven as subagent providers behind the one delegation contract | planned adapters (multi-CLI orchestration gap) | **Adopt** — the parity program's answer to that gap; changing provider changes transport, not the contract. |
+| **Workflow discipline** — hook misuse is fatal and re-thrown (never dissolves into a `null` child failure); cancelled runs settle within a bounded grace even if the script never does; events are observe-only snapshots that cannot leak the live run handle | workflow engine shipped | **Adopt discipline.** |
+
+**Policy and interaction**
+
+| Capability | BrainRouter today | Action |
+|---|---|---|
+| **Permission presets** — named bundles of sandbox mode + approval policy; `custom` is derived-only, never selectable; selection is a log-only event preceding the knob writes | scattered knobs | **Adopt.** |
+| **Approval audit** — fail-closed outcome union (`unavailable`, never an open gate); paired asked/decided log events; `never` enforced inside the service so no listener can bypass it | exec approval | **Adopt audit + fail-closed union.** |
+| **User questions seam** — batched structured questions with intents that change presentation only; the affirmative option is *named*, never positional | none | **Adopt** (`ask_user_question`). |
+| **Plan mode as a logged fold** — pure fold over log-only events, zero live mirror; narration appended only when the last request described the other state; `exit_plan_mode` reviewed via the questions seam | planner surface (ADR-038) | **Adopt the fold + review flow** under the planner. |
+| **Session-native reminders** — schedule tools with a catch-up policy (only the latest due occurrence per recurring rule; at-least-once, maintenance-phase delivery, never interrupts a turn) | cron-style scheduled tasks | **Unify**: session-local reminders adopt these semantics; infra cron stays for org jobs. |
+| **Command log events** — `command/run`/`done` with `sourceEventSeq` naming the authoritative domain event, so UIs fold command + result without parsing text | slash commands | **Adopt pattern.** |
+
+**Platform and diagnostics**
+
+| Capability | BrainRouter today | Action |
+|---|---|---|
+| **Runtime-invariants registry** — package-owned invariant companions, exhaustive across the workspace (empty ones must explain why), regex-filtered activation, a mechanical verify gate | golden inventory tests | **Adopt** — generalizes the golden tests into a first-class system. |
+| **Generated, drift-checked docs** — config/tool/persistence/event catalogs generated from source; doc type snippets asserted byte-equivalent against code | hand-maintained rules handbook | **Adopt generation** for the catalogs; the handbook keeps the judgment content. |
+| **Out-of-process SDK** — JSON-RPC protocol + client to drive the harness from another process; headless one-shot profile | MCP serve + CLI | **Formalize** as a typed SDK surface on the D11 profiles. |
+| **Secrets discipline** — config carries *references*, never secrets; per-operation resolution (rotation reaches the next request); write-only settings fields with path-op writes + revision CAS so a redacted client can never silently delete secrets | JIT secret leases + write-only fields | **Unify** into one credential-reference contract. |
+| **Runtime self-modification** — approval-gated tools letting the agent define/run/retract dynamic plugins in its own live runtime | none | **Evaluate last** — powerful but demands the D9 disposal story plus org-policy gating before any exposure. |
+
+**Adopted conventions** (applied to all new code under this ADR): errors are fields on resolved
+results, not rejections; defaulting is an explicit `resolve(request) → spec` step, never a hidden
+`??`; misconfiguration fails loud at load; guard chains are monotonic (no "allow" result can
+reverse a denial, so listener order can't grant permission); data decides, not listener order;
+cross-boundary ids are branded opaques; closed unions end in exhaustiveness checks; orthogonal
+outcomes (timeout vs abort vs signal vs exit) are reported independently.
+
+**Waves:** W1 — context + execution quick wins (spill, pruner, token meter, permission presets,
+terminals). W2 — session plane (fork, query tools, references, feedback, invariants registry) +
+the D14 transparency plane. W3 — delegation (continuable children, external-agent providers, Code
+Mode). W4 — platform (SDK, generated catalogs, reminder unification, self-modification
+evaluation). Each wave lands only on the D1–D12 surfaces; a parity feature that would require
+patching core is a signal the runtime work is incomplete, not a license to patch.
+
+### D13.1 — Runtime self-modification: evaluated → **not adopted**
+
+The W4 "self-modification" item was, by design, an *evaluation* that could conclude "no". It does.
+
+**Decision: BrainRouter does not expose runtime self-modification** (approval-gated tools letting the
+agent define / run / retract dynamic plugins in its own live runtime). Reasons, in order:
+
+1. **Its own precondition is unmet.** The row conditions any exposure on "the D9 disposal story plus
+   org-policy gating." D9's `host.scope(sessionKey)` session-scoped *reversible* registration is not
+   built (it awaits a per-session registration consumer), so the retractability that would make a
+   dynamic plugin safely disposable does not yet exist. Without provable retraction, a self-registered
+   plugin is a permanent modification, not a scoped effect.
+2. **It inverts this program's security posture.** ADR-037 (credentials the page cannot read), ADR-043
+   (provider TLS + credentials stay server-side), and D8's guarded pipeline all exist so that a
+   prompt-injected or compromised agent *cannot* escalate. Runtime self-modification is precisely an
+   escalation primitive: one injected instruction could register a plugin that exfiltrates data or
+   sidesteps the sandbox. It would become the single highest-value injection target and defeat the
+   boundaries the rest of this ADR builds.
+3. **The legitimate need is already served.** Controlled extensibility exists — `ExtensionHost`
+   registers tools/providers/hooks *at an access tier the sandbox and exec-policy still gate* (an
+   extension registers AT a tier; it cannot bypass it), capability presets scope what a session may do,
+   and **Code Mode** (W3) gives the model a sandboxed, budgeted way to *compose tool calls as code*
+   without mutating its own runtime. These cover the "do something custom" case without a self-mutation
+   primitive.
+4. **Cost/benefit.** The benefit over extensions + Code Mode is marginal; the cost — a first-class
+   escalation surface plus the org-policy and disposal machinery it demands — is high.
+
+**Reconsider only if all of:** (a) D9 session-scoped reversible registration ships (a plugin is provably
+retractable), (b) an **org-admin-controlled** policy gate exists (the agent cannot self-authorize), and
+(c) a concrete use-case emerges that extensions + Code Mode cannot serve. Absent those, the controlled
+extension / preset / Code-Mode path is the answer.
+
+### D14 — The glass box: a human can watch, inspect, and replay the whole process
+
+The reference harness's most product-defining property is not any single feature — it is that **the
+process is transparent to the human by construction**. That falls out of the architecture, not the
+UI: because the transcript is an append-only event log and every model request is a pure function
+of it (D13's "model-visible ⟺ logged"), the UI can show the truth rather than a narration of it.
+BrainRouter adopts the plane as five commitments:
+
+1. **Every request is inspectable, exactly.** The per-request header event logs the *rendered*
+   system prompt, tool schemas, and route/config actually sent. A human opens any step and sees
+   precisely what the model saw — not a reconstruction. This retroactively strengthens debugging,
+   review audits, and the ADR-033 agent trace: "why did it do that?" becomes a read, not a guess.
+2. **A trajectory ledger beside the chat.** A turn-aware, virtualized event ledger — turn rules,
+   step markers, selectable user/assistant/tool/nested-subtool records — with a per-record
+   inspector (input, output, token usage, duration, timing) and a fixed timeline overview
+   projecting each record's real start/duration, assistant spans split into **TTFT vs decode**,
+   wheel-zoom and interval drag-focus, tail-following that suspends while the human inspects
+   history and pages older prefixes on demand. One honesty rule inherited verbatim: **in-flight
+   work shows a start marker, never a fabricated live duration**, and unloaded history is an
+   explicit ellipsis, never an invented span.
+3. **Tool activity is structured data, not prose.** Tool calls/results carry semantic *render
+   intents* (terminal, diff, read, search, web — pure functions of args, logged with the call), so
+   the UI renders a diff card, a terminal card with its exit-status pill, a search-hit list — and
+   an unknown intent falls back to text instead of breaking. Call/result pairing and sub-call
+   topology stay runtime-authoritative; per-tool views register by wire name through the panel/
+   slot registries (D5/D8), so an extension's tool arrives with its own presentation. A
+   "deliverables" fold recognizes a turn's mutations *by render intent, not tool name*, and
+   presents the produced files as a row.
+4. **The human sees more than the model, and knows the difference.** Log-only events — commands,
+   approval asked/decided pairs, permission-preset selections, feedback, compaction brackets — are
+   rendered to the human but never enter model context. The ledger visibly distinguishes
+   model-visible, log-only, and shadowed-by-compaction records, so "what the model knew" and "what
+   happened" are separately answerable. Approval prompts attach to the already-streamed tool call
+   by id rather than re-rendering a copy that could drift from what is approved.
+5. **Live state is pushed as consistent wholes.** Session-derived state (stats like turn/step
+   counts and first-token/decode wall times, goals, todos, plan mode) reaches clients as
+   whole-value projection snapshots at one consistent log position — never client-side folds of
+   raw events — so every surface (desktop, dashboard, CLI) shows the same truth at the same seq.
+   Composition transparency closes the loop: `--dump-composition` (D11) and the plugin-inventory
+   panel show *what is running*, the generated catalogs (D13) show *what it can do*.
+
+Delivery rides existing surfaces: the desktop gains the trajectory panel and request inspector via
+`PanelRegistry`; the dashboard review console reuses the same record components for the agent
+trace; the CLI gets the text projection of the same ledger. One rule binds all of it: **the UI
+renders the log; it never keeps private state the log cannot reproduce** — a reload, a replay, or
+another surface must show the same process.
+
+**Shipped so far (D14 as a slice series):** four of the five commitments have their first vertical.
+*Commitment #5 — composition transparency* (#1548): `runtimeCompositionSnapshot()` is served over
+HTTP (`GET /api/admin/runtime/composition`) and rendered as the dashboard `/runtime` panel — built-in
+tools, the D8-migrated handler set, providers, extensions, slash commands, the invariant areas with
+any live violations, and the active loop-driver / execution-world rows (*what is running*).
+*Commitment #1 — every request is inspectable* (#1549): a per-request header (model, route, effort,
+message/tool counts, the exact tools, and a bounded excerpt of the *rendered* system prompt) is
+captured — opt-in via `cli.traceRequests`, log-only in a session sidecar so it never touches the
+transcript/replay — and rendered on two surfaces: the desktop **Request Inspector** panel (via
+`PanelRegistry`, reading the local trace the backend can't see) and the CLI `/inspect` text
+projection. *Commitments #2 (trajectory ledger) + #3 (render intents)* (#1550): a second log-only
+session sidecar records one STEP per model call — model, wall-clock duration, prompt/completion
+tokens, and the tools the step requested, each tagged with a **render intent** (terminal / diff /
+read / search / web / text) computed from its wire name and logged with the call. Opt-in via
+`cli.traceTrajectory`; rendered as the desktop **Trajectory** panel (via `PanelRegistry`) and the CLI
+`/trajectory` projection. The record carries the #4 `visibility` field (populated `model-visible`).
+Remaining: the model-visible / **log-only / shadowed-by-compaction** record markers' distinct emit
+points (#4, at the approval / command / compaction sites), and the ledger's fuller surface — turn-
+grouping of steps, the fixed timeline overview with TTFT-vs-decode spans, and tool-result durations
+(measured at the batch-execution site) — which land on the transcript surface.
+
 ---
 
 ## 3. Ownership
@@ -363,40 +547,101 @@ at runtime can contribute a panel without a rebuild or a code change in `panelCa
 Each row is a separate pull request. A checked row requires its own evidence. Merging the accepted
 decision record checks only A41-0; it makes no implementation claim.
 
-- [ ] **A41-0 — Accept this decision.** ADR and index only; no runtime claims.
-- [ ] **A41-1 — Extract IAgent interface.** Pull the interface out of the concrete `Agent` class.
+- [x] **A41-0 — Accept this decision.** ADR and index only; no runtime claims.
+- [x] **A41-1 — Extract IAgent interface.** Pull the interface out of the concrete `Agent` class.
   Pure type seam — no behaviour change, no new methods. Hosts switch imports from `Agent` to `IAgent`.
-- [ ] **A41-2 — Live provider registry.** Replace `PROVIDER_REGISTRY: ReadonlyMap` with
+- [x] **A41-2 — Live provider registry.** Replace `PROVIDER_REGISTRY: ReadonlyMap` with
   `ProviderRegistry` class. Rewire `ExtensionHost.registerProvider` to call
   `ProviderRegistry.register()`. All existing consumers read through the new class with the same API.
-- [ ] **A41-3 — Capability ports.** Extract `FilesystemPort`, `ShellPort`, `SubprocessPort` from
+- [x] **A41-3 — Capability ports.** Extract `FilesystemPort`, `ShellPort`, `SubprocessPort` from
   `invokeBuiltinToolRuntime`. Wire default implementations. Register on `ExtensionHost`.
-- [ ] **A41-4 — Phase hooks and extension host evolution.** Add `registerPhaseHook()` and
+- [x] **A41-4 — Phase hooks and extension host evolution.** Add `registerPhaseHook()` and
   `registerDisposable()` to `ExtensionHost`. Wire `beforePhase` / `afterPhase` into the agent turn
   loop. Unify provider registration through `ProviderRegistry`.
-- [ ] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
+- [x] **A41-5 — Provider-neutral streaming protocol.** Introduce `StreamChunk` union. Build the
   OpenAI SSE adapter. Switch core consumers to `StreamChunk`. Add native provider streaming paths.
-- [ ] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
+  *Merged in #1546: the `StreamChunk` union + the OpenAI-SSE adapter + the gateway /
+  model-phase consumers landed earlier; the last gap — native providers falling back to a
+  non-streaming call — is closed. `anthropic-messages` and `gemini-generate` now stream their own SSE
+  (`agent/transport/nativeProviderStream.ts`), accumulated back into the canonical envelope so the
+  streamed `NativeOutput` is identical to the whole-response path; opt-in/default-off, with a
+  fall-back-to-non-streaming-before-first-paint and a mid-stream-abort→InterruptError guard.*
+- [x] **A41-6 — IMemoryStoreComposite.** Compose the 12 store interfaces. Implement on
   `MemoryEngine`. Remove `as unknown as *Store` casts.
-- [ ] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
+- [x] **A41-7 — Product-wide registries.** `McpToolRegistry`, `CommandRegistry`, `PanelRegistry`,
   `ApiRouteRegistry` — four surfaces, one PR per surface or one combined PR if the pattern is small
   enough.
-- [ ] **A41-8 — Guarded tool pipeline; the switch dissolves.** Lift approval/policy/sandbox/guards
+- [x] **A41-8 — Guarded tool pipeline; the switch dissolves.** Lift approval/policy/sandbox/guards
   into the shared pipeline; builtin tools re-register as registry entries; `McpToolRegistry`
   becomes a projection. Waterfall `next()` semantics land on `pre-step` / `provider-call` /
   `pre-execute` / `post-execute`, with the transcript ("model-visible means logged") assertion.
 - [ ] **A41-9 — Universal disposables + scoped contexts.** Every registrar returns a handle;
   extension unload unwinds in reverse order; `host.scope(sessionKey)` + capability presets; roles
-  consume presets.
-- [ ] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
-  resolver; `local` default; worktree/container backends re-expressed as worlds.
+  consume presets. *Shipped: the universal-disposable handles (`Disposable` from every `register*`,
+  reverse-order unwind in `disposeExtensionHost`), the capability presets (`capabilityPresets.ts`),
+  and roles-consume-presets. **Deferred (consumer-gated):** `host.scope(sessionKey)`. No extension
+  registers per-session contributions today, so a `scope()` that buckets registrations and a
+  consumer that disposes it at session end would be an export with no live caller — the
+  `inert-value-sweep` ceiling rejects that, and a hollow consumer would be ceremony. Awaits a genuine
+  per-session extension-registration use case (e.g. a session-scoped tool or provider) to force it.*
+- [x] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
+  resolver; `local` default; worktree/container backends re-expressed as worlds. *Merged in #1547:
+  the `local` world is now LIVE and the Agent's default — `runtime/localWorld.ts` binds the three
+  node ports (`nodeFilesystemPort` / `nodeShellPort` / `defaultSubprocessPort`) as one unit, the
+  constructor resolves ports through it, and `--dump-composition` reports the active world. Byte-
+  identical (every port consumer is a `?? node*Port` fall-through; nothing branches on definedness).
+  **Deferred:** worktree/container-as-worlds — all four runtime backends
+  (process/worktree/container/hosted) share the same host node ports and `exec/runtime/sandbox`
+  command path (worktree differs by cwd, container by bind-mount with its in-container loop explicitly
+  deferred, hosted is an out-of-process CLI), so no port-level backend exists to express as a distinct
+  world yet. Awaits one.*
 - [ ] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
   overlays targeting rows by id, `--dump-composition`, and the default loop driver registered as a
-  replaceable row.
+  replaceable row. *Shipped: the four host profiles, `--dump-composition`, and the default
+  loop-driver-as-a-replaceable-row (#1536 — `resolveRuntime` applies `applyLoopDriver`, the dump
+  surfaces the `loopDriver` id). **Deferred (consumer-gated):** overlay-by-id (layered overlays that
+  target composition rows by id). No host profile needs to overlay another by row id today, so the
+  overlay resolver would have no caller. Awaits a profile that legitimately layers onto a base by
+  row id (e.g. a `test` or `minimal` profile derived from `local`).*
 - [ ] **A41-12 — Remote seam bindings + service profiles.** Typed remote binding for
   remote-capable seams (boot error for the rest); one existing subsystem (the provider gateway is
   the natural first, per ADR-043) re-expressed as a service profile; its Docker image reduced to
-  "loader + profile"; dev compose regenerated from profile sets.
+  "loader + profile"; dev compose regenerated from profile sets. *Shipped: service profiles and the
+  typed remote-binding gate `assertRemoteBindable` (#1526), wired into `EgressTunnelService.start()`
+  so a non-remote-bindable seam fails loud at boot. **Deferred (consumer-gated):** reducing a service
+  image to "loader + profile" and regenerating dev-compose from profile sets are build/ops changes
+  with no runtime consumer inside core — the profile is already the source of truth; restructuring
+  the Dockerfiles and the compose generator around it is an ops decision, not a code seam, and doing
+  it speculatively changes no behavior. Awaits the ops call to restructure the images around the
+  profile loader.*
+- [ ] **A41-13 — Parity wave W1** (spill store + policy, tool-result pruner, token meter,
+  permission presets, persistent terminals) — each as an extension, no core edits. *All five
+  capabilities are present in core (the spill store, the last gap, shipped as a `ResultCache` disk
+  cold tier in #1525). **Deferred (consumer-gated), same reasoning as A41-9/11/12:** the "each as an
+  extension" repackaging is not buildable "with no core edits." The `ExtensionHost` registers
+  tools / providers / hooks / phase-hooks / panels only, and neither the extension-tool runtime
+  context nor the phase-hook context can reach the per-agent turn-loop state (the in-flight message
+  array, the result cache, token accounting) that the spill store / pruner / meter / presets operate
+  on — they are wired directly into the `Agent`. Re-expressing any of them as an extension needs
+  either widening the host (a core edit — and the added registration surface would be an export the
+  loop does not consume, which the `inert-value-sweep` ceiling rejects) or deleting the direct wiring
+  (also a core edit). Persistent terminals are the one already delivered through the host — bundled in
+  the required `shell` built-in extension — so there is no zero-core-edit build here. Awaits a host
+  surface (a capability/middleware registrar reaching turn-loop state) that a real consumer forces.*
+- [x] **A41-14 — Parity wave W2** (session fork + lineage, session query tools, session
+  references, message feedback, runtime-invariants registry). *Shipped: invariants registry,
+  fork lineage, per-message feedback, and the `session_list` / `session_read` / `session_search` /
+  `session_reference` plane.*
+- [x] **A41-15 — Parity wave W3** (continuable children + send/interrupt/report, external-agent
+  subagent providers, Code Mode). *Continuable children existed; external-agent subagent providers
+  and the `run_code` Code Mode flagship shipped.*
+- [x] **A41-16 — Parity wave W4** (out-of-process SDK, generated drift-checked catalogs,
+  session-native reminder unification, self-modification evaluation — evaluation may conclude
+  "no"). *Merged: out-of-process typed SDK (#1543 — the `@kinqs/brainrouter-core/sdk`
+  entry point over the existing runner client), generated drift-checked tool catalog (#1542 —
+  `brainrouter-docs/generated/tool-catalog.md` + a regen-or-fail test), session-native reminder
+  unification (#1544 — a `remind` tool + a per-session store + a pure catch-up projection delivered
+  at the turn boundary), and the self-modification item **evaluated → not adopted** (§D13.1).*
 
 ---
 

@@ -2,6 +2,7 @@
 // callback order remain unchanged.
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
+import { recordTrajectoryStep, recordTrajectoryEvent } from '../../session/trace/trajectoryStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import {
   buildRootContextEnvelope,
@@ -21,16 +22,20 @@ import { isConnectivityError, isRetryableServerError } from '../../storage/check
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from '../guards/toolCallRecovery.js';
 import { resolveEffortForTurn } from '../support/effortRouting.js';
+import { recordRequestTrace, clampExcerpt } from '../../session/trace/requestTraceStore.js';
 import {
   abortableDelay,
   callOpenAI,
-  callOpenAIStream,
   effortForTurnSelection,
   InterruptError,
   isInterrupt,
 } from '../transport/llmTransport.js';
+// ADR-041 A41-5 — the provider-neutral streaming seam (wraps callOpenAIStream).
+import { callProviderStream, type ProviderStreamResult } from '../transport/providerStream.js';
 import { recoverAgentProviderRoute } from './providerRecovery.js';
 import { ReviewProviderRequestBudgetExceededError } from './modelRequestBudget.js';
+import { runPhaseWaterfall } from './phaseWaterfall.js';
+import { phaseHookContributions } from '../../extension/registry.js';
 
 export interface ModelPhaseResponse {
   content: string;
@@ -39,9 +44,23 @@ export interface ModelPhaseResponse {
   finishReason?: string;
 }
 
+/**
+ * ADR-041 D4b.2 — thrown when a `provider-call` phase hook refuses (returns
+ * without calling next()). NOT a server/connectivity error, so
+ * `invokeLlmResilient` rethrows it without retrying; `invokeModelPhase` converts
+ * it to a `provider-refused` terminal that closes a durable zero-step turn.
+ */
+export class ProviderCallRefusedError extends Error {
+  constructor(readonly refusedBy: string) {
+    super(`Provider call refused by extension "${refusedBy}" (provider-call phase).`);
+    this.name = 'ProviderCallRefusedError';
+  }
+}
+
 export type ModelInvocationResult =
   | { kind: 'response'; response: ModelPhaseResponse }
-  | { kind: 'interrupted'; note: string };
+  | { kind: 'interrupted'; note: string }
+  | { kind: 'provider-refused'; refusedBy: string };
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -91,57 +110,118 @@ export async function invokeModelPhase(
       agent.chatHistory,
       getCliKnobs(),
     );
+    // ADR-041 D14 — capture the request header (what the model actually saw) when
+    // `cli.traceRequests` is on. Best-effort and off the turn's critical path: a
+    // failure here can never affect the request, and with the knob off (the
+    // default) not a byte is written.
+    if (getCliKnobs().traceRequests === true) {
+      try {
+        const systemText = requestMessages
+          .filter((m: any) => m?.role === 'system' && typeof m.content === 'string')
+          .map((m: any) => m.content as string)
+          .join('\n\n');
+        recordRequestTrace(agent.workspaceRoot, agent.sessionKey, {
+          at: new Date().toISOString(),
+          model: agent.llmConfig.model,
+          endpoint: typeof (agent.llmConfig as any).endpoint === 'string' ? (agent.llmConfig as any).endpoint : undefined,
+          effort: effort == null ? undefined : String(effort),
+          messageCount: requestMessages.length,
+          systemChars: systemText.length,
+          systemExcerpt: clampExcerpt(systemText),
+          toolNames: (allTools ?? []).map((t: any) => t?.name).filter((n: any): n is string => typeof n === 'string'),
+        });
+      } catch { /* trace is advisory — never break a turn */ }
+    }
     const streamRequested = Boolean(
       callbacks.onAssistantDelta || callbacks.onReasoningDelta,
     ) && getCliKnobs().disableStream !== true;
     const requestBudget = agent.reviewSourceSafety
       ? { beforeProviderRequest: () => agent.reserveModelProviderRequest() }
       : {};
-    if (streamRequested) {
-      let started = false;
-      try {
-        const final = await callOpenAIStream(
-          agent.llmConfig,
-          requestMessages,
-          allTools,
-          { effort, signal: agent.turnAbort?.signal, ...requestBudget },
-          {
-            onTextDelta: (text) => {
+    const dispatch = async (): Promise<ModelPhaseResponse> => {
+      if (streamRequested) {
+        let started = false;
+        try {
+          // ADR-041 A41-5 — consume the provider-neutral StreamChunk stream instead
+          // of registering delta callbacks + reading a separate return value. Same
+          // deltas, same order, same final result (the terminal `done` chunk).
+          let final: ProviderStreamResult | undefined;
+          for await (const chunk of callProviderStream(
+            agent.llmConfig,
+            requestMessages,
+            allTools,
+            { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+          )) {
+            if (chunk.type === 'text') {
               if (!started) {
                 started = true;
                 callbacks.onAssistantTurnStart?.();
               }
-              callbacks.onAssistantDelta?.(text);
-            },
-            onReasoningDelta: (text) => callbacks.onReasoningDelta?.(text),
-          },
-        );
-        if (started) callbacks.onAssistantTurnEnd?.(final.content);
-        return {
-          content: final.content,
-          toolCalls: final.toolCalls,
-          usage: final.usage,
-          finishReason: final.finishReason,
-        };
-      } catch (streamError: any) {
-        if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
-        if (streamError instanceof ReviewProviderRequestBudgetExceededError) throw streamError;
-        if (started) {
-          streamError.brainrouterStreamStarted = true;
-          callbacks.onAssistantTurnEnd?.('');
-          throw streamError;
+              callbacks.onAssistantDelta?.(chunk.delta);
+            } else if (chunk.type === 'reasoning') {
+              callbacks.onReasoningDelta?.(chunk.delta);
+            } else {
+              final = chunk.result;
+            }
+          }
+          // The stream always terminates with a `done` chunk on success.
+          const result = final!;
+          if (started) callbacks.onAssistantTurnEnd?.(result.content);
+          return {
+            content: result.content,
+            toolCalls: result.toolCalls,
+            usage: result.usage,
+            finishReason: result.finishReason,
+          };
+        } catch (streamError: any) {
+          if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
+          if (streamError instanceof ReviewProviderRequestBudgetExceededError) throw streamError;
+          if (started) {
+            streamError.brainrouterStreamStarted = true;
+            callbacks.onAssistantTurnEnd?.('');
+            throw streamError;
+          }
+          callbacks.onStatusUpdate(
+            `Streaming failed (${String(streamError?.message ?? streamError).slice(0, 120)}) — falling back to non-streaming.`,
+          );
         }
-        callbacks.onStatusUpdate(
-          `Streaming failed (${String(streamError?.message ?? streamError).slice(0, 120)}) — falling back to non-streaming.`,
-        );
       }
-    }
-    return callOpenAI(
-      agent.llmConfig,
-      requestMessages,
-      allTools,
-      { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+      return callOpenAI(
+        agent.llmConfig,
+        requestMessages,
+        allTools,
+        { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+      );
+    };
+    // ADR-041 D4b.2 — the provider-call waterfall. Gated on hookEnforceActive so
+    // safeMode / reviewSourceSafety isolate a bad hook. No hooks ⇒ dispatch runs
+    // directly (byte-identical). Registered hooks wrap the model dispatch: each
+    // may pass through, or refuse to call next() and reject the call outright.
+    const providerHooks = agent.hookEnforceActive()
+      ? phaseHookContributions('provider-call')
+      : [];
+    if (providerHooks.length === 0) return dispatch();
+    const requestSnapshot = JSON.stringify(requestMessages);
+    const outcome = await runPhaseWaterfall(
+      providerHooks,
+      { phase: 'provider-call', workspaceRoot: agent.workspaceRoot, sessionKey: agent.sessionKey },
+      async () => {
+        // ADR-041 D4 logged invariant: after the hooks' pre-code and before the
+        // model request is sent, the in-flight request array must be untouched —
+        // a hook injects model-visible context via the transcript/history, never
+        // by mutating `requestMessages` in place, or fork/resume/replay would lie.
+        if (JSON.stringify(requestMessages) !== requestSnapshot) {
+          throw new Error(
+            'ADR-041 D4 logged-invariant violation (provider-call): a phase hook '
+            + 'mutated the in-flight request message array. Inject context via '
+            + 'history/transcript, not by mutating messages in place.',
+          );
+        }
+        return dispatch();
+      },
     );
+    if (!outcome.ran) throw new ProviderCallRefusedError(outcome.refusedBy ?? 'a phase hook');
+    return outcome.result!;
   };
 
   const maxReconnects = Math.max(
@@ -206,6 +286,13 @@ export async function invokeModelPhase(
       agent.recordTranscript(interruptMessage);
       callbacks.onStatusUpdate('Interrupted');
       return { kind: 'interrupted', note: '⏹ Turn interrupted by user.' };
+    }
+
+    // ADR-041 D4b.2 — a provider-call hook refused; it is non-retryable, so it
+    // propagated here. Close the turn as a zero-step attempt (the terminal in
+    // runTurn records it to the transcript), never a retryable provider failure.
+    if (error instanceof ProviderCallRefusedError) {
+      return { kind: 'provider-refused', refusedBy: error.refusedBy };
     }
 
     const message = String(error?.message ?? error);
@@ -312,6 +399,18 @@ export async function invokeModelPhase(
               summary: compacted.summary,
             });
           }
+          // ADR-041 D14 (#4) — log-only compaction bracket (reactive path).
+          if (compacted && getCliKnobs().traceTrajectory === true) {
+            try {
+              recordTrajectoryEvent(agent.workspaceRoot, agent.sessionKey, {
+                event: 'compaction',
+                label: 'compaction (reactive)',
+                droppedMessages: Math.max(0, beforeLength - agent.chatHistory.length),
+                keptMessages: agent.chatHistory.length,
+                detail: compacted.summary,
+              });
+            } catch { /* trace is advisory — never break a turn */ }
+          }
           response = await invokeLlmResilient();
         } catch (retryError: any) {
           throw new Error(
@@ -356,5 +455,32 @@ export async function invokeModelPhase(
   }
 
   if (!response) throw new Error('LLM Execution failed: no response returned.');
+
+  // ADR-041 D14 (#2/#3) — record this model call as one step in the session's
+  // trajectory ledger, keyed off the FINALIZED response so a step is recorded no
+  // matter which attempt produced it (first try, reconnect, router/model
+  // fallback, or a post-compaction retry) — a glass box must not go blank on the
+  // exact turns something went wrong. `at` is the step's start (before the first
+  // attempt), so `durationMs` is the whole step's wall-clock, recovery included.
+  // Opt-in and log-only, so a replay is byte-identical whether it is on or off;
+  // fully guarded so a trace write can never affect the turn.
+  if (getCliKnobs().traceTrajectory === true) {
+    try {
+      recordTrajectoryStep(agent.workspaceRoot, agent.sessionKey, {
+        model: agent.llmConfig.model,
+        at: providerAttemptStartedAt,
+        durationMs: Date.now() - Date.parse(providerAttemptStartedAt),
+        tokensIn: response.usage?.prompt_tokens,
+        tokensOut: response.usage?.completion_tokens,
+        toolNames: (response.toolCalls ?? [])
+          .map((tc: any) => tc?.function?.name ?? tc?.name)
+          .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0),
+        text: response.content,
+      });
+    } catch {
+      /* never break a turn on a metadata write */
+    }
+  }
+
   return { kind: 'response', response };
 }

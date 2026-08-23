@@ -3,6 +3,7 @@
 // subsystem's file layout stays an internal detail. Re-exports the modules the
 // CLI and Desktop heads consume; the remaining agent files are internal wiring.
 export * from './agent.js';
+export * from './iagent.js';
 export * from './fs/workspaceFs.js';
 export * from './guards/verificationGate.js';
 export * from './support/prompter.js';

@@ -45,6 +45,12 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // --- read tier: always available (no workspace mutation) ----------------
   { name: 'read_file', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_dir', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // ADR-042 D3 — worktree awareness + entry (same-repository only). enter
+  // is non-destructive (it widens scope, never mutates files), so read tier.
+  { name: 'worktree_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'worktree_enter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'worktree_create', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'worktree_done', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'grep_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'glob_files', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'fetch_url', accessTier: 'read', actionKind: 'network', parallelSafe: true },
@@ -53,6 +59,13 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // update_plan / artifact_write: read tier, read_only, serialized (not parallel).
   { name: 'research_note', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'research_brief', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // §A41-16 — session-native reminders persist per-session state (reminders.json),
+  // like the research ledger: read tier, read_only, serialized (read-modify-write).
+  { name: 'remind', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'session_reference', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
@@ -165,6 +178,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'notebook_edit', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
+  { name: 'run_code', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'kill_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'terminal_list', accessTier: 'shell', actionKind: 'read_only', parallelSafe: true, availability: 'terminal-use' },
   { name: 'terminal_read', accessTier: 'shell', actionKind: 'read_only', parallelSafe: true, availability: 'terminal-use' },

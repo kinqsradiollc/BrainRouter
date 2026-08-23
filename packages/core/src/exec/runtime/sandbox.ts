@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,7 +173,15 @@ export function resolveSandboxConfig(
   const cfgReads = knobs.sandboxReadPaths;
   const cfgWrites = knobs.sandboxWritePaths;
   const readPaths = Array.from(new Set([...(persistedExtras?.readPaths ?? []), ...cfgReads]));
-  const writePaths = Array.from(new Set([...(persistedExtras?.writePaths ?? []), ...cfgWrites]));
+  const writePaths = Array.from(new Set([
+    ...(persistedExtras?.writePaths ?? []),
+    ...cfgWrites,
+    // ADR-042 D4 — when the effective cwd is a LINKED worktree, `git commit`
+    // (and index writes) need the repo's shared gitdir and the worktree's
+    // private gitdir, which live OUTSIDE workspaceRoot. Grant exactly those two.
+    // A non-worktree cwd has its `.git` inside workspaceRoot already → no-op.
+    ...gitWorktreeGrants(workspaceRoot),
+  ]));
 
   // CODEX-SANDBOX-UNATTENDED — when an agent runs silent/unattended (cloud
   // worker, spawned child, non-interactive), there is no human to approve or
@@ -472,6 +480,40 @@ function escapeSb(p: string): string {
 /** Resolve symlinks (e.g. macOS /var → /private/var) so sandbox `subpath`
  * rules match the kernel-resolved path; fall back to the raw path if the
  * target doesn't exist yet. */
+/**
+ * ADR-042 D4 — the two write grants a sandboxed `git` needs inside a LINKED
+ * worktree: the repo's shared gitdir (`--git-common-dir`) and the worktree's
+ * private gitdir (`--git-dir`, `.git/worktrees/<id>`). Both realpath'd like every
+ * other grant. Empty for the main worktree (its `.git` is a directory inside the
+ * root, already granted) or a non-repo — detected cheaply by `.git` being a FILE,
+ * which is exactly how git marks a linked worktree, so the common case pays no
+ * subprocess. This is the ONLY sandbox widening: network/fail-closed/env-scrub
+ * posture is untouched.
+ */
+function gitWorktreeGrants(dir: string): string[] {
+  try {
+    const dotGit = path.join(dir, '.git');
+    let st: fs.Stats;
+    try { st = fs.lstatSync(dotGit); } catch { return []; }
+    if (!st.isFile()) return []; // main worktree (.git is a dir) or none
+    const grants: string[] = [];
+    for (const flag of ['--git-common-dir', '--git-dir']) {
+      let out: string;
+      try {
+        out = execFileSync('git', ['rev-parse', flag], {
+          cwd: dir, encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+      } catch { continue; }
+      if (!out) continue;
+      const abs = path.isAbsolute(out) ? out : path.resolve(dir, out);
+      grants.push(realpathOrSelf(abs));
+    }
+    return grants;
+  } catch {
+    return [];
+  }
+}
+
 function realpathOrSelf(p: string): string {
   try {
     return fs.realpathSync(p);

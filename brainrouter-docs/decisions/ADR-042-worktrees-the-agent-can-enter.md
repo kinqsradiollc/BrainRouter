@@ -1,6 +1,17 @@
 # ADR-042 — Worktrees the agent can enter: multi-root workspaces, worktree-aware tools, and a sandbox that lets git work
 
-**Status:** PROPOSED
+**Status:** Accepted — implemented (2026-08-17). Shipped to `release/0.4.21` in six stacked slices
+S1–S6 (PRs #1391, #1392, #1396, #1397, #1398, and this one): S1 `WorkspaceScope` + multi-root
+`resolveWorkspacePathInScope` (reads widen to attached roots, writes stay in the writable set, escape
+messages byte-identical for unattached paths); S2 the D2 derivation rule + `worktree_list` /
+`worktree_enter`; S3 the validated `run_command` `cwd` + the `git rev-parse --git-common-dir` /
+`--git-dir` sandbox grants that let `git commit` run inside a linked worktree; S4 `worktree_create` /
+`worktree_done` (named-branch create, finish through the destructive-command guard); S5 the ownership
+registry + read-only foreign attach (writes refused with the owner named) + the `branch → path →
+owner` feature map; S6 `attachTo` on child spawn (`prepareChildWorkspace` resumes an existing worktree
+instead of minting, refusing foreign-owned/unlisted unless `fallback:'create'`). The jail is widened,
+never removed: every path outside every attached root keeps the verbatim `Path escapes workspace
+root` error, and the whole feature is inert until a worktree is entered.
 
 **Builds on:** ADR-025 (runtime boundary modernization), ADR-040 (one runtime, graphs of bounded
 loops), the existing `worktree/` module (isolation + passive awareness) and the exec sandbox.

@@ -6,8 +6,8 @@
  * directly with the stored JWT (refreshing once on a 401) and the optional
  * `X-BrainRouter-Org` active-org header.
  */
-import { BASE_URL, refreshAccessToken } from "./client";
-import { getApiKey, getJwt } from "./client-auth";
+import { BASE_URL, refreshAccessToken, getAccessToken, getCsrfToken } from "./client";
+import { getApiKey } from "./client-auth";
 import type {
   ModelCapabilityProvenanceSource,
   ModelCatalogEnvelope,
@@ -37,6 +37,10 @@ async function sendAuthed(path: string, opts: FetchOpts, timeoutMs: number): Pro
   const doFetch = (token: string): Promise<Response> =>
     fetch(`${BASE_URL}${path}`, {
       method: opts.method ?? "GET",
+      // ADR-037 D-2 — send the httpOnly br_refresh + readable br_csrf cookies
+      // (only /api/auth/* reads them) alongside the in-memory access token; the
+      // CSRF token is echoed and is harmless on non-auth routes.
+      credentials: "include",
       // Never leave a dashboard panel (or the global auth bootstrap) spinning
       // on the browser's multi-minute socket timeout. Callers that own a
       // shorter cancellation policy can still provide their own signal.
@@ -44,12 +48,13 @@ async function sendAuthed(path: string, opts: FetchOpts, timeoutMs: number): Pro
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(getCsrfToken() ? { "X-BrainRouter-Csrf": getCsrfToken() as string } : {}),
         ...(opts.orgId ? { "X-BrainRouter-Org": opts.orgId } : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
 
-  const res = await doFetch(getJwt() || getApiKey() || "");
+  const res = await doFetch(getAccessToken() || getApiKey() || "");
   if (res.status !== 401) return res;
   const fresh = await refreshAccessToken();
   return fresh ? doFetch(fresh) : res;
@@ -383,6 +388,20 @@ export interface PentestRun {
   findingsDetail?: ReviewJob["findingsDetail"];
 }
 
+/** ADR-041 D14 — the resolved runtime composition ("what is running"). Mirrors
+ *  core's `RuntimeCompositionSnapshot`. `executionWorld` is optional so the panel
+ *  stays forward-compatible with the backend before A41-10 lands. */
+export interface RuntimeComposition {
+  builtinTools: string[];
+  migratedBuiltinTools: string[];
+  extensions: { tools: string[]; providers: string[]; hooks: number; panels: string[] };
+  providers: string[];
+  slashCommands: string[];
+  invariants: { areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>; violations: number };
+  loopDriver: string;
+  executionWorld?: string;
+}
+
 export const adminApi = {
   listProviders: (orgId?: string) =>
     authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean; inherited?: boolean; source?: ScopeSource }>("/api/admin/providers", { orgId }),
@@ -453,6 +472,8 @@ export const adminApi = {
     return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
   },
   getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
+  // ADR-041 D14 — the runtime composition snapshot ("what is running").
+  getRuntimeComposition: (orgId?: string) => authFetch<RuntimeComposition>("/api/admin/runtime/composition", { orgId }),
   getReviewPrActivity: (repo: string, number: number, orgId?: string) => {
     const [owner, name] = repo.split("/");
     return authFetch<{ reviews: ReviewJob[]; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/activity`, { orgId });

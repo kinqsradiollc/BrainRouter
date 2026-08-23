@@ -14,6 +14,7 @@ import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';
 import {
   registerExtensionHook,
+  registerExtensionPhaseHook,
   resetExtensionContributions,
 } from '../extension/registry.js';
 import { setGoal } from '../goal/store/goalStore.js';
@@ -874,5 +875,96 @@ test('ADR-040 A40-2 local policy drift while issuance awaits MCP inventory cance
       issuance,
       /local execution policy changed/i,
     );
+  });
+});
+
+// ADR-041 D4b.2 (review finding TE-1) — a tool-execution phase hook that REFUSES
+// a reviewed durable launch must reject the already-consumed lease and terminate
+// the reviewed turn, exactly like the throw/adapter denial paths. Before the fix
+// the refuse branch only set a tool result, so the reviewed turn kept looping.
+test('ADR-041 D4b.2 — a tool-execution phase-hook refusal of a reviewed durable launch terminates the turn, not loops', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    enableEngineeringWorkspace(workspace);
+    const args = { template: 'build', templateArgs: { task: 'hook-refused reviewed launch' } };
+    const llm = stubToolTurn('run_workflow', args);
+    resetExtensionContributions();
+    let hookFired = 0;
+    // A refusing hook: its before() returns without ever calling next().
+    registerExtensionPhaseHook('tool-execution', {
+      before: () => { hookFired += 1; },
+    }, 'test-refuse');
+    let confirmations = 0;
+    try {
+      const agent = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, { workspaceRoot: workspace, launchCwd: workspace });
+      const handle = await agent.issueExecutionIntent({
+        source: 'user-command',
+        toolName: 'run_workflow',
+        args,
+      });
+      agent.confirmRunWorkflowLaunch = async () => { confirmations += 1; return true; };
+      const answer = await withDeadline(
+        agent.runTurn('run the reviewed workflow', CALLBACKS, { executionIntent: handle }),
+        20_000,
+        'reviewed turn did not terminate after a tool-execution hook refusal (regression: kept looping)',
+      );
+      assert.ok(hookFired >= 1, 'the tool-execution phase hook fired on the launch');
+      assert.equal(confirmations, 0, 'refused before dispatch — the cost gate was never reached');
+      assert.equal(runStoreExists(workspace), false, 'a refused launch persists no run');
+      assert.match(
+        answer,
+        /did not proceed|blocked by extension/i,
+        'the reviewed turn returned a terminal denial rather than looping',
+      );
+    } finally {
+      llm.restore();
+      resetExtensionContributions();
+    }
+  });
+});
+
+// ADR-041 D4b.2 — a provider-call phase hook that REFUSES (never calls next())
+// rejects the model call outright; the turn closes with zero steps and records
+// the attempt, rather than producing a model response.
+test('ADR-041 D4b.2 — a provider-call phase-hook refusal closes the turn with zero steps', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    // The model WOULD answer — strategy JSON for the classification pass, a plain
+    // message otherwise — but the provider-call hook refuses the main call first.
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { tools?: unknown[] };
+      const content = (body.tools ?? []).length === 0
+        ? '{"strategy":"answer-direct","reasoning":"direct","subtasks":[]}'
+        : 'model answer';
+      return new Response(JSON.stringify({
+        choices: [{ message: { content } }],
+        usage: { prompt_tokens: 5, completion_tokens: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    resetExtensionContributions();
+    let hookFired = 0;
+    registerExtensionPhaseHook('provider-call', {
+      before: () => { hookFired += 1; /* refuse: never call next() */ },
+    }, 'test-refuse');
+    try {
+      const agent = new Agent(makeStubMcp(), {
+        provider: 'openai', apiKey: 'k', model: 'test-model',
+      }, { workspaceRoot: workspace, launchCwd: workspace });
+      const answer = await withDeadline(
+        agent.runTurn('hello', CALLBACKS),
+        20_000,
+        'a provider-call hook refusal did not terminate the turn',
+      );
+      assert.ok(hookFired >= 1, 'the provider-call phase hook fired on the model call');
+      assert.match(
+        answer,
+        /blocked by extension.*provider-call/i,
+        'the turn returned the provider-refused terminal, not a model response',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetExtensionContributions();
+    }
   });
 });

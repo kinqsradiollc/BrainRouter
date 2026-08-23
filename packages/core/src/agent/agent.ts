@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -33,6 +34,12 @@ import type {
   ExecutionIntentSource,
 } from '@kinqs/brainrouter-types/agent';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
+import type { FilesystemPort } from './fs/filesystemPort.js';
+import type { SubprocessPort } from './subprocess/subprocessPort.js';
+import type { ShellPort } from './shell/shellPort.js';
+import { type ExecutionWorld, resolveExecutionPorts } from '../runtime/executionWorld.js';
+import { localExecutionWorld } from '../runtime/localWorld.js';
+import type { IAgent } from './iagent.js';
 import {
   appendTranscriptEntry,
   isInternalSessionKey,
@@ -123,7 +130,7 @@ import { listAll as listAgentDefinitions } from '../orchestration/agents/agentRe
 import { ownershipWriteViolation } from '../orchestration/ownership/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
-import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './fs/workspaceFs.js';
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch, type WorkspaceScope } from './fs/workspaceFs.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
@@ -194,6 +201,7 @@ import { gitChurnSignal } from '../git/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/result/resultHandoff.js';
+import { SpillStore } from '../util/result/spillStore.js';
 import { runExtractResult } from '../tool/result/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
@@ -683,6 +691,33 @@ export interface AgentOptions {
   interactionPort?: InteractionPort;
   /** Desktop-only native computer control capability. Omitted in CLI/headless runtimes. */
   computerUsePort?: ComputerUsePort;
+  /**
+   * ADR-041 D3 — filesystem capability for the builtin tool runtime. Omitted ⇒
+   * the local `nodeFilesystemPort` (byte-identical to the previous inline
+   * `node:fs` calls). An execution world (D10) injects a container/remote port.
+   */
+  filesystemPort?: FilesystemPort;
+  /**
+   * ADR-041 D3 — subprocess/worker-spawn capability. Omitted ⇒ the local default
+   * that wraps `spawnWorkerThread` (byte-identical). An execution world (D10)
+   * injects a port that spawns the worker in a container/remote.
+   */
+  subprocessPort?: SubprocessPort;
+  /**
+   * ADR-041 D3 — shell-exec capability (bare exec only; approval/sandbox stay in
+   * the tool). Omitted ⇒ the local default wrapping `runShell` /
+   * `startBackgroundShell` (byte-identical). An execution world (D10) injects a
+   * port that runs the command in a container/remote.
+   */
+  shellPort?: ShellPort;
+  /**
+   * ADR-041 D10 — an execution world binds all three capability ports as one
+   * coherent set (filesystem + shell + subprocess). Omitted ⇒ the local defaults.
+   * When present, it supplies any port not given explicitly above; an explicit
+   * per-port option still wins. Point the world at a container/remote and every
+   * tool follows in one gesture.
+   */
+  executionWorld?: ExecutionWorld;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
   browserControlPort?: BrowserControlPort;
   /** Desktop-only access to native terminals already opened by the user. */
@@ -826,7 +861,7 @@ function canonicalExecutionAuthorityJson(value: unknown): string {
 }
 
 
-export class Agent {
+export class Agent implements IAgent {
   public mcpClient: McpClientWrapper;
   public llmConfig: LLMConfig;
   /** CLI-REINDEX — per-path stat signature of the last reindex, so unchanged
@@ -886,8 +921,88 @@ export class Agent {
     if (value === this.#workspaceRoot) return;
     if (this.#workspaceRoot !== undefined) {
       this.invalidateExecutionIntentAuthority();
+      // ADR-042 D1/D2 — attached worktrees belong to the OLD primary's trust
+      // domain (same-repo membership was derived from it). A new primary is a
+      // new domain, so the attachment set is cleared, never carried across.
+      this.#attachedRoots = [];
+      this.#readOnlyRoots.clear();
     }
     this.#workspaceRoot = value;
+  }
+
+  // ADR-042 D1 — same-repo worktrees this session has explicitly entered
+  // (`worktree_enter`). Empty by default, so single-root behavior is unchanged
+  // until the agent opts in. Reset whenever the primary root changes (above).
+  #attachedRoots: string[] = [];
+  // ADR-042 D6 — worktrees attached READ-ONLY because a live foreign session
+  // owns them: path (realpath'd) -> owner session key. Reads resolve; writes
+  // are refused with the owner named. Reset with the primary root (above).
+  #readOnlyRoots: Map<string, string> = new Map();
+  /** A snapshot of the attached same-repo worktree roots (absolute, realpath'd). */
+  public get attachedRoots(): readonly string[] {
+    return this.#attachedRoots;
+  }
+  /** The session's full workspace scope: primary root + attached worktrees. */
+  public get workspaceScope(): WorkspaceScope {
+    return {
+      primaryRoot: this.workspaceRoot,
+      attachedRoots: this.#attachedRoots,
+      readOnlyRoots: [...this.#readOnlyRoots.keys()],
+    };
+  }
+  /**
+   * Attach a same-repo worktree root for file access (idempotent, capped). The
+   * caller is responsible for the D2 derivation check (`resolveAttachableWorktree`)
+   * — this only records an already-validated root. Realpath'd so scope checks
+   * compare canonically.
+   */
+  public attachWorktree(root: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* keep as given */ }
+    if (canonical === this.workspaceRoot) return; // the primary is always in scope
+    if (this.#attachedRoots.includes(canonical)) return;
+    if (this.#attachedRoots.length >= 16) this.#attachedRoots.shift(); // bounded
+    this.#attachedRoots.push(canonical);
+  }
+
+  /**
+   * ADR-042 S4 — detach a previously-entered worktree from the scope (e.g. after
+   * worktree_done removes it). Idempotent; matches on the realpath or the raw
+   * path so a removed directory (whose realpath now fails) still drops.
+   */
+  public detachWorktree(root: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* dir may be gone post-removal */ }
+    this.#attachedRoots = this.#attachedRoots.filter((r) => r !== canonical && r !== root);
+    this.#readOnlyRoots.delete(canonical);
+    this.#readOnlyRoots.delete(root);
+  }
+
+  /**
+   * ADR-042 D6 — attach a worktree READ-ONLY because a live foreign session
+   * (`owner`) owns it. Its files resolve for READ; writes are refused with the
+   * owner named. Never both read-only and read/write.
+   */
+  public attachReadOnlyWorktree(root: string, owner: string): void {
+    let canonical = root;
+    try { canonical = fs.realpathSync(root); } catch { /* keep as given */ }
+    if (canonical === this.workspaceRoot) return;
+    this.#attachedRoots = this.#attachedRoots.filter((r) => r !== canonical); // never both
+    this.#readOnlyRoots.set(canonical, owner);
+  }
+
+  /**
+   * The owning session of the read-only worktree that would contain `inputPath`,
+   * or null. Resolved lexically against the primary anchor the same way the path
+   * resolver does, so the tool layer can refuse a write before it is attempted.
+   */
+  public readOnlyWorktreeOwner(inputPath: string): string | null {
+    if (this.#readOnlyRoots.size === 0 || typeof inputPath !== 'string' || !inputPath.trim()) return null;
+    const abs = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(this.workspaceRoot, inputPath);
+    for (const [root, owner] of this.#readOnlyRoots) {
+      if (isPathInside(root, abs)) return owner;
+    }
+    return null;
   }
   public launchCwd: string;
   /** Stable identity for the currently running turn; reset at turn finalization. */
@@ -925,7 +1040,15 @@ export class Agent {
   private readonly sessionTitleModelTimeoutMs?: number;
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
   // MEM-22 — retention is configurable via cli.offloadRetentionMs / cli.offloadMaxEntries.
-  public readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
+  // ADR-041 A41-13 (W1) — back the in-memory offload cache with a bounded disk
+  // spill tier, so a large result evicted (LRU) or expired (TTL) survives in a
+  // cold tier and `extract_result` can still recover it instead of "not found".
+  public readonly resultCache = new ResultCache(
+    getCliKnobs().offloadRetentionMs,
+    getCliKnobs().offloadMaxEntries,
+    undefined,
+    new SpillStore(path.join(os.tmpdir(), 'brainrouter-offload')),
+  );
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   public triedModelFallback = false;
   /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
@@ -1174,6 +1297,11 @@ export class Agent {
   public confirmToolApproval?: AgentOptions['confirmToolApproval'];
   public interactionPort?: AgentOptions['interactionPort'];
   public computerUsePort?: ComputerUsePort;
+  public filesystemPort?: FilesystemPort;
+  public subprocessPort?: SubprocessPort;
+  public shellPort?: ShellPort;
+  /** ADR-041 D10 — the execution world these ports were resolved from, if any. */
+  public executionWorld?: ExecutionWorld;
   public browserControlPort?: BrowserControlPort;
   public terminalUsePort?: AgentOptions['terminalUsePort'];
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
@@ -1243,6 +1371,19 @@ export class Agent {
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
+    // ADR-041 D10 — an execution world supplies any port not given explicitly; an
+    // ADR-041 A41-10 — every agent runs in an execution world. Absent an explicit
+    // one, that is the `local` world, which binds the same node ports the tool
+    // runtime would otherwise fall through to (`?? nodeFilesystemPort`, etc.) — so
+    // the resolved ports are byte-identical, but the seam is now live: the world is
+    // introspectable and a host/extension can swap the whole set at once. An
+    // explicit per-port option still wins over the world.
+    const executionWorld = options.executionWorld ?? localExecutionWorld();
+    this.executionWorld = executionWorld;
+    const resolvedPorts = resolveExecutionPorts({ ...options, executionWorld });
+    this.filesystemPort = resolvedPorts.filesystemPort;
+    this.subprocessPort = resolvedPorts.subprocessPort;
+    this.shellPort = resolvedPorts.shellPort;
     this.browserControlPort = options.browserControlPort;
     this.terminalUsePort = options.terminalUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
@@ -2498,6 +2639,9 @@ export class Agent {
       args: Record<string, unknown>,
       descriptor: unknown,
     ): void;
+    // ADR-041 A41-15 — Code Mode sub-dispatch, forwarded to run_code only via the
+    // trusted builtinRuntime path below (CWE-266 — never to a user extension).
+    codeModeDispatch?(tool: string, args: Record<string, unknown>): Promise<string>;
   }): Promise<string> {
     // HONK-L3 — re-nest args the local model emitted against a flattened schema
     // (dot-notation keys → nested objects) before any executor sees them.
@@ -2533,6 +2677,7 @@ export class Agent {
             toolName,
             toolArgs,
             runtime?.authorizeMcpTarget,
+            runtime?.codeModeDispatch,
           ),
         }
         : undefined,

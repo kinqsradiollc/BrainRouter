@@ -34,6 +34,8 @@ export interface GatewayUsageEvent {
   httpStatus: number;
   usage: GatewayTokenUsage | null;
   costMicrousd: number | null;
+  /** ADR-043 C7 (D4) — 'server' | 'client-tunnel' (which egress path was taken); null when unknown. */
+  egressMode: string | null;
 }
 
 export class GatewayQuotaError extends Error {
@@ -233,10 +235,10 @@ export async function recordGatewayUsage(
        request_id, org_id, user_id, service_principal_id,
        public_model_id, selected_effort, upstream_route,
        latency_ms, http_status, input_tokens, output_tokens,
-       cached_input_tokens, total_tokens, cost_microusd
+       cached_input_tokens, total_tokens, cost_microusd, egress_mode
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7,
-       $8, $9, $10, $11, $12, $13, $14
+       $8, $9, $10, $11, $12, $13, $14, $15
      )
      ON CONFLICT (request_id) DO NOTHING`,
     [
@@ -254,6 +256,7 @@ export async function recordGatewayUsage(
       event.usage?.cachedInputTokens ?? null,
       event.usage?.totalTokens ?? null,
       event.costMicrousd,
+      event.egressMode,
     ],
   );
 }

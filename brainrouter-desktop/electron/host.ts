@@ -32,6 +32,7 @@ import { FanoutManager } from './host/fanoutManager.js';
 import { RemoteWorktreeManager } from './host/sshRemote.js';
 import { MobileRelayServer } from './host/mobileRelayServer.js';
 import { createRemoteAccessClient } from './host/remoteAccessWiring.js';
+import { createEgressTunnelClient, egressTunnelEnabled } from './host/egressTunnelWiring.js';
 import { endBrainSession, ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
 import { requestDesktopHeldConfirmation } from './host/heldMessageConfirmation.js';
 import { DesktopSessionMessaging } from './host/sessionMessaging.js';
@@ -993,6 +994,13 @@ async function main(): Promise<void> {
   // Enrolled-device broker client (spec §9, Task 23): outbound WSS to the
   // remote-relay edge; attached sockets reuse mobileRelay's E2EE/RPC allowlist.
   const remoteAccess = createRemoteAccessClient(mobileRelay);
+  // ADR-043 C5 — the edge egress tunnel client. Gated OFF unless
+  // `cli.remote.egressTunnel` is set AND the device is enrolled; when on it holds
+  // a standing control channel to the gateway and relays provider traffic through
+  // this device. (Org-switch re-hello is a documented follow-up; a stale binding
+  // is fail-safe — the server just won't route the new org's traffic here.)
+  const egressTunnel = createEgressTunnelClient();
+  if (egressTunnelEnabled(loadConfig()) && remoteAccess.isEnrolled()) egressTunnel.start();
   // Per-endpoint /models cache ('' = the active llm; otherwise a named provider).
   const modelsCacheByKey = new Map<string, { models: string[]; at: number }>();
   // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
@@ -1571,7 +1579,7 @@ async function main(): Promise<void> {
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
     captureRequirementNote, captureAnnotationNote, captureAnnotationExportNote, captureArtifactNote,
-    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, remoteAccess, modelsCacheByKey,
+    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, remoteAccess, egressTunnel, modelsCacheByKey,
     getPrCache: () => prCache, setPrCache: (v) => { prCache = v; },
     getPrStatusMapCache: () => prStatusMapCache, setPrStatusMapCache: (v) => { prStatusMapCache = v; },
     readTranscriptCached, isoNow, collectWorkingDiff,
@@ -1669,6 +1677,7 @@ async function main(): Promise<void> {
       clearTimeout(connectorSchedulerBootTimer);
       stopWorkspaceWatcher();
       mobileRelay.stop();
+      egressTunnel.stop();
       fanoutManager.dispose();
       hostedAgents.dispose();
       ptyRegistry.dispose();

@@ -1,6 +1,6 @@
 # ADR-040 — One runtime, graphs of bounded loops
 
-**Status:** ACCEPTED — owner approved on 2026-08-13.
+**Status:** Accepted — implemented (owner approved 2026-08-13; completed 2026-08-16 into `release/0.4.20`). One bounded turn engine chooses the smallest eligible topology per top-level turn (direct or a validated per-profile stage graph), durable phase plans + saved graphs stay explicit, graph authority/approvals fail closed, and optimization is a grounded verifier/counter-metric/rollback graph — rendered as Desktop Runs + a CLI timeline.
 
 **Target:** `release/0.4.20` for the decision only. Every implementation slice ships in a separate
 pull request after acceptance.

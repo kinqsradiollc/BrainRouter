@@ -1,13 +1,17 @@
 import type { Express, Request, Response as ExpressResponse } from 'express';
 
 import {
+  findProviderByEndpoint,
   ModelEffortAdapterError,
   UpstreamPolicyError,
 } from '@kinqs/brainrouter-core/provider';
 
 import type { ProviderModelRecord } from '../../providers/modelPolicyStore.js';
 import { resolveRequestUrl } from '../../providers/wireFormat.js';
+import type { ResolvedProviderConfig } from '../../providers/types.js';
 import type { GatewayAuthContext } from './auth.js';
+import { selectEdgeDialer, type EgressMode } from './egress/edgeDialerSelection.js';
+import type { EgressTunnelTransport } from './egress/tunnelTransport.js';
 import {
   GatewayQuotaError,
   type GatewayUsageEvent,
@@ -42,6 +46,54 @@ import {
   responsesTokenUsage,
   type GatewayTokenUsage,
 } from './usage.js';
+import { RateShaper, type AcquireResult } from './rateShaper.js';
+
+// ADR-043 S1 (D5) — the gateway rate-shaper. Records an upstream 429's
+// Retry-After so a burst stops hammering a key the provider already refused (the
+// review-bot free-tier wedge), and fast-fails requests to a parked key with the
+// hint. S1b additionally reserves a per-key slot before each dial so the
+// concurrency cap + rpm budget shape a burst BEFORE it stampedes the upstream.
+// Generous per-key budgets: they only shape extreme bursts. Fail-open — a key
+// with no state, and traffic under the budgets, is admitted with zero added latency.
+// Generous per-key defaults: they only shape extreme bursts. Overridable via
+// GatewayDataPlaneOptions.rateShaper (ops tuning + deterministic tests).
+const DEFAULT_SHAPER_BUDGET = { maxConcurrentPerKey: 64, rpmPerKey: 600, maxQueuePerKey: 256 } as const;
+const shaperKeyFor = (orgId: string, endpoint: string): string => `${orgId}\u0000${endpoint}`;
+function shaperFastFail(shaper: RateShaper, res: ExpressResponse, key: string): boolean {
+  const parkedMs = shaper.parkedFor(key);
+  if (parkedMs <= 0) return false;
+  res.setHeader('retry-after', String(Math.ceil(parkedMs / 1000)));
+  sendOpenAiError(res, 429, {
+    message: 'The upstream provider is rate limited; retry after the indicated delay.',
+    type: 'rate_limit_error',
+    param: null,
+    code: 'upstream_rate_limited',
+  });
+  return true;
+}
+function shaperNoteUpstream429(shaper: RateShaper, key: string, upstream: Response): void {
+  const retryAfter = upstream.headers.get('retry-after');
+  const seconds = retryAfter && /^\d{1,6}$/.test(retryAfter) ? Number(retryAfter) : 5;
+  shaper.noteRetryAfter(key, seconds);
+}
+// ADR-043 S1b (D5) — proactive shaping: reserve a per-key slot before dialing so a
+// burst is bounded by the concurrency cap + rpm budget BEFORE it stampedes an
+// upstream (not only reactively after a 429 parks the key). Budgets are generous
+// and fail-open — a key under them is admitted with zero added latency. Returns a
+// one-shot `release` the caller MUST invoke in its finally, or null after sending
+// the 429 (concurrency / rpm / queue-full / a raced Retry-After park).
+function shaperAcquire(shaper: RateShaper, res: ExpressResponse, key: string): (() => void) | null {
+  const result: AcquireResult = shaper.tryAcquire(key);
+  if (result.ok) return result.release;
+  res.setHeader('retry-after', String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))));
+  sendOpenAiError(res, 429, {
+    message: 'This tenant is sending requests faster than the per-key budget; retry after the indicated delay.',
+    type: 'rate_limit_error',
+    param: null,
+    code: `gateway_${result.reason}`,
+  });
+  return null;
+}
 
 export interface GatewayDataPlaneService {
   listModels(auth: GatewayAuthContext): Promise<ProviderModelRecord[]>;
@@ -55,9 +107,75 @@ export interface GatewayDataPlaneService {
   recordUsage(event: GatewayUsageEvent): Promise<void>;
 }
 
+/**
+ * ADR-043 S3b (C6b) — the per-request egress selection inputs. When present (the
+ * tunnel is enabled at boot), the route MAY route a dial through the requesting
+ * user's own device; when absent, every dial uses direct server egress exactly
+ * as before.
+ */
+export interface GatewayEgressSelection {
+  /** A live tunnel transport for this account, or undefined when no device is online. */
+  transportForAccount(orgId: string, userId: string, upstreamKeyId: string): EgressTunnelTransport | undefined;
+  /** Per-org consent gate (D2). Read only on the rare tunnel-eligible path. */
+  orgOptIn(orgId: string): Promise<boolean>;
+  /** Fired once per connection that drops from tunnel to server egress (telemetry). */
+  onFallback?: (reason: Error) => void;
+}
+
 export interface GatewayDataPlaneOptions {
   timeoutMs?: number;
+  /** ADR-043 S1 — override the per-key rate-shaper budgets (defaults in DEFAULT_SHAPER_BUDGET). */
+  rateShaper?: Partial<{ maxConcurrentPerKey: number; rpmPerKey: number; maxQueuePerKey: number }>;
   upstream?: SafeUpstreamFetchOptions;
+  /** ADR-043 S3b (C6b) — edge-egress selection; omitted ⇒ tunnel off ⇒ direct egress. */
+  egress?: GatewayEgressSelection;
+}
+
+/**
+ * ADR-043 S3b (C6b) — resolve the upstream fetch options for ONE dial, choosing
+ * the edge-tunnel dispatcher only when it is genuinely eligible: the tunnel is
+ * enabled, the caller is a user (services have no device), the provider adapter
+ * declares `clientTunnel` in a tunnelling mode, that user has an online device,
+ * AND the org has opted in. On the common path this is a couple of cheap checks
+ * and returns the shared `options.upstream` unchanged (never mutated). The
+ * per-org consent DB read happens ONLY on the otherwise-eligible path.
+ */
+/** The provider egress fields the selection reads; injected for tests. */
+type ProviderEgressLookup = (
+  endpoint: string,
+) => { egressMode?: EgressMode; egressCapabilities?: { vendableToken?: boolean; clientTunnel?: boolean } } | undefined;
+
+export async function selectUpstreamForRequest(
+  options: GatewayDataPlaneOptions,
+  auth: GatewayAuthContext,
+  provider: ResolvedProviderConfig,
+  lookupEgress: ProviderEgressLookup = findProviderByEndpoint,
+): Promise<SafeUpstreamFetchOptions | undefined> {
+  const base = options.upstream;
+  const egress = options.egress;
+  if (!egress || auth.principalType !== 'user') return base;
+  try {
+    const def = lookupEgress(provider.endpoint);
+    const mode = def?.egressMode;
+    if (!def?.egressCapabilities?.clientTunnel || (mode !== 'client-tunnel' && mode !== 'auto')) return base;
+    const transport = egress.transportForAccount(auth.orgId, auth.userId, provider.endpoint);
+    if (!transport) return base;
+    if (!(await egress.orgOptIn(auth.orgId))) return base;
+    const dispatcherFactory = selectEdgeDialer({
+      egressMode: mode,
+      egressCapabilities: def.egressCapabilities,
+      transport,
+      orgOptIn: true,
+      onFallback: egress.onFallback,
+    });
+    return { ...base, dispatcherFactory };
+  } catch (err) {
+    // The tunnel must NEVER fail a request. Any error while selecting it — a
+    // transient consent-read DB error, a provider lookup, a transport build —
+    // falls back to direct server egress (the behaviour before this feature).
+    egress.onFallback?.(err instanceof Error ? err : new Error(String(err)));
+    return base;
+  }
 }
 
 interface OpenAiErrorBody {
@@ -101,6 +219,8 @@ interface GatewayAuditState {
   status: number;
   usage: GatewayTokenUsage | null;
   permitAcquired: boolean;
+  /** ADR-043 C7 (D4) — the egress path taken: 'server' (default) or 'client-tunnel'. */
+  egressMode: string;
 }
 
 function usageEvent(
@@ -123,6 +243,7 @@ function usageEvent(
     httpStatus: audit.status,
     usage: audit.usage,
     costMicrousd: null,
+    egressMode: audit.egressMode,
   };
 }
 
@@ -449,6 +570,9 @@ export function registerGatewayDataPlane(
   service: GatewayDataPlaneService,
   options: GatewayDataPlaneOptions = {},
 ): void {
+  // ADR-043 S1 — one shaper instance per data-plane registration, keyed per
+  // org+endpoint. Budgets default to DEFAULT_SHAPER_BUDGET; tests/ops override.
+  const shaper = new RateShaper({ ...DEFAULT_SHAPER_BUDGET, ...options.rateShaper });
   app.get('/v1/models', async (_req: Request, res: ExpressResponse) => {
     try {
       const models = await service.listModels(authContext(res));
@@ -479,6 +603,8 @@ export function registerGatewayDataPlane(
     const id = requestId(res);
     let phase: 'policy' | 'upstream' = 'policy';
     let audit: GatewayAuditState | null = null;
+    // ADR-043 S1b — a reserved shaper slot, released in `finally` on every exit path.
+    let releaseShaperSlot: (() => void) | null = null;
     try {
       const parsed = parseChatRequest(req.body);
       const auth = authContext(res);
@@ -490,6 +616,7 @@ export function registerGatewayDataPlane(
         status: 500,
         usage: null,
         permitAcquired: false,
+        egressMode: 'server',
       };
       if (parsed.stream && !resolved.model.capabilities.streaming) {
         throw new GatewayRequestError(
@@ -517,7 +644,16 @@ export function registerGatewayDataPlane(
       if (resolved.provider.apiKey) {
         headers.set('authorization', `Bearer ${resolved.provider.apiKey}`);
       }
+      // ADR-043 S1 — if this org+endpoint key is parked by a prior upstream
+      // Retry-After, fail fast with the hint instead of hammering it.
+      const shaperKey = shaperKeyFor(audit.auth.orgId, resolved.provider.endpoint);
+      if (shaperFastFail(shaper, res, shaperKey)) { audit.status = 429; return; }
+      releaseShaperSlot = shaperAcquire(shaper, res, shaperKey);
+      if (!releaseShaperSlot) { audit.status = 429; return; }
       phase = 'upstream';
+      const upstreamOptions = await selectUpstreamForRequest(options, audit.auth, resolved.provider);
+      // A fresh options object (not the shared base) means the edge tunnel engaged.
+      audit.egressMode = upstreamOptions !== options.upstream ? 'client-tunnel' : 'server';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'chat-completions'),
         {
@@ -526,9 +662,10 @@ export function registerGatewayDataPlane(
           body: JSON.stringify(body),
           signal: lifetime.signal,
         },
-        options.upstream,
+        upstreamOptions,
       );
       if (!upstream.ok) {
+        if (upstream.status === 429) shaperNoteUpstream429(shaper, shaperKey, upstream);
         audit.status = await sendUpstreamError(res, upstream);
         return;
       }
@@ -572,6 +709,7 @@ export function registerGatewayDataPlane(
       const status = sendCaughtError(res, error, phase);
       if (audit) audit.status = status;
     } finally {
+      if (releaseShaperSlot) releaseShaperSlot();
       lifetime.cleanup();
       await finalizeAccounting(service, id, audit);
     }
@@ -584,6 +722,8 @@ export function registerGatewayDataPlane(
     const id = requestId(res);
     let phase: 'policy' | 'upstream' = 'policy';
     let audit: GatewayAuditState | null = null;
+    // ADR-043 S1b — a reserved shaper slot, released in `finally` on every exit path.
+    let releaseShaperSlot: (() => void) | null = null;
     try {
       const parsed = parseResponsesRequest(req.body);
       const auth = authContext(res);
@@ -595,6 +735,7 @@ export function registerGatewayDataPlane(
         status: 500,
         usage: null,
         permitAcquired: false,
+        egressMode: 'server',
       };
       if (!resolved.model.capabilities.responses) {
         throw new GatewayRequestError(
@@ -629,7 +770,16 @@ export function registerGatewayDataPlane(
       if (resolved.provider.apiKey) {
         headers.set('authorization', `Bearer ${resolved.provider.apiKey}`);
       }
+      // ADR-043 S1 — if this org+endpoint key is parked by a prior upstream
+      // Retry-After, fail fast with the hint instead of hammering it.
+      const shaperKey = shaperKeyFor(audit.auth.orgId, resolved.provider.endpoint);
+      if (shaperFastFail(shaper, res, shaperKey)) { audit.status = 429; return; }
+      releaseShaperSlot = shaperAcquire(shaper, res, shaperKey);
+      if (!releaseShaperSlot) { audit.status = 429; return; }
       phase = 'upstream';
+      const upstreamOptions = await selectUpstreamForRequest(options, audit.auth, resolved.provider);
+      // A fresh options object (not the shared base) means the edge tunnel engaged.
+      audit.egressMode = upstreamOptions !== options.upstream ? 'client-tunnel' : 'server';
       const upstream = await fetchUpstreamWithPolicy(
         resolveRequestUrl(resolved.provider.endpoint, 'responses'),
         {
@@ -638,9 +788,10 @@ export function registerGatewayDataPlane(
           body: JSON.stringify(body),
           signal: lifetime.signal,
         },
-        options.upstream,
+        upstreamOptions,
       );
       if (!upstream.ok) {
+        if (upstream.status === 429) shaperNoteUpstream429(shaper, shaperKey, upstream);
         audit.status = await sendUpstreamError(res, upstream);
         return;
       }
@@ -685,6 +836,7 @@ export function registerGatewayDataPlane(
       const status = sendCaughtError(res, error, phase);
       if (audit) audit.status = status;
     } finally {
+      if (releaseShaperSlot) releaseShaperSlot();
       lifetime.cleanup();
       await finalizeAccounting(service, id, audit);
     }

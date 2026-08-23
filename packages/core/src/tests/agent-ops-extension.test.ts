@@ -34,10 +34,11 @@ function makeHost(workspaceRoot: string): Harness {
     workspaceRoot,
     version: 'test',
     log: () => {},
-    registerTool: (def) => tools.set(def.name, def),
-    registerProvider: () => {},
-    registerHook: () => {},
-    registerPanel: () => {},
+    registerTool: (def) => { tools.set(def.name, def); return { dispose() {} }; },
+    registerProvider: () => ({ dispose() {} }),
+    registerHook: () => ({ dispose() {} }),
+    registerPhaseHook: () => ({ dispose() {} }),
+    registerPanel: () => ({ dispose() {} }),
   };
   return { tools, host };
 }

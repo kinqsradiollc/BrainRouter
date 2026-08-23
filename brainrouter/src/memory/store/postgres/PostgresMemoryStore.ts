@@ -173,6 +173,8 @@ import * as userStats from "./queries/userStatsQueries.js";
 import * as sourcesTree from "./queries/sourcesTreeQueries.js";
 import * as tenancy from "./queries/tenancyQueries.js";
 import * as emailAuth from "./queries/emailAuthQueries.js";
+import { makeRefreshSessionStore } from "./queries/refreshSessionQueries.js";
+import type { RefreshSessionStore } from "../../../api/routes/identity/refreshSessions.js";
 import * as orgPersona from "./queries/orgPersonaQueries.js";
 import * as sharing from "./queries/memorySharingQueries.js";
 import * as projects from "./queries/projectQueries.js";
@@ -188,6 +190,7 @@ import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import * as connectorCfg from "./queries/connectorConfigQueries.js";
 import * as pentestTargets from "./queries/pentestTargetQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
+import type { IMemoryStoreComposite } from "../composite.js";
 import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
 import type { ProviderStore } from "../../../providers/store.js";
@@ -255,7 +258,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, ModelPolicyStore, RemoteAccessStore, IntegrationStore, ConnectorStore {
+export class PostgresMemoryStore implements IMemoryStoreComposite {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -523,7 +526,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   // ── email/auth (ADR-014 P-B2: settings, tokens, invites) ─────────────────
   public getSetting<T = unknown>(key: string): Promise<T | null> { return emailAuth.getSetting<T>(this.exec, key); }
   public setSetting(key: string, value: unknown): Promise<void> { return emailAuth.setSetting(this.exec, key, value, new Date().toISOString()); }
-  public createAuthToken(rec: { tokenHash: string; kind: string; userId?: string | null; email?: string | null; expiresAt: string; createdAt: string }): Promise<void> { return emailAuth.createAuthToken(this.exec, rec); }
+  /** ADR-037 B1 — the revocable refresh-session store, backed by refresh_sessions. */
+  public refreshSessionStore(): RefreshSessionStore { return makeRefreshSessionStore(this.exec); }
+    public createAuthToken(rec: { tokenHash: string; kind: string; userId?: string | null; email?: string | null; expiresAt: string; createdAt: string }): Promise<void> { return emailAuth.createAuthToken(this.exec, rec); }
   public consumeAuthToken(tokenHash: string, kind: string, nowIso: string): Promise<emailAuth.AuthTokenRecord | null> { return emailAuth.consumeAuthToken(this.exec, tokenHash, kind, nowIso); }
   public setEmailVerified(userId: string): Promise<void> { return emailAuth.setEmailVerified(this.exec, userId); }
   public createInvite(rec: emailAuth.OrgInviteRecord): Promise<void> { return emailAuth.createInvite(this.exec, rec); }

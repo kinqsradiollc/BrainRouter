@@ -1340,8 +1340,11 @@ describe("notes + workspace routes", () => {
   it("the routers are mounted on the app, which is the difference between built and reachable", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const index = fs.readFileSync(path.join(here, "..", "index.ts"), "utf8");
-    expect(index).toContain('app.use("/api/notes", notesRouter)');
-    expect(index).toContain('app.use("/api/workspace", workspaceRouter)');
+    // ADR-041 A41-7 — the /api route mounts moved from individual `app.use(...)`
+    // lines into the ordered `apiRoutes` registry array (mounted in a loop). The
+    // route is still mounted; assert its registry entry instead of the old call.
+    expect(index).toContain('["/api/notes", notesRouter]');
+    expect(index).toContain('["/api/workspace", workspaceRouter]');
   });
 
   /**
