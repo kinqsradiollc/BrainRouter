@@ -6,6 +6,7 @@
 import React from 'react';
 import { sanitizePeerTextForTerminal } from '@kinqs/brainrouter-types/peer-presentation';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { usePanelPolling } from '../../lib/panels/usePanelPolling.js';
 import '../../styles/surfaces/peers.css';
 
 interface PeerRoute {
@@ -69,7 +70,7 @@ export function heldDecisionNotice(approved: boolean, transport?: 'local' | 'rem
     : 'Declined locally; this message will not be applied.';
 }
 
-export function PeersPanel(): React.ReactElement {
+export function PeersPanel({ active = true }: { active?: boolean }): React.ReactElement {
   const [snapshot, setSnapshot] = React.useState<PeersSnapshot>({ ownSessionKey: '', brainOnline: false, routes: [] });
   const [held, setHeld] = React.useState<HeldMessage[]>([]);
   const [receipts, setReceipts] = React.useState<Receipt[]>([]);
@@ -100,11 +101,7 @@ export function PeersPanel(): React.ReactElement {
     }
   }, []);
 
-  React.useEffect(() => {
-    void refresh();
-    const timer = setInterval(() => { void refresh(); }, 3_000);
-    return () => clearInterval(timer);
-  }, [refresh]);
+  usePanelPolling({ active, intervalMs: 3_000, refresh });
 
   const send = async (): Promise<void> => {
     if (!target.trim() || !text.trim()) return;

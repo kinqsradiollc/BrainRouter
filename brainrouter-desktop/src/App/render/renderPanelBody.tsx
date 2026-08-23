@@ -164,10 +164,10 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           tokens={tokens} liveTurn={liveTurn} contextUsage={contextUsage} efficiency={efficiency}
           bgCount={runningTasks.length} configDir="~/.config/brainrouter"
         />);
-      case 'peers': return <PeersPanel />;
-      case 'runs': return <RunsPanel />;
-      case 'trajectory': return <TrajectoryPanel />;
-      case 'request-trace': return <RequestTracePanel />;
+      case 'peers': return <PeersPanel active={active} />;
+      case 'runs': return <RunsPanel active={active} />;
+      case 'trajectory': return <TrajectoryPanel active={active} />;
+      case 'request-trace': return <RequestTracePanel active={active} />;
       case 'files': return <FilesPanel workspaceKey={activeRoot} files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
         onGrep={(gq) => q('q-grep', 'search-content', { q: gq })}
         onRefresh={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}
@@ -206,7 +206,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
       // SERVERS — start/stop launch.json dev servers; "Open in Browser" drives the
       // IN-APP Browser panel (not the system browser) via the br-browser-navigate
       // event, mirroring the Atlas onDriveElement handoff.
-      case 'servers': return <ServersPanel onOpenInBrowser={(url) => {
+      case 'servers': return <ServersPanel active={active} onOpenInBrowser={(url) => {
         ensurePanel('browser');
         window.dispatchEvent(new CustomEvent('br-browser-navigate', { detail: { url } }));
       }} />;
@@ -293,7 +293,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
         onRemove={(id) => { q('q-schedule', 'schedule-remove', { id }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
         onToggle={(id, enabled) => { q('q-schedule', 'schedule-toggle', { id, enabled }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }} />;
-      case 'worktrees': return <WorktreesPanel worktrees={worktrees} diffs={worktreeDiffs}
+      case 'worktrees': return <WorktreesPanel active={active} worktrees={worktrees} diffs={worktreeDiffs}
         onCreate={(name, ref) => { q('q-worktree-create', 'worktree-create', { name, ref }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onOpen={(path) => openWorktree(path)}
