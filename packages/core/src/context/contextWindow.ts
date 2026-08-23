@@ -22,8 +22,24 @@ import path from 'node:path';
 import os from 'node:os';
 import { loadModelsConfig } from '../config/configLoader.js';
 import { lookupLmStudioModel } from '../provider/providers/lmstudio/index.js';
+import { getCliKnobs } from '../config/config.js';
 
 let cachedOverride: Record<string, number> | undefined;
+
+/**
+ * ADR-045 — the config.json `cli.contextWindows` per-model override, read lazily
+ * so this module keeps no eager dependency on the config module (cycle-safe:
+ * `getCliKnobs` is only called at lookup time, never at module init). config.json
+ * wins over the legacy `~/.config/brainrouter/contextWindows.json` file. Values are
+ * already validated + lowercased by `sanitizeContextWindows`.
+ */
+function cliContextWindowOverride(): Record<string, number> {
+  try {
+    return getCliKnobs().contextWindows ?? {};
+  } catch {
+    return {};
+  }
+}
 
 function loadOverride(): Record<string, number> {
   if (cachedOverride !== undefined) return cachedOverride;
@@ -77,6 +93,13 @@ export function contextWindowFor(modelId: string | undefined | null): number | u
   const stripped = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
   const override = loadOverride();
   const cfg = loadModelsConfig();
+
+  // ADR-045 — the config.json `cli.contextWindows` knob wins over everything,
+  // including the legacy override file, so a user's per-model setting is the
+  // authoritative source for their own backend.
+  const cli = cliContextWindowOverride();
+  if (raw in cli) return cli[raw];
+  if (stripped in cli) return cli[stripped];
 
   if (raw in override) return override[raw];
   if (stripped in override) return override[stripped];

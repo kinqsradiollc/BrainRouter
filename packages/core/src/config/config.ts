@@ -652,6 +652,24 @@ export function sanitizeLlmProfiles(raw: unknown): Record<string, LlmProfileConf
   return out;
 }
 
+/**
+ * ADR-045 — validate a per-model context-window override map: model id → a
+ * positive finite integer token count. Keys are trimmed + lowercased so the
+ * lookup matches `contextWindowFor`'s lowercased ids; bad entries are dropped
+ * (a misconfigured value never sizes a real budget).
+ */
+export function sanitizeContextWindows(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const key = (name ?? '').trim().toLowerCase();
+    if (key && typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      out[key] = Math.floor(value);
+    }
+  }
+  return out;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   // MC-D3 — validated profiles; the active pointer only survives when it names one.
@@ -701,6 +719,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
     briefingMaxSources: c.briefingMaxSources ?? 6,
     autoCompactTokens: c.autoCompactTokens ?? 80_000,
+    contextWindows: sanitizeContextWindows(c.contextWindows),
     turnEndResultCapTokens: c.turnEndResultCapTokens ?? 3_000,
     turnEndShrinkRatio: c.turnEndShrinkRatio ?? 0.4,
     childResultSystemChars: c.childResultSystemChars ?? 12_000,
