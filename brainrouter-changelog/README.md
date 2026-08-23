@@ -13,6 +13,8 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.4.21](0.4.21.md)** | — | Qualified, unpublished | Plug-and-play runtime (registries replace the switches; capability ports + execution worlds), the glass box (trajectory ledger, request inspector, composition panel), the live edge egress tunnel, completed credential hardening, and closed security holes |
+| **[0.4.20](0.4.20.md)** | 2026-08 | Shipped | Security + correctness pass; ADR-034 exact-key session messaging; ADR-038 shared Planner/Notes; deep review restored, review-stage CHECK + retry fixes, provider-probe SSRFs closed |
 | **[0.4.18](0.4.18.md)** | — | Qualified, unpublished | Native Desktop appearance, unified workbench styling, state-preserving performance, and phase-aware agent execution |
 | **[0.4.17](0.4.17.md)** | 2026-07-30 | Shipped | Conversational workspace setup, one engineer with task-time capabilities, scoped profile packs, and Project knowledge across Dashboard and Desktop |
 | **[0.4.16](0.4.16.md)** | 2026-07-01 | Shipped | Autonomous fleet, unified Desktop, mature Track workflows, PostgreSQL/pgvector brain, remote brain, and Atlas |
