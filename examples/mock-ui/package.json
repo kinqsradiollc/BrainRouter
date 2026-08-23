@@ -1,7 +1,7 @@
 {
   "name": "mock-ui",
   "private": true,
-  "version": "0.4.21",
+  "version": "0.4.22",
   "type": "module",
   "description": "Tiny TS app to demo the BrainRouter Browser panel — Extract + the command layer.",
   "scripts": {
