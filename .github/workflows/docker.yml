@@ -31,7 +31,7 @@ jobs:
     name: Build brain image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       # Build the default `runtime` target (the migrator/worker/api/gateway share
       # its base, so a green runtime build validates all of them). GHA cache keeps
@@ -61,7 +61,7 @@ jobs:
     # select. Then the four ways an incomplete answer must degrade to segmented,
     # and the checkpoint rules that make a reconnect safe.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - uses: actions/setup-node@v4
         with:
