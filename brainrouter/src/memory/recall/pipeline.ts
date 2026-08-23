@@ -112,20 +112,25 @@ export class MemoryRecallPipeline {
       searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number, orgId?: string): Promise<VectorSearchResult[]>;
     };
 
-    // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
-    const ftsResultsRaw = await orgStore.searchCognitiveFts(userId, query, limits.ftsLimit, orgId);
-    const filePathResultsRaw = await this.expandWithFilePathMatches(userId, query);
-
-    // 2. Vector search (Top-K, env: BRAINROUTER_RECALL_VEC_LIMIT)
-    let vecResultsRaw: VectorSearchResult[] = [];
-    if (this.embeddingService.isReady()) {
-      try {
-        const queryVec = await this.embeddingService.embed(query);
-        vecResultsRaw = await orgStore.searchCognitiveVec(userId, queryVec, limits.vecLimit, orgId);
-      } catch (e) {
-        console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
-      }
-    }
+    // Stage 1 has no cross-stream dependencies: begin FTS, filepath expansion,
+    // and embedding/vector retrieval together, then fuse their completed results
+    // below. Vector failure remains intentionally fail-open so an unavailable
+    // embedder never makes keyword recall unavailable.
+    const ftsResultsPromise = orgStore.searchCognitiveFts(userId, query, limits.ftsLimit, orgId);
+    const filePathResultsPromise = this.expandWithFilePathMatches(userId, query);
+    const vecResultsPromise: Promise<VectorSearchResult[]> = this.embeddingService.isReady()
+      ? this.embeddingService.embed(query)
+        .then((queryVec) => orgStore.searchCognitiveVec(userId, queryVec, limits.vecLimit, orgId))
+        .catch((e) => {
+          console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
+          return [];
+        })
+      : Promise.resolve([]);
+    const [ftsResultsRaw, filePathResultsRaw, vecResultsRaw] = await Promise.all([
+      ftsResultsPromise,
+      filePathResultsPromise,
+      vecResultsPromise,
+    ]);
 
     // Federation Stage 1 — when a workspace filter is set, pre-fetch the
     // workspace_tag for every candidate id once. The FTS5 virtual table
