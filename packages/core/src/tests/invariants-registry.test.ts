@@ -77,8 +77,10 @@ test('A41-14 — the built-in companions are exhaustive and currently HOLD', () 
   // The baseline set the runtime ships with.
   assert.ok(areas.includes('tool-registry'), 'tool-registry companion registered');
   assert.ok(areas.includes('extension-events'), 'extension-events companion registered');
+  assert.ok(areas.includes('tool-capabilities'), 'tool-capabilities companion registered (ADR-046)');
+  assert.ok(areas.includes('session-history'), 'session-history companion registered (ADR-046)');
   // The real build must have zero violations across the built-in companions.
-  const builtinViolations = verifyInvariants({ filter: /^(tool-registry|extension-events)\// });
+  const builtinViolations = verifyInvariants({ filter: /^(tool-registry|extension-events|tool-capabilities|session-history)\// });
   assert.deepEqual(builtinViolations, [], `built-in invariants must hold: ${JSON.stringify(builtinViolations)}`);
 });
 
@@ -93,5 +95,7 @@ test('A41-14 — the composition snapshot surfaces the invariants (glass box)', 
   // count is not 0 here — the "built-in invariants hold" claim is the previous
   // test's job, run against the built-in areas in isolation via the regex filter.)
   assert.equal(snap.invariants.violations, verifyInvariants().length);
-  assert.deepEqual(verifyInvariants({ filter: /^(tool-registry|extension-events)\// }), [], 'the built-in invariants hold in this build');
+  assert.deepEqual(verifyInvariants({ filter: /^(tool-registry|extension-events|tool-capabilities|session-history)\// }), [], 'the built-in invariants hold in this build');
+  // ADR-046 D2 — the tripwire channel is surfaced (advisory, separate from violations).
+  assert.ok(Array.isArray(snap.invariants.runtimeReports), 'snapshot carries the tripwire totals');
 });

@@ -37,6 +37,8 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **043** | **Egress at the user's edge** | **✅ Implemented (live edge tunnel, end-to-end)** | **0.4.21** |
 | 044 | Web pages the agent can actually read | 📝 Proposed (HTML→markdown + memory-native ingest; wires the unwired ADR-027 D10 scaffolding) | — |
 | 045 | A context window you can size (+ tier ceiling) | 📝 Proposed (configurable model window: cli.* knob + desktop setting + server-enforced org/tier cap + local clamp) | — |
+| **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S5)** — extends the A41-14 registry with a tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel. S6 opportunistic. | **0.4.22** |
+| 047 | Providers as data, agents as engines, playbooks, a vetted install | 📝 Proposed (declarative providers + agent-as-engine + playbooks + allowlist/advisory install gate) | — |
 
 ## In flight / next
 

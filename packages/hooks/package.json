@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-hooks",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "description": "BrainRouter React hooks — data + state hooks for building a UI on top of a BrainRouter MCP server (pairs with @kinqs/brainrouter-sdk).",
   "type": "module",
   "main": "dist/index.js",
@@ -16,8 +16,8 @@
     "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "dependencies": {
-    "@kinqs/brainrouter-sdk": "^0.4.21",
-    "@kinqs/brainrouter-types": "^0.4.21"
+    "@kinqs/brainrouter-sdk": "^0.4.22",
+    "@kinqs/brainrouter-types": "^0.4.22"
   },
   "peerDependencies": {
     "react": "^18.3.1 || ^19.0.0"

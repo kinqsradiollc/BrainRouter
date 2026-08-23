@@ -20,7 +20,8 @@ import {
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
-import { sanitizeToolCallPairing } from '../guards/toolCallRecovery.js';
+import { deriveModelRequest } from '../guards/toolCallRecovery.js';
+import { reportPairingRepair } from '../../runtime/invariantReports.js';
 import { resolveEffortForTurn } from '../support/effortRouting.js';
 import { recordRequestTrace, clampExcerpt } from '../../session/trace/requestTraceStore.js';
 import {
@@ -95,8 +96,9 @@ export async function invokeModelPhase(
         maxTokens: contextWindowTokens,
       },
     });
-    const requestMessages = sanitizeToolCallPairing(
+    const requestMessages = deriveModelRequest(
       materializeContextEnvelope(contextEnvelope) as any[],
+      reportPairingRepair,
     );
     const activeMode = agent.reviewedExecutionPolicySnapshot()?.activeMode
       ?? resolveActiveMode(agent.workspaceRoot, agent.sessionKey);

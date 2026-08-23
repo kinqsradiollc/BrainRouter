@@ -3711,3 +3711,5 @@ a.review-detail__check:hover .review-detail__check-name { color: var(--text); }
 .runtime-ok { color: var(--br-color-status-success, #4ade80); }
 .runtime-bad { color: var(--danger); font-weight: 600; }
 .runtime-invariants { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 0.82rem; }
+.runtime-tripwires { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle, rgba(128,128,128,0.2)); }
+.runtime-subhead { margin: 0 0 8px; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }

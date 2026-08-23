@@ -16,6 +16,7 @@ import { PROVIDER_REGISTRY } from '../provider/providers/index.js';
 import { SLASH_COMMANDS } from '../command/catalog.js';
 import { invariantCompanions, verifyInvariants } from './invariants.js';
 import { registerBuiltinInvariantCompanions } from './invariantCompanions.js';
+import { runtimeInvariantReportTotals } from './invariantReports.js';
 import { activeLoopDriverId } from './loopDriver.js';
 import { LOCAL_EXECUTION_WORLD_NAME } from './localWorld.js';
 
@@ -39,6 +40,14 @@ export interface RuntimeCompositionSnapshot {
   invariants: {
     areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>;
     violations: number;
+    /**
+     * ADR-046 D2 — tripwire firings this process, per `${area}/${name}` id (e.g.
+     * `session/tool-call-pairing`). Advisory and historical, NOT part of
+     * `violations` (which is the pull-model verify gate). Empty ⇒ quiet, the
+     * target steady state; a non-zero count is a repair that should not have
+     * been needed.
+     */
+    runtimeReports: Array<{ id: string; count: number }>;
   };
   /** ADR-041 A41-11 — the active agent loop-driver row (`default` until a host swaps it). */
   loopDriver: string;
@@ -63,6 +72,9 @@ export function runtimeCompositionSnapshot(): RuntimeCompositionSnapshot {
         ...(c.emptyReason ? { emptyReason: c.emptyReason } : {}),
       })),
       violations: verifyInvariants().length,
+      runtimeReports: Object.entries(runtimeInvariantReportTotals())
+        .map(([id, count]) => ({ id, count }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
     },
     loopDriver: activeLoopDriverId(),
     executionWorld: LOCAL_EXECUTION_WORLD_NAME,

@@ -5,10 +5,11 @@
  * verbatim; every value flows through props so the rendered layout, DOM order
  * (load-bearing for Electron drag regions), and behavior are unchanged.
  */
-import type { WorkspaceMode } from '../../components/layout/ActivityBar.js';
+import { modeForWorkspaceReference, type ModeTransition, type WorkspaceMode } from '../../lib/workspace/modes.js';
 import React, { Suspense, lazy } from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
+import { ModeContext } from '../../components/layout/ModeContext.js';
 /**
  * Notes is lazy for the reason the panels above it are (see renderPanelBody):
  * a block editor, five database views and their controls are ~60KB of initial
@@ -56,6 +57,7 @@ type TV = React.ComponentProps<typeof TrackView>;
 export interface MainContentProps {
   mode: WorkspaceMode;
   setMode: (m: WorkspaceMode) => void;
+  modeTransition: ModeTransition | null;
   workrowRef: React.RefObject<HTMLDivElement>;
   // Track view
   track: { project: TV['project']; items: TV['items']; sprints: TV['sprints']; modules: TV['modules']; views: TV['views']; automations: TV['automations']; members: TV['members']; sync: TV['sync']; git: TV['git']; pr: TV['pr'] };
@@ -203,7 +205,7 @@ export interface MainContentProps {
 
 export function MainContent(p: MainContentProps): React.ReactElement {
   const {
-    mode, setMode, workrowRef, track, trackOps, railOpen, setRailOpen, sidePanelOpen, sidePinned, sideFullScreen,
+    mode, setMode, modeTransition, workrowRef, track, trackOps, railOpen, setRailOpen, sidePanelOpen, sidePinned, sideFullScreen,
     setSidePanelOpen, setSidePinned, sideAnim, sideWidth, setSideWidth, activeSideTab, sideTabs, setActiveSideTab,
     closeSideTab, reorderSideTab, tabTitle, renderPanelBody, openSideView, restoreLastSessionPanels, lastSessionPanels,
     lastPlan, changedFiles, backgroundTasks,
@@ -261,16 +263,13 @@ export function MainContent(p: MainContentProps): React.ReactElement {
   const openWorkspaceRef = React.useCallback((uri: string): void => {
     const parsed = parseWorkspaceRef(uri);
     if (!parsed.ok) return;
-    const target = parsed.ref.mode;
-    if (target === 'planner' || target === 'track' || target === 'meetings' || target === 'chat') {
-      setMode(target === 'chat' ? 'chat' : target);
-      return;
-    }
-    if (target === 'code') setMode('code');
+    const target = modeForWorkspaceReference(parsed.ref.mode);
+    if (target) setMode(target);
   }, [setMode]);
 
   return (
     <div className="main">
+      <ModeContext mode={mode} transition={modeTransition} />
       {/* F4 — mounted while the meetings mode is selected OR while a capture is
           open, and only HIDDEN in between. The `workrow` ref goes to whichever
           workrow is the visible one; a hidden node has no rect, so the drag

@@ -10,6 +10,7 @@
 @import "./styles/shell/dock.css";
 @import "./styles/surfaces/chat.css";
 @import "./styles/surfaces/composer.css";
+@import "./styles/surfaces/home.css";
 @import "./styles/surfaces/panels.css";
 @import "./styles/surfaces/settings.css";
 @import "./styles/surfaces/editorFiles.css";

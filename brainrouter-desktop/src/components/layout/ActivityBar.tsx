@@ -12,29 +12,18 @@
 import React, { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../../icons.js';
 import { useActiveOrg } from '../../lib/orgContext.js';
+import { WORKSPACE_MODE_DEFINITIONS, type WorkspaceMode } from '../../lib/workspace/modes.js';
 
-export type WorkspaceMode = 'chat' | 'track' | 'code' | 'meetings' | 'planner' | 'notes';
-
-const MODES: ReadonlyArray<readonly [WorkspaceMode, string, string]> = [
-  ['chat', 'bubble', 'Chat'],
-  ['code', 'code', 'Code'],
-  ['track', 'tasks', 'Track'],
-  ['meetings', 'mic', 'Meetings'],
-  // ADR-028 G6 — the planner is a MODE, not a panel: it is user-scoped and
-  // spans every project, and panels are bound to one workspace and session.
-  ['planner', 'plan', 'Planner'],
-  // ADR-029 — Notes, for the same reason: user-scoped and cross-project (D1).
-  ['notes', 'note', 'Notes'],
-];
+export type { WorkspaceMode } from '../../lib/workspace/modes.js';
 
 export interface ActivityBarProps {
   mode: WorkspaceMode;
-  setMode: Dispatch<SetStateAction<WorkspaceMode>>;
+  onModeChange: (mode: WorkspaceMode) => void;
   railOpen: boolean;
   setRailOpen: Dispatch<SetStateAction<boolean>>;
 }
 
-export function ActivityBar({ mode, setMode, railOpen, setRailOpen }: ActivityBarProps): React.ReactElement {
+export function ActivityBar({ mode, onModeChange, railOpen, setRailOpen }: ActivityBarProps): React.ReactElement {
   const { contexts, activeContext, setActiveOrg, refresh } = useActiveOrg();
   const [orgOpen, setOrgOpen] = useState(false);
   const orgRef = useRef<HTMLDivElement | null>(null);
@@ -57,11 +46,11 @@ export function ActivityBar({ mode, setMode, railOpen, setRailOpen }: ActivityBa
         <Icon name="layout" size={15} />
       </button>
       <div className="ab-modes" role="tablist" aria-label="Workspace mode">
-        {MODES.map(([m, icon, label]) => (
-          <button key={m} role="tab" data-mode={m} aria-selected={mode === m} aria-label={`${label} mode`}
-            className={`ab-btn ab-mode${mode === m ? ' active' : ''}`} title={`${label} mode`}
-            onClick={() => setMode(m)}>
-            <Icon name={icon} size={16} />
+        {WORKSPACE_MODE_DEFINITIONS.map((definition) => (
+          <button key={definition.id} role="tab" data-mode={definition.id} aria-selected={mode === definition.id} aria-label={`${definition.label} mode`}
+            className={`ab-btn ab-mode${mode === definition.id ? ' active' : ''}`} title={`${definition.label} mode`}
+            onClick={() => onModeChange(definition.id)}>
+            <Icon name={definition.icon} size={16} />
           </button>
         ))}
       </div>
