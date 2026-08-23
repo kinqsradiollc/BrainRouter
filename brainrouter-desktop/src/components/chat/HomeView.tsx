@@ -30,31 +30,31 @@ export function HomeView(props: {
   return (
     <section className="home">
       <div className="home-kicker-row">
-        <span className="home-kicker"><i /> Welcome back, {name}</span>
+        <span className="home-kicker"><i /> Workspace / <strong>{project}</strong></span>
         <button type="button" className="whatsnew" onClick={() => sendReleaseNotes()}>What&apos;s new</button>
       </div>
       <div className="home-greet">
-        <h1>What should we move forward in {project}?</h1>
-        <p>Start from the outcome you want. BrainRouter keeps project files, useful context, tools, and review close to the task.</p>
+        <h1>Welcome back, {name}.</h1>
+        <p>Choose an action to continue working in {project}.</p>
       </div>
 
       <div className="home-mode-grid" aria-label="Start a workspace mode">
         <button type="button" className="home-mode-card tone-build primary" data-mode="code" onClick={props.onStartBuild}>
-          <span><Icon name="code" size={15} /></span><strong>Build or change code</strong><small>Edit files, run commands, and verify the result in one focused workspace.</small><b>Start building →</b>
+          <em aria-hidden="true">01</em><span><Icon name="code" size={15} /></span><strong>Build</strong><small>Change code, run commands, and verify the result in this workspace.</small><b>Open Code <span aria-hidden="true">→</span></b>
         </button>
         <button type="button" className="home-mode-card tone-plan" data-mode="track" onClick={() => props.onMode('track')}>
-          <span><Icon name="tasks" size={15} /></span><strong>Plan and organize</strong><small>Turn an idea into requirements, tasks, and a delivery path.</small><b>Open Track →</b>
+          <em aria-hidden="true">02</em><span><Icon name="tasks" size={15} /></span><strong>Plan</strong><small>Turn an outcome into work that can be reviewed and delivered.</small><b>Open Track <span aria-hidden="true">→</span></b>
         </button>
         <button type="button" className="home-mode-card tone-explore" data-mode="chat" onClick={() => props.onMode('chat')}>
-          <span><Icon name="bubble" size={15} /></span><strong>Ask or explore</strong><small>Understand the project and discuss options without changing files.</small><b>Open Chat →</b>
+          <em aria-hidden="true">03</em><span><Icon name="bubble" size={15} /></span><strong>Explore</strong><small>Inspect the project and work through an option before changing files.</small><b>Open Chat <span aria-hidden="true">→</span></b>
         </button>
         <button type="button" className="home-mode-card tone-plan" data-mode="meetings" onClick={() => props.onMode('meetings')}>
-          <span><Icon name="mic" size={15} /></span><strong>Capture a meeting</strong><small>Record or paste a transcript, get a summary, and share it.</small><b>Open Meetings →</b>
+          <em aria-hidden="true">04</em><span><Icon name="mic" size={15} /></span><strong>Capture</strong><small>Record a decision or turn a transcript into an accountable next step.</small><b>Open Meetings <span aria-hidden="true">→</span></b>
         </button>
       </div>
 
       <div className="home-context-strip" aria-label="Workspace context">
-        <span className="home-context-label">Open task context</span>
+        <span className="home-context-label">Workspace signals</span>
         <button type="button" className="tone-files" onClick={() => props.onOpenView('files')}><Icon name="folder" size={13} /><span><strong>Project files</strong><small>Browse the workspace</small></span><b>→</b></button>
         <button type="button" className="tone-knowledge" onClick={() => props.onOpenView('memory')}><Icon name="pin" size={13} /><span><strong>Saved knowledge</strong><small>Find useful context</small></span><b>→</b></button>
         {/* ADR-028 G5 — one destination, named once. This said "Review" and the

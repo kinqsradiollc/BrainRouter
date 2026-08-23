@@ -45,7 +45,8 @@ import { nextBrowserOpenGeneration } from './lib/browser/browserPanelModel.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import { ToolingNotice } from './components/ToolingNotice.js';
-import { ActivityBar, type WorkspaceMode } from './components/layout/ActivityBar.js';
+import { ActivityBar } from './components/layout/ActivityBar.js';
+import { describeModeTransition, type ModeTransition, type WorkspaceMode } from './lib/workspace/modes.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import {
@@ -175,6 +176,13 @@ export function App(): React.ReactElement {
   // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
   // swaps the whole main surface). Code is the default agentic-coding view.
   const [mode, setMode] = useState<WorkspaceMode>('code');
+  const [modeTransition, setModeTransition] = useState<ModeTransition | null>(null);
+  const requestMode = useCallback((next: WorkspaceMode): void => {
+    const transition = describeModeTransition(mode, next);
+    if (!transition.changed) return;
+    setMode(next);
+    setModeTransition(transition);
+  }, [mode]);
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
@@ -700,7 +708,7 @@ export function App(): React.ReactElement {
   return (
     <WorkspaceOrgProvider>
     <div className="app">
-      <ActivityBar mode={mode} setMode={setMode} railOpen={railOpen} setRailOpen={setRailOpen} />
+      <ActivityBar mode={mode} onModeChange={requestMode} railOpen={railOpen} setRailOpen={setRailOpen} />
       <Sidebar railAnim={railAnim} railWidth={railWidth} setRailOpen={setRailOpen} setRailWidth={setRailWidth}
         setPaletteOpen={setPaletteOpen} ensurePanel={ensurePanel} setSidePanelOpen={setSidePanelOpen}
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
@@ -726,7 +734,7 @@ export function App(): React.ReactElement {
             horizontal column when it resolves after startup. */}
         <ToolingNotice />
         <MainContent
-        mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
+        mode={mode} setMode={requestMode} modeTransition={modeTransition} workrowRef={workrowRef} track={track} trackOps={trackOps}
         railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
         sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}

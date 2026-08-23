@@ -11,15 +11,17 @@ import test from 'node:test';
 const theme = readFileSync(new URL('../../theme.css', import.meta.url), 'utf8');
 const chat = readFileSync(new URL('../../styles/surfaces/chat.css', import.meta.url), 'utf8');
 const composer = readFileSync(new URL('../../styles/surfaces/composer.css', import.meta.url), 'utf8');
+const home = readFileSync(new URL('../../styles/surfaces/home.css', import.meta.url), 'utf8');
 const composerComponent = readFileSync(new URL('./Composer.tsx', import.meta.url), 'utf8');
 
 test('Chat and composer styles are preview-scoped and use semantic colors', () => {
-  for (const source of [chat, composer]) {
+  for (const source of [chat, composer, home]) {
     assert.match(source, /html\[data-visual-system="v2"\]/);
     assert.doesNotMatch(source, /#[\da-f]{3,8}\b|rgba?\(|hsla?\(/i);
   }
   assert.match(theme, /@import "\.\/styles\/surfaces\/chat\.css";/);
   assert.match(theme, /@import "\.\/styles\/surfaces\/composer\.css";/);
+  assert.match(theme, /@import "\.\/styles\/surfaces\/home\.css";/);
 });
 
 test('queue and steer remain visible, selectable delivery modes', () => {
