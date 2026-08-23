@@ -35,6 +35,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 041 | Plug-and-play runtime | 🟡 A41-6 + D1 + **D3 ports** + **D4 COMPLETE** (D4a IAgent #1443; D4b.1 phase-hook mechanism + turn-end #1444; **D4b.2 both hot-path waterfalls — tool-execution #1449 + hardening #1450, provider-call #1451 — with the logged-invariant fence, each adversarially reviewed**) + **D10 ExecutionWorld #1447**; D8 (guarded tool pipeline), D9, D11+ remain | 0.4.21 |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | 043 | Egress at the user's edge | 🟡 S1 + S1b + S2 EdgeDialer seam + egress fields (#1426) + **S3a tunnel dialer #1432 + S3b egress channel/ticket #1448** shipped dark; S4 (consent/telemetry/fallback ladder + dialer selection off `egressMode`) + S5 (vended-token) remain | 0.4.21 |
+| 046 | The runtime that vouches for itself (catalogs, logged context, invariant roster) | ✅ Implemented (S1–S5) — extends the A41-14 registry with a tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel. S6 opportunistic. | main |
 
 ## In flight / next
 
