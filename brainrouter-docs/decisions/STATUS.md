@@ -36,6 +36,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | **043** | **Egress at the user's edge** | **✅ Implemented (live edge tunnel, end-to-end)** | **0.4.21** |
 | 044 | Web pages the agent can actually read | 📝 Proposed (HTML→markdown + memory-native ingest; wires the unwired ADR-027 D10 scaffolding) | — |
+| 045 | A context window you can size (+ tier ceiling) | 📝 Proposed (configurable model window: cli.* knob + desktop setting + server-enforced org/tier cap + local clamp) | — |
 
 ## In flight / next
 
