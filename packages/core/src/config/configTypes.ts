@@ -529,6 +529,16 @@ export interface CliKnobs {
   // ---- compaction + shrink ----------------------------------------------
   /** Cap on chat-history tokens before auto-compact fires. Default 80000. */
   autoCompactTokens?: number;
+  /**
+   * ADR-045 — per-model context-window override in tokens, keyed by model id
+   * (exact or vendor-prefix-stripped, case-insensitive). Wins over the shipped
+   * `models.json` table and the legacy `~/.config/brainrouter/contextWindows.json`
+   * file, so a user's own setting is authoritative for their backend. Drives
+   * context assembly + the auto-compact threshold + child budgets + the desktop
+   * ring. Unset ⇒ the model table is used (byte-neutral). Example:
+   * `{ "gpt-5": 200000, "my-local-model": 32000 }`.
+   */
+  contextWindows?: Record<string, number>;
   /** Cap on tokens kept in a single tool-result message at turn-end. Default 3000. */
   turnEndResultCapTokens?: number;
   /** Proactive shrink ratio (mid-iter trigger). Default 0.4. */
@@ -1242,6 +1252,8 @@ export interface ResolvedCliKnobs {
   briefingMaxCharsPerSource: number;
   briefingMaxSources: number;
   autoCompactTokens: number;
+  /** ADR-045 — per-model context-window overrides (tokens), validated + lowercased. */
+  contextWindows: Record<string, number>;
   turnEndResultCapTokens: number;
   turnEndShrinkRatio: number;
   childResultSystemChars: number;
