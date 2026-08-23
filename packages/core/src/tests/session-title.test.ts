@@ -9,7 +9,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  resolveSessionTitle,
   resolveSessionTitleDecision,
   normalizeAgentTitle,
   normalizeExplicitSessionTitle,
@@ -110,15 +109,15 @@ test('derivation degrades to a named placeholder, never to an empty string', () 
 
 test('resolve prefers the agent title and falls back on a bad one', () => {
   assert.equal(
-    resolveSessionTitle({ agentTitle: 'Fix the redirect loop', firstUserMessage: 'hey the login is broken' }),
+    resolveSessionTitleDecision({ agentTitle: 'Fix the redirect loop', firstUserMessage: 'hey the login is broken' }).title,
     'Fix the redirect loop',
   );
   // A rejected agent title must not blank the session — fall back to derivation.
   assert.equal(
-    resolveSessionTitle({ agentTitle: "Here's a title", firstUserMessage: 'The login is broken.' }),
+    resolveSessionTitleDecision({ agentTitle: "Here's a title", firstUserMessage: 'The login is broken.' }).title,
     'The login is broken',
   );
-  assert.equal(resolveSessionTitle({}), UNTITLED_SESSION);
+  assert.equal(resolveSessionTitleDecision({}).title, UNTITLED_SESSION);
 });
 
 test('human and hook titles outrank agent and derived titles', () => {
@@ -140,5 +139,5 @@ test('the same inputs give the same name on every surface', () => {
   // dashboard cut at 52 and said "Untitled task", so one session had two names
   // depending on where you looked at it.
   const input = { firstUserMessage: 'Investigate the flaky checkout test that fails on CI only.' };
-  assert.equal(resolveSessionTitle(input), resolveSessionTitle({ ...input }));
+  assert.equal(resolveSessionTitleDecision(input).title, resolveSessionTitleDecision({ ...input }).title);
 });

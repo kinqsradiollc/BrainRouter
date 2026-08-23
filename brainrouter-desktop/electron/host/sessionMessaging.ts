@@ -17,6 +17,7 @@ import {
   getLocalMessagingDeviceId,
   getSessionMeta,
   listHeldSessionMessages,
+  findSessionRouteByKey,
   markHeldSessionMessageApplied,
   mergeSessionRoutes,
   sendLocalSessionMessage,
@@ -164,7 +165,7 @@ export function resolveDesktopPeerAddress(
   const address = rawAddress.trim();
   if (!address) return { reason: 'empty' };
   if (address === ownSessionKey) return { reason: 'self_send' };
-  const exact = routes.find((route) => route.sessionKey === address);
+  const exact = findSessionRouteByKey(routes, address);
   if (exact) {
     if (exact.sessionKey === ownSessionKey) return { reason: 'self_send' };
     if (exact.ambiguous || (exact.instanceCount ?? 1) > 1) return { reason: 'ambiguous' };

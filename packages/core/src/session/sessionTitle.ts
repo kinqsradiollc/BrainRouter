@@ -122,21 +122,6 @@ export function normalizeAgentTitle(raw: string | null | undefined): string | nu
   return truncate(cleaned);
 }
 
-/**
- * The single answer to "what is this session called?".
- *
- * Both surfaces call this so a session does not change name when the user
- * switches between the desktop and the dashboard.
- */
-export function resolveSessionTitle(input: {
-  humanTitle?: string | null;
-  hookTitle?: string | null;
-  agentTitle?: string | null;
-  firstUserMessage?: string | null;
-}): string {
-  return resolveSessionTitleDecision(input).title;
-}
-
 /** Resolve title and provenance with explicit authority precedence. */
 export function resolveSessionTitleDecision(input: {
   humanTitle?: string | null;

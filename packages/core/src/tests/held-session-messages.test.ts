@@ -17,7 +17,6 @@ import {
   holdSessionMessage,
   listHeldSessionMessages,
   markHeldSessionMessageApplied,
-  rejectHeldSessionMessage,
 } from '../session/input/heldSessionMessages.js';
 import type { LocalSessionMessage } from '../session/messaging/contracts.js';
 import { getStateFile, writeJsonFile } from '../storage/store.js';
@@ -105,11 +104,11 @@ test('unsafe inbound messages persist through approve, replay, and applied ackno
 test('held messages reject durably and expire after 24 hours', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     admitSessionMessage(workspace, message('reject'), unsafeAuthority, 1_000);
-    assert.equal(rejectHeldSessionMessage(workspace, 'recipient:1', 'reject', 1_100).status, 'rejected');
+    assert.equal(declineHeldSessionMessage(workspace, 'recipient:1', 'reject', 1_100).status, 'rejected');
     assert.equal(
       admitSessionMessage(workspace, message('reject'), unsafeAuthority, 1_101).decision,
       'rejected',
-      'a rejected replay stays terminal and cannot prompt again',
+      'a declined replay stays terminal and cannot prompt again',
     );
 
     admitSessionMessage(workspace, message('expire'), unsafeAuthority, 2_000);
@@ -140,15 +139,6 @@ test('a delayed terminal decision reports expiry instead of overwriting it', asy
     );
     assert.equal(declined.status, 'expired');
     assert.equal(declined.terminalReceiptStatus, undefined);
-
-    const rejectedReplay = rejectHeldSessionMessage(
-      workspace,
-      'recipient:1',
-      'delayed-decision',
-      cutoff + 1,
-    );
-    assert.equal(rejectedReplay.status, 'expired');
-    assert.equal(rejectedReplay.terminalReceiptStatus, undefined);
   });
 });
 
