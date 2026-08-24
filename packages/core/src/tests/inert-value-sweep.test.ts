@@ -189,7 +189,7 @@ function modulesWithoutImporters(): string[] {
  */
 // 28 → 27 with ADR-028's retirements, then → 26 when merging ADR-034 wired one
 // up. The ratchet working in the direction it was built for.
-const ORPHAN_MODULE_CEILING = 25;
+const ORPHAN_MODULE_CEILING = 24;
 
 /**
  * Modules that ARE orphans and are known to be, with the reason.
@@ -627,7 +627,7 @@ function deadExports(): string[] {
  * gained a production caller: `readRunDetail` reduces a run's retained event journal
  * so `/runs <id>` rebuilds the map from disk instead of reporting `unavailable`.
  */
-const DEAD_EXPORT_CEILING = 273;
+const DEAD_EXPORT_CEILING = 272;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below
