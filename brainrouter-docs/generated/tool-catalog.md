@@ -5,13 +5,14 @@
 
 # BrainRouter tool catalog
 
-87 built-in agent tools, by access tier and action kind.
+88 built-in agent tools, by access tier and action kind.
 
 | Tool | Tier | Action kind | Parallel-safe | Description |
 |------|------|-------------|---------------|-------------|
 | `apply_patch` | write | file_edit | no | Apply a multi-file patch using the Begin/End envelope format ("*** Begin Patch / *** Update File: path / @@ context / -old / +new / *** Add File: / *** Delete File: / *** End Patch"). |
 | `artifact_write` | read | read_only | no | Create or update a durable ARTIFACT — a self-contained, reusable piece of work the user will want to refer back to, edit, or keep: a design doc, a report, an HTML/SVG mockup, a diagram, a standalone code file. |
 | `ask_user_choice` | read | read_only | no | Pause the turn and ask the human to commit to ONE of 2–4 mutually exclusive approaches. |
+| `atlas_context` | read | read_only | yes | Query the workspace codebase map (the Atlas graph built by /atlas): with no query, returns the orientation — project, layers with sizes, and the guided tour heads; with a query, returns the files/symbols whose names, paths, tags, or summaries match it, so you can locate a subsystem without grepping. |
 | `close_agent` | read | read_only | no | Mark a child agent session closed without deleting its transcript. |
 | `close_worker` | read | read_only | no | Mark a worker thread closed (terminal). |
 | `computer_use` | shell | computer | no | Control the real local desktop mouse/keyboard or capture a screenshot. |

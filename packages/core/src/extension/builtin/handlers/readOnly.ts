@@ -8,6 +8,9 @@
 import { formatBrief, summarizeLedger } from '../../../research/evidenceLedger.js';
 import { setQuestion, readLedger, appendEvidence } from '../../../research/researchStore.js';
 import { listConnectors } from '../../../connectors/index.js';
+import { readAtlasGraph } from '../../../atlas/store/atlasStore.js';
+import { atlasOrientation, atlasPromptRetrieval } from '../../../atlas/agentContext.js';
+import { gitHeadSha } from '../../../git/workspaceGit.js';
 import { runExtractResult } from '../../../tool/result/extractResult.js';
 import { listWorktreesStructured } from '../../../worktree/concurrentWorktrees.js';
 import { listTranscripts, readTranscriptEntries, redactTranscriptEntry, loadTranscript, redactText } from '../../../session/transcript/sessionStore.js';
@@ -131,6 +134,22 @@ export const readOnlyHandlers: Record<string, BuiltinToolHandler> = {
       `${lines.join('\n')}\n` +
       `<<<END UNTRUSTED SESSION ${target}>>>`
     );
+  },
+
+  // ADR-048 S6 — query the workspace codebase map (the Atlas graph). No query →
+  // orientation (with an honest staleness note when HEAD moved); a query → the
+  // matching nodes. Pure reads over the per-workspace graph file; a workspace
+  // with no map gets a clear pointer, never an error.
+  atlas_context: async ({ args, host }) => {
+    const graph = readAtlasGraph(host.workspaceRoot);
+    if (!graph) return 'No codebase map yet for this workspace — build one with /atlas.';
+    const query = String(args.query ?? '').trim();
+    if (!query) {
+      const orientation = atlasOrientation(graph, { currentHeadSha: gitHeadSha(host.workspaceRoot) });
+      return orientation || 'The codebase map is empty — rebuild it with /atlas.';
+    }
+    return atlasPromptRetrieval(graph, query, { topK: 10, minPromptChars: 1 })
+      || `No map entries match "${query}" — try broader terms, or grep_search for exact text.`;
   },
 
   research_brief: async ({ args, host }) => {
