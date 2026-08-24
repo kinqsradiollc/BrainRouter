@@ -5,7 +5,7 @@
  */
 import type { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, migrateLegacyContextWindowsFile, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { applyActiveLlmProfile, registerDeclarativeProviders } from '@kinqs/brainrouter-core/provider';
@@ -112,6 +112,12 @@ export function registerChatCommand(program: Command): void {
         process.exit(1);
       }
 
+      // ADR-045 M5 — retire the legacy contextWindows.json file by folding it
+      // into cli.contextWindows once, before config is loaded below.
+      const ctxMigration = migrateLegacyContextWindowsFile();
+      if (ctxMigration.migrated > 0) {
+        console.error(`[BrainRouter] Migrated ${ctxMigration.migrated} entr${ctxMigration.migrated === 1 ? 'y' : 'ies'} from the retired contextWindows.json into cli.contextWindows.`);
+      }
       // CONFIG-HYDRATE — self-fill config.json with any missing safe cli.* knobs so
       // every setting is visible + editable (and new knobs appear on the next launch).
       // Runs only at this deliberate interactive boot, not on every config read.
