@@ -64,8 +64,11 @@ function toLocation(
  * codeFlow has at least two thread-flow locations: source = the first location,
  * sink = the last. Results with no codeFlow (a plain point finding, not a taint
  * path) are skipped here — they enter the review pipeline as a location-only
- * finding, not as a source→sink edge. Intermediate hops are dropped for now;
- * ADR-039 D6 (S4) extends `AssuranceSourceToSinkPath` with an ordered hop array.
+ * finding, not as a source→sink edge.
+ *
+ * ADR-039 D6 (S4) — the ORDERED intermediate hops are now carried on `hops`
+ * (source first, sink last), not discarded. A path is evidence of not just where
+ * but HOW, and the D2 verifier needs each hop to name what an attacker traverses.
  */
 export function mapCodeqlSarifToSourceToSinkPaths(
   sarif: CodeqlSarif,
@@ -76,14 +79,18 @@ export function mapCodeqlSarifToSourceToSinkPaths(
     for (const result of run.results ?? []) {
       const locations = result.codeFlows?.[0]?.threadFlows?.[0]?.locations;
       if (!locations || locations.length < 2) continue;
-      const source = toLocation(locations[0]?.location);
-      const sink = toLocation(locations[locations.length - 1]?.location);
-      if (!source || !sink) continue;
+      const hops = locations
+        .map((loc) => toLocation(loc?.location))
+        .filter((loc): loc is AssuranceSourceLocation => loc !== null);
+      if (hops.length < 2) continue;
+      const source = hops[0]!;
+      const sink = hops[hops.length - 1]!;
       paths.push({
         id: `codeql:${result.ruleId ?? "rule"}:${seq++}`,
         mechanism: "data_flow",
         source,
         sink,
+        hops,
         evidenceRefs: [],
       });
     }
