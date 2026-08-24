@@ -21,6 +21,7 @@ import { opencode } from './opencode/index.js';
 import { lmstudio } from './lmstudio/index.js';
 import { ollama } from './ollama/index.js';
 import { deepseek } from './deepseek/index.js';
+import { externalAgent } from './external-agent/index.js';
 import { cohere, voyage, jina } from './rerankEmbed/index.js';
 import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
@@ -42,6 +43,8 @@ export const BUILTIN_PROVIDERS: ProviderDefinition[] = [
   lmstudio,
   ollama,
   deepseek,
+  // ADR-047 D2 — the subprocess engine (no HTTP; model = a cli.agents.hosted name).
+  externalAgent,
   // Embedding / reranker vendors (hidden from the chat picker; capability-tagged).
   cohere,
   voyage,
