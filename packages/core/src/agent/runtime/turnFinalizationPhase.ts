@@ -14,7 +14,8 @@ import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
-import { phaseHookHandlers } from '../../extension/registry.js';
+import { phaseHookHandlers, type PhaseHookContext } from '../../extension/registry.js';
+import { buildTurnUsageView } from '../../util/tokens/turnUsageView.js';
 import { scheduleLearningCheckpoint } from './learningPhase.js';
 
 interface TurnSpan {
@@ -204,14 +205,32 @@ export async function finalizeTurnPhase(
   // notification, not a waterfall: advisory, so a throwing hook never fails the
   // turn. The logged invariant holds — a hook adds model-visible context only via
   // agent.recordTranscript, never by mutating an in-flight message array.
-  for (const phaseHook of phaseHookHandlers('turn-end')) {
-    try {
-      await phaseHook.after?.(
-        { phase: 'turn-end', workspaceRoot: agent.workspaceRoot, sessionKey: agent.sessionKey },
-        () => {},
-      );
-    } catch {
-      /* turn-end phase hooks are advisory */
+  const turnEndHooks = phaseHookHandlers('turn-end');
+  if (turnEndHooks.length > 0) {
+    // ADR-041 A41-13 — enrich the turn-end context with a read-only usage view and
+    // a bounded next-turn write channel. Built ONCE, and only when a hook is
+    // registered, so a run with no turn-end observer is byte-for-byte unchanged.
+    const ctx: PhaseHookContext = {
+      phase: 'turn-end',
+      workspaceRoot: agent.workspaceRoot,
+      sessionKey: agent.sessionKey,
+      usage: buildTurnUsageView(agent),
+      injectNextTurnContext: (text: string) => {
+        const bounded = String(text ?? '').slice(0, 2_000).trim();
+        if (!bounded) return;
+        // Same channel stop-hooks use — drained into the next prompt, never the
+        // in-flight message array (the D4 logged-context invariant).
+        agent.pendingStopContext = agent.pendingStopContext
+          ? `${agent.pendingStopContext}\n${bounded}`
+          : bounded;
+      },
+    };
+    for (const phaseHook of turnEndHooks) {
+      try {
+        await phaseHook.after?.(ctx, () => {});
+      } catch {
+        /* turn-end phase hooks are advisory */
+      }
     }
   }
 
