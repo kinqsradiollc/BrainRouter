@@ -679,6 +679,43 @@ export function sanitizeContextWindows(raw: unknown): Record<string, number> {
 }
 
 /**
+ * ADR-045 M5 — retire the legacy `contextWindows.json` override file by folding
+ * it into `cli.contextWindows` once, at boot. Reads the sibling file, merges any
+ * entries NOT already set in `cli.contextWindows` (an explicit knob value always
+ * wins), persists config.json, and renames the file to `.migrated` so it is
+ * retired and never re-read. Idempotent — no file (or a renamed one) ⇒ a no-op.
+ * Returns how many entries moved so the boot can surface a one-time notice.
+ */
+export function migrateLegacyContextWindowsFile(): { migrated: number } {
+  const legacyPath = path.join(configDir(), 'contextWindows.json');
+  if (!fs.existsSync(legacyPath)) return { migrated: 0 };
+  let legacy: Record<string, number> = {};
+  try {
+    legacy = sanitizeContextWindows(JSON.parse(fs.readFileSync(legacyPath, 'utf8')));
+  } catch {
+    // A corrupt legacy file is retired without touching config.
+  }
+  let migrated = 0;
+  if (Object.keys(legacy).length > 0) {
+    const config = loadOrInitConfig();
+    const cli = config.cli ?? {};
+    const merged = { ...(cli.contextWindows ?? {}) };
+    // legacy keys are lowercased by sanitizeContextWindows; compare
+    // case-insensitively against the (possibly mixed-case) config keys.
+    const existingKeys = new Set(Object.keys(merged).map((k) => k.toLowerCase()));
+    for (const [key, value] of Object.entries(legacy)) {
+      if (!existingKeys.has(key)) { merged[key] = value; migrated += 1; }
+    }
+    if (migrated > 0) {
+      config.cli = { ...cli, contextWindows: merged };
+      saveConfig(config);
+    }
+  }
+  try { fs.renameSync(legacyPath, `${legacyPath}.migrated`); } catch { /* best-effort retirement */ }
+  return { migrated };
+}
+
+/**
  * ADR-047 D1 — STRUCTURAL sanitize of the declarative-provider list: keep only
  * plain objects carrying a non-empty string `id` and `endpoint`. This is the
  * cheap gate that keeps the resolved knob well-shaped; the LOUD semantic

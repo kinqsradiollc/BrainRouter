@@ -17,21 +17,20 @@
  * "?" rather than guessing.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { loadModelsConfig } from '../config/configLoader.js';
 import { lookupLmStudioModel } from '../provider/providers/lmstudio/index.js';
 import { getCliKnobs } from '../config/config.js';
 
-let cachedOverride: Record<string, number> | undefined;
-
 /**
  * ADR-045 — the config.json `cli.contextWindows` per-model override, read lazily
  * so this module keeps no eager dependency on the config module (cycle-safe:
- * `getCliKnobs` is only called at lookup time, never at module init). config.json
- * wins over the legacy `~/.config/brainrouter/contextWindows.json` file. Values are
+ * `getCliKnobs` is only called at lookup time, never at module init). Values are
  * already validated + lowercased by `sanitizeContextWindows`.
+ *
+ * ADR-045 M5 — the legacy `~/.config/brainrouter/contextWindows.json` override
+ * file is RETIRED: it is migrated into `cli.contextWindows` once, at boot
+ * (`migrateLegacyContextWindowsFile`), so this lookup reads one authoritative
+ * source instead of two.
  */
 function cliContextWindowOverride(): Record<string, number> {
   try {
@@ -41,41 +40,23 @@ function cliContextWindowOverride(): Record<string, number> {
   }
 }
 
-function loadOverride(): Record<string, number> {
-  if (cachedOverride !== undefined) return cachedOverride;
-  const overridePath = path.join(os.homedir(), '.config', 'brainrouter', 'contextWindows.json');
-  try {
-    if (fs.existsSync(overridePath)) {
-      const raw = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
-      if (raw && typeof raw === 'object') {
-        const lowered: Record<string, number> = {};
-        for (const [k, v] of Object.entries(raw)) {
-          if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
-            lowered[k.toLowerCase()] = v;
-          }
-        }
-        cachedOverride = lowered;
-        return cachedOverride;
-      }
-    }
-  } catch {
-    // Bad / missing override → ignore.
-  }
-  cachedOverride = {};
-  return cachedOverride;
-}
-
-/** Test hook. */
+/**
+ * Test hook, retained for API compatibility (called on config reload by
+ * `context/service.ts`). The per-model override now lives in `cli.contextWindows`
+ * — read live via `getCliKnobs()` with no local cache — so there is nothing to
+ * reset here since M5 retired the separate legacy-file cache.
+ */
 export function _resetContextWindowCache(): void {
-  cachedOverride = undefined;
+  /* no-op — see doc above */
 }
 
 /**
  * Look up a model's context window in tokens.
  *
  * Resolution order (first hit wins):
- *   1. `~/.config/brainrouter/contextWindows.json` — exact match.
- *   2. Same file — vendor-prefix-stripped (`openai/gpt-5` → `gpt-5`).
+ *   1. `cli.contextWindows` (config.json) — exact match. The user's own setting
+ *      (the legacy `contextWindows.json` file is migrated into this at boot).
+ *   2. Same knob — vendor-prefix-stripped (`openai/gpt-5` → `gpt-5`).
  *   3. **LM Studio's native `/api/v1/models` cache** — when the user
  *      is on a local LM Studio endpoint, the model's `max_context_length`
  *      from LM Studio is *more* authoritative than our shipped JSON
@@ -91,18 +72,13 @@ export function contextWindowFor(modelId: string | undefined | null): number | u
   if (!modelId || typeof modelId !== 'string') return undefined;
   const raw = modelId.toLowerCase();
   const stripped = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
-  const override = loadOverride();
   const cfg = loadModelsConfig();
 
-  // ADR-045 — the config.json `cli.contextWindows` knob wins over everything,
-  // including the legacy override file, so a user's per-model setting is the
-  // authoritative source for their own backend.
+  // ADR-045 — the config.json `cli.contextWindows` knob is the authoritative
+  // per-model override (the legacy override file was migrated into it at boot).
   const cli = cliContextWindowOverride();
   if (raw in cli) return cli[raw];
   if (stripped in cli) return cli[stripped];
-
-  if (raw in override) return override[raw];
-  if (stripped in override) return override[stripped];
 
   // LM Studio enrichment. Only fires when the cache was populated at
   // session boot via `refreshLmStudioCache(endpoint)` — populates only
