@@ -233,7 +233,10 @@ export function searchSettings(query: string): SettingsNavItem[] {
 export const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'github', 'providers', 'agentModels', 'providerRequestFormat',
   // MC-DESK — object-knobs now driven by their own structured Settings panels
   // (Runtime / Automations / Profiles), so they never appear as raw JSON rows.
-  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles', 'router']);
+  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles', 'router',
+  // ADR-045 M2 — per-model context-window overrides get their own editor
+  // (Models → Profiles → Context windows), so no raw JSON row.
+  'contextWindows']);
 // WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
 // ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
 // from the default list. Still settable via `/config` or the raw disclosure.
