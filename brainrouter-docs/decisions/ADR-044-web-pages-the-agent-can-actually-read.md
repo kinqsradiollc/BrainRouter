@@ -1,6 +1,6 @@
 # ADR-044 — Web pages the agent can actually read
 
-**Status:** IMPLEMENTED (0.4.22) — M1 structured-markdown floor, M3/M4 durable memory-native ingest, M5 robustness. M2 rendered-DOM escalation deferred (browser-first already renders JS pages; readiness detection belongs in the in-app-browser path). · **Builds on:** ADR-030 (documents the
+**Status:** IMPLEMENTED (0.4.22) — M1 structured-markdown floor, M2 rendered-DOM readiness (bounded re-read + consent-wall detection in the in-app-browser fetch), M3/M4 durable memory-native ingest, M5 robustness. All milestones shipped. · **Builds on:** ADR-030 (documents the
 agent can actually read — the `DocumentArtifact` shape, the note landing, the untrusted-content
 fence), ADR-029 (notes + the `brainrouter://` address space + the C4 untrusted-content boundary),
 ADR-027 D10 (which already wrote — but never wired — the HTML→markdown and page-readiness logic),
