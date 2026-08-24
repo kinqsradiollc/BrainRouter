@@ -100,9 +100,11 @@ test('crawler extracts clean text, title, and strips non-content chrome', async 
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.title, 'Doc');
-    assert.match(result.text, /Head/);
-    assert.match(result.text, /Hello world\./);
-    assert.match(result.text, /- One/);
+    // ADR-044 M1: extraction is now structure-preserving markdown, not a flat
+    // run of words — the heading carries its `#`, and inline emphasis survives.
+    assert.match(result.text, /^# Head$/m);
+    assert.match(result.text, /Hello \*\*world\*\*\./);
+    assert.match(result.text, /^- One$/m);
     assert.doesNotMatch(result.text, /Skip|script|style/);
   }
 });
