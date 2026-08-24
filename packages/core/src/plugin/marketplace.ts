@@ -21,7 +21,7 @@ import { loadOrInitConfig, resolveCliKnobs, saveConfig } from '../config/config.
 import type { Config, MarketplaceSource } from '../config/configTypes.js';
 import { stagingDir } from './paths.js';
 import { installPlugin, classifySource, type InstallOptions, type InstallResult } from './install.js';
-import { assertMarketplaceAllowed, type ManagedGates } from './trust.js';
+import { assertMarketplaceAllowed, assertPluginAllowed, type ManagedGates } from './trust.js';
 
 /** Derive the managed gates from a Config's resolved-shape plugin knobs (fail-open). */
 function gatesFromConfig(config: Config): ManagedGates {
@@ -29,6 +29,8 @@ function gatesFromConfig(config: Config): ManagedGates {
   return {
     allowedMarketplaces: p?.allowedMarketplaces ?? [],
     blockedMarketplaces: p?.blockedMarketplaces ?? [],
+    allowedPlugins: p?.allowedPlugins ?? [],
+    blockedPlugins: p?.blockedPlugins ?? [],
     allowManagedHooksOnly: p?.allowManagedHooksOnly === true,
   };
 }
@@ -419,7 +421,17 @@ export function resolvePluginByName(name: string, config?: Config): ResolveResul
       continue;
     }
     const entry = parsed.manifest.plugins.find((p) => p.name === name);
-    if (entry) return { ok: true, resolved: { marketplace: mkt.name, entry, fetched: fetched.fetched } };
+    if (entry) {
+      // ADR-047 D4 — the plugin gate, between resolve and install: refuse a
+      // blocked / non-allowlisted plugin by name of the policy (the marketplace
+      // gate above only decides whole marketplaces).
+      const pluginGateErr = assertPluginAllowed(entry.name, gates);
+      if (pluginGateErr) {
+        fetched.fetched.cleanup?.();
+        return { ok: false, error: pluginGateErr };
+      }
+      return { ok: true, resolved: { marketplace: mkt.name, entry, fetched: fetched.fetched } };
+    }
     fetched.fetched.cleanup?.();
   }
   const detail = errors.length ? ` (${errors.join('; ')})` : '';
