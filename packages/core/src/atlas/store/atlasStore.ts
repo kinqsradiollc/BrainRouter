@@ -7,6 +7,7 @@
  * Pure functions of `workspaceRoot` for trivial testability.
  */
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { isAtlasGraph, type AtlasGraph } from "@kinqs/brainrouter-types";
 import { getStateFile, readJsonFile, writeJsonFile } from "../../storage/store.js";
 
@@ -41,6 +42,29 @@ export function saveAtlasGraph(workspaceRoot: string, graph: AtlasGraph): void {
 export function readAtlasGraph(workspaceRoot: string): AtlasGraph | null {
   const raw = readJsonFile<unknown>(atlasGraphFile(workspaceRoot), null);
   return isAtlasGraph(raw) ? raw : null;
+}
+
+// ADR-048 — the turn-loop taps read the graph every prepared turn; a large graph
+// JSON must not be re-parsed each time. Keyed by file mtime+size so an external
+// rebuild (another process, /atlas, the background refresh) invalidates
+// naturally; an absent file caches null the same way.
+const graphCache = new Map<string, { mtimeMs: number; size: number; graph: AtlasGraph | null }>();
+
+/** `readAtlasGraph` behind an mtime+size cache — for per-turn readers. */
+export function readAtlasGraphCached(workspaceRoot: string): AtlasGraph | null {
+  const file = atlasGraphFile(workspaceRoot);
+  let mtimeMs = -1;
+  let size = -1;
+  try {
+    const st = statSync(file);
+    mtimeMs = st.mtimeMs;
+    size = st.size;
+  } catch { /* absent — cache null under (-1,-1) until it appears */ }
+  const cached = graphCache.get(file);
+  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.graph;
+  const graph = mtimeMs < 0 ? null : readAtlasGraph(workspaceRoot);
+  graphCache.set(file, { mtimeMs, size, graph });
+  return graph;
 }
 
 /** Compact stats for a graph — for the CLI summary + desktop badges. */

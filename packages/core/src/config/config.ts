@@ -825,6 +825,11 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     disableStream: c.disableStream ?? false,
     traceTrajectory: c.traceTrajectory === true,
     traceRequests: c.traceRequests ?? false,
+    atlas: {
+      orient: c.atlas?.orient ?? true,
+      retrieval: c.atlas?.retrieval ?? true,
+      autoRefresh: c.atlas?.autoRefresh ?? true,
+    },
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     fallbackModel: c.fallbackModel ?? null,

@@ -39,7 +39,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 045 | A context window you can size (+ tier ceiling) | ✅ Implemented (M1–M5): cli.contextWindows knob, desktop editor, gateway per-org cap advertised + client-honored, legacy-file retired | 0.4.22 |
 | **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S6)** — tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel; **S6 model-class runtime catalog + drift gate (#1587)**. Personas/file-triggers intentionally left dynamic. | **0.4.22** |
 | 047 | Providers as data, agents as engines, playbooks, a vetted install | ✅ Implemented (all 4 decisions: P1 declarative providers, P2 agents-as-engines, P3 playbooks, P4a allowlist + P4b advisory install gate) | 0.4.22 |
-| 048 | A codebase map the agent actually reads (Atlas → the loop) | 🔨 Accepted — in build (S1–S6: session hook pair, orientation+staleness, background refresh, prompt retrieval, blast radius, `atlas_context` tool) | 0.4.22 |
+| 048 | A codebase map the agent actually reads (Atlas → the loop) | ✅ Implemented (S1–S6) — session hook pair fired (#1594), orientation+staleness + background refresh + prompt retrieval + blast-radius taps (deterministic, byte-neutral without a graph), `atlas_context` tool (#1595); knobs `cli.atlas.*` default on | 0.4.22 |
 
 ## In flight / next
 

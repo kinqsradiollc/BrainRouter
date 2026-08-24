@@ -697,6 +697,15 @@ export interface CliKnobs {
    * model, route) to the session's request-trace.jsonl for `/inspect`. Default false. */
   traceRequests?: boolean;
   /**
+   * ADR-048 — the codebase-map (Atlas) turn-loop taps. All default ON and are
+   * byte-neutral for a workspace with no built graph (`/atlas` builds one).
+   * `orient`: inject the once-per-session orientation block. `retrieval`:
+   * inject prompt-matched map nodes each turn. `autoRefresh`: rebuild the
+   * deterministic base graph in the background when HEAD moved since the graph
+   * was built (never from nothing, never the LLM enrichment).
+   */
+  atlas?: { orient?: boolean; retrieval?: boolean; autoRefresh?: boolean };
+  /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
    * usage, and the tools it requested with their render intents). Log-only —
@@ -1364,6 +1373,7 @@ export interface ResolvedCliKnobs {
   disableStream: boolean;
   traceTrajectory: boolean;
   traceRequests: boolean;
+  atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fallbackModel: string | null;

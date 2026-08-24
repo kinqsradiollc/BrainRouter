@@ -131,6 +131,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    this.turnWrittenFiles.clear();
     // CC-hooks parity — drain any additionalContext a prior `stop` /
     // `subagent-stop` hook (or a child's subagent-stop) asked to inject back
     // into the model on THIS turn. Read-and-clear so it fires exactly once.
@@ -1628,6 +1629,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.assertInheritedExecutionAuthorityCurrent();
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
+          // ADR-048 S5 — record written paths for the turn-end blast-radius tap.
+          if (name === 'write_file' || name === 'edit_file' || name === 'notebook_edit') {
+            const written = (args as Record<string, unknown>).path;
+            if (typeof written === 'string' && written.trim()) this.turnWrittenFiles.add(written.trim());
+          } else if (name === 'apply_patch') {
+            const patch = (args as Record<string, unknown>).patch;
+            if (typeof patch === 'string') {
+              for (const m of patch.matchAll(/^\*\*\* (?:Update|Add) File: (.+)$/gm)) {
+                this.turnWrittenFiles.add(m[1]!.trim());
+              }
+            }
+          }
           // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
           // the breakdown can show per-server call counts. `mcp_<server>_<tool>`
           // → serverId; non-MCP tools return undefined and aren't counted.
