@@ -9,7 +9,7 @@
 // review reports "not analyzed" (ADR-039 §4 / Golden rule 23) rather than
 // treating absence as safety; that decision is the caller's.
 
-import type { AssuranceSourceToSinkPath } from "@kinqs/brainrouter-types/review";
+import type { CodeqlPathsResult } from "./codeqlAugmentedAssembler.js";
 import {
   mapCodeqlSarifToSourceToSinkPaths,
   type CodeqlSarif,
@@ -74,13 +74,20 @@ export interface FetchCodeqlPathsInput {
 }
 
 /**
- * Fetch and map the CodeQL source→sink paths for a ref. Returns `[]` when code
- * scanning is unavailable for the ref (non-2xx on the analyses list or the SARIF
- * fetch, or no matching analysis) so the caller can surface "not analyzed".
+ * Fetch and map the CodeQL source→sink paths for a ref. ADR-039 S5a — returns a
+ * discriminated outcome so the caller can tell "code scanning did not run" apart
+ * from "code scanning ran and found nothing":
+ *
+ *   • `unavailable` (with a reason code) when the analyses list is non-2xx or
+ *     malformed, no analysis matches the target language, or the SARIF fetch
+ *     fails — the review surfaces "not analyzed", never treating absence as
+ *     safety (Golden rule 23).
+ *   • `analyzed` (with `paths`, possibly empty) once an analysis was located and
+ *     its SARIF fetched — an empty list here is a genuine clean result.
  */
 export async function fetchCodeqlSourceToSinkPaths(
   input: FetchCodeqlPathsInput,
-): Promise<AssuranceSourceToSinkPath[]> {
+): Promise<CodeqlPathsResult> {
   const { apiBase, repo, ref, token, fetchImpl } = input;
   const needle = (input.languageCategory ?? "javascript").toLowerCase();
 
@@ -88,18 +95,26 @@ export async function fetchCodeqlSourceToSinkPaths(
     ref,
   )}&per_page=50`;
   const listRes = await fetchImpl(listUrl, { headers: ghHeaders(token) });
-  if (!listRes.ok) return [];
+  if (!listRes.ok) {
+    return { status: "unavailable", reasonCode: `ANALYSES_LIST_HTTP_${listRes.status}` };
+  }
   const analyses = (await listRes.json()) as CodeScanningAnalysisSummary[];
-  if (!Array.isArray(analyses)) return [];
+  if (!Array.isArray(analyses)) {
+    return { status: "unavailable", reasonCode: "ANALYSES_LIST_MALFORMED" };
+  }
 
   const id = selectAnalysisId(analyses, needle);
-  if (id == null) return [];
+  if (id == null) {
+    return { status: "unavailable", reasonCode: "NO_MATCHING_ANALYSIS" };
+  }
 
   const sarifRes = await fetchImpl(
     `${apiBase}/repos/${repo}/code-scanning/analyses/${id}`,
     { headers: ghHeaders(token, "application/sarif+json") },
   );
-  if (!sarifRes.ok) return [];
+  if (!sarifRes.ok) {
+    return { status: "unavailable", reasonCode: `SARIF_FETCH_HTTP_${sarifRes.status}` };
+  }
   const sarif = (await sarifRes.json()) as CodeqlSarif;
-  return mapCodeqlSarifToSourceToSinkPaths(sarif);
+  return { status: "analyzed", paths: mapCodeqlSarifToSourceToSinkPaths(sarif) };
 }
