@@ -3,13 +3,21 @@
 // A non-invasive decorator over any RepositoryAssuranceImpactPort: it runs the
 // base assembler (the TS-index source→sink analyzer) and then appends the CodeQL
 // source→sink paths for the same revision as one extra impact packet. Both
-// producers' paths then flow through the SAME seam — normalizeDeterministic
-// candidates → verifyCandidate (D2) → the publication gate — as candidates on the
-// same footing as model findings (ADR-039 D1).
+// producers' paths flow through normalizeDeterministicCandidates as candidates on
+// the same footing as model findings (ADR-039 D1).
 //
 // The CodeQL packet carries empty evidenceRefs: the path itself is the evidence
 // (source → sink), which normalizeDeterministicCandidates accepts (its evidence
-// check is vacuous for an empty ref list). The verifier adjudicates reachability.
+// check is vacuous for an empty ref list). Because the resulting candidate has no
+// persisted evidence record, it is — exactly like a model finding — advisory
+// review INPUT, not a blocking finding: the independent verifier adjudicates only
+// evidence-bearing candidates (it filters `evidence.length > 0`, see
+// diffReviewAssurance), so a CodeQL path informs the reviewer and the coverage
+// statement without auto-blocking a merge. Blocking still requires the
+// evidence-bearing, independently-verified deterministic path (ADR-039 D2, the
+// conservative posture assuranceGate encodes). The D4 barrier model that keeps
+// fixed code from re-reporting belongs in the taint engine, not here — see
+// adr039BarrierPack.ts.
 //
 // The provider is injected and failure-tolerant. ADR-039 D5 / S5a — it reports
 // one of two outcomes so the review can be HONEST about coverage:
