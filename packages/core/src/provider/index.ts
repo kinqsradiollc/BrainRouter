@@ -24,4 +24,12 @@ export {
   type DeclarativeRegistration,
 } from './providers/declarative.js';
 export { STARTER_DECLARATIVE_PROVIDERS } from './providers/declarative-starter.js';
+// ADR-045 M4 — the client honors a gateway-advertised context_window cap.
+export {
+  extractAdvertisedContext,
+  setManagedModelContext,
+  lookupManagedModelContext,
+  clearManagedModelContextForTests,
+  type AdvertisedModelContext,
+} from './managedModelContext.js';
 export * from './models/reasoning.js';
