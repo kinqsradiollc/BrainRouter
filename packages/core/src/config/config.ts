@@ -19,6 +19,7 @@ import type {
   PluginCapabilityConsent,
   LlmProfileConfig,
   RouterCliKnobs,
+  DeclarativeProviderEntry,
 } from './configTypes.js';
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 import { stripTrailingSlashes } from '../util/trimEdges.js';
@@ -670,6 +671,27 @@ export function sanitizeContextWindows(raw: unknown): Record<string, number> {
   return out;
 }
 
+/**
+ * ADR-047 D1 — STRUCTURAL sanitize of the declarative-provider list: keep only
+ * plain objects carrying a non-empty string `id` and `endpoint`. This is the
+ * cheap gate that keeps the resolved knob well-shaped; the LOUD semantic
+ * validation (valid URL, id vs built-in collision, enum membership, duplicates)
+ * lives in `registerDeclarativeProviders` at boot, where a misdeclaration can be
+ * reported with a precise reason rather than silently dropped here.
+ */
+export function sanitizeCustomProviders(raw: unknown): DeclarativeProviderEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DeclarativeProviderEntry[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const e = value as Partial<DeclarativeProviderEntry>;
+    if (typeof e.id !== 'string' || !e.id.trim()) continue;
+    if (typeof e.endpoint !== 'string' || !e.endpoint.trim()) continue;
+    out.push(e as DeclarativeProviderEntry);
+  }
+  return out;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   // MC-D3 — validated profiles; the active pointer only survives when it names one.
@@ -765,6 +787,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     fallbackModels: resolveFallbackModels(c.fallbackModels, c.fallbackModel),
     availableModels: sanitizeStringList(c.availableModels),
     enforceAvailableModels: c.enforceAvailableModels === true,
+    customProviders: sanitizeCustomProviders(c.customProviders),
     llmProfiles,
     activeLlmProfile,
     requiredMinimumVersion: typeof c.requiredMinimumVersion === 'string' ? c.requiredMinimumVersion.trim() : '',

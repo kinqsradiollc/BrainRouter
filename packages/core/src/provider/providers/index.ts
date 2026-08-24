@@ -96,7 +96,15 @@ export function normalizeProviderEndpoint(endpoint: string | undefined | null): 
 export function findProviderByEndpoint(endpoint: string | undefined | null): ProviderDefinition | undefined {
   const key = normalizeProviderEndpoint(endpoint);
   if (!key) return undefined;
-  return BUILTIN_PROVIDERS.find((p) => p.endpoint && !p.local && normalizeProviderEndpoint(p.endpoint) === key);
+  // Iterate the LIVE registry, not just `BUILTIN_PROVIDERS`, so a declarative
+  // provider (ADR-047 D1) or an extension provider registered with a real cloud
+  // endpoint resolves by endpoint too — the same way `deepseek` does by id.
+  // Built-ins are inserted before dynamic registrations in the merged view, so a
+  // built-in still wins when two definitions share a normalized endpoint.
+  for (const p of PROVIDER_REGISTRY.values()) {
+    if (p.endpoint && !p.local && normalizeProviderEndpoint(p.endpoint) === key) return p;
+  }
+  return undefined;
 }
 
 /** Loopback host detection (port-agnostic), the single source of truth for "is

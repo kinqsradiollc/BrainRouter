@@ -118,6 +118,9 @@ const CONSUMED_ELSEWHERE = new Map<string, string>([
   // PROSE in `review/prRouter.ts` — a comment is not a consumer, and this sweep
   // cannot tell the difference. The reader is the desktop Track create-PR path.
   ['stackingMode', 'brainrouter-desktop/electron/host/github-track-services.ts:631 — Track create-PR'],
+  // ADR-047 D1. The only in-core mention is PROSE in declarative-starter.ts; the
+  // real reader is the CLI chat boot, which registers the declarative providers.
+  ['customProviders', 'brainrouter-cli/src/entry/chatCommand.ts — registerDeclarativeProviders at boot'],
 ]);
 
 test('E1 — every resolved cli.* knob has a consumer', () => {
