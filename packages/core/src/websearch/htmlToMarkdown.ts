@@ -61,8 +61,26 @@ const INLINE = new Set([
 const STRIP_SELECTOR =
   'script,style,noscript,svg,canvas,template,iframe,form,button,input,select,textarea,nav,header,footer,aside';
 
+/**
+ * ADR-044 M5 — recursion-depth ceiling. `maxHtmlBytes` bounds INPUT size, but a
+ * few megabytes of `<div><div><div>…` is still hundreds of thousands of nesting
+ * levels — enough to overflow the call stack in the recursive walk below. Beyond
+ * this depth a node is flattened to its text rather than recursed, so a
+ * pathological (or malicious) document degrades to readable text instead of
+ * crashing the fetch. Chosen well above any real page's nesting (tens) and well
+ * below the stack limit (each level is a handful of frames).
+ */
+const MAX_RECURSION_DEPTH = 200;
+
 interface Ctx {
   pageUrl: string;
+  /** Current recursion depth; incremented via `deeper()` at each descent. */
+  rdepth: number;
+}
+
+/** A child context one level deeper — the single place recursion depth advances. */
+function deeper(ctx: Ctx): Ctx {
+  return { pageUrl: ctx.pageUrl, rdepth: ctx.rdepth + 1 };
 }
 
 function attr(node: DomNode, key: string): string {
@@ -73,18 +91,33 @@ function isTag(node: DomNode, name?: string): boolean {
   return node.type === 'tag' && (name === undefined || node.name === name);
 }
 
-/** Concatenate all descendant text verbatim — for `<pre>`, where collapsing whitespace would corrupt code. */
+/**
+ * Concatenate all descendant text verbatim — for `<pre>`, where collapsing
+ * whitespace would corrupt code, and for the M5 depth-limit fallback.
+ * ITERATIVE (an explicit stack, not recursion) so it can flatten an arbitrarily
+ * deep subtree without adding stack frames — the whole point of calling it once
+ * the recursive walk has hit its depth ceiling.
+ */
 function rawText(node: DomNode): string {
-  if (node.type === 'text') return node.data ?? '';
-  if (!node.children) return '';
-  return node.children.map(rawText).join('');
+  const out: string[] = [];
+  const stack: DomNode[] = [node];
+  while (stack.length > 0) {
+    const n = stack.pop()!;
+    if (n.type === 'text') { out.push(n.data ?? ''); continue; }
+    const kids = n.children;
+    if (kids) for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!);
+  }
+  return out.join('');
 }
 
+/** First descendant (document order) with the given tag name, or null. Iterative — see `rawText`. */
 function firstDescendant(node: DomNode, name: string): DomNode | null {
-  if (isTag(node, name)) return node;
-  for (const child of node.children ?? []) {
-    const found = firstDescendant(child, name);
-    if (found) return found;
+  const stack: DomNode[] = [node];
+  while (stack.length > 0) {
+    const n = stack.pop()!;
+    if (isTag(n, name)) return n;
+    const kids = n.children;
+    if (kids) for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!);
   }
   return null;
 }
@@ -112,12 +145,15 @@ function normalizeSpace(text: string): string {
 // ---------------------------------------------------------------------------
 
 function inlineChildren(node: DomNode, ctx: Ctx): string {
-  return (node.children ?? []).map((child) => inline(child, ctx)).join('');
+  return (node.children ?? []).map((child) => inline(child, deeper(ctx))).join('');
 }
 
 function inline(node: DomNode, ctx: Ctx): string {
   if (node.type === 'text') return normalizeSpace(node.data ?? '');
   if (!isTag(node)) return '';
+  // ADR-044 M5 — beyond the ceiling, flatten the rest of this inline subtree to
+  // text instead of recursing further.
+  if (ctx.rdepth > MAX_RECURSION_DEPTH) return normalizeSpace(rawText(node));
 
   switch (node.name) {
     case 'br':
@@ -185,7 +221,7 @@ function blocks(nodes: readonly DomNode[], ctx: Ctx, depth: number): string {
       continue;
     }
     flush();
-    const rendered = block(node, ctx, depth);
+    const rendered = block(node, deeper(ctx), depth);
     if (rendered) parts.push(rendered);
   }
   flush();
@@ -195,6 +231,9 @@ function blocks(nodes: readonly DomNode[], ctx: Ctx, depth: number): string {
 function block(node: DomNode, ctx: Ctx, depth: number): string {
   if (node.type === 'text') return normalizeSpace(node.data ?? '').trim();
   if (!isTag(node) || node.name === undefined) return '';
+  // ADR-044 M5 — beyond the ceiling, flatten this block subtree to text rather
+  // than recurse (content is kept, structure is not — a safe degradation).
+  if (ctx.rdepth > MAX_RECURSION_DEPTH) return normalizeSpace(rawText(node)).trim();
 
   const name = node.name;
   const heading = /^h([1-6])$/.exec(name);
@@ -333,6 +372,6 @@ export function htmlToMarkdown(
   const title = $('title').first().text().trim();
   $(STRIP_SELECTOR).remove();
   const root = pickMainRoot($);
-  const markdown = tidy(blocks(root.children ?? [], { pageUrl }, 0), maxContentChars);
+  const markdown = tidy(blocks(root.children ?? [], { pageUrl, rdepth: 0 }, 0), maxContentChars);
   return { title, markdown };
 }
