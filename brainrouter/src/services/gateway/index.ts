@@ -1,12 +1,16 @@
 /**
- * Provider/LLM-Gateway entry point (ADR-010 P7). Run as its own process:
- *   node dist/services/gateway/index.js
- * Deployed via deploy/stack (the `gateway` service reuses the brain image).
+ * Provider/LLM-Gateway entry point (ADR-010 P7). Deployed via deploy/stack — the
+ * `gateway` service now boots through the generic service loader
+ * (`node dist/services/loader.js provider-gateway`, ADR-041 A41-12), which calls
+ * {@link startProviderGateway} with the port resolved from the service profile.
+ * Running this module directly still works (the entry guard at the bottom).
  */
+import { pathToFileURL } from "node:url";
 import { GatewayProviderService } from "./providerPool.js";
 import { createGatewayServer } from "./server.js";
 import { EgressTunnelService } from "./egress/egressTunnelService.js";
 import type { GatewayEgressSelection } from "./chatRoutes.js";
+import type { ServiceHandle } from "../serviceEntrypoints.js";
 
 /** ADR-043 C6b — the edge-egress tunnel is OFF unless GATEWAY_EGRESS_ENABLED is set. */
 function egressConfigFromEnv() {
@@ -20,7 +24,14 @@ function egressConfigFromEnv() {
   };
 }
 
-function main(): void {
+/**
+ * Boot the provider gateway on `port` and return a stop handle. The generic
+ * service loader (ADR-041 A41-12) calls this with the port resolved from the
+ * `provider-gateway` service profile; `main()` below calls it for a direct run.
+ * Signal wiring is the caller's job (the loader owns SIGTERM/SIGINT), so this is
+ * reusable by both entry paths.
+ */
+export function startProviderGateway(port: number): ServiceHandle {
   const url = process.env.BRAINROUTER_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!url) {
     console.error("[provider-gateway] BRAINROUTER_DATABASE_URL (or DATABASE_URL) is required");
@@ -31,7 +42,6 @@ function main(): void {
     console.error("[provider-gateway] BRAINROUTER_JWT_SECRET is required (shared with the brain)");
     process.exit(1);
   }
-  const port = parseInt(process.env.GATEWAY_PORT ?? "3748", 10);
   const svc = new GatewayProviderService(url, jwtSecret);
 
   // ADR-043 C6b — the tunnel service + per-request selection. When disabled the
@@ -93,7 +103,7 @@ function main(): void {
     });
 
   let shutdownPromise: Promise<void> | null = null;
-  const shutdown = () => {
+  const stop = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       await egressService.stop().catch(() => undefined);
       await audioStreaming.close().catch(() => undefined);
@@ -102,9 +112,22 @@ function main(): void {
       await httpClosed;
       await svc.close().catch(() => undefined);
     })();
+    return shutdownPromise;
   };
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  return { stop };
 }
 
-main();
+/** Direct-run entry — resolve the port from env and wire signals to the handle. */
+function main(): void {
+  const port = parseInt(process.env.GATEWAY_PORT ?? "3748", 10);
+  const handle = startProviderGateway(port);
+  const onSignal = () => { void handle.stop(); };
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
+}
+
+// Run only when executed directly (`node dist/services/gateway/index.js`), never
+// when imported (the loader imports startProviderGateway without booting twice).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
