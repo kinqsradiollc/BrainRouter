@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { runtimeCompositionSnapshot, resolveHostProfile, hostProfileIds, type HostProfileSurfaces, SERVICE_PROFILES, serviceProfileIds } from '@kinqs/brainrouter-core/runtime';
+import { runtimeCompositionSnapshot, resolveHostProfile, hostProfileIds, type HostProfileSurfaces, SERVICE_PROFILES, serviceProfileIds, resolveDerivedProfile, derivedProfileIds } from '@kinqs/brainrouter-core/runtime';
 
 /**
  * ADR-041 A41-11 — `brainrouter dump-composition`. Prints what the runtime is
@@ -13,7 +13,7 @@ export function registerDumpCompositionCommand(program: Command): void {
     .command('dump-composition')
     .description('Print the composed runtime — agent tools, providers, extensions, and slash commands.')
     .option('--json', 'Emit the machine-readable JSON snapshot instead of a human summary')
-    .option('--profile <host>', `Show a host profile (${hostProfileIds().join(' | ')}) — which surfaces that host composes`)
+    .option('--profile <host>', `Show a profile (${[...hostProfileIds(), ...derivedProfileIds()].join(' | ')}) — which surfaces it composes`)
     .option('--services', 'List the registered service profiles (runnable services + remote-bindability)')
     .action((opts: { json?: boolean; profile?: string; services?: boolean }) => {
       const snapshot = runtimeCompositionSnapshot();
@@ -35,27 +35,47 @@ export function registerDumpCompositionCommand(program: Command): void {
       // activates; render it against the live registries so declared and actual
       // sit side by side.
       if (opts.profile) {
-        const profile = resolveHostProfile(opts.profile);
-        if (!profile) {
-          console.error(`Unknown host profile "${opts.profile}". Known: ${hostProfileIds().join(', ')}.`);
-          process.exitCode = 1;
-          return;
-        }
         const live: Partial<Record<keyof HostProfileSurfaces, number>> = {
           agentTools: snapshot.builtinTools.length,
           slashCommands: snapshot.slashCommands.length,
           providers: snapshot.providers.length,
         };
-        if (opts.json) {
-          console.log(JSON.stringify({ profile, live }, null, 2));
+        const liveNote = (name: keyof HostProfileSurfaces, on: boolean): string => {
+          const count = live[name];
+          return on && count !== undefined ? `  (${count} in this process)` : '';
+        };
+        const profile = resolveHostProfile(opts.profile);
+        if (profile) {
+          if (opts.json) {
+            console.log(JSON.stringify({ profile, live }, null, 2));
+            return;
+          }
+          console.log(`Host profile: ${profile.host}\n  ${profile.description}\n`);
+          console.log('  Surfaces:');
+          for (const [name, on] of Object.entries(profile.surfaces)) {
+            console.log(`    ${on ? '✓' : '·'} ${name}${liveNote(name as keyof HostProfileSurfaces, on)}`);
+          }
           return;
         }
-        console.log(`Host profile: ${profile.host}\n  ${profile.description}\n`);
+        // ADR-041 A41-11 / D11 — a derived profile is a base host profile with an
+        // overlay folded onto it; render each row with the layer that set it.
+        const derived = resolveDerivedProfile(opts.profile);
+        if (!derived) {
+          console.error(
+            `Unknown profile "${opts.profile}". Known: ${[...hostProfileIds(), ...derivedProfileIds()].join(', ')}.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        if (opts.json) {
+          console.log(JSON.stringify({ profile: derived, live }, null, 2));
+          return;
+        }
+        console.log(`Derived profile: ${derived.id}  (base: ${derived.base})\n  ${derived.description}\n`);
         console.log('  Surfaces:');
-        for (const [name, on] of Object.entries(profile.surfaces)) {
-          const count = live[name as keyof HostProfileSurfaces];
-          const liveNote = on && count !== undefined ? `  (${count} in this process)` : '';
-          console.log(`    ${on ? '✓' : '·'} ${name}${liveNote}`);
+        for (const row of derived.rows) {
+          const layerTag = row.layer === 'base' ? '[base]' : `[${row.layer}]`;
+          console.log(`    ${row.value ? '✓' : '·'} ${row.id}  ${layerTag}${liveNote(row.id, row.value)}`);
         }
         return;
       }
