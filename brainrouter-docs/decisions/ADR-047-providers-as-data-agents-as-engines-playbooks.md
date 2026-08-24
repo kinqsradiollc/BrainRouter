@@ -1,6 +1,6 @@
 # ADR-047 — Providers as data, agents as engines, playbooks you can hand someone, and a vetted install
 
-**Status:** ACCEPTED — approved by the owner (2026-08-24); not yet implemented. · **Builds on:** ADR-041 (the live
+**Status:** IMPLEMENTED (0.4.22) — all four decisions: P1 declarative providers, P2 agents-as-engines (headless invocations pending owner confirmation), P3 playbooks, P4a allowlist + P4b advisory install gate. · **Builds on:** ADR-041 (the live
 `ProviderRegistry` (D1), opt-in native wire adapters (D2), the external-agent subagent providers of
 parity wave W3, and the product-wide registry discipline), the plugin/marketplace system
 (`packages/core/src/plugin/`), the schedule runtime, and the skills + workflows surfaces. ·

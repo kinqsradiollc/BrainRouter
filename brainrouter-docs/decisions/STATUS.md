@@ -1,6 +1,6 @@
 # ADR status tracker
 
-A single view of where each decision stands. Updated 2026-08-23. Foundational
+A single view of where each decision stands. Updated 2026-08-24. Foundational
 ADRs 001–016 (async store, core extraction, service decomposition, tenancy,
 providers-DB, GitHub linking, connectors) are implemented and long-shipped; the
 active era is tracked below. Status lives authoritatively in each ADR's own
@@ -35,10 +35,10 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **041** | **Plug-and-play runtime** | **✅ Implemented (glass-box capstone)** — 13/17 §5 board rows + all D8, W1–W4, and the D14 glass box (#1548–#1551); only 4 consumer/ops-gated seams (A41-9/11/12/13) deferred | **0.4.21** |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | **043** | **Egress at the user's edge** | **✅ Implemented (live edge tunnel, end-to-end)** | **0.4.21** |
-| 044 | Web pages the agent can actually read | 🗓️ Accepted — not yet built (HTML→markdown + memory-native ingest; wires the unwired ADR-027 D10 scaffolding) | 0.4.22+ |
-| 045 | A context window you can size (+ tier ceiling) | 🗓️ Accepted — not yet built (configurable model window: cli.* knob + desktop setting + server-enforced org/tier cap + local clamp) | 0.4.22+ |
+| 044 | Web pages the agent can actually read | ✅ Implemented (M1 structured-markdown floor + M3/M4 durable memory-native ingest + M5 robustness; M2 rendered-DOM escalation deferred — browser-first already renders JS pages) | 0.4.22 |
+| 045 | A context window you can size (+ tier ceiling) | ✅ Implemented (M1 cli.contextWindows knob + M2 desktop editor + M3 per-org cap advertised in gateway /v1/models; M4 client-honor + M5 legacy-file retire deferred) | 0.4.22 |
 | **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S5)** — extends the A41-14 registry with a tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel. S6 opportunistic. | **0.4.22** |
-| 047 | Providers as data, agents as engines, playbooks, a vetted install | 🗓️ Accepted — not yet built (declarative providers + agent-as-engine + playbooks + allowlist/advisory install gate) | 0.4.22+ |
+| 047 | Providers as data, agents as engines, playbooks, a vetted install | ✅ Implemented (all 4 decisions: P1 declarative providers, P2 agents-as-engines, P3 playbooks, P4a allowlist + P4b advisory install gate) | 0.4.22 |
 
 ## In flight / next
 
