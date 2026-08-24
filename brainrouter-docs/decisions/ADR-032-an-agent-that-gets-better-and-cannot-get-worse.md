@@ -5,7 +5,7 @@
 **Implementation status (2026-08-12): COMPLETE IN CODE. What remains is one acceptance run, not a
 build.**
 
-The deterministic half is demonstrated, not asserted: 82 tests in
+The deterministic half is demonstrated, not asserted: 83 tests in
 `packages/core/src/tests/learning-adr032.test.ts`, including the §6 exercise driven through real
 Agents — one learns from its own repetition, a second runs what it learned, a third cannot once it
 is retired.
