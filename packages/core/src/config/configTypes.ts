@@ -211,6 +211,14 @@ export interface WebSearchCliKnobs {
   google?: { apiKey?: string; cx?: string };
   braveApiKey?: string;
   searxngBaseUrl?: string;
+  /**
+   * ADR-044 M4 — when true, a successful `fetch_url` lands the page as a durable
+   * workspace artifact (markdown with provenance + addressable sections) and
+   * captures it into session memory, so a later turn can cite it instead of it
+   * being ephemeral tool output. Default false (opt-in — not every fetch is
+   * worth keeping).
+   */
+  persistToMemory?: boolean;
   crawler?: {
     respectRobots?: boolean;
     maxContentChars?: number;
@@ -229,6 +237,8 @@ export interface ResolvedWebSearchKnobs {
   google: { apiKey: string; cx: string };
   braveApiKey: string;
   searxngBaseUrl: string;
+  /** ADR-044 M4 — persist a fetched page as a durable, recallable artifact. Default false. */
+  persistToMemory: boolean;
   crawler: {
     respectRobots: boolean;
     maxContentChars: number;

@@ -500,6 +500,7 @@ function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWe
     },
     braveApiKey: input?.braveApiKey ?? '',
     searxngBaseUrl: input?.searxngBaseUrl ?? '',
+    persistToMemory: input?.persistToMemory === true,
     crawler: {
       respectRobots: input?.crawler?.respectRobots ?? true,
       maxContentChars: positiveInt(input?.crawler?.maxContentChars, 15_000, { min: 1 }),

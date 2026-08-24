@@ -13,7 +13,46 @@ import { buildSearchProvider } from '../../../websearch/factory.js';
 import { parseGoogleHtml, googleSearchUrl } from '../../../websearch/providers/google.js';
 import { looksStructuredUrl, fetchViaInAppBrowser, fetchHtmlViaInAppBrowser } from '../../../websearch/inAppBrowser.js';
 import type { WebSearchResult } from '../../../websearch/types.js';
-import type { BuiltinToolHandler } from './registry.js';
+import { buildPageArtifact } from '../../../browser/pageArtifact.js';
+import { createArtifact } from '../../../artifact/artifactStore.js';
+import type { BuiltinToolHandler, BuiltinToolHost } from './registry.js';
+
+/**
+ * ADR-044 M4 — land a successfully fetched page as a durable, recallable
+ * artifact (opt-in via `cli.webSearch.persistToMemory`). The page becomes a
+ * markdown artifact with provenance (source URL + fetch time) and addressable
+ * sections via `buildPageArtifact`, and is captured into session memory so a
+ * later turn can cite it. Best-effort: any failure here never breaks the fetch —
+ * the tool still returns the page. Returns the artifact id when one was written.
+ */
+export async function persistFetchedPage(
+  host: BuiltinToolHost,
+  page: { title: string; url: string; text: string },
+): Promise<string | undefined> {
+  if (!getCliKnobs().webSearch.persistToMemory) return undefined;
+  if (!host.workspaceRoot || !host.sessionKey) return undefined;
+  try {
+    const artifact = buildPageArtifact({
+      title: page.title,
+      url: page.url,
+      markdown: page.text,
+      fetchedAt: new Date().toISOString(),
+    });
+    const created = createArtifact(host.workspaceRoot, {
+      kind: 'markdown-report',
+      format: 'markdown',
+      title: artifact.title,
+      content: artifact.markdown,
+      summary: `Fetched from ${page.url}`,
+      sessionKey: host.sessionKey,
+      editedBy: 'agent',
+    });
+    await host.captureArtifactToMemory(created);
+    return created.id;
+  } catch {
+    return undefined;
+  }
+}
 
 export const websearchHandlers: Record<string, BuiltinToolHandler> = {
   fetch_url: async ({ args, host }) => {
@@ -43,7 +82,8 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
           // session, JavaScript, and authentication are still available.
           const viaBrowser = await fetchViaInAppBrowser(host.browserControlPort, String(url), 25_000, host.turnAbort?.signal);
           if (viaBrowser?.text) {
-            return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text }, null, 2);
+            const artifactId = await persistFetchedPage(host, { title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text });
+            return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text, ...(artifactId ? { artifactId } : {}) }, null, 2);
           }
         }
         const result = await fetchAndExtract(String(url), {
@@ -53,6 +93,10 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
           // private/loopback/metadata IPs on each hop as an always-on SSRF guard).
           isEgressAllowed: (target) => egressDecision(target, egressAllowlist).decision !== 'deny',
         });
+        if (result.ok) {
+          const artifactId = await persistFetchedPage(host, { title: result.title, url: result.url, text: result.text });
+          if (artifactId) return JSON.stringify({ ...result, artifactId }, null, 2);
+        }
         return JSON.stringify(result, null, 2);
   },
 
