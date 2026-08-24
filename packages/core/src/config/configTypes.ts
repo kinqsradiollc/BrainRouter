@@ -96,6 +96,45 @@ export interface LlmProfileConfig {
 }
 
 /**
+ * ADR-047 D1 — a provider you add with DATA, not a code module.
+ *
+ * Every built-in provider is a directory module registered in `BUILTIN_PROVIDERS`.
+ * That is the right home for a provider with real behavioural quirks, but it makes
+ * the twentieth OpenAI-compatible vendor — a name, an endpoint, an env-key, a wire
+ * format — a code change and a release. A `DeclarativeProviderEntry` in
+ * `cli.customProviders` carries exactly that, is validated and registered into the
+ * SAME live `ProviderRegistry` as the code modules, and routes a turn with its
+ * declared wire behaviour. The golden rule holds: model *lists* still come from the
+ * endpoint's `/models`, never from this entry. A misdeclared entry fails loud at
+ * load; an id that collides with a built-in is skipped (the code module wins).
+ */
+export interface DeclarativeProviderEntry {
+  /** Stable id used in config + the picker (e.g. 'together', 'fireworks'). Lowercase, `[a-z0-9-]`. */
+  id: string;
+  /** Human-readable picker label. Defaults to the id when omitted. */
+  label?: string;
+  /** One-line picker hint shown after the em-dash. */
+  hint?: string;
+  /** OpenAI-compatible BASE URL (ends in `/v1` or `/api/v1`). Required and non-empty —
+   *  a declarative provider with no endpoint has nothing to route to. */
+  endpoint: string;
+  /** Env var checked to pre-detect a usable key. Defaults to `OPENAI_API_KEY`. */
+  envKey?: string;
+  /** True when the provider runs locally and a blank API key is fine. Default false. */
+  local?: boolean;
+  /** Show in the `/config` + desktop pickers. Default true. */
+  pickerVisible?: boolean;
+  /** Which model kinds this provider serves. Default `['chat']`. */
+  capabilities?: Array<'chat' | 'embedding' | 'reranker'>;
+  /** Seed models for a provider whose endpoint has no live `GET /models`. A live list still wins. */
+  defaultModels?: string[];
+  /** Primary generation wire format. Default `'chat-completions'`. */
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+  /** How this endpoint handles reasoning-effort. Default `'param'` (the OpenAI-compatible default). */
+  reasoningEffort?: 'param' | 'ignored' | 'unsupported';
+}
+
+/**
  * CLI behaviour knobs. All previously-env-only flags live here so
  * `~/.config/brainrouter/config.json` is the single source of CLI
  * truth — no more `.env` file to chase. Every field is optional;
@@ -659,6 +698,13 @@ export interface CliKnobs {
   availableModels?: string[];
   /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
   enforceAvailableModels?: boolean;
+  /**
+   * ADR-047 D1 — declarative providers: OpenAI-compatible vendors added as DATA
+   * rather than a code module. Each entry is validated and registered into the
+   * live `ProviderRegistry` at boot so it routes with its declared wire
+   * behaviour. Empty/absent (default) = only the built-in + starter providers.
+   */
+  customProviders?: DeclarativeProviderEntry[];
   /**
    * MC-D3 — NAMED LLM PROFILES: reusable model presets layered over the base
    * `llm` config. A profile carries a model (required) plus an optional
@@ -1292,6 +1338,9 @@ export interface ResolvedCliKnobs {
   /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
   availableModels: string[];
   enforceAvailableModels: boolean;
+  /** ADR-047 D1 — declarative provider entries (structurally sanitized; semantic
+   *  validation + registration happens at boot in `registerDeclarativeProviders`). */
+  customProviders: DeclarativeProviderEntry[];
   /** MC-D3 — validated named LLM profiles (blank names / model-less entries dropped). */
   llmProfiles: Record<string, LlmProfileConfig>;
   /** MC-D3 — active profile name; '' when unset or not among `llmProfiles`. */

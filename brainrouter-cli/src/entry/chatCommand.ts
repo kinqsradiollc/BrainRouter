@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
-import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { applyActiveLlmProfile, registerDeclarativeProviders } from '@kinqs/brainrouter-core/provider';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
@@ -205,6 +205,18 @@ export function registerChatCommand(program: Command): void {
       // cli.llmProfiles) onto the base llm config. Inert when unset; an
       // explicit --model and per-session runtime overrides still win.
       const bootKnobs = resolveCliKnobs(config);
+
+      // ADR-047 D1 — register declarative providers (packaged starter set +
+      // cli.customProviders) into the live registry so an OpenAI-compatible
+      // vendor added as DATA routes a turn with no code module. Loud but not
+      // fatal: a malformed entry prints its reason and boot continues on the
+      // built-ins rather than refusing to start.
+      try {
+        registerDeclarativeProviders(bootKnobs.customProviders);
+      } catch (err) {
+        console.error(chalk.yellow(`⚠ ${err instanceof Error ? err.message : String(err)}`));
+      }
+
       const llm: LLMConfig = applyActiveLlmProfile(bootKnobs, { ...(config.llm ?? DEFAULT_LLM) });
 
       if (options.model) {
