@@ -8,6 +8,13 @@ export interface AgentAdapter {
   command: string;
   aliases: string[];
   interactiveArgs: string[];
+  /**
+   * ADR-047 D2 — the HEADLESS (one-shot) invocation args, used when this agent
+   * drives the main loop as an ENGINE. The prompt is piped on stdin unless an
+   * arg is the literal `{prompt}` (then it is substituted there). Omitted ⇒ this
+   * agent is interactive-launch only and cannot be an engine.
+   */
+  engineArgs?: string[];
   resumeArgs: (sessionId: string) => string[];
   requiresWorkspaceTrust: boolean;
   controls: { interrupt: string; approve: string; submit: string };

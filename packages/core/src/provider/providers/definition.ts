@@ -52,10 +52,14 @@ export interface ProviderDefinition {
    *  - 'chat-completions'  — POST /chat/completions with layered messages.
    *  - 'anthropic-messages'— POST /messages, native Anthropic Messages API.
    *  - 'gemini-generate'   — POST /models/{model}:generateContent, native Gemini.
+   *  - 'external-agent'    — ADR-047 D2: no HTTP at all. The turn is driven by an
+   *                          installed coding-agent CLI (subprocess), and the
+   *                          "model" id is the hosted-agent name. A terminal pick —
+   *                          the router never fails over to or from it.
    * Omitted ⇒ 'chat-completions'. The native formats are normally reached via
    * `cli.providerRequestFormat` opt-in rather than declared as a built-in.
    */
-  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'external-agent';
 
   /**
    * How this provider handles reasoning depth over `/v1/chat/completions`:

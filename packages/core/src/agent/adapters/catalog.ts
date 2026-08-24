@@ -21,7 +21,8 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
   },
   {
     id: 'claude-code', label: 'Claude Code', command: 'claude', aliases: [],
-    interactiveArgs: [], resumeArgs: (id) => ['--resume', id],
+    // ADR-047 D2 — headless: `claude -p` (print mode) reads the prompt from stdin.
+    interactiveArgs: [], engineArgs: ['-p'], resumeArgs: (id) => ['--resume', id],
     requiresWorkspaceTrust: true, ...common,
     integration: {
       mcp: { command: 'claude', args: ['mcp', 'add', '--scope', 'local', 'brainrouter', '--', 'brainrouter', 'mcp-proxy'] },
@@ -30,7 +31,8 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
   },
   {
     id: 'codex', label: 'Codex CLI', command: 'codex', aliases: [],
-    interactiveArgs: [], resumeArgs: (id) => ['resume', id],
+    // ADR-047 D2 — headless: `codex exec` runs a single non-interactive turn (prompt on stdin).
+    interactiveArgs: [], engineArgs: ['exec'], resumeArgs: (id) => ['resume', id],
     requiresWorkspaceTrust: true, ...common,
     integration: {
       mcp: { command: 'codex', args: ['mcp', 'add', 'brainrouter', '--', 'brainrouter', 'mcp-proxy'] },
@@ -39,7 +41,8 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
   },
   {
     id: 'opencode', label: 'OpenCode', command: 'opencode', aliases: [],
-    interactiveArgs: [], resumeArgs: (id) => ['--session', id],
+    // ADR-047 D2 — headless: `opencode run "<prompt>"` (prompt as an arg).
+    interactiveArgs: [], engineArgs: ['run', '{prompt}'], resumeArgs: (id) => ['--session', id],
     requiresWorkspaceTrust: true, ...common,
     integration: {
       hookEvents: ['session.created', 'session.status', 'tool.execute.before', 'tool.execute.after', 'session.idle', 'session.error'],
@@ -47,7 +50,8 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
   },
   {
     id: 'gemini-cli', label: 'Gemini CLI', command: 'gemini', aliases: [],
-    interactiveArgs: [], resumeArgs: (id) => ['--resume', id],
+    // ADR-047 D2 — headless: `gemini -p "<prompt>"` (non-interactive, prompt as an arg).
+    interactiveArgs: [], engineArgs: ['-p', '{prompt}'], resumeArgs: (id) => ['--resume', id],
     requiresWorkspaceTrust: true, ...common,
     integration: {
       mcp: { command: 'gemini', args: ['mcp', 'add', '--scope', 'user', 'brainrouter', 'brainrouter', 'mcp-proxy'] },

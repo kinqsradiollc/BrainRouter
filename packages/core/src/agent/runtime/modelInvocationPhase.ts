@@ -30,6 +30,7 @@ import {
   effortForTurnSelection,
   InterruptError,
   isInterrupt,
+  resolveRequestFormat,
 } from '../transport/llmTransport.js';
 // ADR-041 A41-5 — the provider-neutral streaming seam (wraps callOpenAIStream).
 import { callProviderStream, type ProviderStreamResult } from '../transport/providerStream.js';
@@ -299,7 +300,11 @@ export async function invokeModelPhase(
 
     const message = String(error?.message ?? error);
     const routerKnobs = getCliKnobs().router;
-    if (routerKnobs.enabled && !reviewedExecution) {
+    // ADR-047 D2 — an engine (external-agent) model is a TERMINAL pick: never
+    // fail over from it to the primary chain, or a failed subscription seat
+    // silently becomes an API bill. Its error propagates as-is.
+    const isEngineModel = resolveRequestFormat(agent.llmConfig) === 'external-agent';
+    if (routerKnobs.enabled && !reviewedExecution && !isEngineModel) {
       const failure = classifyRouterFailure(error);
       if (failure.retryable) {
         const config = loadOrInitConfig();
@@ -421,6 +426,10 @@ export async function invokeModelPhase(
         }
       } else if (
         !reviewedExecution
+        // ADR-047 D2 — never model-fallback an ENGINE pick: the fallback name is
+        // not a hosted-agent name, so it would corrupt the terminal engine model
+        // for this and every later turn and mask the agent's real error.
+        && !isEngineModel
         && isModelNotFoundError(message)
         && (() => {
           agent.triedModels.add((agent.llmConfig.model ?? '').trim());

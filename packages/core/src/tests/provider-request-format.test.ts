@@ -49,6 +49,22 @@ test('resolveRequestFormat: defaults are unchanged — canonical OpenAI uses Res
   );
 });
 
+test('resolveRequestFormat: the external-agent (engine) provider resolves to external-agent by id (ADR-047 D2)', () => {
+  // No endpoint, no key — an engine is resolved purely by provider id, and its
+  // format is intrinsic (a wire-format override cannot change it). This is both
+  // the transport-dispatch condition AND the router terminal-pick guard.
+  assert.equal(
+    resolveRequestFormat({ provider: 'external-agent', apiKey: '', model: 'ada', endpoint: '' }),
+    'external-agent',
+  );
+  setCliKnobOverride({ providerRequestFormat: { 'external-agent': 'responses' } });
+  assert.equal(
+    resolveRequestFormat({ provider: 'external-agent', apiKey: '', model: 'ada', endpoint: '' }),
+    'external-agent',
+    'a wire-format override cannot turn a subprocess engine into an HTTP call',
+  );
+});
+
 test('resolveRequestFormat: per-provider CLI override flips chat-completions → responses for non-canonical endpoint', () => {
   setCliKnobOverride({ providerRequestFormat: { lmstudio: 'responses' } });
   // LM Studio now opts into Responses — even though built-in default would
