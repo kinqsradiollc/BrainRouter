@@ -214,14 +214,14 @@ export async function pluginConsentSummary(
 }
 
 /** Install a plugin by registry name/id (resolving through configured marketplaces). */
-export function installPluginFromRegistry(
+export async function installPluginFromRegistry(
   name: string,
   opts: { scope?: PluginScope; workspaceRoot?: string; force?: boolean } = {},
-): { ok: boolean; name?: string; error?: string } {
-  const r = installPluginByName(name, { scope: opts.scope, workspaceRoot: opts.workspaceRoot, force: opts.force, config: loadOrInitConfig() });
+): Promise<{ ok: boolean; name?: string; error?: string; warning?: string }> {
+  const r = await installPluginByName(name, { scope: opts.scope, workspaceRoot: opts.workspaceRoot, force: opts.force, config: loadOrInitConfig() });
   if (!r.ok) return { ok: false, error: r.error };
   const installed = r.result && r.result.ok ? r.result.name : name;
-  return { ok: true, name: installed };
+  return { ok: true, name: installed, ...(r.warning ? { warning: r.warning } : {}) };
 }
 
 /** Install a plugin from a raw source (local path OR git url). */

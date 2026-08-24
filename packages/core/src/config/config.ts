@@ -400,6 +400,7 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   let orgScope = false;
   let publishRepo = '';
   let autoUpdateCheck = false;
+  let advisoryPolicy: 'off' | 'warn' | 'block' = 'off';
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
     if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
@@ -423,8 +424,9 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     orgScope = obj.orgScope === true;
     if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
     autoUpdateCheck = obj.autoUpdateCheck === true;
+    if (obj.advisoryPolicy === 'warn' || obj.advisoryPolicy === 'block') advisoryPolicy = obj.advisoryPolicy;
   }
-  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowedPlugins, blockedPlugins, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck };
+  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowedPlugins, blockedPlugins, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck, advisoryPolicy };
 }
 
 function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {

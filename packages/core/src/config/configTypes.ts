@@ -394,6 +394,15 @@ export interface PluginsCliKnobs {
    * false (off) — additive + inert.
    */
   autoUpdateCheck?: boolean;
+  /**
+   * ADR-047 D4 (P4b) — advisory-database gate at the plugin install path:
+   *  - `off`   (default) — no check, no network call, byte-neutral.
+   *  - `warn`  — a plugin with a published advisory installs with a warning.
+   *  - `block` — a plugin with a published advisory is refused, citing it.
+   * A lookup that cannot complete always fails OPEN (warns), so a flaky advisory
+   * service never wedges every install.
+   */
+  advisoryPolicy?: 'off' | 'warn' | 'block';
 }
 
 export interface SkillsCliKnobs {
@@ -1464,6 +1473,8 @@ export interface ResolvedCliKnobs {
     /** PLUGIN-MARKETPLACE P5 — surface (never install) an "updates available"
      *  notice on session start. Default false. */
     autoUpdateCheck: boolean;
+    /** ADR-047 D4 — advisory-database gate at install ('off' default). */
+    advisoryPolicy: 'off' | 'warn' | 'block';
   };
   agents: { hosted: ResolvedHostedAgentConfig[] };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
