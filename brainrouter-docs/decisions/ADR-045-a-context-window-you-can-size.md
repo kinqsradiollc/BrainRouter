@@ -1,6 +1,6 @@
 # ADR-045 — A context window you can size, and a ceiling you cannot cross
 
-**Status:** IMPLEMENTED (0.4.22) — M1 cli.contextWindows knob, M2 desktop editor, M3 per-org cap advertised in the gateway /v1/models. M4 client-honor of the advertised cap + M5 legacy contextWindows.json retire deferred. · **Builds on:** ADR-041 (plug-and-play runtime —
+**Status:** IMPLEMENTED (0.4.22) — M1 cli.contextWindows knob, M2 desktop editor, M3 per-org cap advertised in the gateway /v1/models, M4 client honors the advertised cap (contextWindowFor clamps to it), M5 the legacy contextWindows.json retired (migrated into the knob at boot). All milestones shipped. · **Builds on:** ADR-041 (plug-and-play runtime —
 the config/provider seams and the golden-rule that every knob lives in `cli.*`), ADR-010/017 (org /
 team / RBAC tenancy), and the per-org recall-settings pattern (`system_settings` KV +
 `/api/admin/recall-settings`). · **Supersedes:** nothing.

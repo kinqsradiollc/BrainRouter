@@ -35,8 +35,8 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **041** | **Plug-and-play runtime** | **✅ Implemented (glass-box capstone)** — 13/17 §5 board rows + all D8, W1–W4, and the D14 glass box (#1548–#1551); only 4 consumer/ops-gated seams (A41-9/11/12/13) deferred | **0.4.21** |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | **043** | **Egress at the user's edge** | **✅ Implemented (live edge tunnel, end-to-end)** | **0.4.21** |
-| 044 | Web pages the agent can actually read | ✅ Implemented (M1 structured-markdown floor + M3/M4 durable memory-native ingest + M5 robustness; M2 rendered-DOM escalation deferred — browser-first already renders JS pages) | 0.4.22 |
-| 045 | A context window you can size (+ tier ceiling) | ✅ Implemented (M1 cli.contextWindows knob + M2 desktop editor + M3 per-org cap advertised in gateway /v1/models; M4 client-honor + M5 legacy-file retire deferred) | 0.4.22 |
+| 044 | Web pages the agent can actually read | ✅ Implemented (M1–M5): structured-markdown floor, rendered-DOM readiness, durable memory-native ingest, robustness | 0.4.22 |
+| 045 | A context window you can size (+ tier ceiling) | ✅ Implemented (M1–M5): cli.contextWindows knob, desktop editor, gateway per-org cap advertised + client-honored, legacy-file retired | 0.4.22 |
 | **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S5)** — extends the A41-14 registry with a tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel. S6 opportunistic. | **0.4.22** |
 | 047 | Providers as data, agents as engines, playbooks, a vetted install | ✅ Implemented (all 4 decisions: P1 declarative providers, P2 agents-as-engines, P3 playbooks, P4a allowlist + P4b advisory install gate) | 0.4.22 |
 
