@@ -32,12 +32,12 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 038 | A planner worth opening | ✅ Implemented | main |
 | 039 | The half of security a model cannot see (taint) | ✅ Implemented (this-repo scope) — 6 vulns fixed; CodeQL integration live (S2), §6 replay corpus, **D6 source→hops→sink**, **D5 "not analyzed" honesty**, **D4 barrier pack + parity check** (0.4.22); `security-extended` suite + barrier-in-engine model are **owner-activated** (one settings change — see `setup/adr039-codeql-advanced-setup.md`) | 0.4.21–0.4.22 |
 | **040** | **One runtime, graphs of bounded loops** | **✅ Implemented** | **0.4.20** |
-| **041** | **Plug-and-play runtime** | **✅ Implemented (glass-box capstone)** — 13/17 §5 board rows + all D8, W1–W4, and the D14 glass box (#1548–#1551); only 4 consumer/ops-gated seams (A41-9/11/12/13) deferred | **0.4.21** |
+| **041** | **Plug-and-play runtime** | **✅ Implemented — all 17 §5 board rows** — D8, W1–W4, the D14 glass box (#1548–#1551, 0.4.21), and the final four build-on-top seams with genuine consumers (0.4.22): A41-11 overlay-by-id (#1588), A41-12 loader+profile boot (#1589), A41-13 token-meter extension (#1590), A41-9 session-scoped BYOK providers (#1591) | **0.4.21–0.4.22** |
 | **042** | **Worktrees the agent can enter** | **✅ Implemented** | **0.4.21** |
 | **043** | **Egress at the user's edge** | **✅ Implemented (live edge tunnel, end-to-end)** | **0.4.21** |
 | 044 | Web pages the agent can actually read | ✅ Implemented (M1–M5): structured-markdown floor, rendered-DOM readiness, durable memory-native ingest, robustness | 0.4.22 |
 | 045 | A context window you can size (+ tier ceiling) | ✅ Implemented (M1–M5): cli.contextWindows knob, desktop editor, gateway per-org cap advertised + client-honored, legacy-file retired | 0.4.22 |
-| **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S5)** — extends the A41-14 registry with a tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel. S6 opportunistic. | **0.4.22** |
+| **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S6)** — tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel; **S6 model-class runtime catalog + drift gate (#1587)**. Personas/file-triggers intentionally left dynamic. | **0.4.22** |
 | 047 | Providers as data, agents as engines, playbooks, a vetted install | ✅ Implemented (all 4 decisions: P1 declarative providers, P2 agents-as-engines, P3 playbooks, P4a allowlist + P4b advisory install gate) | 0.4.22 |
 
 ## In flight / next

@@ -1,6 +1,11 @@
 # ADR-046 — The runtime that vouches for itself: harvested catalogs, a logged-context guarantee, and a roster of invariants
 
-**Status:** Accepted — **implemented (S1–S5)**; S6 opportunistic. The foundational spine, both
+**Status:** Accepted — **implemented (S1–S6)**. S6 landed the last code-defined catalog — the
+model-class runtime catalog + drift gate (`release/0.4.22`, #1587): the `BrainAgentModelClass` type
+now derives from a runtime `BRAIN_AGENT_MODEL_CLASSES`, and the generated `model-class-catalog.md` is
+harvested from it × the live brain-agent registry. Personas and file-based triggers are deliberately
+NOT catalogued: they are runtime/user-defined sets, not code-defined ones, so a "generated from code"
+catalog would be misleading for them. The foundational spine, both
 drift-gate classes, the shared derivation, and the glass-box surface are live in `packages/core`,
 `brainrouter`, and `brainrouter-dashboard`, with tests as the CI runner.
 
@@ -34,9 +39,10 @@ report side is the tripwire; the structural guarantee is the shared function + t
 **S5 (throwing + glass box):** the built-in companions run in CI via the A41-14 verify-gate test
 (a failing check fails the build — D2/D3's dev/CI enforcement), and the dashboard runtime ("glass
 box") panel now renders the tripwire totals — a "Tripwire firings" metric + a per-id breakdown that
-should read zero. **Remaining:** S6 (more catalogs — personas and file-based triggers are dynamic,
-not code-defined registry sets, so they are not D1-shaped; model-class is a type-only union today).
-Opportunistic by design. Historical proposal follows.
+should read zero. **S6 (done, #1587):** the model-class runtime catalog + drift gate — the last code-defined set that
+was still a type-only union. Personas and file-based triggers are deliberately not catalogued: they
+are dynamic (runtime/user-defined), not code-defined registry sets, so they are not D1-shaped and a
+generated-from-code catalog would mislead. Historical proposal follows.
 
 **Builds on:** ADR-041 (plug-and-play runtime: registries, phase hooks, the D4 logged-invariant
 fence, the A41-16 tool catalog), ADR-040 (bounded loops), the glass-box trajectory surfaces
@@ -206,7 +212,7 @@ The decision:
 | S3 | D1 SQL enum ↔ TS union harvest + gate | M | ✅ done (`sql-enum-drift.test.ts`, flagship `SESSION_MESSAGE_STATUSES` pair, extensible `PAIRS`) |
 | S4 | D2 shared derivation function used by live + resume | M | ✅ done (`deriveModelRequest`; fixed-point + live/resume-equality + no-private-copy tests) |
 | S5 | D2 CI enforcement (verify gate) + glass-box tripwire panel | S | ✅ done (A41-14 verify-gate test fails the build on a broken check; dashboard runtime panel renders tripwire totals) |
-| S6 | Remaining catalogs opportunistically | S each | ⬜ opportunistic — personas/file-triggers are dynamic (not code-defined sets); model-class is a type-only union today |
+| S6 | Remaining catalogs | S each | ✅ done (#1587 — model-class runtime catalog + drift gate; `BrainAgentModelClass` derives from `BRAIN_AGENT_MODEL_CLASSES`. Personas/file-triggers intentionally left dynamic — runtime/user-defined, not code-defined) |
 
 Each slice is independently shippable and independently revertible; S1 extended the existing A41-14
 registry (one home per fact) rather than adding a parallel roster.
