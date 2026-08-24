@@ -19,6 +19,7 @@
 
 import { loadModelsConfig } from '../config/configLoader.js';
 import { lookupLmStudioModel } from '../provider/providers/lmstudio/index.js';
+import { lookupManagedModelContext } from '../provider/managedModelContext.js';
 import { getCliKnobs } from '../config/config.js';
 
 /**
@@ -66,10 +67,12 @@ export function _resetContextWindowCache(): void {
  *   6. `models.json` `familyFallbacks` — regex match for versioned
  *      variants (`gpt-5-2025-04-01` → `gpt-5`).
  *
+ *   7. ADR-045 M4 — a window resolved above is CLAMPED to a BrainRouter
+ *      gateway's advertised `context_window` (an org cap only ever tightens).
+ *
  * Returns `undefined` when nothing matches.
  */
-export function contextWindowFor(modelId: string | undefined | null): number | undefined {
-  if (!modelId || typeof modelId !== 'string') return undefined;
+function baseContextWindow(modelId: string): number | undefined {
   const raw = modelId.toLowerCase();
   const stripped = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
   const cfg = loadModelsConfig();
@@ -103,6 +106,19 @@ export function contextWindowFor(modelId: string | undefined | null): number | u
     }
   }
   return undefined;
+}
+
+export function contextWindowFor(modelId: string | undefined | null): number | undefined {
+  if (!modelId || typeof modelId !== 'string') return undefined;
+  const base = baseContextWindow(modelId);
+  // ADR-045 M4 — clamp to a gateway-advertised cap. The cap only tightens:
+  // with a known base it is `min(base, cap)`; with no base the cap IS the window
+  // (a managed model carries none locally). No cap advertised ⇒ base unchanged.
+  const cap = lookupManagedModelContext(modelId);
+  if (cap !== undefined && cap > 0) {
+    return base === undefined ? cap : Math.min(base, cap);
+  }
+  return base;
 }
 
 /**

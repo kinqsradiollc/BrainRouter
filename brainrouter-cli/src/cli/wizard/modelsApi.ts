@@ -3,6 +3,8 @@ import type { Theme } from '../theme/theme.js';
 import {
   inferModelReasoningCapabilities,
   registerModelReasoningCapabilities,
+  extractAdvertisedContext,
+  setManagedModelContext,
   type ProviderEntry,
   LOCAL_PLACEHOLDER_KEY,
 } from '@kinqs/brainrouter-core/provider';
@@ -72,6 +74,10 @@ export async function fetchOpenAiCompatibleModels(
       ids.push(id);
       registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
     }
+    // ADR-045 M4 — record any gateway-advertised `context_window` so
+    // `contextWindowFor` clamps a managed model to the org cap (inert for a
+    // plain endpoint, which omits the field).
+    setManagedModelContext(extractAdvertisedContext(list));
     if (ids.length === 0) {
       return { ok: false, error: 'endpoint returned an empty model list' };
     }
