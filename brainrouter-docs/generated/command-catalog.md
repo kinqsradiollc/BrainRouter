@@ -5,7 +5,7 @@
 
 # BrainRouter command catalog
 
-139 slash commands across 7 help categories.
+140 slash commands across 7 help categories.
 
 ## Session & State
 
@@ -105,6 +105,7 @@
 | /continue | Resume after a loop-limit abort |
 | /loop <interval> <prompt> /loop stop | Repeat a prompt on cadence |
 | /schedule cron "<expr>" <cmd> · /schedule in 5m <cmd> | Schedule a recurring (cron) or one-shot command |
+| /playbook run <name> --param k=v · /playbook init\|list\|schedule | Run a parameterized, schedulable automation unit |
 | /commit | Generate message, stage, and git commit |
 | /diff | Show git changes (stream-paginated) |
 
