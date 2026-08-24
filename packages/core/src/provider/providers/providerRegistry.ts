@@ -34,18 +34,64 @@ export class ProviderRegistry {
   // from the extension host's active set (see setExtensionProviders). A builtin id
   // still wins over an extension of the same id, matching the catalog rule.
   #extensions = new Map<string, ProviderDefinition>();
+  // ADR-041 A41-9 — providers scoped to a single session (registerForSession).
+  // Only resolvable by a caller that passes the owning sessionKey, so one session's
+  // ad-hoc BYOK endpoint is invisible to every other session. A builtin id still
+  // wins (a session cannot shadow a compiled-in provider).
+  readonly #sessionProviders = new Map<string, Map<string, ProviderDefinition>>();
 
   constructor(builtins: readonly ProviderDefinition[]) {
     this.#builtins = new Map(builtins.map((p) => [p.id, p]));
   }
 
-  /** Runtime registrations win over a builtin of the same id (the swap case). */
-  get(id: string): ProviderDefinition | undefined {
+  /**
+   * Runtime registrations win over a builtin of the same id (the swap case). When
+   * `sessionKey` is given, a provider registered for THAT session is consulted
+   * first (unless the id is a builtin) — the byte-neutral default path (no
+   * sessionKey) is exactly `#dynamic ?? #builtins ?? #extensions` as before.
+   */
+  get(id: string, sessionKey?: string): ProviderDefinition | undefined {
+    if (sessionKey && !this.#builtins.has(id)) {
+      const scoped = this.#sessionProviders.get(sessionKey)?.get(id);
+      if (scoped) return scoped;
+    }
     return this.#dynamic.get(id) ?? this.#builtins.get(id) ?? this.#extensions.get(id);
   }
 
-  has(id: string): boolean {
+  has(id: string, sessionKey?: string): boolean {
+    if (sessionKey && !this.#builtins.has(id) && this.#sessionProviders.get(sessionKey)?.has(id)) {
+      return true;
+    }
     return this.#dynamic.has(id) || this.#builtins.has(id) || this.#extensions.has(id);
+  }
+
+  /**
+   * ADR-041 A41-9 — register a provider only the owning session may route to.
+   * The handle removes it; `disposeSession` removes every provider for a session
+   * at once (session end). A builtin id is never shadowed (get() checks builtins
+   * before the session overlay).
+   */
+  registerForSession(sessionKey: string, def: ProviderDefinition): ProviderRegistryHandle {
+    let bucket = this.#sessionProviders.get(sessionKey);
+    if (!bucket) { bucket = new Map(); this.#sessionProviders.set(sessionKey, bucket); }
+    bucket.set(def.id, def);
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        const b = this.#sessionProviders.get(sessionKey);
+        if (b?.get(def.id) === def) {
+          b.delete(def.id);
+          if (b.size === 0) this.#sessionProviders.delete(sessionKey);
+        }
+      },
+    };
+  }
+
+  /** Remove every session-scoped provider for `sessionKey` (session end). */
+  disposeSession(sessionKey: string): void {
+    this.#sessionProviders.delete(sessionKey);
   }
 
   /** True only for a compiled-in builtin — NOT a runtime registration. */
