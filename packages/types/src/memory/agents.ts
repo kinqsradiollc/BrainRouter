@@ -20,17 +20,26 @@
 //   - BRAIN-DESIGN-T4 — `MemoryBlackboardItem` + lifecycle.
 
 /**
- * The five model classes a brain agent might need. `none` means the
- * agent does no LLM work (e.g. a pure embedder or a graph extractor
- * that runs on heuristics). The class drives provider routing, tier
- * ladder, and cache-stats grouping.
+ * The model classes a brain agent might need. `none` means the agent does no LLM
+ * work (e.g. a pure embedder or a graph extractor that runs on heuristics). The
+ * class drives provider routing, tier ladder, and cache-stats grouping.
+ *
+ * ADR-046 S6 — this is the runtime source of the set, not a type-only union: the
+ * `BrainAgentModelClass` type derives from it, and the generated model-class
+ * catalog (`brainrouter-docs/generated/model-class-catalog.md`) is harvested from
+ * it and drift-checked. Adding or removing a class here refreshes both the type
+ * and the catalog from one edit; the catalog drift gate fails the build if the
+ * committed doc falls behind.
  */
-export type BrainAgentModelClass =
-  | "extraction"
-  | "synthesis"
-  | "judge"
-  | "embedding"
-  | "none";
+export const BRAIN_AGENT_MODEL_CLASSES = [
+  "extraction",
+  "synthesis",
+  "judge",
+  "embedding",
+  "none",
+] as const;
+
+export type BrainAgentModelClass = (typeof BRAIN_AGENT_MODEL_CLASSES)[number];
 
 /**
  * A brain-side specialist. Each agent owns one stage of the memory
