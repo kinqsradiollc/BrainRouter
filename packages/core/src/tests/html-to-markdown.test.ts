@@ -107,3 +107,19 @@ test('a blockquote is prefixed line by line', () => {
   const out = md('<body><blockquote><p>quoted line</p></blockquote></body>');
   assert.match(out, /^> quoted line$/m);
 });
+
+test('pathologically deep nesting degrades to text instead of overflowing the stack (ADR-044 M5)', () => {
+  // Thousands of nested <div>s would blow the recursive walk's stack without the
+  // depth ceiling. It must not throw, and the inner content must survive (flattened).
+  const depth = 6000;
+  const html = `<body>${'<div>'.repeat(depth)}deep content here${'</div>'.repeat(depth)}</body>`;
+  let out = '';
+  assert.doesNotThrow(() => { out = md(html); });
+  assert.match(out, /deep content here/);
+});
+
+test('deep inline nesting also degrades safely', () => {
+  const depth = 6000;
+  const html = `<body><p>${'<span>'.repeat(depth)}x${'</span>'.repeat(depth)}</p></body>`;
+  assert.doesNotThrow(() => { md(html); });
+});
