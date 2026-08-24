@@ -39,6 +39,25 @@ describe("mapCodeqlSarifToSourceToSinkPaths", () => {
     expect(paths[0].evidenceRefs).toEqual([]);
   });
 
+  it("ADR-039 D6 (S4) — carries the ORDERED intermediate hops, not just source+sink", () => {
+    const sarif: CodeqlSarif = {
+      runs: [{ results: [resultWithFlow("js/request-forgery", [
+        { uri: "req.ts", line: 10 },   // source (attacker-controlled body)
+        { uri: "handler.ts", line: 22 }, // hop
+        { uri: "net/fetch.ts", line: 4 }, // sink
+      ])] }],
+    };
+    const [path] = mapCodeqlSarifToSourceToSinkPaths(sarif);
+    expect(path.hops).toEqual([
+      { path: "req.ts", line: 10 },
+      { path: "handler.ts", line: 22 },
+      { path: "net/fetch.ts", line: 4 },
+    ]);
+    // source/sink stay the first/last hop for back-compat.
+    expect(path.source).toEqual(path.hops![0]);
+    expect(path.sink).toEqual(path.hops![path.hops!.length - 1]);
+  });
+
   it("skips results without a codeFlow (point findings, not taint paths)", () => {
     const sarif: CodeqlSarif = {
       runs: [
