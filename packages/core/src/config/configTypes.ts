@@ -359,6 +359,14 @@ export interface PluginsCliKnobs {
   approved?: Record<string, PluginCapabilityConsent>;
   allowedMarketplaces?: string[];
   blockedMarketplaces?: string[];
+  /**
+   * ADR-047 D4 — managed allowlist of PLUGIN names. Non-empty ⇒ only listed
+   * plugins install (finer than `allowedMarketplaces`, which gates whole
+   * marketplaces); a plugin off the list is refused by name of the policy.
+   */
+  allowedPlugins?: string[];
+  /** ADR-047 D4 — managed denylist of plugin names; any listed plugin is refused. */
+  blockedPlugins?: string[];
   allowManagedHooksOnly?: boolean;
   /** MC-E4 — surface org convention repositories as a read-only plugin/skill scope. Default false. */
   orgScope?: boolean;
@@ -1435,6 +1443,9 @@ export interface ResolvedCliKnobs {
     approved: Record<string, PluginCapabilityConsent>;
     allowedMarketplaces: string[];
     blockedMarketplaces: string[];
+    /** ADR-047 D4 — validated plugin-name allowlist / denylist (finer than the marketplace gate). */
+    allowedPlugins: string[];
+    blockedPlugins: string[];
     allowManagedHooksOnly: boolean;
     orgScope: boolean;
     /** PLUGIN-MARKETPLACE P5 — community registry repo for `plugin publish`

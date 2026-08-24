@@ -394,6 +394,8 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   let approved: Record<string, PluginCapabilityConsent> = {};
   let allowedMarketplaces: string[] = [];
   let blockedMarketplaces: string[] = [];
+  let allowedPlugins: string[] = [];
+  let blockedPlugins: string[] = [];
   let allowManagedHooksOnly = false;
   let orgScope = false;
   let publishRepo = '';
@@ -415,12 +417,14 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     approved = resolveApprovedMap(obj.approved);
     allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
     blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
+    allowedPlugins = resolveStringList(obj.allowedPlugins);
+    blockedPlugins = resolveStringList(obj.blockedPlugins);
     allowManagedHooksOnly = obj.allowManagedHooksOnly === true;
     orgScope = obj.orgScope === true;
     if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
     autoUpdateCheck = obj.autoUpdateCheck === true;
   }
-  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck };
+  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowedPlugins, blockedPlugins, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck };
 }
 
 function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {

@@ -236,6 +236,9 @@ export function buildConsentSummary(
 export interface ManagedGates {
   allowedMarketplaces: readonly string[];
   blockedMarketplaces: readonly string[];
+  /** ADR-047 D4 — plugin-name allowlist / denylist, finer than the marketplace gate. */
+  allowedPlugins: readonly string[];
+  blockedPlugins: readonly string[];
   allowManagedHooksOnly: boolean;
 }
 
@@ -252,6 +255,27 @@ export function assertMarketplaceAllowed(name: string, gates: ManagedGates): str
   const allowed = gates.allowedMarketplaces.map((m) => m.trim()).filter(Boolean);
   if (allowed.length && !allowed.includes(n)) {
     return `marketplace "${n}" is not in the managed allowlist (allowedMarketplaces: [${allowed.join(', ')}]).`;
+  }
+  return null;
+}
+
+/**
+ * ADR-047 D4 — decide whether a plugin NAME is permitted under the managed
+ * gates, the finer-grained sibling of `assertMarketplaceAllowed`. A blocklist
+ * match always refuses; a non-empty allowlist refuses anything not on it. The
+ * refusal names the policy so an operator sees WHY, not just that it failed.
+ * Returns an error message when refused, else null.
+ */
+export function assertPluginAllowed(
+  name: string,
+  gates: Pick<ManagedGates, 'allowedPlugins' | 'blockedPlugins'>,
+): string | null {
+  const n = name.trim();
+  const blocked = gates.blockedPlugins.map((p) => p.trim()).filter(Boolean);
+  if (blocked.includes(n)) return `plugin "${n}" is blocked by managed policy (blockedPlugins).`;
+  const allowed = gates.allowedPlugins.map((p) => p.trim()).filter(Boolean);
+  if (allowed.length && !allowed.includes(n)) {
+    return `plugin "${n}" is not in the managed allowlist (allowedPlugins: [${allowed.join(', ')}]).`;
   }
   return null;
 }
