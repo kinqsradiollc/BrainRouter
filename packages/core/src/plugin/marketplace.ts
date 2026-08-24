@@ -22,6 +22,7 @@ import type { Config, MarketplaceSource } from '../config/configTypes.js';
 import { stagingDir } from './paths.js';
 import { installPlugin, classifySource, type InstallOptions, type InstallResult } from './install.js';
 import { assertMarketplaceAllowed, assertPluginAllowed, type ManagedGates } from './trust.js';
+import { evaluatePluginAdvisory, osvAdvisorySource, type PluginAdvisorySource } from './advisory.js';
 
 /** Derive the managed gates from a Config's resolved-shape plugin knobs (fail-open). */
 function gatesFromConfig(config: Config): ManagedGates {
@@ -63,6 +64,13 @@ export interface MarketplacePluginEntry {
   author?: MarketplaceAuthor;
   /** PLUGIN-MARKETPLACE P3 — expected sha256 integrity for a remote artifact. */
   integrity?: string;
+  /**
+   * ADR-047 D4 (P4b) — the distribution's identity in an advisory database
+   * (ecosystem + name, e.g. `{ ecosystem: 'npm', name: 'left-pad' }`), so the
+   * advisory check can query for known vulnerabilities. Optional; when absent the
+   * default advisory source falls back to the plugin's own name in npm.
+   */
+  package?: { ecosystem: string; name: string };
 }
 
 export interface MarketplaceManifest {
@@ -119,6 +127,10 @@ export function validateMarketplaceManifest(raw: unknown): MarketplaceParseResul
       if (typeof p.version === 'string' && p.version.trim()) entry.version = p.version.trim();
       if (typeof p.category === 'string' && p.category.trim()) entry.category = p.category.trim();
       if (typeof p.integrity === 'string' && p.integrity.trim()) entry.integrity = p.integrity.trim();
+      if (isPlainObject(p.package) && typeof p.package.ecosystem === 'string' && typeof p.package.name === 'string'
+        && p.package.ecosystem.trim() && p.package.name.trim()) {
+        entry.package = { ecosystem: p.package.ecosystem.trim(), name: p.package.name.trim() };
+      }
       const author = parseAuthor(p.author);
       if (author) entry.author = author;
       plugins.push(entry);
@@ -476,24 +488,45 @@ export interface InstallByNameResult {
   marketplace?: string;
   result?: InstallResult;
   error?: string;
+  /** ADR-047 D4 — a non-fatal advisory notice (policy 'warn' with a hit, or a lookup that could not complete). */
+  warning?: string;
 }
 
 /**
- * Install a plugin BY NAME: resolve it across marketplaces, then reuse P1's
- * atomic `installPlugin`. A failed install leaves any prior version intact
- * (P1 atomic-staging guarantee). Always cleans up the marketplace checkout.
+ * Install a plugin BY NAME: resolve it across marketplaces, run the advisory gate
+ * (ADR-047 D4), then reuse P1's atomic `installPlugin`. A failed install leaves
+ * any prior version intact (P1 atomic-staging guarantee). Always cleans up the
+ * marketplace checkout.
+ *
+ * Async because the advisory gate may query an external database — but ONLY when
+ * `cli.plugins.advisoryPolicy` is not 'off' (the default), so the common path
+ * makes no network call. The `advisorySource` opt is injectable for tests.
  */
-export function installPluginByName(
+export async function installPluginByName(
   name: string,
-  opts: { scope?: InstallOptions['scope']; workspaceRoot?: string; force?: boolean; config?: Config } = {},
-): InstallByNameResult {
+  opts: {
+    scope?: InstallOptions['scope'];
+    workspaceRoot?: string;
+    force?: boolean;
+    config?: Config;
+    advisorySource?: PluginAdvisorySource;
+  } = {},
+): Promise<InstallByNameResult> {
   const config = opts.config ?? loadOrInitConfig();
   const altManifestNames = resolveCliKnobs(config).plugins.altManifestNames;
+  const advisoryPolicy = resolveCliKnobs(config).plugins.advisoryPolicy;
   const resolved = resolvePluginByName(name, config);
   if (!resolved.ok) return { ok: false, error: resolved.error };
+  let warning: string | undefined;
   try {
+    // ADR-047 D4 (P4b) — advisory gate, between resolve and install.
+    const verdict = await evaluatePluginAdvisory(resolved.resolved.entry, advisoryPolicy, opts.advisorySource ?? osvAdvisorySource);
+    if (verdict.verdict === 'block') {
+      return { ok: false, marketplace: resolved.resolved.marketplace, error: verdict.message ?? 'blocked by advisory policy' };
+    }
+    if (verdict.verdict === 'warn') warning = verdict.message;
     const spec = resolvePluginInstallSpec(resolved.resolved);
-    if (!spec.ok) return { ok: false, marketplace: resolved.resolved.marketplace, error: spec.error };
+    if (!spec.ok) return { ok: false, marketplace: resolved.resolved.marketplace, error: spec.error, warning };
     const result = installPlugin(spec.source, {
       scope: opts.scope,
       workspaceRoot: opts.workspaceRoot,
@@ -504,8 +537,8 @@ export function installPluginByName(
       integrity: spec.opts.integrity,
       altManifestNames,
     });
-    if (!result.ok) return { ok: false, marketplace: resolved.resolved.marketplace, result, error: result.error };
-    return { ok: true, marketplace: resolved.resolved.marketplace, result };
+    if (!result.ok) return { ok: false, marketplace: resolved.resolved.marketplace, result, error: result.error, warning };
+    return { ok: true, marketplace: resolved.resolved.marketplace, result, warning };
   } finally {
     resolved.resolved.fetched.cleanup?.();
   }

@@ -1060,7 +1060,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       },
-      'action:plugin-install': (args) => {
+      'action:plugin-install': async (args) => {
         try {
           const scope = args.scope === 'workspace' ? 'workspace' : 'user';
           const force = args.force === true;
@@ -1069,7 +1069,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           }
           const name = typeof args.name === 'string' ? args.name.trim() : '';
           if (!name) return { ok: false, error: 'plugin name or source is required' };
-          return installPluginFromRegistry(name, { scope, workspaceRoot, force });
+          return await installPluginFromRegistry(name, { scope, workspaceRoot, force });
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
