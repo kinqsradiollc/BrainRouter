@@ -17,6 +17,10 @@ import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { phaseHookHandlers, type PhaseHookContext } from '../../extension/registry.js';
 import { buildTurnUsageView } from '../../util/tokens/turnUsageView.js';
 import { scheduleLearningCheckpoint } from './learningPhase.js';
+import { getCliKnobs } from '../../config/config.js';
+import { readAtlasGraphCached } from '../../atlas/store/atlasStore.js';
+import { buildAtlasChangeContext } from '../../atlas/changeContext.js';
+import path from 'node:path';
 
 interface TurnSpan {
   end(extra?: Record<string, unknown>): void;
@@ -205,6 +209,37 @@ export async function finalizeTurnPhase(
   // notification, not a waterfall: advisory, so a throwing hook never fails the
   // turn. The logged invariant holds — a hook adds model-visible context only via
   // agent.recordTranscript, never by mutating an in-flight message array.
+  // ADR-048 S5 — the blast radius of this turn's edits. Files the write tools
+  // touched are mapped onto the Atlas graph and their dependents-by-layer
+  // summary rides the stop-context channel into the NEXT turn (never the
+  // in-flight array — ADR-041 D4). Deterministic and bounded (D2): no graph, no
+  // edits, or taps knobbed off ⇒ nothing; the set clears regardless so a skipped
+  // turn never leaks stale paths into the next.
+  {
+    const written = [...agent.turnWrittenFiles];
+    agent.turnWrittenFiles.clear();
+    if (written.length > 0 && !agent.silent && !agent.reviewSourceSafety) {
+      try {
+        const atlasKnobs = getCliKnobs().atlas;
+        const graph = (atlasKnobs.orient || atlasKnobs.retrieval)
+          ? readAtlasGraphCached(agent.workspaceRoot)
+          : null;
+        if (graph) {
+          const relative = written.map((p) =>
+            path.isAbsolute(p) ? path.relative(agent.workspaceRoot, p) : p,
+          );
+          const block = buildAtlasChangeContext(graph, relative);
+          if (block) {
+            const bounded = block.slice(0, 1_000).trim();
+            agent.pendingStopContext = agent.pendingStopContext
+              ? `${agent.pendingStopContext}\n${bounded}`
+              : bounded;
+          }
+        }
+      } catch { /* the map enriches a turn; it must never break one */ }
+    }
+  }
+
   const turnEndHooks = phaseHookHandlers('turn-end');
   if (turnEndHooks.length > 0) {
     // ADR-041 A41-13 — enrich the turn-end context with a read-only usage view and

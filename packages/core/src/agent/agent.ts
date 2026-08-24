@@ -3182,6 +3182,10 @@ export class Agent implements IAgent {
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
 
+  /** ADR-048 S5 — paths this turn's write tools touched (reset each turn); the
+   *  turn-end blast-radius tap maps them onto the Atlas graph. */
+  public turnWrittenFiles = new Set<string>();
+
   /**
    * ADR-032 D7 — this session's content provenance, tallied per tool call.
    *

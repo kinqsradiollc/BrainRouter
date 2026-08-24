@@ -1,6 +1,6 @@
 # ADR-048 — A codebase map the agent actually reads
 
-**Status:** Accepted — owner-commissioned (2026-08-25) for `release/0.4.22`.
+**Status:** Accepted — owner-commissioned (2026-08-25); **implemented (S1–S6)** on `release/0.4.22`. The map is now consumed by deterministic taps in the turn runtime (D1) — orientation once per session, coverage-gated retrieval each matching prompt, edit blast radius into the next turn, background refresh on drift — plus the completed session hook pair and the `atlas_context` tool.
 
 **Depends on:** ADR-041 (plug-and-play runtime — the hook registries and phase seams this rides),
 ADR-032 (learning checkpoints already anchor the session-end moment), ADR-021 (workspace
@@ -118,18 +118,25 @@ graph built.
 
 ## 5. Delivery board
 
-- [ ] **S1 — Session hook pair.** Fire `session-start` (once per session, additionalContext →
-  first prompt) and `session-end` (inside `endSession()`); `/guard` list becomes true.
-- [ ] **S2 — Orientation + staleness.** Once-per-session Atlas orientation block with layer/tour
-  summary and drift note; `cli.atlas.orient` (default on).
-- [ ] **S3 — Background refresh.** Debounced base-graph rebuild when HEAD moved and a graph
-  exists; summaries carried forward; `cli.atlas.autoRefresh` (default on).
-- [ ] **S4 — Prompt retrieval.** Deterministic term-match scorer + coverage gate over nodes/tags/
-  summaries; bounded block; `cli.atlas.retrieval` (default on).
-- [ ] **S5 — Blast radius.** Turn-end mapping of this turn's written files → dependents-by-layer
-  via `atlasImpactOf`, injected next turn through the stop-context channel.
-- [ ] **S6 — `atlas_context` tool.** Read-tier builtin (spec + catalog + capability owner +
-  handler, both generated catalogs refreshed) so the agent can pull the map on demand.
+- [x] **S1 — Session hook pair.** Fire `session-start` (once per session, additionalContext →
+  first prompt, sessionTitle applied) and `session-end` (inside `endSession()`); `/guard` list
+  becomes true. *(#1594 — 3 turn-driven tests; a session switch is a new start, silent agents
+  suppressed.)*
+- [x] **S2 — Orientation + staleness.** Once-per-session Atlas orientation block (project, layers,
+  tour heads) with the drift note when HEAD moved; `cli.atlas.orient` (default on). *(builders
+  #1595; tap wired in the taps slice with S3–S5.)*
+- [x] **S3 — Background refresh.** Debounced base-graph rebuild when HEAD moved and a graph exists
+  (never from nothing), summaries carried forward by node id, scheduled with `setImmediate` so the
+  scan runs while the turn idles on the model call; `cli.atlas.autoRefresh` (default on). *(taps
+  slice; predicate + a real git-repo rebuild test.)*
+- [x] **S4 — Prompt retrieval.** Deterministic term-match scorer + coverage gate over node names/
+  paths/tags/summaries (summary-only matches never pass alone); bounded block each matching turn;
+  `cli.atlas.retrieval` (default on). *(builders #1595; tap in the taps slice.)*
+- [x] **S5 — Blast radius.** The write tools' touched paths are recorded per turn and mapped onto
+  the graph at turn end (`buildAtlasChangeContext`); the dependents-by-layer block rides the
+  stop-context channel into the next turn. *(taps slice; verified through a real write_file turn.)*
+- [x] **S6 — `atlas_context` tool.** Read-tier builtin (spec + catalog + capability owner +
+  handler, both generated catalogs refreshed) so the agent can pull the map on demand. *(#1595.)*
 
 ## 6. How this will be judged
 

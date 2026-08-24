@@ -13,6 +13,10 @@ import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { parseHookDecision, parseSessionStartDirectives } from '../../hooks/hooksStore.js';
 import { setSessionMeta } from '../../session/state/sessionMetaStore.js';
+import { readAtlasGraphCached } from '../../atlas/store/atlasStore.js';
+import { atlasOrientation, atlasPromptRetrieval } from '../../atlas/agentContext.js';
+import { maybeRefreshAtlasInBackground } from '../../atlas/autoRefresh.js';
+import { gitHeadSha } from '../../git/workspaceGit.js';
 import {
   buildFanOutHint,
   shouldSuggestFanOut,
@@ -184,6 +188,38 @@ export async function prepareTurnContextPhase(
         prompt = `${prompt}\n\n[session context]\n${directives.additionalContext}`;
       }
     } catch { /* session-start hooks are advisory */ }
+  }
+
+  // ADR-048 S2/S3/S4 — the codebase-map taps. Deterministic code, never model
+  // discretion (D1); byte-neutral when no graph exists — every branch is a cheap
+  // cached existence check first (D2). Injected blocks are DATA for the model,
+  // fenced by the same untrusted-content posture as any workspace text (D3).
+  if (!agent.silent && !input.reviewedExecution && !agent.reviewSourceSafety) {
+    try {
+      const atlasKnobs = getCliKnobs().atlas;
+      const graph = (atlasKnobs.orient || atlasKnobs.retrieval || atlasKnobs.autoRefresh)
+        ? readAtlasGraphCached(agent.workspaceRoot)
+        : null;
+      if (graph) {
+        if (isSessionStart) {
+          // S3 — schedule the background base-graph rebuild FIRST, so the scan
+          // runs while this turn idles on the model call; the orientation below
+          // still reads the prior graph and states the drift honestly.
+          if (atlasKnobs.autoRefresh) maybeRefreshAtlasInBackground(agent.workspaceRoot);
+          if (atlasKnobs.orient) {
+            const orientation = atlasOrientation(graph, {
+              currentHeadSha: gitHeadSha(agent.workspaceRoot),
+            });
+            if (orientation) prompt = `${prompt}\n\n${orientation}`;
+          }
+        }
+        if (atlasKnobs.retrieval) {
+          // Match on the person's ORIGINAL words, not the accumulated context.
+          const retrieval = atlasPromptRetrieval(graph, input.prompt);
+          if (retrieval) prompt = `${prompt}\n\n${retrieval}`;
+        }
+      }
+    } catch { /* the map enriches a turn; it must never break one */ }
   }
 
   if (agent.hookAdvisoryActive()) {
