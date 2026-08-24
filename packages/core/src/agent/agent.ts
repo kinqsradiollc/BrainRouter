@@ -2789,6 +2789,19 @@ export class Agent implements IAgent {
    * memory transport without turning an unbounded LLM call into a slow exit.
    */
   public endSession(timeoutMs = 2_500): Promise<void> {
+    // ADR-048 S1 — fire `session-end` shell hooks (advisory, bounded) at the
+    // same moment ADR-032 anchors the session-end learning checkpoint, so a
+    // host that awaits endSession() before shutdown observes both. A throwing
+    // or slow hook never delays the learning drain beyond its own timeout.
+    if (!this.silent && !this.reviewSourceSafety && this.hookNotifyActive()) {
+      try {
+        this.runExecutionHooks(
+          'session-end',
+          { payload: { sessionKey: this.sessionKey } },
+          Math.max(500, Math.min(2_000, timeoutMs)),
+        );
+      } catch { /* session-end hooks are advisory */ }
+    }
     return finishLearningSession(this, timeoutMs);
   }
 
