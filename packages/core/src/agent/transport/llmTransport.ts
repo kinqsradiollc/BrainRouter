@@ -108,7 +108,9 @@ export function supportsReasoningEffortField(config: LLMConfig): boolean {
  * endpoint) — treated as the OpenAI-compatible default downstream.
  */
 export function activeProviderDef(config: LLMConfig): ProviderDefinition | undefined {
-  return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase());
+  // ADR-041 A41-9 — config.sessionKey resolves a session-scoped BYOK provider
+  // first; undefined for an ordinary config, so this is the global path unchanged.
+  return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase(), config.sessionKey);
 }
 
 function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderDefinition['binaryEffortValueMap'] | undefined {

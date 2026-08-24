@@ -1,5 +1,6 @@
 import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import type { LLMConfig } from '../../config/config.js';
+import { syncSessionScopedProvider, clearSessionScopedProvider } from '../../provider/providers/sessionScopedProvider.js';
 
 /**
  * T5 — per-session runtime overrides: which provider/model/endpoint and which
@@ -23,6 +24,12 @@ export interface SessionRuntime {
    *  recorded by `switch_model` / `/profile use` alongside the concrete
    *  model/endpoint overrides so `/profile` can label the active preset. */
   llmProfile?: string;
+  /** ADR-041 A41-9 — wire format for a session's BYOK endpoint (provider+endpoint
+   *  not in the global catalog). Lets one session pin a custom endpoint's request
+   *  shape (e.g. native anthropic-messages) without touching the global catalog;
+   *  the provider is registered scoped to this session only. Default
+   *  chat-completions when omitted. */
+  byokRequestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 }
 
 /** Fully-resolved runtime for a session (no optional provider/model). */
@@ -54,7 +61,7 @@ export function setSessionRuntime(workspaceRoot: string, sessionKey: string, pat
   const all = readSessionRuntimeAll(workspaceRoot);
   const next: SessionRuntime = { ...(all[sessionKey] ?? {}), ...patch };
   if (next.mcpProfiles && next.mcpProfiles.length === 0) delete next.mcpProfiles;
-  for (const k of ['provider', 'model', 'endpoint', 'brainProfile', 'llmProfile', 'agentAdapter'] as const) {
+  for (const k of ['provider', 'model', 'endpoint', 'brainProfile', 'llmProfile', 'agentAdapter', 'byokRequestFormat'] as const) {
     if (next[k] == null || next[k] === '') delete next[k];
   }
   if (Object.keys(next).length === 0) delete all[sessionKey];
@@ -66,6 +73,8 @@ export function setSessionRuntime(workspaceRoot: string, sessionKey: string, pat
 export function clearSessionRuntime(workspaceRoot: string, sessionKey: string): void {
   const all = readSessionRuntimeAll(workspaceRoot);
   if (all[sessionKey]) { delete all[sessionKey]; writeJsonFile(runtimeFile(workspaceRoot), all); }
+  // ADR-041 A41-9 — a cleared session runtime drops any BYOK provider scoped to it.
+  clearSessionScopedProvider(sessionKey);
 }
 
 /**
@@ -96,6 +105,7 @@ export function resolveSessionRuntime(
  */
 export function resolveSessionLlmConfig(globalLlm: LLMConfig, workspaceRoot: string, sessionKey?: string): LLMConfig {
   if (!sessionKey) return { ...globalLlm };
+  const session = getSessionRuntime(workspaceRoot, sessionKey);
   const resolved = resolveSessionRuntime(
     {
       provider: globalLlm.provider,
@@ -104,12 +114,23 @@ export function resolveSessionLlmConfig(globalLlm: LLMConfig, workspaceRoot: str
       mcpProfiles: [],
     },
     undefined,
-    getSessionRuntime(workspaceRoot, sessionKey),
+    session,
   );
+  // ADR-041 A41-9 — when this session resolves a custom provider+endpoint not in
+  // the global catalog, register it as a provider only this session may route to
+  // and stamp `sessionKey` so `PROVIDER_REGISTRY.get(id, sessionKey)` finds it.
+  // Byte-neutral for an ordinary session: nothing is registered and no sessionKey
+  // is stamped, so resolution is exactly the global path.
+  const byok = syncSessionScopedProvider(sessionKey, {
+    provider: resolved.provider,
+    endpoint: resolved.endpoint,
+    requestFormat: session.byokRequestFormat,
+  });
   return {
     ...globalLlm,
     provider: resolved.provider,
     model: resolved.model,
     endpoint: resolved.endpoint,
+    ...(byok ? { sessionKey } : {}),
   };
 }

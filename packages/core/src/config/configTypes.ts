@@ -75,6 +75,14 @@ export interface LLMConfig {
   cachedModels?: string[];
   /** ISO timestamp for `cachedModels`. */
   cachedAt?: string;
+  /**
+   * ADR-041 A41-9 — the owning session key, set when a session runs an ad-hoc
+   * BYOK provider registered only for it (`host.scope(sessionKey)`). Provider
+   * resolution passes this to `PROVIDER_REGISTRY.get(id, sessionKey)` so the
+   * session's own provider definition is used. Absent for every ordinary config —
+   * resolution is then byte-for-byte the global path.
+   */
+  sessionKey?: string;
 }
 
 /**
