@@ -528,6 +528,16 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'atlas_context',
+    description: 'Query the workspace codebase map (the Atlas graph built by /atlas): with no query, returns the orientation — project, layers with sizes, and the guided tour heads; with a query, returns the files/symbols whose names, paths, tags, or summaries match it, so you can locate a subsystem without grepping. Read-only; returns a clear notice when no map has been built for this workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional terms to look up (e.g. a subsystem, file, or concept). Omit for the whole-repo orientation.' }
+      }
+    }
+  },
+  {
     name: 'session_list',
     description: 'List the other conversations in this workspace (session key, title, turn count, last-modified time, and — for a forked session — which session it branched from). Read-only; scoped to this workspace. Use it to find a sibling session to reference or continue.',
     inputSchema: {

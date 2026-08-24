@@ -12,4 +12,5 @@ export { validateAtlasGraph, type AtlasValidation } from "./pipeline/validate.js
 export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag } from "./store/atlasStore.js";
 export { enrichAtlasGraph, carryForwardSummaries, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich/enrich.js";
 export { buildAtlasChangeContext } from "./changeContext.js";
+export { atlasOrientation, atlasPromptRetrieval, atlasPromptTerms, ATLAS_RETRIEVAL_MIN_PROMPT_CHARS } from "./agentContext.js";
 export { extractAtlasJson, extractAtlasJsonArray } from "./enrich/jsonExtract.js";

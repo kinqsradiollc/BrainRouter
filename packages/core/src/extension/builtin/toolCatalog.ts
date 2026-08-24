@@ -62,6 +62,9 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // §A41-16 — session-native reminders persist per-session state (reminders.json),
   // like the research ledger: read tier, read_only, serialized (read-modify-write).
   { name: 'remind', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // ADR-048 S6 — the codebase-map query: pure read over the per-workspace Atlas
+  // graph file; no mutation, safe to parallelize.
+  { name: 'atlas_context', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
