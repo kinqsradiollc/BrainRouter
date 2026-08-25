@@ -12,6 +12,7 @@ import type {
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 import { createMeetingsOps } from '../components/meetings/meetingsOps.js';
 import type { MeetingListItem } from '../components/meetings/types.js';
+import { takeStudyGenerateIntent, STUDY_GENERATE_EVENT, type StudyGenerateIntent } from './studyHandoff.js';
 
 interface SourceHint { kind: string; label: string; hint: string }
 interface FileRef { path: string; title: string }
@@ -22,6 +23,7 @@ interface SourcesResult {
   decisions: FileRef[];
   rules: FileRef[];
   track: { id: string; title: string }[];
+  documents: { id: string; title: string }[];
 }
 
 interface DeckRow {
@@ -39,7 +41,7 @@ interface SessionResult { items: ReviewItem[]; streak: number }
 
 type Pane =
   | { kind: 'list' }
-  | { kind: 'edit'; deckId: string | null }
+  | { kind: 'edit'; deckId: string | null; initialGenerate?: StudyGenerateIntent }
   | { kind: 'review'; deckId: string; deckName: string };
 
 const GRADES: StudyGrade[] = ['again', 'hard', 'good', 'easy'];
@@ -58,6 +60,22 @@ function newId(prefix: string): string {
 
 export function StudyView(): React.JSX.Element {
   const [pane, setPane] = useState<Pane>({ kind: 'list' });
+
+  // ADR-049 (documents) — a hand-off from the Document reader: open a fresh deck
+  // straight into the generate tray, preselected to that document. Checked on
+  // mount (the intent may have been queued before Study mounted) and while
+  // mounted (a second hand-off after we are already in Study).
+  useEffect(() => {
+    const consume = () => {
+      const intent = takeStudyGenerateIntent();
+      if (intent) setPane({ kind: 'edit', deckId: null, initialGenerate: intent });
+    };
+    consume();
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    window.addEventListener(STUDY_GENERATE_EVENT, consume);
+    return () => window.removeEventListener(STUDY_GENERATE_EVENT, consume);
+  }, []);
+
   return (
     <div className="study-mode">
       {pane.kind === 'list' ? (
@@ -67,7 +85,7 @@ export function StudyView(): React.JSX.Element {
           onReview={(id, name) => setPane({ kind: 'review', deckId: id, deckName: name })}
         />
       ) : pane.kind === 'edit' ? (
-        <DeckEditor deckId={pane.deckId} onDone={() => setPane({ kind: 'list' })} />
+        <DeckEditor deckId={pane.deckId} initialGenerate={pane.initialGenerate} onDone={() => setPane({ kind: 'list' })} />
       ) : (
         <ReviewSession
           deckId={pane.deckId}
@@ -237,16 +255,19 @@ function DeckList(props: {
 
 // --- deck editor -----------------------------------------------------------
 
-function DeckEditor(props: { deckId: string | null; onDone: () => void }): React.JSX.Element {
+function DeckEditor(props: { deckId: string | null; onDone: () => void; initialGenerate?: StudyGenerateIntent }): React.JSX.Element {
   const [deck, setDeck] = useState<StudyDeck | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(Boolean(props.initialGenerate));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (props.deckId === null) {
       const now = new Date().toISOString();
-      setDeck({ schemaVersion: 1, id: newId('deck'), name: 'New deck', description: '', tags: [], cards: [], createdAt: now, updatedAt: now });
+      // A hand-off from a document names the fresh deck after it, so the cards
+      // land somewhere already labelled by their source.
+      const name = props.initialGenerate?.name ? `Cards: ${props.initialGenerate.name}` : 'New deck';
+      setDeck({ schemaVersion: 1, id: newId('deck'), name, description: '', tags: [], cards: [], createdAt: now, updatedAt: now });
       return;
     }
     bridgeQuery<{ deck: StudyDeck | null }>('study:read', { id: props.deckId })
@@ -307,7 +328,7 @@ function DeckEditor(props: { deckId: string | null; onDone: () => void }): React
       </div>
 
       {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} onImport={onImport} /> : null}
-      {generateOpen ? <GenerateDialog onClose={() => setGenerateOpen(false)} onAccept={onAcceptGenerated} /> : null}
+      {generateOpen ? <GenerateDialog initial={props.initialGenerate} onClose={() => setGenerateOpen(false)} onAccept={onAcceptGenerated} /> : null}
 
       {deck.cards.length === 0 ? (
         <div className="study-empty">
@@ -358,13 +379,13 @@ function ImportDialog(props: { onClose: () => void; onImport: (text: string) => 
 
 interface Proposal extends StudyCardProposal { _accepted: boolean }
 
-const EMPTY_SOURCES: SourcesResult = { profile: 'custom', sources: [{ kind: 'text', label: 'Paste text', hint: '' }], docs: [], decisions: [], rules: [], track: [] };
+const EMPTY_SOURCES: SourcesResult = { profile: 'custom', sources: [{ kind: 'text', label: 'Paste text', hint: '' }], docs: [], decisions: [], rules: [], track: [], documents: [] };
 
-function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCardProposal[]) => void }): React.JSX.Element {
+function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCardProposal[]) => void; initial?: StudyGenerateIntent }): React.JSX.Element {
   const [sources, setSources] = useState<SourcesResult | null>(null);
-  const [kind, setKind] = useState<string>('text');
+  const [kind, setKind] = useState<string>(props.initial?.kind ?? 'text');
   const [text, setText] = useState('');
-  const [pickedPath, setPickedPath] = useState('');
+  const [pickedPath, setPickedPath] = useState(props.initial?.ref ?? '');
   const [meetings, setMeetings] = useState<MeetingListItem[] | null>(null);
   const [pickedMeeting, setPickedMeeting] = useState('');
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
@@ -378,9 +399,10 @@ function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCar
   useEffect(() => {
     bridgeQuery<SourcesResult>('study:sources', {}).then((r) => {
       setSources({ ...EMPTY_SOURCES, ...r });
-      if (r.sources[0]) setKind(r.sources[0].kind);
+      // A hand-off preselected the kind; otherwise lead with the profile's first.
+      if (!props.initial && r.sources[0]) setKind(r.sources[0].kind);
     }).catch(() => setSources(EMPTY_SOURCES));
-  }, []);
+  }, [props.initial]);
 
   // Lazy-load the meetings list the first time the meeting source is chosen.
   useEffect(() => {
@@ -408,7 +430,7 @@ function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCar
         } catch (e) {
           setError(`Could not load that meeting: ${(e as Error)?.message ?? e}`); setBusy(false); return;
         }
-      } else if (kind === 'atlas' || kind === 'doc' || kind === 'decisions' || kind === 'rules' || kind === 'track') {
+      } else if (kind === 'atlas' || kind === 'doc' || kind === 'decisions' || kind === 'rules' || kind === 'track' || kind === 'document') {
         const r = await bridgeQuery<{ ok: boolean; text?: string; ref?: string; reason?: string }>('study:read-source', { kind, path: pickedPath });
         if (!r.ok || !r.text) { setError(r.reason ?? 'Could not read that source.'); setBusy(false); return; }
         sourceText = r.text; ref = r.ref;
@@ -424,13 +446,14 @@ function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCar
     } finally { setBusy(false); }
   }, [kind, text, pickedPath, pickedMeeting, meetingsOps]);
 
-  const needsPath = kind === 'doc' || kind === 'decisions' || kind === 'rules' || kind === 'track';
+  const needsPath = kind === 'doc' || kind === 'decisions' || kind === 'rules' || kind === 'track' || kind === 'document';
   const pathOptions: { path: string; title: string }[] =
     kind === 'decisions' ? sources?.decisions ?? []
       : kind === 'rules' ? sources?.rules ?? []
         : kind === 'track' ? (sources?.track ?? []).map((t) => ({ path: t.id, title: t.title }))
-          : sources?.docs ?? [];
-  const pickLabel = kind === 'decisions' ? 'decision record' : kind === 'rules' ? 'rule' : kind === 'track' ? 'work item' : 'document';
+          : kind === 'document' ? (sources?.documents ?? []).map((d) => ({ path: d.id, title: d.title }))
+            : sources?.docs ?? [];
+  const pickLabel = kind === 'decisions' ? 'decision record' : kind === 'rules' ? 'rule' : kind === 'track' ? 'work item' : kind === 'document' ? 'reading' : 'workspace file';
   const acceptedCount = proposals?.filter((p) => p._accepted).length ?? 0;
 
   return (

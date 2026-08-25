@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const ALL: StudySourceKind[] = ["text", "doc", "decisions", "rules", "atlas", "track", "meeting"];
+const ALL: StudySourceKind[] = ["text", "document", "doc", "decisions", "rules", "atlas", "track", "meeting"];
 
 test("every profile can reach every source; the order leads, never gates", () => {
   for (const profile of ["engineering", "research", "study", "product-management", "custom", "sales", "finance"]) {
@@ -26,10 +26,12 @@ test("every profile can reach every source; the order leads, never gates", () =>
   }
 });
 
-test("profile shapes the lead source (D2)", () => {
+test("profile shapes the lead source (D2); readings lead for study/research", () => {
   assert.equal(profileGenerationSources("engineering")[0]!.kind, "decisions");
   assert.equal(profileGenerationSources("product-management")[0]!.kind, "meeting");
-  assert.equal(profileGenerationSources("research")[0]!.kind, "doc");
+  // ADR-030 documents (readings) lead where a person studies material.
+  assert.equal(profileGenerationSources("research")[0]!.kind, "document");
+  assert.equal(profileGenerationSources("study")[0]!.kind, "document");
   // An unknown profile still gets a usable generic order led by paste.
   assert.equal(profileGenerationSources("nope")[0]!.kind, "text");
 });
