@@ -35,6 +35,10 @@ import { parseWorkspaceRef } from '@kinqs/brainrouter-core/workspace/references'
  */
 const MeetingsView = lazy(() =>
   import('../../components/meetings/MeetingsView.js').then((m) => ({ default: m.MeetingsView })));
+// ADR-049 — Study mode. Self-contained (its own bridgeQuery data), so like Notes
+// it renders without the workspace side-panel rail.
+const StudyView = lazy(() =>
+  import('../../study/StudyView.js').then((m) => ({ default: m.StudyView })));
 import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
 import { ChatThread } from '../../components/chat/ChatThread.js';
 import { Composer } from '../../components/chat/Composer.js';
@@ -307,6 +311,13 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         <div className="workrow" ref={workrowRef}>
           <Suspense fallback={<div className="br-planner" />}>
             <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
+          </Suspense>
+        </div>
+      ) : mode === 'study' ? (
+        // ADR-049 — workspace-scoped decks; self-contained view, no side rail.
+        <div className="workrow" ref={workrowRef}>
+          <Suspense fallback={<div className="study-mode" />}>
+            <StudyView />
           </Suspense>
         </div>
       ) : mode === 'track' ? (

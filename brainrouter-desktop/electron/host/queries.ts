@@ -83,6 +83,18 @@ import {
   walkSubtree as walkNoteSubtree,
 } from '@kinqs/brainrouter-core/notes';
 import { createNotesTransport } from './notesTransport.js';
+// ADR-049 — Study mode. Pure logic from the browser-safe barrel; the node-fs
+// store from its own subpath.
+import {
+  buildReviewSession, applyGrade, newSchedule, previewIntervalDays,
+  deckStats, reviewStreak, parseDelimitedCards, proposalsToCards,
+  deckToCsv, deckToMarkdown, isoDay,
+} from '@kinqs/brainrouter-core/study';
+import {
+  listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
+  readStudyProgress, saveStudyProgress,
+} from '@kinqs/brainrouter-core/study/store';
+import type { StudyDeck, StudyGrade, StudyCard } from '@kinqs/brainrouter-types';
 import {
   formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
 } from '@kinqs/brainrouter-core/workspace/references';
@@ -557,6 +569,24 @@ function readNoteConflictClock(
     logical: Number(clock.logical),
     deviceId: clock.deviceId,
   };
+}
+
+/**
+ * ADR-049 — the identity a workspace's Study progress is keyed by. Git's
+ * `user.email` is the natural per-person id in a repo; `local` when there is no
+ * git identity, so a non-git folder still studies. Progress files
+ * (`progress/<user>.json`) are personal and recommend `.gitignore`.
+ */
+function studyUser(workspaceRoot: string): string {
+  try {
+    const email = execFileSync('git', ['-C', workspaceRoot, 'config', 'user.email'], {
+      encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (email) return email;
+  } catch {
+    // no git identity — fall through
+  }
+  return 'local';
 }
 
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
@@ -1226,6 +1256,91 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const key = typeof args.sessionKey === 'string' ? args.sessionKey : getActiveAgent().sessionKey;
         const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 20;
         return { records: readRequestTrace(workspaceRoot, key, limit) };
+      },
+      // ADR-049 — Study mode. Decks live under this workspace's
+      // .brainrouter/study/; review progress is personal (keyed by studyUser).
+      // All logic runs here (the ADR-049 deterministic core); the renderer is a
+      // thin client over these queries.
+      'study:list': () => {
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const now = new Date();
+        const decks = listStudyDecks(workspaceRoot).map((d) => ({
+          id: d.id, name: d.name, description: d.description ?? '', tags: d.tags,
+          updatedAt: d.updatedAt, stats: deckStats(d, progress, now),
+        }));
+        return { decks, streak: reviewStreak(progress, now), user };
+      },
+      'study:read': (args) => {
+        const deck = readStudyDeck(workspaceRoot, String(args.id ?? ''));
+        return { deck: deck ?? null };
+      },
+      'study:save': (args) => {
+        const deck = args.deck as StudyDeck | undefined;
+        if (!deck || typeof deck.id !== 'string' || !deck.id.trim() || !Array.isArray(deck.cards)) {
+          return { ok: false, reason: 'invalid deck' };
+        }
+        saveStudyDeck(workspaceRoot, { ...deck, updatedAt: new Date().toISOString() });
+        return { ok: true, id: deck.id };
+      },
+      'study:delete': (args) => {
+        deleteStudyDeck(workspaceRoot, String(args.id ?? ''));
+        return { ok: true };
+      },
+      'study:import': (args) => {
+        const delimiter = args.delimiter === 'tab' ? '\t' : args.delimiter === 'comma' ? ',' : 'auto';
+        const proposals = parseDelimitedCards(String(args.text ?? ''), { delimiter });
+        const now = new Date().toISOString();
+        const base = Date.now();
+        const cards: StudyCard[] = proposalsToCards(proposals, (i) => `c-${base}-${i}`, now);
+        return { cards };
+      },
+      'study:export': (args) => {
+        const deck = readStudyDeck(workspaceRoot, String(args.id ?? ''));
+        if (!deck) return { ok: false, reason: 'no such deck' };
+        const format = args.format === 'csv' ? 'csv' : 'markdown';
+        return {
+          ok: true, format,
+          content: format === 'csv' ? deckToCsv(deck) : deckToMarkdown(deck),
+          filename: `${deck.id}.${format === 'csv' ? 'csv' : 'md'}`,
+        };
+      },
+      'study:session': (args) => {
+        const deck = readStudyDeck(workspaceRoot, String(args.id ?? ''));
+        if (!deck) return { items: [], streak: 0 };
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const now = new Date();
+        const newLimit = typeof args.newLimit === 'number' ? args.newLimit : 20;
+        const items = buildReviewSession(deck, progress, { now, newLimit }).map((it) => ({
+          card: it.card,
+          isNew: it.isNew,
+          mc: it.mc,
+          previews: {
+            again: previewIntervalDays(it.schedule, 'again'),
+            hard: previewIntervalDays(it.schedule, 'hard'),
+            good: previewIntervalDays(it.schedule, 'good'),
+            easy: previewIntervalDays(it.schedule, 'easy'),
+          },
+        }));
+        return { items, streak: reviewStreak(progress, now) };
+      },
+      'study:grade': (args) => {
+        const cardId = String(args.cardId ?? '');
+        const grade = args.grade as StudyGrade;
+        const deckId = String(args.deckId ?? '');
+        if (!cardId || !['again', 'hard', 'good', 'easy'].includes(grade)) return { ok: false };
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const now = new Date();
+        const current = progress.schedules[cardId] ?? newSchedule(cardId, now);
+        progress.schedules[cardId] = applyGrade(current, grade, now);
+        const day = isoDay(now);
+        progress.reviewsByDay[day] = (progress.reviewsByDay[day] ?? 0) + 1;
+        progress.updatedAt = now.toISOString();
+        saveStudyProgress(workspaceRoot, progress);
+        void deckId; // reserved for future per-deck review logs
+        return { ok: true, nextDueOn: progress.schedules[cardId]!.dueOn };
       },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in
