@@ -1,7 +1,8 @@
 # ADR-049 — Memory for the human
 
-**Status:** Proposed — drafted at the owner's request (2026-08-25). Planning only; no slice is
-scheduled until this ADR is accepted. Desktop-only surface.
+**Status:** Accepted — owner-commissioned and approved for build (2026-08-25). Desktop-only
+surface; workspace-scoped decks stored under the workspace root (`.brainrouter/study/`). The S1–S6
+board is being built as small green slices into `release/0.4.22`.
 
 **Depends on:** the workspace-mode system (`brainrouter-desktop/src/lib/workspace/modes.ts` —
 `WORKSPACE_MODE_IDS` / `WORKSPACE_MODE_DEFINITIONS`, rendered by `ActivityBar` and routed by
