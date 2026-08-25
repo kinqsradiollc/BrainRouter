@@ -56,19 +56,26 @@ a full study system in the Quizlet family, but workspace-native:
   source (meeting id, document, memory record, Atlas node → file). What gets offered to generate
   from is **profile-aware** (§D2).
 
-Desktop-only as a surface. The store lives in core (the Track/Notes pattern) so the data model is
-shared and testable, but no CLI or dashboard surface is part of this decision.
+Desktop-only as a surface, **workspace-scoped as data**: a deck belongs to the workspace it was
+made in, and everything lives inside that workspace's root folder (`.brainrouter/study/` — the
+same root-folder convention as ADR-047's `.brainrouter/playbooks/`). That makes a deck a project
+artifact: commit it, and every teammate who clones the repo gets the deck — a codebase-onboarding
+deck generated from the Atlas map travels with the codebase it teaches. The store *code* lives in
+core (the Track pattern) so the data model is shared and testable, but no CLI or dashboard
+surface is part of this decision.
 
 ## 3. Decisions
 
-### D1 · Study is a mode, and its scope is the person, not the repo
+### D1 · Study is a mode scoped to the current workspace
 
-It joins `WORKSPACE_MODE_IDS` as a first-class mode with the **"Across projects"** scope Notes
-and Planner established — you study *subjects*, and a subject outlives any one workspace. A
-"Rust" deck keeps accumulating whether cards came from three different repos or none. Decks may
-be *anchored* to a workspace for generation defaults, but the store is personal and global, like
-the planner's. (The alternative — per-workspace decks — was rejected: it shreds a subject across
-repos and makes the due queue lie.)
+It joins `WORKSPACE_MODE_IDS` as a first-class mode with the **"This workspace"** scope Code and
+Track established — the decks you see, review, and generate are the *current workspace's* decks,
+and switching workspaces switches decks. The owner's call, and the right one for what this is:
+the study material IS the project's knowledge (its decisions, meetings, documents, map), the
+workspace already carries the profile that shapes generation (D2), and a deck stored in the repo
+is instantly a *team* artifact — sharing is `git commit`, not an export ritual. (The alternative
+— a personal across-projects store like Notes/Planner — was considered and rejected: it detaches
+decks from the project knowledge they teach and from the teammates who need them.)
 
 ### D2 · Available in every profile; shaped by each profile
 
@@ -110,17 +117,26 @@ traced and refreshed. Source text is untrusted data end-to-end — a document ca
 that carries instructions anywhere authority lives, because a human reads every card before it
 exists.
 
-### D5 · Offline-first, local, and never locked in
+### D5 · Plain files in the workspace root; decks commit, progress stays personal
 
 Authoring, review, scheduling, and stats require no model and no network — a person can complete
-a session with everything unplugged. The store is a local, durable artifact (the Notes/Planner
-pattern; no brain-side sync in this decision — a later ADR may add `atlas_put`-style sync).
-Export (Markdown table / CSV) and import are first-class from the first slice that has cards, so
+a session with everything unplugged. Everything lives under `<workspaceRoot>/.brainrouter/study/`:
+
+- **Deck files** (`decks/*.json` — content, tags, provenance) are designed to commit cleanly:
+  stable ids, sorted keys, no timestamps that churn. Committing a deck is how a team shares it —
+  and how an `education`-profile author distributes an assessment.
+- **Review state** (ease, intervals, streaks) is *personal*, so it is keyed per user
+  (`progress/<user>.json`) and recommended for `.gitignore` — your retention is yours, and two
+  teammates reviewing the same committed deck never conflict.
+
+No brain-side sync in this decision (a later ADR may add `atlas_put`-style sync). Export
+(Markdown table / CSV) and import remain first-class from the first slice that has cards, so
 decks are portable in both directions — including from the incumbent apps.
 
 ### D6 · Nudges ride existing rails
 
-Due cards surface as a badge on the mode's ActivityBar entry and an optional once-daily reminder
+Due cards for the **active workspace's** decks surface as a badge on the mode's ActivityBar
+entry, and an optional once-daily reminder
 through the **existing** schedule store (`schedules.json` + the schedule ticker) — no new
 scheduler, no notification system, no engagement mechanics. The number is honest (truly-due
 count) or absent.
@@ -128,16 +144,17 @@ count) or absent.
 ### D7 · The renderer boundary follows the house split
 
 Pure logic (types, the SRS scheduler, distractor sampling, import/export codecs) is browser-safe
-core the renderer deep-imports; the store (node fs) lives main-process-side behind host queries —
-the same recipe as Track and the request-trace panel. No new IPC surface beyond the established
+core the renderer deep-imports; the store (node fs over `<workspaceRoot>/.brainrouter/study/`)
+lives main-process-side behind host queries — the same recipe as Track and the request-trace
+panel. No new IPC surface beyond the established
 host-query pattern.
 
 ## 4. What this does not do
 
 - **No CLI/TUI or dashboard surface, no mobile, no web** — desktop mode only.
-- **No deck marketplace, sharing, or collaboration** — personal memory, local store. (The
-  `education` profile authors decks *for* others; distribution is out of scope here — export is
-  the hand-off.)
+- **No deck marketplace or hosted sharing** — a deck is shared the way the repo is shared:
+  commit it. (The `education` profile authors decks *for* others; git and export are the
+  hand-offs — no service, no accounts.)
 - **No gamification economy** — streaks and retention stats are measurements, not points, and no
   mechanic ever changes the schedule.
 - **No auto-committed cards, ever** — including "just this once" bulk-accept-without-review.
@@ -149,10 +166,11 @@ host-query pattern.
 - [ ] **S1 — The study core.** `packages/core/src/study/`: types (deck, card, review record,
   provenance ref), the pure SM-2-family scheduler (`srs.ts` — interval/ease/lapse transitions,
   due-queue selection, deterministic and property-tested), deterministic MC distractor sampling,
-  Markdown/CSV import-export codecs, and the per-user store (`studyStore.ts`, Notes/Planner
-  scope). Browser-safe purity split per D7. *(M)*
+  Markdown/CSV import-export codecs, and the workspace-root store (`studyStore.ts` over
+  `.brainrouter/study/` — commit-clean deck files, per-user progress files, D5). Browser-safe
+  purity split per D7. *(M)*
 - [ ] **S2 — The mode shell.** `study` joins `WORKSPACE_MODE_IDS` + `WORKSPACE_MODE_DEFINITIONS`
-  ("Across projects" scope); ActivityBar picks it up; `MainContent` routes a lazy `StudyView`;
+  ("This workspace" scope); ActivityBar picks it up; `MainContent` routes a lazy `StudyView`;
   host queries for store reads/writes; empty state that teaches the mode in one screen. *(S)*
 - [ ] **S3 — Decks and authoring.** Deck CRUD, the keyboard-first card editor (prompt/answer/
   cloze/tags), import/export wired to the S1 codecs, deck list with due counts. *(M)*
@@ -178,6 +196,9 @@ host-query pattern.
 - **Profile test.** All seventeen profiles show the mode; the `study` profile's generation picker
   leads with readings/tutoring, the `engineering` profile's with decisions/rules/map — the D2
   table, observable.
+- **Clone test.** Commit a deck, clone the repo on another machine: the deck is there with
+  full provenance, due counts start fresh for the new person, and nothing of the original
+  author's personal progress came along.
 - **Portability test.** Export a deck, delete it, re-import: cards, tags, and provenance
   round-trip; scheduling state resets honestly (and says so) rather than pretending.
 - Not judged by: cards created, minutes-in-app, or any engagement number. A study system is

@@ -40,7 +40,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | **046** | **The runtime that vouches for itself** (catalogs, logged context, invariant roster) | **✅ Implemented (S1–S6)** — tripwire push channel + `tool-capabilities`/`session-history` companions; command/capability/SQL-enum drift gates; `deriveModelRequest` shared by live+resume; dashboard tripwire panel; **S6 model-class runtime catalog + drift gate (#1587)**. Personas/file-triggers intentionally left dynamic. | **0.4.22** |
 | 047 | Providers as data, agents as engines, playbooks, a vetted install | ✅ Implemented (all 4 decisions: P1 declarative providers, P2 agents-as-engines, P3 playbooks, P4a allowlist + P4b advisory install gate) | 0.4.22 |
 | 048 | A codebase map the agent actually reads (Atlas → the loop) | ✅ Implemented (S1–S6) — session hook pair fired (#1594), orientation+staleness + background refresh + prompt retrieval + blast-radius taps (deterministic, byte-neutral without a graph), `atlas_context` tool (#1595); knobs `cli.atlas.*` default on | 0.4.22 |
-| 049 | Memory for the human (Study mode — decks, SRS, generation with receipts) | 📝 Proposed — planning only (S1–S6 boarded; desktop-only mode, profile-aware generation, deterministic scheduler); accepting the ADR schedules the build | — |
+| 049 | Memory for the human (Study mode — decks, SRS, generation with receipts) | 📝 Proposed — planning only (S1–S6 boarded; desktop-only, workspace-scoped decks in `<root>/.brainrouter/study/` — committable, per-user progress; profile-aware generation, deterministic scheduler); accepting the ADR schedules the build | — |
 
 ## In flight / next
 
