@@ -10,9 +10,19 @@ import type {
   StudyCard, StudyCardProposal, StudyDeck, StudyDeckStats, StudyGrade,
 } from '@kinqs/brainrouter-types';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
+import { createMeetingsOps } from '../components/meetings/meetingsOps.js';
+import type { MeetingListItem } from '../components/meetings/types.js';
 
 interface SourceHint { kind: string; label: string; hint: string }
-interface SourcesResult { profile: string; sources: SourceHint[]; docs: { path: string; title: string }[]; decisions: { path: string; title: string }[] }
+interface FileRef { path: string; title: string }
+interface SourcesResult {
+  profile: string;
+  sources: SourceHint[];
+  docs: FileRef[];
+  decisions: FileRef[];
+  rules: FileRef[];
+  track: { id: string; title: string }[];
+}
 
 interface DeckRow {
   id: string; name: string; description: string; tags: string[];
@@ -71,6 +81,60 @@ export function StudyView(): React.JSX.Element {
 
 // --- deck list -------------------------------------------------------------
 
+/** ADR-049 S6 — the once-daily reminder toggle (a record in schedules.json). */
+function ReminderToggle(): React.JSX.Element {
+  const [state, setState] = useState<{ enabled: boolean; hour: number } | null>(null);
+  useEffect(() => {
+    bridgeQuery<{ enabled: boolean; hour: number }>('study:reminder', {})
+      .then(setState).catch(() => setState({ enabled: false, hour: 9 }));
+  }, []);
+  const set = useCallback((enabled: boolean, hour: number) => {
+    setState({ enabled, hour });
+    bridgeQuery<{ enabled: boolean; hour: number }>('study:reminder:set', { enabled, hour })
+      .then(setState).catch(() => { /* keep optimistic state */ });
+  }, []);
+  if (!state) return <span className="study-reminder" aria-busy="true" />;
+  return (
+    <label className="study-reminder" title="A once-daily nudge when cards are due (stored in this workspace's schedules).">
+      <input type="checkbox" checked={state.enabled} onChange={(e) => set(e.target.checked, state.hour)} />
+      <span>Remind me daily</span>
+      {state.enabled ? (
+        <select aria-label="Reminder hour" value={state.hour} onChange={(e) => set(true, Number(e.target.value))}>
+          {Array.from({ length: 24 }, (_, h) => (
+            <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+          ))}
+        </select>
+      ) : null}
+    </label>
+  );
+}
+
+/**
+ * ADR-049 S6 — the once-per-day due nudge. The host (study:due-nudge) decides —
+ * enabled + due + past the reminder hour + not shown today — and marks it shown,
+ * so this fires at most once per person per day. Dismissible; no new notification
+ * system, just an in-app banner.
+ */
+function DueNudge(props: { decks: DeckRow[]; onReview: (id: string, name: string) => void }): React.JSX.Element | null {
+  const [nudge, setNudge] = useState<{ show: boolean; dueCount: number } | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    bridgeQuery<{ show: boolean; dueCount: number }>('study:due-nudge', {})
+      .then(setNudge).catch(() => setNudge({ show: false, dueCount: 0 }));
+  }, []);
+  if (!nudge?.show || dismissed) return null;
+  const target = props.decks.find((d) => d.stats.dueCards + d.stats.newCards > 0);
+  return (
+    <div className="study-nudge" role="status">
+      <span>You have {nudge.dueCount} card{nudge.dueCount === 1 ? '' : 's'} due today.</span>
+      <span className="study-nudge__actions">
+        {target ? <button className="study-btn study-btn--primary" onClick={() => props.onReview(target.id, target.name)}>Review now</button> : null}
+        <button className="study-btn" onClick={() => setDismissed(true)}>Later</button>
+      </span>
+    </div>
+  );
+}
+
 function DeckList(props: {
   onNew: () => void;
   onEdit: (id: string) => void;
@@ -111,6 +175,7 @@ function DeckList(props: {
 
   return (
     <div className="study-list">
+      <DueNudge onReview={props.onReview} decks={data.decks} />
       <header className="study-list__head">
         <div>
           <h1 className="study-list__title">Study</h1>
@@ -120,7 +185,10 @@ function DeckList(props: {
               : `${totalDue} card${totalDue === 1 ? '' : 's'} to review${data.streak > 0 ? ` · ${data.streak}-day streak` : ''}`}
           </p>
         </div>
-        <button className="study-btn study-btn--primary" onClick={props.onNew}>New deck</button>
+        <div className="study-list__actions">
+          <ReminderToggle />
+          <button className="study-btn study-btn--primary" onClick={props.onNew}>New deck</button>
+        </div>
       </header>
 
       {data.decks.length === 0 ? (
@@ -290,28 +358,57 @@ function ImportDialog(props: { onClose: () => void; onImport: (text: string) => 
 
 interface Proposal extends StudyCardProposal { _accepted: boolean }
 
+const EMPTY_SOURCES: SourcesResult = { profile: 'custom', sources: [{ kind: 'text', label: 'Paste text', hint: '' }], docs: [], decisions: [], rules: [], track: [] };
+
 function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCardProposal[]) => void }): React.JSX.Element {
   const [sources, setSources] = useState<SourcesResult | null>(null);
   const [kind, setKind] = useState<string>('text');
   const [text, setText] = useState('');
   const [pickedPath, setPickedPath] = useState('');
+  const [meetings, setMeetings] = useState<MeetingListItem[] | null>(null);
+  const [pickedMeeting, setPickedMeeting] = useState('');
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ADR-049 — meetings are org/server-backed, so we reach them through the same
+  // ops the Meetings mode uses (graceful `unavailable()` when signed out), then
+  // feed the chosen summary into the local study:generate as `kind: 'meeting'`.
+  const meetingsOps = useMemo(() => createMeetingsOps(), []);
 
   useEffect(() => {
     bridgeQuery<SourcesResult>('study:sources', {}).then((r) => {
-      setSources(r);
+      setSources({ ...EMPTY_SOURCES, ...r });
       if (r.sources[0]) setKind(r.sources[0].kind);
-    }).catch(() => setSources({ profile: 'custom', sources: [{ kind: 'text', label: 'Paste text', hint: '' }], docs: [], decisions: [] }));
+    }).catch(() => setSources(EMPTY_SOURCES));
   }, []);
+
+  // Lazy-load the meetings list the first time the meeting source is chosen.
+  useEffect(() => {
+    if (kind !== 'meeting' || meetings !== null) return;
+    let alive = true;
+    meetingsOps.listPage({ limit: 50 })
+      .then((page) => { if (alive) setMeetings(page.meetings); })
+      .catch(() => { if (alive) setMeetings([]); });
+    return () => { alive = false; };
+  }, [kind, meetings, meetingsOps]);
 
   const generate = useCallback(async () => {
     setBusy(true); setError(null); setProposals(null);
     try {
       let sourceText = text;
       let ref: string | undefined;
-      if (kind === 'atlas' || kind === 'doc' || kind === 'decisions') {
+      if (kind === 'meeting') {
+        if (!pickedMeeting) { setError('Pick a meeting first.'); setBusy(false); return; }
+        try {
+          const ov = await meetingsOps.overview(pickedMeeting) as { title?: string; summaryMarkdown?: string };
+          const body = (ov.summaryMarkdown ?? '').trim();
+          if (!body) { setError('That meeting has no summary yet — generate its summary in Meetings first.'); setBusy(false); return; }
+          sourceText = ov.title ? `# ${ov.title}\n\n${body}` : body;
+          ref = pickedMeeting;
+        } catch (e) {
+          setError(`Could not load that meeting: ${(e as Error)?.message ?? e}`); setBusy(false); return;
+        }
+      } else if (kind === 'atlas' || kind === 'doc' || kind === 'decisions' || kind === 'rules' || kind === 'track') {
         const r = await bridgeQuery<{ ok: boolean; text?: string; ref?: string; reason?: string }>('study:read-source', { kind, path: pickedPath });
         if (!r.ok || !r.text) { setError(r.reason ?? 'Could not read that source.'); setBusy(false); return; }
         sourceText = r.text; ref = r.ref;
@@ -325,10 +422,15 @@ function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCar
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
     } finally { setBusy(false); }
-  }, [kind, text, pickedPath]);
+  }, [kind, text, pickedPath, pickedMeeting, meetingsOps]);
 
-  const needsPath = kind === 'doc' || kind === 'decisions';
-  const pathOptions = kind === 'decisions' ? sources?.decisions ?? [] : sources?.docs ?? [];
+  const needsPath = kind === 'doc' || kind === 'decisions' || kind === 'rules' || kind === 'track';
+  const pathOptions: { path: string; title: string }[] =
+    kind === 'decisions' ? sources?.decisions ?? []
+      : kind === 'rules' ? sources?.rules ?? []
+        : kind === 'track' ? (sources?.track ?? []).map((t) => ({ path: t.id, title: t.title }))
+          : sources?.docs ?? [];
+  const pickLabel = kind === 'decisions' ? 'decision record' : kind === 'rules' ? 'rule' : kind === 'track' ? 'work item' : 'document';
   const acceptedCount = proposals?.filter((p) => p._accepted).length ?? 0;
 
   return (
@@ -349,18 +451,36 @@ function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCar
             {kind === 'text' ? (
               <textarea className="study-input" rows={7} value={text} autoFocus
                 placeholder="Paste notes, an article, a transcript…" onChange={(e) => setText(e.target.value)} />
+            ) : kind === 'meeting' ? (
+              meetings === null ? (
+                <p className="study-srcpick__note">Loading your meetings…</p>
+              ) : meetings.length === 0 ? (
+                <p className="study-srcpick__note">No meetings found — capture one in the Meetings mode, or sign in to your organization.</p>
+              ) : (
+                <select className="study-input" value={pickedMeeting} onChange={(e) => setPickedMeeting(e.target.value)}>
+                  <option value="">Choose a meeting…</option>
+                  {meetings.map((m) => (
+                    <option key={m.id} value={m.id}>{m.title}{m.summaryStatus === 'ready' ? '' : ` (${m.summaryStatus})`}</option>
+                  ))}
+                </select>
+              )
             ) : needsPath ? (
-              <select className="study-input" value={pickedPath} onChange={(e) => setPickedPath(e.target.value)}>
-                <option value="">Choose a {kind === 'decisions' ? 'decision record' : 'document'}…</option>
-                {pathOptions.map((d) => <option key={d.path} value={d.path}>{d.title}</option>)}
-              </select>
+              pathOptions.length === 0 ? (
+                <p className="study-srcpick__note">Nothing to pick here yet — this workspace has no {pickLabel}s.</p>
+              ) : (
+                <select className="study-input" value={pickedPath} onChange={(e) => setPickedPath(e.target.value)}>
+                  <option value="">Choose a {pickLabel}…</option>
+                  {pathOptions.map((d) => <option key={d.path} value={d.path}>{d.title}</option>)}
+                </select>
+              )
             ) : (
               <p className="study-srcpick__note">Cards will be drawn from the codebase map (build one with <code>/atlas</code> first).</p>
             )}
             {error ? <p className="study-error">{error}</p> : null}
             <div className="study-dialog__actions">
               <button className="study-btn" onClick={props.onClose}>Cancel</button>
-              <button className="study-btn study-btn--primary" disabled={busy || (needsPath && !pickedPath) || (kind === 'text' && !text.trim())}
+              <button className="study-btn study-btn--primary"
+                disabled={busy || (needsPath && !pickedPath) || (kind === 'meeting' && !pickedMeeting) || (kind === 'text' && !text.trim())}
                 onClick={generate}>{busy ? 'Generating…' : 'Generate'}</button>
             </div>
           </>

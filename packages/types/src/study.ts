@@ -22,6 +22,7 @@ export type StudyProvenance =
   | { kind: "memory"; id: string }
   | { kind: "atlas"; nodeId: string; filePath?: string }
   | { kind: "adr"; number: string }
+  | { kind: "track"; id: string }
   | { kind: "manual" };
 
 /** How a card is quizzed. `cloze` fronts carry `{{...}}` spans to blank out. */
@@ -90,6 +91,9 @@ export interface StudyProgress {
   schedules: Record<string, StudyCardSchedule>;
   /** ISO date (`YYYY-MM-DD`) → reviews graded that day, for the streak. */
   reviewsByDay: Record<string, number>;
+  /** ADR-049 S6 — the last day the desktop showed a study reminder nudge, so it
+   *  fires at most once per day (per person). Absent until the first nudge. */
+  lastNudgeDay?: string;
   updatedAt: string;
 }
 
