@@ -13,6 +13,7 @@ import {
 import { pickDistractors, multipleChoiceOptions } from "../study/distractors.js";
 import { parseDelimitedCards, deckToCsv, deckToMarkdown, proposalsToCards } from "../study/codecs.js";
 import { deckStats, reviewStreak } from "../study/stats.js";
+import { buildGenerationPrompt, parseCardProposals, profileGenerationSources } from "../study/generate.js";
 import {
   listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
   readStudyProgress, saveStudyProgress, decksDir,
@@ -183,6 +184,36 @@ test("store — progress is per-user and isolated", async () => {
     // Bob's progress is untouched by Alice's.
     assert.deepEqual(readStudyProgress(ws, "bob").schedules, {});
   });
+});
+
+// --- generation ------------------------------------------------------------
+
+test("generate — parse tolerates fences/prose, validates, bounds, stamps provenance", () => {
+  const reply = 'Here are the cards:\n```json\n[{"front":"What is SM-2?","back":"A spaced-repetition algorithm","tags":["srs","x","y","z","w","v","EXTRA"]},{"front":"","back":"skip me"},{"q":"Alt keys?","a":"handled"}]\n```';
+  const cards = parseCardProposals(reply, { kind: "adr", number: "49" });
+  assert.equal(cards.length, 2); // the empty-front row dropped; q/a aliases accepted
+  assert.equal(cards[0]!.front, "What is SM-2?");
+  assert.equal(cards[0]!.tags.length, 6); // capped
+  assert.deepEqual(cards[0]!.provenance, { kind: "adr", number: "49" });
+  assert.equal(cards[1]!.front, "Alt keys?");
+  // A malformed reply yields [] — never a half-card.
+  assert.deepEqual(parseCardProposals("not json at all"), []);
+  assert.deepEqual(parseCardProposals("[ broken"), []);
+});
+
+test("generate — prompt bounds the source; profile orders the sources (D2)", () => {
+  const { system, user } = buildGenerationPrompt("x".repeat(50_000), { count: 8, focus: "APIs" });
+  assert.match(system, /JSON array/);
+  assert.match(user, /Focus on: APIs/);
+  assert.ok(user.length < 25_000, "source clipped");
+
+  // Engineering leads with decisions + the map; every profile still lists all 4.
+  const eng = profileGenerationSources("engineering").map((s) => s.kind);
+  assert.equal(eng[0], "decisions");
+  assert.ok(eng.includes("atlas") && eng.includes("text"));
+  const study = profileGenerationSources("study").map((s) => s.kind);
+  assert.equal(study[0], "doc");
+  assert.equal(new Set(profileGenerationSources("custom").map((s) => s.kind)).size, 4);
 });
 
 test("stats — new/learning/review/due counts + streak are honest", () => {

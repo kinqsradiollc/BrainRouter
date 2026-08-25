@@ -89,7 +89,10 @@ import {
   buildReviewSession, applyGrade, newSchedule, previewIntervalDays,
   deckStats, reviewStreak, parseDelimitedCards, proposalsToCards,
   deckToCsv, deckToMarkdown, isoDay,
+  buildGenerationPrompt, parseCardProposals, profileGenerationSources,
+  type StudySourceKind,
 } from '@kinqs/brainrouter-core/study';
+import { atlasOrientation } from '@kinqs/brainrouter-core/atlas';
 import {
   listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
   readStudyProgress, saveStudyProgress,
@@ -1341,6 +1344,81 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         saveStudyProgress(workspaceRoot, progress);
         void deckId; // reserved for future per-deck review logs
         return { ok: true, nextDueOn: progress.schedules[cardId]!.dueOn };
+      },
+      // ADR-049 S5 — generation with receipts. `study:sources` offers profile-
+      // ordered sources + the pickable docs/ADRs; `study:read-source` resolves
+      // one to text; `study:generate` runs the model and returns PROPOSALS (never
+      // committed cards — the renderer's tray gates every one).
+      'study:sources': () => {
+        let profile = 'custom';
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(workspaceRoot, '.brainrouter', 'workspace.json'), 'utf8'));
+          if (typeof raw?.profile === 'string') profile = raw.profile;
+        } catch { /* no manifest — generic order */ }
+        const listMd = (dir: string, limit: number): { path: string; title: string }[] => {
+          try {
+            return fs.readdirSync(path.join(workspaceRoot, dir))
+              .filter((n) => n.endsWith('.md')).sort().slice(0, limit)
+              .map((n) => ({ path: path.join(dir, n), title: n.replace(/\.md$/, '') }));
+          } catch { return []; }
+        };
+        return {
+          profile,
+          sources: profileGenerationSources(profile),
+          docs: listMd('.', 40).concat(listMd('docs', 40)).slice(0, 60),
+          decisions: listMd(path.join('brainrouter-docs', 'decisions'), 100),
+        };
+      },
+      'study:read-source': (args) => {
+        const kind = args.kind as StudySourceKind;
+        if (kind === 'atlas') {
+          const graph = readAtlasGraph(workspaceRoot);
+          if (!graph) return { ok: false, reason: 'No codebase map yet — build one with /atlas.' };
+          const layers = graph.layers.map((l) => `- ${l.name}: ${l.nodeIds.length} files`).join('\n');
+          const summaries = graph.nodes.filter((n) => n.summary).slice(0, 120)
+            .map((n) => `- ${n.filePath ?? n.name}: ${n.summary}`).join('\n');
+          return { ok: true, text: `${atlasOrientation(graph)}\n\nLayers:\n${layers}\n\nFiles:\n${summaries}`, ref: 'atlas' };
+        }
+        // doc / decisions — a workspace-relative file, guarded within the root.
+        const rel = String(args.path ?? '');
+        const resolved = path.resolve(workspaceRoot, rel);
+        if (!resolved.startsWith(path.resolve(workspaceRoot) + path.sep)) {
+          return { ok: false, reason: 'path escapes the workspace' };
+        }
+        try {
+          return { ok: true, text: fs.readFileSync(resolved, 'utf8').slice(0, 60_000), ref: rel };
+        } catch {
+          return { ok: false, reason: 'could not read that file' };
+        }
+      },
+      'study:generate': async (args) => {
+        const text = String(args.text ?? '').trim();
+        if (!text) return { ok: false, reason: 'no source text' };
+        const kind = (args.kind as StudySourceKind) ?? 'text';
+        const ref = typeof args.ref === 'string' ? args.ref : undefined;
+        const llm = llmForSession(getActiveAgent().sessionKey);
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+          return { ok: false, reason: 'No model is configured — set one in the model picker to generate cards.' };
+        }
+        const { system, user } = buildGenerationPrompt(text, {
+          count: typeof args.count === 'number' ? args.count : 12,
+          focus: typeof args.focus === 'string' ? args.focus : undefined,
+        });
+        let raw = '';
+        try {
+          const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: user }], [], { effort: 'low' });
+          raw = (resp?.content as string) ?? '';
+        } catch (e) {
+          return { ok: false, reason: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        const provenance = kind === 'atlas'
+          ? { kind: 'atlas' as const, nodeId: 'atlas' }
+          : kind === 'decisions'
+            ? { kind: 'adr' as const, number: (ref ?? '').replace(/[^0-9]/g, '') || '?' }
+            : ref
+              ? { kind: 'doc' as const, path: ref }
+              : undefined;
+        return { ok: true, proposals: parseCardProposals(raw, provenance) };
       },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in

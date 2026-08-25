@@ -7,9 +7,12 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  StudyCard, StudyDeck, StudyDeckStats, StudyGrade,
+  StudyCard, StudyCardProposal, StudyDeck, StudyDeckStats, StudyGrade,
 } from '@kinqs/brainrouter-types';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
+
+interface SourceHint { kind: string; label: string; hint: string }
+interface SourcesResult { profile: string; sources: SourceHint[]; docs: { path: string; title: string }[]; decisions: { path: string; title: string }[] }
 
 interface DeckRow {
   id: string; name: string; description: string; tags: string[];
@@ -169,6 +172,7 @@ function DeckList(props: {
 function DeckEditor(props: { deckId: string | null; onDone: () => void }): React.JSX.Element {
   const [deck, setDeck] = useState<StudyDeck | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -201,6 +205,16 @@ function DeckEditor(props: { deckId: string | null; onDone: () => void }): React
     setImportOpen(false);
   }, [mutate]);
 
+  const onAcceptGenerated = useCallback((accepted: StudyCardProposal[]) => {
+    const now = new Date().toISOString();
+    const cards: StudyCard[] = accepted.map((p) => ({
+      id: newId('c'), front: p.front, back: p.back, format: p.format, tags: p.tags,
+      ...(p.provenance ? { provenance: p.provenance } : {}), createdAt: now,
+    }));
+    mutate((d) => ({ ...d, cards: [...d.cards, ...cards] }));
+    setGenerateOpen(false);
+  }, [mutate]);
+
   if (!deck) return <div className="study-empty"><p>Deck not found.</p><button className="study-btn" onClick={props.onDone}>Back</button></div>;
 
   const commit = async () => { await save(deck); props.onDone(); };
@@ -210,6 +224,7 @@ function DeckEditor(props: { deckId: string | null; onDone: () => void }): React
       <header className="study-editor__head">
         <button className="study-btn study-btn--ghost" onClick={props.onDone}>← Decks</button>
         <div className="study-editor__actions">
+          <button className="study-btn" onClick={() => setGenerateOpen(true)}>✨ Generate</button>
           <button className="study-btn" onClick={() => setImportOpen(true)}>Import</button>
           <button className="study-btn" onClick={addCard}>Add card</button>
           <button className="study-btn study-btn--primary" onClick={commit} disabled={busy}>Save</button>
@@ -224,6 +239,7 @@ function DeckEditor(props: { deckId: string | null; onDone: () => void }): React
       </div>
 
       {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} onImport={onImport} /> : null}
+      {generateOpen ? <GenerateDialog onClose={() => setGenerateOpen(false)} onAccept={onAcceptGenerated} /> : null}
 
       {deck.cards.length === 0 ? (
         <div className="study-empty">
@@ -270,13 +286,157 @@ function ImportDialog(props: { onClose: () => void; onImport: (text: string) => 
   );
 }
 
+// --- generation with receipts ----------------------------------------------
+
+interface Proposal extends StudyCardProposal { _accepted: boolean }
+
+function GenerateDialog(props: { onClose: () => void; onAccept: (cards: StudyCardProposal[]) => void }): React.JSX.Element {
+  const [sources, setSources] = useState<SourcesResult | null>(null);
+  const [kind, setKind] = useState<string>('text');
+  const [text, setText] = useState('');
+  const [pickedPath, setPickedPath] = useState('');
+  const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    bridgeQuery<SourcesResult>('study:sources', {}).then((r) => {
+      setSources(r);
+      if (r.sources[0]) setKind(r.sources[0].kind);
+    }).catch(() => setSources({ profile: 'custom', sources: [{ kind: 'text', label: 'Paste text', hint: '' }], docs: [], decisions: [] }));
+  }, []);
+
+  const generate = useCallback(async () => {
+    setBusy(true); setError(null); setProposals(null);
+    try {
+      let sourceText = text;
+      let ref: string | undefined;
+      if (kind === 'atlas' || kind === 'doc' || kind === 'decisions') {
+        const r = await bridgeQuery<{ ok: boolean; text?: string; ref?: string; reason?: string }>('study:read-source', { kind, path: pickedPath });
+        if (!r.ok || !r.text) { setError(r.reason ?? 'Could not read that source.'); setBusy(false); return; }
+        sourceText = r.text; ref = r.ref;
+      }
+      if (!sourceText.trim()) { setError('Nothing to generate from — add some source text.'); setBusy(false); return; }
+      const g = await bridgeQuery<{ ok: boolean; proposals?: StudyCardProposal[]; reason?: string }>('study:generate', { text: sourceText, kind, ref, count: 12 }, 90_000);
+      if (!g.ok) { setError(g.reason ?? 'Generation failed.'); setBusy(false); return; }
+      const list = (g.proposals ?? []).map((p) => ({ ...p, _accepted: true }));
+      setProposals(list);
+      if (list.length === 0) setError('The model returned no usable cards. Try a longer or clearer source.');
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e));
+    } finally { setBusy(false); }
+  }, [kind, text, pickedPath]);
+
+  const needsPath = kind === 'doc' || kind === 'decisions';
+  const pathOptions = kind === 'decisions' ? sources?.decisions ?? [] : sources?.docs ?? [];
+  const acceptedCount = proposals?.filter((p) => p._accepted).length ?? 0;
+
+  return (
+    <div className="study-dialog" role="dialog" aria-label="Generate cards">
+      <div className="study-dialog__body study-dialog__body--wide">
+        <h3>Generate cards</h3>
+        {proposals === null ? (
+          <>
+            <p>Draft flashcards from what this workspace knows — you review every one before it lands.
+              {sources ? <> Ordered for the <strong>{sources.profile}</strong> profile.</> : null}</p>
+            <div className="study-srcpick">
+              {(sources?.sources ?? []).map((s) => (
+                <button key={s.kind} className={`study-srcpick__btn ${kind === s.kind ? 'is-on' : ''}`} onClick={() => setKind(s.kind)}>
+                  <strong>{s.label}</strong><span>{s.hint}</span>
+                </button>
+              ))}
+            </div>
+            {kind === 'text' ? (
+              <textarea className="study-input" rows={7} value={text} autoFocus
+                placeholder="Paste notes, an article, a transcript…" onChange={(e) => setText(e.target.value)} />
+            ) : needsPath ? (
+              <select className="study-input" value={pickedPath} onChange={(e) => setPickedPath(e.target.value)}>
+                <option value="">Choose a {kind === 'decisions' ? 'decision record' : 'document'}…</option>
+                {pathOptions.map((d) => <option key={d.path} value={d.path}>{d.title}</option>)}
+              </select>
+            ) : (
+              <p className="study-srcpick__note">Cards will be drawn from the codebase map (build one with <code>/atlas</code> first).</p>
+            )}
+            {error ? <p className="study-error">{error}</p> : null}
+            <div className="study-dialog__actions">
+              <button className="study-btn" onClick={props.onClose}>Cancel</button>
+              <button className="study-btn study-btn--primary" disabled={busy || (needsPath && !pickedPath) || (kind === 'text' && !text.trim())}
+                onClick={generate}>{busy ? 'Generating…' : 'Generate'}</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p>{proposals.length} proposed — untick any you don’t want, edit inline, then add. Each keeps a link to its source.</p>
+            <ol className="study-tray">
+              {proposals.map((p, idx) => (
+                <li key={idx} className={`study-tray__row ${p._accepted ? '' : 'is-rejected'}`}>
+                  <input type="checkbox" checked={p._accepted}
+                    onChange={(e) => setProposals((ps) => ps!.map((q, i) => i === idx ? { ...q, _accepted: e.target.checked } : q))} />
+                  <div className="study-tray__cells">
+                    <input className="study-input" value={p.front}
+                      onChange={(e) => setProposals((ps) => ps!.map((q, i) => i === idx ? { ...q, front: e.target.value } : q))} />
+                    <input className="study-input" value={p.back}
+                      onChange={(e) => setProposals((ps) => ps!.map((q, i) => i === idx ? { ...q, back: e.target.value } : q))} />
+                  </div>
+                  {p.provenance && p.provenance.kind !== 'manual'
+                    ? <span className="study-src" title="Source">{p.provenance.kind}</span> : null}
+                </li>
+              ))}
+            </ol>
+            {error ? <p className="study-error">{error}</p> : null}
+            <div className="study-dialog__actions">
+              <button className="study-btn" onClick={() => setProposals(null)}>← Back</button>
+              <button className="study-btn study-btn--primary" disabled={acceptedCount === 0}
+                onClick={() => props.onAccept(proposals.filter((p) => p._accepted).map(({ _accepted, ...p }) => { void _accepted; return p; }))}>
+                Add {acceptedCount} card{acceptedCount === 1 ? '' : 's'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // --- review session --------------------------------------------------------
+
+type ReviewMode = 'flip' | 'choice' | 'type';
+const REVIEW_MODES: { id: ReviewMode; label: string }[] = [
+  { id: 'flip', label: 'Flip' }, { id: 'choice', label: 'Choice' }, { id: 'type', label: 'Type' },
+];
+
+/** Character-level diff of a typed answer vs the expected answer, as spans. */
+function diffAnswer(typed: string, expected: string): { correct: boolean; nodes: React.ReactNode } {
+  const t = typed.trim();
+  const e = expected.trim();
+  const correct = t.toLowerCase() === e.toLowerCase();
+  if (correct) return { correct, nodes: <span className="study-diff__ok">{e}</span> };
+  // Show the expected answer with the shared prefix/suffix marked, the middle wrong.
+  let pre = 0;
+  while (pre < t.length && pre < e.length && t[pre]!.toLowerCase() === e[pre]!.toLowerCase()) pre++;
+  let suf = 0;
+  while (suf < e.length - pre && suf < t.length - pre && e[e.length - 1 - suf]!.toLowerCase() === t[t.length - 1 - suf]!.toLowerCase()) suf++;
+  const okStart = e.slice(0, pre);
+  const wrong = e.slice(pre, e.length - suf);
+  const okEnd = e.slice(e.length - suf);
+  return {
+    correct,
+    nodes: <>
+      <span className="study-diff__ok">{okStart}</span>
+      <span className="study-diff__miss">{wrong}</span>
+      <span className="study-diff__ok">{okEnd}</span>
+    </>,
+  };
+}
 
 function ReviewSession(props: { deckId: string; deckName: string; onDone: () => void }): React.JSX.Element {
   const [queue, setQueue] = useState<ReviewItem[] | null>(null);
   const [pos, setPos] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [graded, setGraded] = useState(0);
+  const [reviewMode, setReviewMode] = useState<ReviewMode>('flip');
+  const [picked, setPicked] = useState<number | null>(null);
+  const [typed, setTyped] = useState('');
   const againRef = useRef<ReviewItem[]>([]);
 
   useEffect(() => {
@@ -289,6 +449,8 @@ function ReviewSession(props: { deckId: string; deckName: string; onDone: () => 
 
   const advance = useCallback((requeue: ReviewItem | null) => {
     setRevealed(false);
+    setPicked(null);
+    setTyped('');
     setQueue((q) => {
       if (!q) return q;
       const next = requeue ? [...q, requeue] : q;
@@ -333,6 +495,9 @@ function ReviewSession(props: { deckId: string; deckName: string; onDone: () => 
 
   const remaining = queue.length - pos;
   void againRef;
+  const canMc = reviewMode === 'choice' && current.mc.options.length >= 2;
+  const typedDiff = revealed && reviewMode === 'type' ? diffAnswer(typed, current.card.back) : null;
+
   return (
     <div className="study-review">
       <header className="study-review__head">
@@ -340,12 +505,50 @@ function ReviewSession(props: { deckId: string; deckName: string; onDone: () => 
         <div className="study-review__meta">
           <span>{props.deckName}</span>
           <span className="study-review__count">{remaining} left{current.isNew ? ' · new card' : ''}</span>
+          <div className="study-modeswitch" role="tablist" aria-label="Review format">
+            {REVIEW_MODES.map((m) => (
+              <button key={m.id} role="tab" aria-selected={reviewMode === m.id}
+                className={`study-modeswitch__btn ${reviewMode === m.id ? 'is-on' : ''}`}
+                onClick={() => { setReviewMode(m.id); setRevealed(false); setPicked(null); setTyped(''); }}>
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
-      <div className={`study-card ${revealed ? 'is-revealed' : ''}`} onClick={() => !revealed && setRevealed(true)}>
+      <div className={`study-card ${revealed ? 'is-revealed' : ''}`}
+        onClick={() => reviewMode === 'flip' && !revealed && setRevealed(true)}>
         <div className="study-card__front">{renderFront(current.card)}</div>
-        {revealed ? (
+
+        {reviewMode === 'choice' && canMc ? (
+          <div className="study-choices">
+            {current.mc.options.map((opt, idx) => {
+              const isAnswer = idx === current.mc.correctIndex;
+              const state = picked === null ? '' : isAnswer ? 'is-correct' : idx === picked ? 'is-wrong' : '';
+              return (
+                <button key={idx} className={`study-choice ${state}`} disabled={picked !== null}
+                  onClick={() => { setPicked(idx); setRevealed(true); }}>
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+        ) : reviewMode === 'type' ? (
+          revealed ? (
+            <div className="study-typed">
+              <div className={`study-typed__result ${typedDiff?.correct ? 'is-ok' : 'is-miss'}`}>
+                {typedDiff?.correct ? '✓ Correct' : 'Expected:'} {typedDiff?.nodes}
+              </div>
+              {!typedDiff?.correct && typed.trim() ? <div className="study-typed__yours">You typed: {typed}</div> : null}
+            </div>
+          ) : (
+            <form className="study-typed" onSubmit={(e) => { e.preventDefault(); setRevealed(true); }}>
+              <input className="study-input" autoFocus placeholder="Type the answer, then Enter"
+                value={typed} onChange={(e) => setTyped(e.target.value)} />
+            </form>
+          )
+        ) : revealed ? (
           <>
             <hr className="study-card__rule" />
             <div className="study-card__back">{current.card.back || <em>(no answer text)</em>}</div>
@@ -367,7 +570,11 @@ function ReviewSession(props: { deckId: string; deckName: string; onDone: () => 
         </div>
       ) : (
         <div className="study-grades study-grades--hint">
-          <button className="study-btn study-btn--primary" onClick={() => setRevealed(true)}>Reveal answer</button>
+          {reviewMode === 'flip'
+            ? <button className="study-btn study-btn--primary" onClick={() => setRevealed(true)}>Reveal answer</button>
+            : reviewMode === 'type'
+              ? <button className="study-btn study-btn--primary" onClick={() => setRevealed(true)}>Check</button>
+              : <span className="study-card__hint">Pick an answer</span>}
         </div>
       )}
     </div>
