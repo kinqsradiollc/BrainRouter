@@ -5,6 +5,7 @@ export * from "./artifact.js";
 export * from "./attachment.js";
 export * from "./requirement.js";
 export * from "./atlas.js";
+export * from "./study.js";
 export * from "./atlas-ops.js";
 export * from "./atlas-json.js";
 export * from "./atlas-enrich.js";

@@ -4,7 +4,7 @@
  * the rail, transition feedback, and cross-mode links agree on what changed.
  */
 
-export const WORKSPACE_MODE_IDS = ['chat', 'code', 'track', 'meetings', 'planner', 'notes'] as const;
+export const WORKSPACE_MODE_IDS = ['chat', 'code', 'track', 'meetings', 'planner', 'notes', 'study'] as const;
 
 export type WorkspaceMode = (typeof WORKSPACE_MODE_IDS)[number];
 
@@ -48,6 +48,11 @@ export const WORKSPACE_MODE_DEFINITIONS: readonly WorkspaceModeDefinition[] = [
     summary: 'Write and connect personal notes that are not limited to one workspace.',
     access: 'Workspace panels stay out of this view',
   },
+  {
+    id: 'study', label: 'Study', icon: 'study', scope: 'This workspace',
+    summary: 'Build decks and review what this project taught you — spaced repetition.',
+    access: 'Decks live in the workspace; review progress is personal',
+  },
 ];
 
 const MODES_BY_ID = new Map(WORKSPACE_MODE_DEFINITIONS.map((definition) => [definition.id, definition]));
@@ -84,7 +89,9 @@ export function describeModeTransition(from: WorkspaceMode, to: WorkspaceMode): 
         ? 'Refreshing this workspace’s work, Git, checks, and review state.'
         : to === 'meetings'
           ? 'Meeting capture stays active if you move to another mode.'
-          : 'This personal view spans projects, so workspace panels are kept out of the way.';
+          : to === 'study'
+            ? 'Reviewing this workspace’s decks. Your review progress is personal to you.'
+            : 'This personal view spans projects, so workspace panels are kept out of the way.';
 
   return { from, to, changed: true, message };
 }
