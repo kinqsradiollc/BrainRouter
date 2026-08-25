@@ -23,6 +23,7 @@ export type StudyProvenance =
   | { kind: "atlas"; nodeId: string; filePath?: string }
   | { kind: "adr"; number: string }
   | { kind: "track"; id: string }
+  | { kind: "document"; attachmentId: string }
   | { kind: "manual" };
 
 /** How a card is quizzed. `cloze` fronts carry `{{...}}` spans to blank out. */

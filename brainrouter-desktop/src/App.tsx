@@ -47,6 +47,7 @@ import { Sidebar } from './components/layout/Sidebar.js';
 import { ToolingNotice } from './components/ToolingNotice.js';
 import { ActivityBar } from './components/layout/ActivityBar.js';
 import { describeModeTransition, type ModeTransition, type WorkspaceMode } from './lib/workspace/modes.js';
+import { STUDY_GENERATE_EVENT } from './study/studyHandoff.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import {
@@ -183,6 +184,14 @@ export function App(): React.ReactElement {
     setMode(next);
     setModeTransition(transition);
   }, [mode]);
+  // ADR-049 — the Document reader (in Code mode) can hand a reading to Study;
+  // it queues the intent and fires this event. Switch to Study, where StudyView
+  // takes the intent on mount and opens the generate tray preselected.
+  useEffect(() => {
+    const toStudy = (): void => requestMode('study');
+    window.addEventListener(STUDY_GENERATE_EVENT, toStudy);
+    return () => window.removeEventListener(STUDY_GENERATE_EVENT, toStudy);
+  }, [requestMode]);
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });

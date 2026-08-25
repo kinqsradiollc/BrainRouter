@@ -1374,6 +1374,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             .slice(0, 100)
             .map((w: WorkItem) => ({ id: w.id, title: `${w.key ?? w.id}: ${w.title}` }));
         } catch { /* no track board — empty */ }
+        // ADR-030 documents (ADR-049 D2 "documents/readings"): ingested attachments
+        // that were PARSED into a readable artifact (documentRef present).
+        let documents: { id: string; title: string }[] = [];
+        try {
+          documents = listAttachments(workspaceRoot)
+            .filter((a) => a.documentRef)
+            .slice(0, 80)
+            .map((a) => ({ id: a.id, title: a.name }));
+        } catch { /* no attachments — empty */ }
         return {
           profile,
           sources: profileGenerationSources(profile),
@@ -1381,6 +1390,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           decisions: listMd(path.join('brainrouter-docs', 'decisions'), 100),
           rules: listMd('brainrouter-rules', 60),
           track,
+          documents,
         };
       },
       'study:read-source': (args) => {
@@ -1392,6 +1402,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           const summaries = graph.nodes.filter((n) => n.summary).slice(0, 120)
             .map((n) => `- ${n.filePath ?? n.name}: ${n.summary}`).join('\n');
           return { ok: true, text: `${atlasOrientation(graph)}\n\nLayers:\n${layers}\n\nFiles:\n${summaries}`, ref: 'atlas' };
+        }
+        if (kind === 'document') {
+          // ADR-030 — an ingested document's parsed parts, concatenated + bounded.
+          const id = String(args.path ?? args.ref ?? '');
+          if (!getAttachment(workspaceRoot, id)) return { ok: false, reason: 'no such document' };
+          const artifact = readDocumentArtifact(workspaceRoot, id);
+          if (!artifact) return { ok: false, reason: 'that attachment has no parsed document yet' };
+          const text = artifact.parts.map((p) => p.text).join('\n\n').slice(0, 60_000);
+          if (!text.trim()) return { ok: false, reason: 'the document had no extractable text' };
+          return { ok: true, text, ref: id };
         }
         if (kind === 'track') {
           // A single Track work item → its title + description + comments as text.
@@ -1451,9 +1471,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               ? { kind: 'track' as const, id: ref }
               : kind === 'meeting' && ref
                 ? { kind: 'meeting' as const, id: ref }
-                : ref
-                  ? { kind: 'doc' as const, path: ref } // doc + rules are files
-                  : undefined;
+                : kind === 'document' && ref
+                  ? { kind: 'document' as const, attachmentId: ref }
+                  : ref
+                    ? { kind: 'doc' as const, path: ref } // doc + rules are files
+                    : undefined;
         return { ok: true, proposals: parseCardProposals(raw, provenance) };
       },
       // ADR-049 S6 / D6 — the once-daily reminder, a record in the EXISTING

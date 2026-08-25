@@ -23,12 +23,14 @@ export interface GenerationPrompt {
 }
 
 /** A source the "Generate cards" flow can draw from. */
-export type StudySourceKind = "text" | "doc" | "decisions" | "rules" | "atlas" | "track" | "meeting";
+export type StudySourceKind = "text" | "document" | "doc" | "decisions" | "rules" | "atlas" | "track" | "meeting";
 export interface StudySourceHint { kind: StudySourceKind; label: string; hint: string }
 
 const SOURCE_HINT: Record<StudySourceKind, StudySourceHint> = {
   text: { kind: "text", label: "Paste text", hint: "Any material — notes, an article, a transcript." },
-  doc: { kind: "doc", label: "A document", hint: "A Markdown file in this workspace." },
+  // ADR-030 documents (ingested PDFs/readings), distinct from workspace `.md`.
+  document: { kind: "document", label: "A reading", hint: "A PDF or document you've attached and read." },
+  doc: { kind: "doc", label: "A workspace file", hint: "A Markdown file in this workspace." },
   decisions: { kind: "decisions", label: "A decision (ADR)", hint: "An architecture decision record." },
   rules: { kind: "rules", label: "An engineering rule", hint: "A conventions/handbook rule for this repo." },
   atlas: { kind: "atlas", label: "The codebase map", hint: "What the Atlas map knows about this repo." },
@@ -38,25 +40,27 @@ const SOURCE_HINT: Record<StudySourceKind, StudySourceHint> = {
 
 // Every source kind, in a stable fallback order. `text` (paste) leads because it
 // is the one source available with nothing configured and no data present.
-const ALL_SOURCES: StudySourceKind[] = ["text", "doc", "decisions", "rules", "atlas", "track", "meeting"];
+const ALL_SOURCES: StudySourceKind[] = ["text", "document", "doc", "decisions", "rules", "atlas", "track", "meeting"];
 
 /**
  * ADR-049 D2 — the sources the Generate flow offers FIRST, ordered by the active
  * workspace's profile. Every source stays reachable from every profile (the
- * order is a lead, not a gate); `text` (paste) is always available.
+ * order is a lead, not a gate); `text` (paste) is always available. Readings
+ * (ingested documents) lead for the study/research profiles — the material a
+ * person there is most often turning into cards.
  */
 export function profileGenerationSources(profileId: string): StudySourceHint[] {
   const order: StudySourceKind[] =
     profileId === "engineering" || profileId === "data-science"
-      ? ["decisions", "atlas", "rules", "track", "doc", "meeting", "text"]
+      ? ["decisions", "atlas", "rules", "track", "document", "doc", "meeting", "text"]
       : profileId === "research" || profileId === "writing"
-        ? ["doc", "text", "decisions", "meeting"]
+        ? ["document", "doc", "text", "decisions", "meeting"]
         : profileId === "study" || profileId === "education"
-          ? ["doc", "text", "decisions", "meeting"]
+          ? ["document", "doc", "text", "decisions", "meeting"]
           : profileId === "product-management" || profileId === "operations"
             || profileId === "sales" || profileId === "consulting"
-            ? ["meeting", "track", "doc", "text"]
-            : ["text", "doc", "decisions", "atlas"];
+            ? ["meeting", "track", "document", "doc", "text"]
+            : ["text", "document", "doc", "decisions", "atlas"];
   const seen = new Set<StudySourceKind>();
   const ordered: StudySourceHint[] = [];
   for (const kind of [...order, ...ALL_SOURCES]) {
