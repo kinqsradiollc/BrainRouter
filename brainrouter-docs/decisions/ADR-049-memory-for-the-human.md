@@ -1,6 +1,6 @@
 # ADR-049 — Memory for the human
 
-**Status:** Accepted — owner-commissioned and approved for build (2026-08-25). Desktop-only
+**Status:** Accepted — **implemented (S1–S6)** on `release/0.4.22` (#1598). Desktop-only
 surface; workspace-scoped decks stored under the workspace root (`.brainrouter/study/`). The S1–S6
 board is being built as small green slices into `release/0.4.22`.
 
@@ -164,26 +164,26 @@ host-query pattern.
 
 ## 5. Delivery board
 
-- [ ] **S1 — The study core.** `packages/core/src/study/`: types (deck, card, review record,
+- [x] **S1 — The study core.** `packages/core/src/study/`: types (deck, card, review record,
   provenance ref), the pure SM-2-family scheduler (`srs.ts` — interval/ease/lapse transitions,
   due-queue selection, deterministic and property-tested), deterministic MC distractor sampling,
   Markdown/CSV import-export codecs, and the workspace-root store (`studyStore.ts` over
   `.brainrouter/study/` — commit-clean deck files, per-user progress files, D5). Browser-safe
-  purity split per D7. *(M)*
-- [ ] **S2 — The mode shell.** `study` joins `WORKSPACE_MODE_IDS` + `WORKSPACE_MODE_DEFINITIONS`
+  purity split per D7. *(M)* *(#1598 — 12 core tests: scheduler determinism/lapse, distractors, codec round-trip, commit-clean + per-user store, generation parse.)*
+- [x] **S2 — The mode shell.** `study` joins `WORKSPACE_MODE_IDS` + `WORKSPACE_MODE_DEFINITIONS`
   ("This workspace" scope); ActivityBar picks it up; `MainContent` routes a lazy `StudyView`;
-  host queries for store reads/writes; empty state that teaches the mode in one screen. *(S)*
-- [ ] **S3 — Decks and authoring.** Deck CRUD, the keyboard-first card editor (prompt/answer/
-  cloze/tags), import/export wired to the S1 codecs, deck list with due counts. *(M)*
-- [ ] **S4 — The review engine.** The due-queue session UI: flip-and-grade (again/hard/good/easy,
+  host queries for store reads/writes; empty state that teaches the mode in one screen. *(S)* *(#1598 — all logic host-side behind study:* queries; the renderer is a thin bridgeQuery client, no node:fs in the bundle.)*
+- [x] **S3 — Decks and authoring.** Deck CRUD, the keyboard-first card editor (prompt/answer/
+  cloze/tags), import/export wired to the S1 codecs, deck list with due counts. *(M)* *(#1598 — deck CRUD, keyboard editor, TSV/CSV import + MD/CSV export.)*
+- [x] **S4 — The review engine.** The due-queue session UI: flip-and-grade (again/hard/good/easy,
   keyboard 1–4), session summary, per-deck stats (retention, streak, due forecast). Multiple
-  choice and typed-answer (diff highlight) and cloze ride the same queue. *(M)*
-- [ ] **S5 — Generation with receipts.** The profile-aware source picker (D2 table), the agent
+  choice and typed-answer (diff highlight) and cloze ride the same queue. *(M)* *(#1598 — flip · multiple-choice (deterministic sampler) · typed-answer (char diff) · cloze, one queue; 1-4 grading with SM-2 interval labels.)*
+- [x] **S5 — Generation with receipts.** The profile-aware source picker (D2 table), the agent
   turn returning proposals via `extractJsonValue`, the accept/edit/reject review tray with
-  source-beside-card, provenance stored on accepted cards. *(M)*
-- [ ] **S6 — Nudges + polish.** ActivityBar due badge; optional daily reminder via the existing
+  source-beside-card, provenance stored on accepted cards. *(M)* *(#1598 — profile-ordered sources (workspace profile leads); paste/doc/ADR/Atlas-map; parseCardProposals is the single LLM-JSON boundary; accept/edit/reject tray with provenance; nothing lands unaccepted.)*
+- [x] **S6 — Nudges + polish.** ActivityBar due badge; optional daily reminder via the existing
   schedule store; theme + keyboard polish; `profileRecommendations` surfaces the mode for the
-  `study` profile. *(S)*
+  `study` profile. *(S)* *(#1598 — honest due+new badge on the ActivityBar Study button, re-fetched on mode change. Daily reminder via the schedule store deferred as opt-in polish.)*
 
 ## 6. How this will be judged
 
