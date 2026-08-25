@@ -6092,3 +6092,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .study-tray__row.is-rejected { opacity: .4; }
 .study-tray__cells { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .study-tray__cells .study-input { padding: 5px 8px; font-size: 12px; }
+
+/* ADR-049 S6 — reminder toggle + once-daily due nudge. */
+.study-list__actions { display: flex; align-items: center; gap: 12px; }
+.study-reminder { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12.5px; white-space: nowrap; }
+.study-reminder input { accent-color: var(--accent); }
+.study-reminder select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev); color: var(--text); }
+.study-nudge { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--bg-elev); font-size: 13px; }
+.study-nudge__actions { display: inline-flex; gap: 8px; }

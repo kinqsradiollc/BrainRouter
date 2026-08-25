@@ -90,6 +90,8 @@ import {
   deckStats, reviewStreak, parseDelimitedCards, proposalsToCards,
   deckToCsv, deckToMarkdown, isoDay,
   buildGenerationPrompt, parseCardProposals, profileGenerationSources,
+  buildStudyReminderSchedule, findStudyReminder, studyReminderState, shouldNudge,
+  STUDY_REMINDER_COMMAND,
   type StudySourceKind,
 } from '@kinqs/brainrouter-core/study';
 import { atlasOrientation } from '@kinqs/brainrouter-core/atlas';
@@ -97,7 +99,7 @@ import {
   listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
   readStudyProgress, saveStudyProgress,
 } from '@kinqs/brainrouter-core/study/store';
-import type { StudyDeck, StudyGrade, StudyCard } from '@kinqs/brainrouter-types';
+import type { StudyDeck, StudyGrade, StudyCard, WorkItem } from '@kinqs/brainrouter-types';
 import {
   formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
 } from '@kinqs/brainrouter-core/workspace/references';
@@ -1362,11 +1364,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               .map((n) => ({ path: path.join(dir, n), title: n.replace(/\.md$/, '') }));
           } catch { return []; }
         };
+        // ADR-049 (completion) — local, workspace-scoped pickables: docs, ADRs,
+        // engineering rules (brainrouter-rules/), and Track work items. Meetings
+        // are org/server-backed, so the renderer fetches those via the existing
+        // meetings bridge and feeds the transcript to study:generate directly.
+        let track: { id: string; title: string }[] = [];
+        try {
+          track = listWorkItems(workspaceRoot, {})
+            .slice(0, 100)
+            .map((w: WorkItem) => ({ id: w.id, title: `${w.key ?? w.id}: ${w.title}` }));
+        } catch { /* no track board — empty */ }
         return {
           profile,
           sources: profileGenerationSources(profile),
           docs: listMd('.', 40).concat(listMd('docs', 40)).slice(0, 60),
           decisions: listMd(path.join('brainrouter-docs', 'decisions'), 100),
+          rules: listMd('brainrouter-rules', 60),
+          track,
         };
       },
       'study:read-source': (args) => {
@@ -1379,7 +1393,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             .map((n) => `- ${n.filePath ?? n.name}: ${n.summary}`).join('\n');
           return { ok: true, text: `${atlasOrientation(graph)}\n\nLayers:\n${layers}\n\nFiles:\n${summaries}`, ref: 'atlas' };
         }
-        // doc / decisions — a workspace-relative file, guarded within the root.
+        if (kind === 'track') {
+          // A single Track work item → its title + description + comments as text.
+          const id = String(args.path ?? args.ref ?? '');
+          try {
+            const item = listWorkItems(workspaceRoot, {}).find((w: WorkItem) => w.id === id || w.key === id);
+            if (!item) return { ok: false, reason: 'no such work item' };
+            const body = [
+              `# ${item.key ?? item.id}: ${item.title}`,
+              item.description ? `\n${item.description}` : '',
+              Array.isArray(item.comments) && item.comments.length
+                ? `\n\nComments:\n${item.comments.map((c) => `- ${c.body}`).join('\n')}`
+                : '',
+            ].join('');
+            return { ok: true, text: body.slice(0, 60_000), ref: item.id };
+          } catch {
+            return { ok: false, reason: 'could not read that work item' };
+          }
+        }
+        // doc / decisions / rules — a workspace-relative file, guarded within the root.
         const rel = String(args.path ?? '');
         const resolved = path.resolve(workspaceRoot, rel);
         if (!resolved.startsWith(path.resolve(workspaceRoot) + path.sep)) {
@@ -1415,10 +1447,50 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ? { kind: 'atlas' as const, nodeId: 'atlas' }
           : kind === 'decisions'
             ? { kind: 'adr' as const, number: (ref ?? '').replace(/[^0-9]/g, '') || '?' }
-            : ref
-              ? { kind: 'doc' as const, path: ref }
-              : undefined;
+            : kind === 'track' && ref
+              ? { kind: 'track' as const, id: ref }
+              : kind === 'meeting' && ref
+                ? { kind: 'meeting' as const, id: ref }
+                : ref
+                  ? { kind: 'doc' as const, path: ref } // doc + rules are files
+                  : undefined;
         return { ok: true, proposals: parseCardProposals(raw, provenance) };
+      },
+      // ADR-049 S6 / D6 — the once-daily reminder, a record in the EXISTING
+      // schedule store (schedules.json). `study:reminder` reads it; `set` toggles
+      // exactly one study reminder record; `due-nudge` tells the desktop whether
+      // to surface the once-per-day, once-per-person nudge (in-app — §4 keeps
+      // study desktop-only, so no OS notification / CLI command is invented).
+      'study:reminder': () => studyReminderState(loadSchedules(workspaceRoot)),
+      'study:reminder:set': (args) => {
+        const enabled = args.enabled === true;
+        const hour = typeof args.hour === 'number' ? args.hour : 9;
+        const existing = findStudyReminder(loadSchedules(workspaceRoot));
+        if (existing) removeSchedule(workspaceRoot, existing.id);
+        if (enabled) {
+          addSchedule(workspaceRoot, buildStudyReminderSchedule(
+            { owner: getActiveAgent().sessionKey, hour },
+            new Date(),
+          ));
+        }
+        return studyReminderState(loadSchedules(workspaceRoot));
+      },
+      'study:due-nudge': () => {
+        const now = new Date();
+        const { enabled, hour } = studyReminderState(loadSchedules(workspaceRoot));
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const dueCount = listStudyDecks(workspaceRoot).reduce((n, d) => {
+          const s = deckStats(d, progress, now);
+          return n + s.dueCards + s.newCards;
+        }, 0);
+        const show = shouldNudge({ enabled, hour, dueCount, lastNudgeDay: progress.lastNudgeDay }, now);
+        if (show) {
+          progress.lastNudgeDay = isoDay(now);
+          progress.updatedAt = now.toISOString();
+          saveStudyProgress(workspaceRoot, progress);
+        }
+        return { show, dueCount, hour, enabled };
       },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in

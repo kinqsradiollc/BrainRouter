@@ -207,13 +207,13 @@ test("generate — prompt bounds the source; profile orders the sources (D2)", (
   assert.match(user, /Focus on: APIs/);
   assert.ok(user.length < 25_000, "source clipped");
 
-  // Engineering leads with decisions + the map; every profile still lists all 4.
+  // Engineering leads with decisions + the map; every profile lists all 7 sources.
   const eng = profileGenerationSources("engineering").map((s) => s.kind);
   assert.equal(eng[0], "decisions");
-  assert.ok(eng.includes("atlas") && eng.includes("text"));
+  assert.ok(eng.includes("atlas") && eng.includes("text") && eng.includes("track") && eng.includes("meeting"));
   const study = profileGenerationSources("study").map((s) => s.kind);
   assert.equal(study[0], "doc");
-  assert.equal(new Set(profileGenerationSources("custom").map((s) => s.kind)).size, 4);
+  assert.equal(new Set(profileGenerationSources("custom").map((s) => s.kind)).size, 7);
 });
 
 test("stats — new/learning/review/due counts + streak are honest", () => {

@@ -23,15 +23,22 @@ export interface GenerationPrompt {
 }
 
 /** A source the "Generate cards" flow can draw from. */
-export type StudySourceKind = "text" | "doc" | "decisions" | "atlas";
+export type StudySourceKind = "text" | "doc" | "decisions" | "rules" | "atlas" | "track" | "meeting";
 export interface StudySourceHint { kind: StudySourceKind; label: string; hint: string }
 
 const SOURCE_HINT: Record<StudySourceKind, StudySourceHint> = {
   text: { kind: "text", label: "Paste text", hint: "Any material — notes, an article, a transcript." },
   doc: { kind: "doc", label: "A document", hint: "A Markdown file in this workspace." },
   decisions: { kind: "decisions", label: "A decision (ADR)", hint: "An architecture decision record." },
+  rules: { kind: "rules", label: "An engineering rule", hint: "A conventions/handbook rule for this repo." },
   atlas: { kind: "atlas", label: "The codebase map", hint: "What the Atlas map knows about this repo." },
+  track: { kind: "track", label: "A work item", hint: "A task or issue from this workspace's Track board." },
+  meeting: { kind: "meeting", label: "A meeting", hint: "A captured meeting's transcript or summary." },
 };
+
+// Every source kind, in a stable fallback order. `text` (paste) leads because it
+// is the one source available with nothing configured and no data present.
+const ALL_SOURCES: StudySourceKind[] = ["text", "doc", "decisions", "rules", "atlas", "track", "meeting"];
 
 /**
  * ADR-049 D2 — the sources the Generate flow offers FIRST, ordered by the active
@@ -41,16 +48,18 @@ const SOURCE_HINT: Record<StudySourceKind, StudySourceHint> = {
 export function profileGenerationSources(profileId: string): StudySourceHint[] {
   const order: StudySourceKind[] =
     profileId === "engineering" || profileId === "data-science"
-      ? ["decisions", "atlas", "doc", "text"]
+      ? ["decisions", "atlas", "rules", "track", "doc", "meeting", "text"]
       : profileId === "research" || profileId === "writing"
-        ? ["doc", "text", "decisions"]
+        ? ["doc", "text", "decisions", "meeting"]
         : profileId === "study" || profileId === "education"
-          ? ["doc", "text", "decisions"]
-          : ["text", "doc", "decisions", "atlas"];
-  const all: StudySourceKind[] = ["text", "doc", "decisions", "atlas"];
+          ? ["doc", "text", "decisions", "meeting"]
+          : profileId === "product-management" || profileId === "operations"
+            || profileId === "sales" || profileId === "consulting"
+            ? ["meeting", "track", "doc", "text"]
+            : ["text", "doc", "decisions", "atlas"];
   const seen = new Set<StudySourceKind>();
   const ordered: StudySourceHint[] = [];
-  for (const kind of [...order, ...all]) {
+  for (const kind of [...order, ...ALL_SOURCES]) {
     if (!seen.has(kind)) { seen.add(kind); ordered.push(SOURCE_HINT[kind]); }
   }
   return ordered;
