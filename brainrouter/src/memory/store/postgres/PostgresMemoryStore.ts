@@ -115,6 +115,7 @@ import {
   type CompressionStats,
 } from "./converters.js";
 import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency.js";
+import { UpstreamPolicyError } from "@kinqs/brainrouter-core/provider";
 import type { Executor } from "./queries/executor.js";
 import type { KnowledgeBaseRecord, UpdateKnowledgeBaseInput } from "../../../knowledge/contracts/base.js";
 import type {
@@ -471,12 +472,23 @@ export class PostgresMemoryStore implements IMemoryStoreComposite {
       WHERE r.invalid_at IS NULL AND r.archived = 0 AND v.record_id IS NULL
       ORDER BY r.created_time ASC, r.record_id ASC
     `);
+    // A policy/config error (e.g. the embedding endpoint is HTTP + not in the
+    // self-hosted upstream allowlist) blocks the embedder for EVERY record, so log
+    // it once for the whole run instead of once per stale row.
+    let policyBlockedLogged = false;
     const outcomes = await mapWithConcurrency(rows, readEmbedConcurrency(), async (row) => {
       try {
         const embedding = await embedder(row.content);
         await this.upsertCognitiveVec(row.record_id, embedding);
         return true;
       } catch (error) {
+        if (error instanceof UpstreamPolicyError) {
+          if (!policyBlockedLogged) {
+            policyBlockedLogged = true;
+            console.error(`[BrainRouter] Re-embed blocked for all ${rows.length} stale record(s): ${error.message}`);
+          }
+          return false;
+        }
         console.error(`[BrainRouter] Failed to re-embed record ${row.record_id}:`, error instanceof Error ? error.message : error);
         return false;
       }

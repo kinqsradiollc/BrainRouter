@@ -253,7 +253,12 @@ export async function validateUpstreamTarget(
   const allowlisted = mode === 'self-hosted' && allowlist.has(url.origin);
 
   if (url.protocol !== 'https:' && !allowlisted) {
-    throw new UpstreamPolicyError('HTTP upstreams require an exact self-hosted origin allowlist.');
+    const reason = mode === 'self-hosted'
+      ? 'its exact origin is not in the self-hosted upstream allowlist'
+      : 'hosted mode permits only HTTPS upstreams';
+    throw new UpstreamPolicyError(
+      `HTTP upstream ${url.origin} is blocked: ${reason}. Add ${url.origin} to the self-hosted upstream origin allowlist to permit it.`,
+    );
   }
 
   const hostKind = hostnameClass(hostname);
