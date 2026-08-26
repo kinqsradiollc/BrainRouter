@@ -51,28 +51,39 @@ Zero recall on a case with planted defects is not a formatting problem, so a thi
 not the answer; the wall is reviewing capability. D7's number therefore needs a frontier-class
 provider, which is the owner's key to supply.
 
-**The harness has since been run against five real providers (2026-08-26), and the wall is now
-precisely located.** The paired runner was pointed — via a provider-config naming an `apiKeyEnv`, so
-no key ever touched the config or a log — at hosted models through the owner's OpenRouter and
-OrcaRouter accounts. The model-independent input-cost diagnostic reproduced §6's cost half exactly
-(bundled **516,672** vs legacy **545,529** characters, **−28,857 / −5.29%**), so the harness itself
-is proven end to end. What every *free* model did was **complete the call and then fail the strict
-findings-envelope on the real review prompt** — a formatting failure the parser refuses to launder
-into a clean zero-finding report:
+**The harness has since been run EXHAUSTIVELY against eight models on the real corpus (2026-08-26),
+and the wall is now precisely located.** The paired runner was pointed — via a provider-config naming
+an `apiKeyEnv`, so no key ever touched the config or a log — at hosted models through the owner's
+OpenRouter and OrcaRouter accounts. The model-independent input-cost diagnostic reproduced §6's cost
+half exactly (bundled **516,672** vs legacy **545,529** characters, **−28,857 / −5.29%**), so the
+harness itself is proven end to end. Every accessible free/local model **fails a different part of the
+strict review contract on the real 280 K-char prompt** — a fail-closed rejection the parser refuses
+to launder into a clean zero-finding report. The `bench:review` runs, in order of how far each got:
 
-- a hosted reasoning model *did not end* with the fenced envelope (its answer trailed off after the
-  reasoning trace);
-- **DeepSeek-V4-pro** and **Nemotron-3-Ultra-550B** returned *no* envelope at all — and Nemotron has
-  a **1 M-token context**, so the 280 K-char prompt was nowhere near its limit. That rules OUT
-  context size as the cause: the wall is the complex, multi-constraint review contract itself, which
-  the open models honour on a toy prompt but not on the real one.
+| Model (free / local) | Where it failed on the real corpus |
+|---|---|
+| `qwen2.5-coder:7b` (local) | could not produce the fenced findings envelope at all |
+| `qwen2.5-coder:14b` (local) | envelope OK, then **zero recall** on planted defects, then invalid findings |
+| `stealth/ox-alpha` (reasoning) | did not *end* with the fenced envelope (trailed off after reasoning) |
+| `deepseek/deepseek-v4-pro-0813` | returned **no** envelope |
+| `nvidia/nemotron-3-ultra-550b` (1 M ctx) | returned **no** envelope — so it is NOT context size |
+| `minimax/minimax-m3` (1 M ctx) | envelope OK, but findings **missing required `file`/`summary`** (`reviewFindings.ts:81`) |
+| `nvidia/nemotron-3-super-120b` | **malformed JSON** in the envelope |
+| `nvidia/nemotron-3-nano-…-reasoning` | too slow to complete a case; no valid envelope |
 
-The one genuinely frontier, envelope-clean model reached in probing — a **GPT-5.1 codex-class**
-model — was blocked before the corpus by **`402 Payment Required`**: the OpenRouter balance could not
-cover even one full request. So the residual gate is now specific and small: **funded frontier
-access**. Add credits to a frontier provider (or point the config at one already funded), then run
-the single `bench:review` command in §6 — the corpus, runner, safety discipline and cost half are all
-in place and reproduced; only the paid quality measurement remains, and it is the owner's to unlock.
+Two more were reached but never produced a corpus artifact: **`z-ai/glm-5.2:free`** — a genuinely
+frontier free coding model — is **`429` upstream-pool-saturated** on every attempt; and the one
+frontier, envelope-clean model probed, a **GPT-5.1 codex-class** model, was blocked before the corpus
+by **`402 Payment Required`** — the OpenRouter balance could not cover even one full request. Each of
+these free models passes a *simplified* review-shaped probe (finds a planted bug, emits a clean
+envelope) yet fails the *real* multi-constraint contract, which is the whole point: the wall is
+reviewing-capability-plus-format-discipline, not context size and not the harness.
+
+So the residual gate is now specific and small, and proven so: **funded frontier access.** Add credits
+to a frontier provider (or point the config at one already funded — a GLM/Claude/GPT BYOK key clears
+both the `429` pool cap and the `402` balance), then run the single `bench:review` command in §6 — the
+corpus, runner, safety discipline and cost half are all in place and reproduced; only the paid quality
+measurement remains, and it is the owner's to unlock.
 
 **Both failures are evidence FOR the design, and worth keeping.** A malformed envelope and an
 invalid finding each aborted the run and wrote an explicitly FAILED artifact. Neither degraded into
