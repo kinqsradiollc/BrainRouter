@@ -71,19 +71,32 @@ to launder into a clean zero-finding report. The `bench:review` runs, in order o
 | `nvidia/nemotron-3-super-120b` | **malformed JSON** in the envelope |
 | `nvidia/nemotron-3-nano-…-reasoning` | too slow to complete a case; no valid envelope |
 
-Two more were reached but never produced a corpus artifact: **`z-ai/glm-5.2:free`** — a genuinely
-frontier free coding model — is **`429` upstream-pool-saturated** on every attempt; and the one
-frontier, envelope-clean model probed, a **GPT-5.1 codex-class** model, was blocked before the corpus
-by **`402 Payment Required`** — the OpenRouter balance could not cover even one full request. Each of
-these free models passes a *simplified* review-shaped probe (finds a planted bug, emits a clean
-envelope) yet fails the *real* multi-constraint contract, which is the whole point: the wall is
-reviewing-capability-plus-format-discipline, not context size and not the harness.
+Two more were reached but never produced a corpus artifact from the free pool: **`z-ai/glm-5.2:free`**
+— a genuinely frontier free coding model — is **`429` upstream-pool-saturated** on every attempt; and
+a **GPT-5.1 codex-class** model probed on the OpenRouter balance was blocked by **`402 Payment
+Required`**. Each free model passes a *simplified* review-shaped probe (finds a planted bug, emits a
+clean envelope) yet fails the *real* multi-constraint contract on the review itself.
 
-So the residual gate is now specific and small, and proven so: **funded frontier access.** Add credits
-to a frontier provider (or point the config at one already funded — a GLM/Claude/GPT BYOK key clears
-both the `429` pool cap and the `402` balance), then run the single `bench:review` command in §6 — the
-corpus, runner, safety discipline and cost half are all in place and reproduced; only the paid quality
-measurement remains, and it is the owner's to unlock.
+**Then the real blocker turned out NOT to be access at all — it was a harness bug (fixed 2026-08-26).**
+A funded frontier path exists after all: the owner's **OrcaRouter** balance runs `anthropic/claude-sonnet-5`,
+and it is the FIRST model to clear the review contract — valid envelope, valid findings, a full scored
+paired case (`pr-743`). It then failed, every run, on the reflection pass: *"Reflection response did not
+contain exactly one valid verdict per finding."* A two-part diagnostic located the cause precisely — the
+same model, given the reflection prompt ALONE, returns four perfect verdicts; given the prompt the
+benchmark actually sent, it returns a prose "Review Assessment" the parser rejects. The benchmark's
+reflection call (`reviewBenchmarkHarness.ts`) had prepended the code-review **lens** system prompt ("you
+are reviewing a pull request") onto the reflection's own contract ("judge these findings, report
+verdicts"), handing the model two conflicting jobs. Production never does this (`reviewReflection.ts`
+sends the reflection prompt alone). The fix sends `request.system` alone — so the reflection is measured
+as the reviewer actually runs it (§6), and it does NOT touch the acceptance bar.
+
+So the wall was a **prompt-contamination bug that made every model, frontier included, answer the
+reflection in prose** — not context size, not the harness's strictness, not access. With it fixed, the
+qualifying number is one run away. The one remaining input is small: the exhaustive diagnosis (8+ model
+runs plus a retry loop, before the bug was isolated) **drained the OrcaRouter balance to `$0`** ("needs
+$0.03"), so the fixed `bench:review` needs a **~$1–2 top-up** on OrcaRouter (or OpenRouter) to run
+`claude-sonnet-5` across the frozen corpus and record precision/recall. The corpus, runner, safety
+discipline, cost half, a funded frontier model, and now a correct reflection are all in place.
 
 **Both failures are evidence FOR the design, and worth keeping.** A malformed envelope and an
 invalid finding each aborted the run and wrote an explicitly FAILED artifact. Neither degraded into
