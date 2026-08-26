@@ -1152,6 +1152,41 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'action:connector-run': async (args) => runConnector(typeof args.id === 'string' ? args.id : ''),
       'action:connector-index-memory': async (args) => indexConnectorMemory(typeof args.id === 'string' ? args.id : ''),
       'action:connector-sync-permissions': async (args) => syncConnectorPermissions(typeof args.id === 'string' ? args.id : ''),
+      // ADR-015 P3 — "Index this repo into memory": walk the git-aware file list
+      // (respects .gitignore, caps at 3000), read each file from the LOCAL checkout
+      // (D2 — no auth for file content), and route them through memory_ingest_repo
+      // scoped by the workspace's repoTag so a repo's files recall together and
+      // survive a moved/renamed folder. Opt-in, bounded, idempotent (hash dedup).
+      'action:index-repo': async () => {
+        try {
+          const repoTag = wsGit.repoTag || '';
+          if (!repoTag) {
+            return { ok: false, error: 'This workspace has no git remote, so there is no repo identity to scope memory by. Add an origin remote (git remote add origin …) and try again.' };
+          }
+          const listed = await listWorkspaceFilesCached({ limit: 3000 });
+          if (listed.error) return { ok: false, error: listed.error };
+          const files: Array<{ path: string; content: string }> = [];
+          for (const path of listed.files ?? []) {
+            const entry = readWorkspaceEntry(workspaceRoot, path);
+            if (entry.error || entry.binary || entry.kind !== 'file' || !entry.content) continue;
+            files.push({ path, content: entry.content });
+            if (files.length >= 3000) break;
+          }
+          if (files.length === 0) {
+            return { ok: true, repoTag, filesRead: 0, ingested: 0, skipped: 0, chunks: 0, truncated: listed.truncated ?? false };
+          }
+          const res = await mcpClient.callTool('memory_ingest_repo', { repoTag, files });
+          if (res?.isError) {
+            const text = typeof res.content?.[0]?.text === 'string' ? res.content[0].text : 'memory_ingest_repo failed.';
+            return { ok: false, repoTag, filesRead: files.length, error: text };
+          }
+          const text = typeof res?.content?.[0]?.text === 'string' ? res.content[0].text : '';
+          const parsed = text.trim() ? JSON.parse(text) : {};
+          return { ok: true, repoTag, filesRead: files.length, truncated: listed.truncated ?? false, ...parsed };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
       // DESK-5d — current branch's PR, for the project-row status chip.
       // Quietly null when gh is missing, unauthenticated, or there is no PR.
       'git-pr': async () => {
