@@ -1704,3 +1704,45 @@ test('Bug-fix: resuming a SAVED key with no transcript still emits a controlled 
   assert.ok(err, 'a missing transcript for a real saved session is still an error');
   assert.match((err!.event as Extract<AgentEventMessage['event'], { kind: 'turn-error' }>).message, /No transcript found/);
 });
+
+test('set-model: a router-catalog route slug is resolved to a concrete LLM, not sent raw', async () => {
+  const setLLM: Array<Record<string, unknown>> = [];
+  const setMdl: string[] = [];
+  const sessionLlm: Array<Record<string, unknown>> = [];
+  const agent = {
+    sessionKey: 'sess-test',
+    runTurn: async () => 'ok',
+    setModel: (m: string) => { setMdl.push(m); },
+    setLLMConfig: (c: Record<string, unknown>) => { setLLM.push(c); },
+  } as unknown as AgentLike;
+  const { send } = collect();
+  const core = createHostCore({
+    agent,
+    send,
+    resolveRouteLlm: (model: string) => model === 'openrouter/stealth/ox-alpha'
+      ? { llm: { provider: 'openrouter', model: 'stealth/ox-alpha', endpoint: 'https://openrouter.ai/api/v1', apiKey: 'k' }, providerName: 'openrouter' }
+      : undefined,
+    setSessionLlm: (_k: string, patch: Record<string, unknown>) => { sessionLlm.push(patch); },
+    setSessionModel: () => {},
+  });
+  await core.handle({ kind: 'set-model', model: 'openrouter/stealth/ox-alpha' });
+  assert.equal(setLLM.length, 1, 'resolved route → setLLMConfig');
+  assert.equal(setLLM[0].model, 'stealth/ox-alpha', 'bare upstream model on the wire');
+  assert.equal(setLLM[0].endpoint, 'https://openrouter.ai/api/v1', 'correct provider endpoint');
+  assert.equal(setMdl.length, 0, 'never send the prefixed slug raw');
+  assert.deepEqual(sessionLlm[0], { provider: 'openrouter', model: 'stealth/ox-alpha', endpoint: 'https://openrouter.ai/api/v1' });
+});
+
+test('set-model: an unresolvable route falls back to raw (the gateway resolves it downstream)', async () => {
+  const setMdl: string[] = [];
+  const agent = {
+    sessionKey: 'sess-test',
+    runTurn: async () => 'ok',
+    setModel: (m: string) => { setMdl.push(m); },
+    setLLMConfig: () => {},
+  } as unknown as AgentLike;
+  const { send } = collect();
+  const core = createHostCore({ agent, send, resolveRouteLlm: () => undefined, setSessionModel: () => {} });
+  await core.handle({ kind: 'set-model', model: 'big-pickle' });
+  assert.deepEqual(setMdl, ['big-pickle'], 'unresolved route sent raw');
+});

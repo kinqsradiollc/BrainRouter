@@ -62,7 +62,7 @@ import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent, classifyForVerification } from '@kinqs/brainrouter-core/agent';
 import { createBrowserControlBridge, type BrowserControlPort } from '@kinqs/brainrouter-core/browser';
-import { loadConfig, saveConfig, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import {
   setProvider,
@@ -75,6 +75,8 @@ import {
   inferModelReasoningCapabilities,
   registerModelReasoningCapabilities,
   refreshLmStudioCache,
+  buildModelRegistry,
+  resolveRoutes,
 } from '@kinqs/brainrouter-core/provider';
 import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
 import {
@@ -641,6 +643,36 @@ async function main(): Promise<void> {
     const p = loadConfig().providers?.[providerName];
     if (!p) return undefined;
     return { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
+  };
+  // Router-catalog picks from the composer carry a route id — a provider-prefixed
+  // canonical slug (e.g. "openrouter/stealth/ox-alpha"), a bare model, or an alias
+  // — with NO providerName. Resolve it through the router registry, exactly as the
+  // CLI switch_model handler and the :3747 gateway do, so the agent sends the
+  // concrete upstream model to the right endpoint instead of the slug verbatim
+  // (which a direct provider rejects as an unknown model). undefined for 'auto' or
+  // an unresolvable id → the caller sends it raw and the gateway resolves it.
+  const resolveRouteLlm = (model: string): { llm: LLMConfig; providerName: string } | undefined => {
+    const m = (model ?? '').trim();
+    if (!m || m === 'auto') return undefined;
+    const knobs = getCliKnobs();
+    if (knobs.router?.enabled === false) return undefined;
+    const cfg = loadConfig();
+    const baseName = cfg.providers?.base ? 'base-config' : 'base';
+    const global = loadGlobalLlm();
+    const registry = buildModelRegistry(
+      { ...(cfg.providers ?? {}), [baseName]: global },
+      {
+        aliases: knobs.router.aliases,
+        chain: [...(knobs.router.chain ?? []), ...(knobs.fallbackModels ?? []), `${baseName}/${global.model}`],
+        order: knobs.router.order,
+        strategy: knobs.router.strategy,
+        passThrough: knobs.router.passThrough,
+        availableModels: knobs.availableModels,
+        enforceAvailableModels: knobs.enforceAvailableModels,
+      },
+    );
+    const route = resolveRoutes(registry, m, { withFallbacks: true })[0];
+    return route ? { llm: { ...route.llm }, providerName: route.provider } : undefined;
   };
   const syncActiveSessionLlm = (base: LLMConfig = loadGlobalLlm()): LLMConfig => {
     // Restore the host-only credential for the built-in BrainRouter provider;
@@ -1632,6 +1664,7 @@ async function main(): Promise<void> {
     // Resolve a saved connection (by name) to a full LLM config — used to rebuild
     // the active agent when a cross-provider model is picked.
     resolveProviderLlm: (providerName, model) => resolveProviderLlm(providerName, model),
+    resolveRouteLlm: (model) => resolveRouteLlm(model),
     // Full per-session LLM (provider/model/endpoint + resolved key) for the active
     // chat — used to rebuild the agent on a session switch.
     resolveSessionLlm: (sessionKey) => llmForSession(sessionKey),

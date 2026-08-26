@@ -267,6 +267,13 @@ export function createHostCore(input: {
    *  (incl. key) so the active agent can be rebuilt for a cross-provider pick. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   resolveProviderLlm?: (providerName: string, model: string) => Promise<any | undefined> | any | undefined;
+  /** Resolve a router-catalog route id (provider-prefixed slug / bare model /
+   *  alias, as the always-on picker offers) through the router registry to a
+   *  concrete { llm, providerName }, so a no-providerName pick sends the real
+   *  upstream model to the right endpoint instead of the slug verbatim. undefined
+   *  = 'auto' or not resolvable locally (send raw; the gateway resolves it). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  resolveRouteLlm?: (model: string) => { llm: any; providerName: string } | undefined;
   /** Full per-session LLM (provider/model/endpoint + key) for a session switch. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   resolveSessionLlm?: (sessionKey: string) => any | undefined;
@@ -1268,7 +1275,23 @@ export function createHostCore(input: {
         // A `providerName` means a CROSS-PROVIDER pick: rebuild the agent's whole
         // LLM (provider/model/endpoint/key) and write the full session override
         // (never the global default unless persist) — so it never syncs to others.
-        const full = cmd.providerName ? await input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
+        // A `providerName` is a CROSS-PROVIDER pick (rebuild the whole LLM). A pick
+        // WITHOUT one is a router-catalog route id (a provider-prefixed slug / bare
+        // model / alias); resolve it through the router registry — exactly as
+        // switch_model and the :3747 gateway do — so we send the concrete upstream
+        // model to the right endpoint instead of the slug verbatim (which a direct
+        // provider rejects as an unknown model). An unresolvable route stays raw and
+        // the gateway resolves it downstream.
+        const routeResolved = cmd.providerName ? undefined : input.resolveRouteLlm?.(cmd.model);
+        const full = cmd.providerName
+          ? await input.resolveProviderLlm?.(cmd.providerName, cmd.model)
+          : routeResolved?.llm;
+        // The CONFIG provider name for persistence (not the provider KIND on the
+        // LLM). Skip the synthetic base entries the registry adds for chain fallback.
+        const effectiveProvider = cmd.providerName
+          ?? (routeResolved && routeResolved.providerName !== 'base' && routeResolved.providerName !== 'base-config'
+            ? routeResolved.providerName
+            : undefined);
         if (
           cmd.providerName
           && (
@@ -1290,17 +1313,21 @@ export function createHostCore(input: {
         if (full) targetAgent?.setLLMConfig?.(full); else targetAgent?.setModel?.(cmd.model);
         if (cmd.persist) {
           try {
-            if (cmd.providerName) input.persistProviderModel?.(cmd.providerName, cmd.model);
-            else input.persistModel?.(cmd.model);
+            if (effectiveProvider) input.persistProviderModel?.(effectiveProvider, full?.model ?? cmd.model);
+            else input.persistModel?.(full?.model ?? cmd.model);
           } catch (err) {
             stamp(targetKey, { kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
             stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: -1, model: cmd.model });
             return;
           }
           try { input.clearSessionModel?.(targetKey); } catch { /* global model still persisted */ }
-        } else if (cmd.providerName) {
+        } else if (effectiveProvider) {
           // Per-session cross-provider override (provider/model/endpoint, no secret).
-          try { input.setSessionLlm?.(targetKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
+          try { input.setSessionLlm?.(targetKey, { provider: full?.provider, model: full?.model ?? cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
+        } else if (full) {
+          // Resolved to the base/current provider — remember the concrete model so a
+          // respawn sends the same resolved id, not the route slug.
+          try { input.setSessionModel?.(targetKey, full.model); } catch { /* in-memory set already applied */ }
         } else {
           try { input.setSessionModel?.(targetKey, cmd.model); } catch { /* in-memory set already applied */ }
         }
