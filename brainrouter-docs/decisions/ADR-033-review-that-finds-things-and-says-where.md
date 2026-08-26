@@ -9,9 +9,12 @@ live on a path a user reaches: the bot through the scheduler executors, the CLI 
 and the desktop host. Verified deterministically — `review-orchestration` 8/8, `review-bundles`
 18/18, `review-position-and-reflection` 19/19. D6 is a stance and lives in the prompt.
 
-**The one gap, stated precisely: D7's harness ships and has never produced a number.** It exists, it
-runs, and no evaluation has been recorded against it. That is why this ADR is PARTIAL and not
-COMPLETE, and it is a measurement that has not been taken rather than code that was not written.
+**The one gap, stated precisely: D7's harness runs against real providers but no *qualifying* number
+has been recorded.** It exists, it runs, and as of 2026-08-26 it has been exercised against five
+hosted models (see below) — every free one fails the strict findings-envelope on the real prompt, and
+the one frontier model reached was blocked by an empty provider balance. That is why this ADR is
+PARTIAL and not COMPLETE, and it is a measurement gated on **funded frontier access** rather than code
+that was not written.
 
 This is deliberately not called "the live-model half is unproven" any more, which was the earlier
 wording and was vaguer than the facts deserve: the deterministic engineering is done and reached,
@@ -47,6 +50,29 @@ is specific rather than a shrug:
 Zero recall on a case with planted defects is not a formatting problem, so a third local model is
 not the answer; the wall is reviewing capability. D7's number therefore needs a frontier-class
 provider, which is the owner's key to supply.
+
+**The harness has since been run against five real providers (2026-08-26), and the wall is now
+precisely located.** The paired runner was pointed — via a provider-config naming an `apiKeyEnv`, so
+no key ever touched the config or a log — at hosted models through the owner's OpenRouter and
+OrcaRouter accounts. The model-independent input-cost diagnostic reproduced §6's cost half exactly
+(bundled **516,672** vs legacy **545,529** characters, **−28,857 / −5.29%**), so the harness itself
+is proven end to end. What every *free* model did was **complete the call and then fail the strict
+findings-envelope on the real review prompt** — a formatting failure the parser refuses to launder
+into a clean zero-finding report:
+
+- a hosted reasoning model *did not end* with the fenced envelope (its answer trailed off after the
+  reasoning trace);
+- **DeepSeek-V4-pro** and **Nemotron-3-Ultra-550B** returned *no* envelope at all — and Nemotron has
+  a **1 M-token context**, so the 280 K-char prompt was nowhere near its limit. That rules OUT
+  context size as the cause: the wall is the complex, multi-constraint review contract itself, which
+  the open models honour on a toy prompt but not on the real one.
+
+The one genuinely frontier, envelope-clean model reached in probing — a **GPT-5.1 codex-class**
+model — was blocked before the corpus by **`402 Payment Required`**: the OpenRouter balance could not
+cover even one full request. So the residual gate is now specific and small: **funded frontier
+access**. Add credits to a frontier provider (or point the config at one already funded), then run
+the single `bench:review` command in §6 — the corpus, runner, safety discipline and cost half are all
+in place and reproduced; only the paid quality measurement remains, and it is the owner's to unlock.
 
 **Both failures are evidence FOR the design, and worth keeping.** A malformed envelope and an
 invalid finding each aborted the run and wrote an explicitly FAILED artifact. Neither degraded into
