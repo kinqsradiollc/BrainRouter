@@ -1,6 +1,6 @@
 # ADR-015 — GitHub Repository Linking: Authorization Across Plans + Local-First Sync
 
-**Status:** Partially implemented (verified 2026-08-16: P0/P1a/P1b/P2/P4 shipped — including `repoUrl` finally consumed; pending: P1c repoTag-scoped capture and the P3 desktop repo-linking surface; §D1 superseded by ADR-016 and P5 delivered by ADR-017's unified GitHub App; note `ingestRepoFiles` currently has no production caller) · **Extends** ADR-009 (trigger-ingress
+**Status:** Partially implemented (verified 2026-08-26: P0/P1a/P1b/**P1c**/P2/P4 shipped — including `repoUrl` finally consumed and repoTag-scoped turn-capture; pending: the P3 desktop repo-linking surface, which is also `ingestRepoFiles`'s first production caller; §D1 superseded by ADR-016 and P5 delivered by ADR-017's unified GitHub App) · **Extends** ADR-009 (trigger-ingress
 GitHub App), ADR-010 (multi-tenancy), ADR-014 (projects / repos). **Does not commit** until the
 program below is agreed and each phase is verified.
 
@@ -111,7 +111,7 @@ or a second clone — unlike today's path-hash `workspaceTag`.
 | **P1a** | `resolveWorkspaceGit` reads `origin` remote → `remoteUrl`/`repoIdentity`/`repoTag` | `packages/core/src/git/workspaceGit.ts` | ✅ **done** — 9 tests |
 | **P1b** | Desktop host `git-info` query surfaces the identity to the app/agent | `brainrouter-desktop/electron/host/queries.ts` | ✅ **done** — renderer+electron tsc |
 | **P2** | Bounded, idempotent local-file ingest → memory (`kind:file`, scoped by `repoTag`) | `brainrouter/src/memory/source/ingestRepo.ts` | ✅ **done** — 4 tests |
-| **P1c** | Scope turn-capture (transcripts) by `repoTag`, not just path-hash | `brainrouter/src/memory/capture/*`, `SourceDocument` | ▫ pending |
+| **P1c** | Scope turn-capture (transcripts) by `repoTag`, not just path-hash | `brainrouter/src/memory/repoScope.ts`, `tools/capture/memory_capture_turn.ts` | ✅ **done** — 8 tests |
 | **P3** | Desktop "GitHub / Repositories" settings surface (device-flow connect, linked repos, link-current-workspace, index toggle) — **screenshot-driven with the user** | new `src/settings/github/*`, NAV in `src/settings/shared/types.ts`; new host `action:index-repo` | ▫ pending (needs running app) |
 | **P4** | Cloud consumes `Project.repoUrl` (repoTag↔repoUrl match → `projectId` memory scope) | `brainrouter/src/api/routes/tenancy/{projects,githubRepos}.ts`, recall scoping | ▫ pending (proof needs a linked repo) |
 | **P5** *(deferred)* | Hosted BrainRouter App (one-click cloud connect) + server-side remote pull | new callback host + token store |
