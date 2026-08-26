@@ -21,6 +21,7 @@ import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
 import { SchemaCliFields } from './settings/cli/SchemaCliFields.js';
 import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
+import { RepositoriesSettings } from './settings/github/RepositoriesSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
@@ -630,6 +631,7 @@ export function SettingsDialog(props: {
           refreshSnapshot={refreshSnapshot}
         />
       );
+      case 'repositories': return <RepositoriesSettings />;
       case 'marketplace': {
         const plugins = (knobs.plugins ?? {}) as { orgScope?: boolean; autoUpdateCheck?: boolean; altManifestNames?: string[]; publishRepo?: string; registryUrl?: string };
         return (

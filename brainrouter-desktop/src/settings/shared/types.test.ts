@@ -24,6 +24,7 @@ test('settings navigation keeps every section id unique', () => {
     'hooks',
     'connectors',
     'data-connectors',
+    'repositories',
     'extensions',
     'marketplace',
     'observability',
