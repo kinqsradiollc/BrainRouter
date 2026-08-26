@@ -413,7 +413,14 @@ async function reflectFindings(
       const verdicts = await ledger.parse({
         phase: "reflection",
         taskId: `pr-${input.lens.id}-review:benchmark#${input.benchmarkCase.pr}:reflection`,
-        systemPrompt: `${input.lens.systemPrompt}\n\n${request.system}`,
+        // The reflection is its own contract (REVIEW_REFLECTION_SYSTEM_PROMPT via
+        // request.system): judge the findings as a set and report verdicts. Prepending
+        // the lens's "you are reviewing a pull request" role gave the model TWO
+        // conflicting jobs, so it answered with a prose review assessment instead of
+        // the verdict JSON — failing the parser even for a frontier model. Production
+        // (reviewReflection.ts) sends request.system alone; the benchmark must too, so
+        // the measurement describes what the reviewer actually does (§6).
+        systemPrompt: request.system,
         ...prompt,
       }, (reply) => parseReflectionReply(reply, findings.length));
       return JSON.stringify({ verdicts });
