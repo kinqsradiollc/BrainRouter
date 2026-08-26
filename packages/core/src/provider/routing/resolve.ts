@@ -66,17 +66,34 @@ function resolveOne(
     return orderBareModelRoutes(registry, routes);
   }
 
-  if (registry.passthroughProviders.length === 1) {
-    const provider = registry.passthroughProviders[0];
-    const template = registry.entries.find((entry) => entry.provider === provider);
-    if (!template) return [];
-    return [{
-      ...template,
-      slug: `${provider}/${value}`,
-      model: value,
-      label: `${value} — ${provider}`,
-      llm: { ...template.llm, model: value },
-    }];
+  if (registry.passthroughProviders.length >= 1) {
+    // The model is in no catalog. Offer it to the passthrough provider(s) first,
+    // then — when fallbacks are allowed (the gateway path uses withFallbacks) — to
+    // the other configured UPSTREAM providers, so a capacity / not-found failure on
+    // one provider falls through instead of dead-ending on a single passthrough
+    // route (the "no matter what model, it fails" case). The local router gateway
+    // (provider kind 'brainrouter') is never a passthrough fallback target — routing
+    // an unknown model back into the gateway would loop.
+    const providerKind = (name: string): string | undefined =>
+      registry.entries.find((entry) => entry.provider === name)?.llm.provider;
+    const fallbackProviders = opts.withFallbacks
+      ? registry.providerOrder.filter(
+        (name) => !registry.passthroughProviders.includes(name) && providerKind(name) !== 'brainrouter',
+      )
+      : [];
+    const routes: ModelRegistryEntry[] = [];
+    for (const provider of [...registry.passthroughProviders, ...fallbackProviders]) {
+      const template = registry.entries.find((entry) => entry.provider === provider);
+      if (!template) continue;
+      routes.push({
+        ...template,
+        slug: `${provider}/${value}`,
+        model: value,
+        label: `${value} — ${provider}`,
+        llm: { ...template.llm, model: value },
+      });
+    }
+    return routes;
   }
 
   return [];

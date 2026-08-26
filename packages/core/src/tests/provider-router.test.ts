@@ -116,6 +116,39 @@ test('resolveRoutes sends unknown models to a single passthroughUnknown provider
   assert.equal(route.llm.model, 'vendor/new-model');
 });
 
+test('passthrough falls through to other upstream providers when fallbacks are allowed', () => {
+  const registry = buildModelRegistry({
+    orca: { provider: 'openai', apiKey: 'k', model: 'm', endpoint: 'https://api.orcarouter.ai/v1', passthroughUnknown: true, cachedModels: ['m'] },
+    openrouter: { provider: 'openrouter', apiKey: 'k2', model: 'stealth/ox-alpha', endpoint: 'https://openrouter.ai/api/v1', cachedModels: ['stealth/ox-alpha'] },
+  });
+  // A model in NO catalog: passthrough (orca) FIRST, then the other configured
+  // upstream as a fallback, so a capacity/not-found failure does not dead-end.
+  const withFb = resolveRoutes(registry, 'vendor/unknown', { withFallbacks: true });
+  assert.deepEqual(withFb.map((r) => r.provider), ['orca', 'openrouter']);
+  assert.ok(withFb.every((r) => r.llm.model === 'vendor/unknown'), 'the bare unknown model on each route');
+  // Without fallbacks (the primary-chain pass): only the passthrough route.
+  assert.deepEqual(resolveRoutes(registry, 'vendor/unknown', { withFallbacks: false }).map((r) => r.provider), ['orca']);
+});
+
+test('passthrough fallthrough never targets the local router gateway (no loop)', () => {
+  const registry = buildModelRegistry({
+    orca: { provider: 'openai', apiKey: 'k', model: 'm', endpoint: 'https://api.orcarouter.ai/v1', passthroughUnknown: true, cachedModels: ['m'] },
+    localgw: { provider: 'brainrouter', apiKey: 'k2', model: 'big-pickle', endpoint: 'http://localhost:3747/v1/chat/completions', cachedModels: ['big-pickle'] },
+    openrouter: { provider: 'openrouter', apiKey: 'k3', model: 'x', endpoint: 'https://openrouter.ai/api/v1', cachedModels: ['x'] },
+  });
+  // orca (passthrough) + openrouter (upstream fallback); the brainrouter-kind
+  // gateway is excluded so an unknown model is never routed back into itself.
+  assert.deepEqual(resolveRoutes(registry, 'vendor/unknown', { withFallbacks: true }).map((r) => r.provider), ['orca', 'openrouter']);
+});
+
+test('multiple passthroughUnknown providers each get a route (was capped at exactly one)', () => {
+  const registry = buildModelRegistry({
+    orca: { provider: 'openai', apiKey: 'k', model: 'm', endpoint: 'https://api.orcarouter.ai/v1', passthroughUnknown: true, cachedModels: ['m'] },
+    openrouter: { provider: 'openrouter', apiKey: 'k2', model: 'x', endpoint: 'https://openrouter.ai/api/v1', passthroughUnknown: true, cachedModels: ['x'] },
+  });
+  assert.deepEqual(resolveRoutes(registry, 'vendor/unknown', { withFallbacks: false }).map((r) => r.provider), ['orca', 'openrouter']);
+});
+
 test('resolveRoutes applies requireTools and minContext constraints when metadata is known', () => {
   const registry = buildModelRegistry({ openai, groq }, { chain: ['gpt-5.3', 'llama-3.3-70b'] });
   const openaiRoute = registry.bySlug.get('openai/gpt-5.3')!;
