@@ -41,6 +41,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 047 | Providers as data, agents as engines, playbooks, a vetted install | ✅ Implemented (all 4 decisions: P1 declarative providers, P2 agents-as-engines, P3 playbooks, P4a allowlist + P4b advisory install gate) | 0.4.22 |
 | 048 | A codebase map the agent actually reads (Atlas → the loop) | ✅ Implemented (S1–S6) — session hook pair fired (#1594), orientation+staleness + background refresh + prompt retrieval + blast-radius taps (deterministic, byte-neutral without a graph), `atlas_context` tool (#1595); knobs `cli.atlas.*` default on | 0.4.22 |
 | 049 | Memory for the human (Study mode — decks, SRS, generation with receipts) | ✅ Implemented (S1–S6, #1598) — desktop Study mode, workspace-scoped decks in `<root>/.brainrouter/study/` (committable) + per-user progress; deterministic SRS (flip/MC/typed/cloze); profile-aware generation with receipts | 0.4.22 |
+| 050 | External agents as live sessions, not one-shot shells | 📋 Proposed — the protocol decision ADR-047 §3 deferred: an `AgentSessionPort` seam (engine/worker/runtime consumers), catalog-declared transports (ACP, Codex app-server, Claude stream-json; PTY as loud fallback), approvals as `InteractionRequest` (retire `y\r`), incremental turns + resume, agent instances | — |
 
 ## In flight / next
 
