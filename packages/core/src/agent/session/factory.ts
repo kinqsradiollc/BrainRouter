@@ -9,6 +9,8 @@
  */
 import { OneShotStdioSession } from './oneShotSession.js';
 import { ClaudeStreamJsonSession } from './claudeStreamJson.js';
+import { CodexAppServerSession } from './codexAppServer.js';
+import { AcpStdioSession } from './acpStdio.js';
 import type {
   AgentSessionDeps,
   AgentSessionPort,
@@ -24,6 +26,10 @@ export function createAgentSession(
   switch (transport) {
     case 'claude-stream-json':
       return new ClaudeStreamJsonSession(spec, deps);
+    case 'codex-app-server':
+      return new CodexAppServerSession(spec, deps);
+    case 'acp-stdio':
+      return new AcpStdioSession(spec, deps);
     case 'stdio-oneshot':
     default:
       return new OneShotStdioSession(spec, deps);

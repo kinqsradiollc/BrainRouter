@@ -42,8 +42,8 @@ test('factory returns the one-shot fallback; it declares its transport and has n
   assert.ok(s instanceof OneShotStdioSession);
   assert.equal(s.transport, 'stdio-oneshot');
   assert.equal(s.resumeCursor, undefined);
-  // An unknown/not-yet-built transport degrades to one-shot rather than throwing.
-  assert.ok(createAgentSession('acp-stdio', spec) instanceof OneShotStdioSession);
+  // An out-of-union transport degrades to one-shot rather than throwing.
+  assert.ok(createAgentSession('nonexistent' as never, spec) instanceof OneShotStdioSession);
 });
 
 test('prompt emits the whole answer as one text event + done{stop} and resolves with the text', async () => {
