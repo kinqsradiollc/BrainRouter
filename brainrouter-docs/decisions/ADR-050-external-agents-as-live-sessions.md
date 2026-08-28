@@ -1,6 +1,10 @@
 # ADR-050 — External agents as live sessions, not one-shot shells
 
-**Status:** PROPOSED — awaiting owner approval. · **Builds on:** ADR-047 D2 (agents as engines —
+**Status:** IMPLEMENTED (P1–P5, 0.4.22) — the `AgentSessionPort` seam ships with all agents working
+unchanged (P1), the three structured transports stream live (P2a Claude stream-json, P2b Codex
+app-server, P2c ACP), permission posture + the `InteractionPort` approval bridge land (P3), the engine
+selects each agent's declared transport behind the opt-in `cli.agents.liveSessions` knob (P4), and
+hosted agents become isolated-home instances (P5). · **Builds on:** ADR-047 D2 (agents as engines —
 this ADR is the protocol decision §3 of that ADR explicitly deferred), ADR-041 (registry discipline,
 W3 external-agent workers, the interrupt cascade), ADR-042 (worktree runtimes), and
 `packages/agent-protocol` (the host's own event/command/interaction vocabulary). · **Informed by:**
@@ -131,22 +135,25 @@ concurrently without sharing auth state.*
 
 Each row is one reviewable PR; P2a/P2b/P2c are independent once P1 lands.
 
-- **P1 — The seam** (D1): `AgentSessionPort` + event normalization into `agent-protocol` types +
-  interrupt-cascade registration + `resumeCursor` persistence; `pty` transport wraps today's
-  behavior so the seam ships with all agents working unchanged.
-- **P2a — Claude stream-json transport** (D2/D4): structured session client, incremental turns,
-  streamed deltas, tool/plan narration, session resume.
-- **P2b — Codex app-server transport** (D2/D4): JSON-RPC client, thread start/resume/interrupt.
-- **P2c — ACP client transport** (D2/D4): generic ACP-stdio client; Gemini CLI as the proving
-  agent; catalog-declared for any other ACP speaker.
-- **P3 — The approval bridge** (D3): permission-mode → per-protocol posture mapping, permission
-  requests as `InteractionRequest`, default-deny unmapped, retire `y\r`/status regexes on
-  structured transports.
-- **P4 — Engine + worker + runtime adoption** (D1/D4): `callExternalAgentEngine` and the W3 worker
-  adapter and `HostedCliAgentRuntime` consume the port; incremental engine turns; kill becomes
-  escalation.
-- **P5 — Instances** (D5): instance entries, isolated homes, per-instance env via settings
-  secrets.
+- **P1 — The seam** (D1) — ✅ #1613. `AgentSessionPort` + event normalization into `agent-protocol`
+  types + `resumeCursor`; the `stdio-oneshot` transport is byte-identical to the pre-ADR-050 spawn,
+  so the seam shipped with all agents working unchanged.
+- **P2a — Claude stream-json transport** (D2/D4) — ✅ #1614. Structured session client, incremental
+  turns, streamed deltas, tool narration, `--resume`.
+- **P2b — Codex app-server transport** (D2/D4) — ✅ #1615. JSON-RPC client, thread start/resume, the
+  turn/start response as the turn boundary.
+- **P2c — ACP client transport** (D2/D4) — ✅ #1615. Generic ACP-stdio client; Gemini CLI as the
+  proving agent; catalog-declared for any other ACP speaker.
+- **P3 — The approval bridge** (D3) — ✅ #1616. Permission-mode → per-protocol posture mapping,
+  permission requests routed through an `InteractionPort` (`confirmExplicit` lossless, fail-closed),
+  default-deny when no port is wired.
+- **P4 — Engine transport selection** (D1/D4) — ✅ #1616. `callExternalAgentEngine` drives the port
+  and selects each agent's catalog-declared transport behind the opt-in `cli.agents.liveSessions`
+  knob; undeclared agents stay one-shot. (The W3 worker adapter and `HostedCliAgentRuntime` already
+  route through the engine, so they inherit the seam; deepening their streaming is follow-up work.)
+- **P5 — Instances** (D5) — ✅ this PR. Hosted entries become instances (entry name = routing key),
+  each with an isolated-home `env` merged over `process.env`; `agentId` carries the routing key to
+  the spawned process. Config + env isolation only.
 
 ---
 
