@@ -20,6 +20,7 @@ import type {
   LlmProfileConfig,
   RouterCliKnobs,
   DeclarativeProviderEntry,
+  ResolvedHostedAgentConfig,
 } from './configTypes.js';
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 import { stripTrailingSlashes } from '../util/trimEdges.js';
@@ -449,7 +450,19 @@ function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
     // ADR-050 D5 — per-instance env: keep only string→string pairs (a home path
     // is a string; anything else is dropped rather than coerced).
     const env = resolveInstanceEnv(value.env);
-    out.push({ name, command, args, protocol, ...(env ? { env } : {}) });
+    // ADR-050 D2/P4 — a bring-your-own agent may declare a live session transport.
+    const transport = HOSTED_SESSION_TRANSPORTS.includes(value.transport as never)
+      ? (value.transport as ResolvedHostedAgentConfig['transport'])
+      : undefined;
+    const transportArgs = transport && Array.isArray(value.transportArgs)
+      ? value.transportArgs.filter((a): a is string => typeof a === 'string')
+      : undefined;
+    out.push({
+      name, command, args, protocol,
+      ...(env ? { env } : {}),
+      ...(transport ? { transport } : {}),
+      ...(transportArgs && transportArgs.length ? { transportArgs } : {}),
+    });
     seen.add(name);
   }
   const liveSessions = input && typeof input === 'object' && !Array.isArray(input)
@@ -457,6 +470,9 @@ function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
     : false;
   return { hosted: out, liveSessions };
 }
+
+/** ADR-050 D2/P4 — the session transports a bring-your-own hosted agent may declare. */
+const HOSTED_SESSION_TRANSPORTS: readonly string[] = ['stdio-oneshot', 'claude-stream-json', 'codex-app-server', 'acp-stdio'];
 
 /** ADR-050 D5 — sanitize a hosted instance's `env` to a string→string map; a
  *  non-object, or a map with no string values, yields undefined (inherit only). */

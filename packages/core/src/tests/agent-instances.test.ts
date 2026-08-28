@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import type { Config } from '../config/config.js';
 import { resolveCliKnobs, setCliKnobOverride, _resetCliKnobsCache } from '../config/config.js';
-import { resolveEngineTarget, callExternalAgentEngine } from '../agent/transport/externalAgentEngine.js';
+import { resolveEngineTarget, resolveEngineTransport, callExternalAgentEngine } from '../agent/transport/externalAgentEngine.js';
 
 /** A spawn that records the env it was given, then emits one line and exits. */
 function capturingSpawn(answer: string): { spawn: any; envs: Array<Record<string, string | undefined>> } {
@@ -68,6 +68,41 @@ test('resolveEngineTarget carries the instance env; the routing key is the entry
     // Same binary (`claude`), two instances, addressed by their distinct names.
     assert.deepEqual(resolveEngineTarget({ model: 'claude-work' } as never)?.env, { CLAUDE_CONFIG_DIR: '/homes/work' });
     assert.deepEqual(resolveEngineTarget({ model: 'claude-home' } as never)?.env, { CLAUDE_CONFIG_DIR: '/homes/home' });
+  } finally {
+    _resetCliKnobsCache();
+  }
+});
+
+test('a bring-your-own agent may DECLARE a live transport (not limited to the built-in catalog)', () => {
+  // The resolver validates `transport` against the known set and keeps its args.
+  const cfg = {
+    cli: {
+      agents: {
+        hosted: [
+          { name: 'my-acp-agent', command: 'my-agent', args: [], protocol: 'stdio', transport: 'acp-stdio', transportArgs: ['--acp'] },
+          { name: 'bogus', command: 'x', args: [], protocol: 'stdio', transport: 'not-a-transport', transportArgs: ['--x'] },
+          { name: 'plain', command: 'y', args: [], protocol: 'stdio' },
+        ],
+      },
+    },
+  } as unknown as Config;
+  const hosted = resolveCliKnobs(cfg).agents.hosted;
+  assert.equal(hosted.find((h) => h.name === 'my-acp-agent')!.transport, 'acp-stdio');
+  assert.deepEqual(hosted.find((h) => h.name === 'my-acp-agent')!.transportArgs, ['--acp']);
+  assert.equal(hosted.find((h) => h.name === 'bogus')!.transport, undefined); // invalid ⇒ dropped
+  assert.equal(hosted.find((h) => h.name === 'bogus')!.transportArgs, undefined); // args ignored without a valid transport
+  assert.equal(hosted.find((h) => h.name === 'plain')!.transport, undefined);
+
+  // The target carries the declared transport, and the engine prefers it over any
+  // catalog lookup — with live sessions on, `resolveEngineTransport` selects it.
+  _resetCliKnobsCache();
+  setCliKnobOverride({ agents: { liveSessions: true, hosted } });
+  try {
+    const target = resolveEngineTarget({ model: 'my-acp-agent' } as never)!;
+    assert.equal(target.sessionTransport, 'acp-stdio');
+    assert.deepEqual(target.sessionArgs, ['--acp']);
+    assert.equal(resolveEngineTransport(target.name, true, target.sessionTransport), 'acp-stdio');
+    assert.equal(resolveEngineTransport(target.name, false, target.sessionTransport), 'stdio-oneshot'); // knob off ⇒ one-shot
   } finally {
     _resetCliKnobsCache();
   }

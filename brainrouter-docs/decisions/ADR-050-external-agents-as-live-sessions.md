@@ -4,7 +4,8 @@
 unchanged (P1), the three structured transports stream live (P2a Claude stream-json, P2b Codex
 app-server, P2c ACP), permission posture + the `InteractionPort` approval bridge land (P3), the engine
 selects each agent's declared transport behind the opt-in `cli.agents.liveSessions` knob (P4), and
-hosted agents become isolated-home instances (P5). · **Builds on:** ADR-047 D2 (agents as engines —
+hosted agents become isolated-home instances that may declare their own live transport — so live
+sessions reach bring-your-own agents, not just the built-in catalog (P5). · **Builds on:** ADR-047 D2 (agents as engines —
 this ADR is the protocol decision §3 of that ADR explicitly deferred), ADR-041 (registry discipline,
 W3 external-agent workers, the interrupt cascade), ADR-042 (worktree runtimes), and
 `packages/agent-protocol` (the host's own event/command/interaction vocabulary). · **Informed by:**
@@ -151,9 +152,13 @@ Each row is one reviewable PR; P2a/P2b/P2c are independent once P1 lands.
   and selects each agent's catalog-declared transport behind the opt-in `cli.agents.liveSessions`
   knob; undeclared agents stay one-shot. (The W3 worker adapter and `HostedCliAgentRuntime` already
   route through the engine, so they inherit the seam; deepening their streaming is follow-up work.)
-- **P5 — Instances** (D5) — ✅ this PR. Hosted entries become instances (entry name = routing key),
-  each with an isolated-home `env` merged over `process.env`; `agentId` carries the routing key to
-  the spawned process. Config + env isolation only.
+- **P5 — Instances + bring-your-own transports** (D5/D2) — ✅ this PR. Hosted entries become
+  instances (entry name = routing key), each with an isolated-home `env` merged over `process.env`;
+  `agentId` carries the routing key to the spawned process. A hosted entry may also **declare its own
+  live `transport`** (`acp-stdio` for any ACP-speaking CLI, or a vendor transport for a compatible
+  one) with `transportArgs`, so live sessions reach bring-your-own agents — not just the five
+  built-in catalog entries — with **zero new transport code** (D2's promise, extended to the user
+  catalog). Config + env isolation only.
 
 ---
 

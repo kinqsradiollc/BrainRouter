@@ -9,6 +9,7 @@
  * kills the child.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { AgentSessionTransport } from './types.js';
 
 /** How the agent's stdout is read: `stdio` = the whole output is the answer; `line-json` = a JSON envelope. */
 export type EngineProtocol = 'stdio' | 'line-json';
@@ -21,6 +22,14 @@ export interface EngineTarget {
   protocol: EngineProtocol;
   /** ADR-050 D5 — per-instance env (isolated home) merged over process.env at spawn. */
   env?: Record<string, string>;
+  /**
+   * ADR-050 D2/P4 — a live session transport DECLARED by the target itself (a
+   * bring-your-own hosted agent), taking precedence over any built-in catalog
+   * lookup. Absent ⇒ the engine derives the transport from the catalog adapter.
+   */
+  sessionTransport?: AgentSessionTransport;
+  /** ADR-050 D2/P4 — args that launch the CLI in `sessionTransport` mode. */
+  sessionArgs?: readonly string[];
 }
 
 /** In an engine's args, this token is replaced by the prompt (arg delivery); absent ⇒ prompt piped on stdin. */
