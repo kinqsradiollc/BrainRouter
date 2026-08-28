@@ -41,10 +41,13 @@ export class OneShotStdioSession implements AgentSessionPort {
     const parts = [handlers.signal, this.turnAbort.signal].filter((s): s is AbortSignal => !!s);
     const signal = parts.length === 1 ? parts[0]! : AbortSignal.any(parts);
     const target: EngineTarget = {
-      name: this.spec.command,
+      // The instance id (routing key) is the engine-agent marker, not the binary.
+      name: this.spec.agentId ?? this.spec.command,
       command: this.spec.command,
       args: this.spec.args,
       protocol: 'stdio',
+      // ADR-050 D5 — carry the instance's isolated-home env into the spawn.
+      ...(this.spec.env ? { env: this.spec.env } : {}),
     };
     try {
       const out = await runExternalAgentTurn(target, text, {

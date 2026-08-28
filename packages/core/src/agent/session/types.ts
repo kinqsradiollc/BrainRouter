@@ -53,6 +53,13 @@ export interface AgentSessionSpec {
   args: readonly string[];
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * ADR-050 D5 — the instance/adapter id (the routing key), distinct from the raw
+   * `command` binary. Two instances of one CLI share a `command` but differ here.
+   * Surfaces to the spawned agent as `BRAINROUTER_ENGINE_AGENT`; defaults to
+   * `command` when absent.
+   */
+  agentId?: string;
   /** Reopen an earlier session (opaque, transport-specific). */
   resumeCursor?: string;
   /** Permission posture; defaults to `default` (escalate every tool). */

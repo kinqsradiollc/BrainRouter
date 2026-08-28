@@ -19,6 +19,8 @@ export interface EngineTarget {
   command: string;
   args: readonly string[];
   protocol: EngineProtocol;
+  /** ADR-050 D5 — per-instance env (isolated home) merged over process.env at spawn. */
+  env?: Record<string, string>;
 }
 
 /** In an engine's args, this token is replaced by the prompt (arg delivery); absent ⇒ prompt piped on stdin. */
@@ -47,6 +49,8 @@ export interface EngineRunOptions {
   spawnImpl?: typeof spawn;
   /** Working directory for the spawned agent. Defaults to process.cwd(). */
   cwd?: string;
+  /** ADR-050 D5 — per-instance env (isolated home) merged over process.env. */
+  env?: Record<string, string>;
 }
 
 /**
@@ -71,7 +75,9 @@ export function runExternalAgentTurn(
     try {
       child = spawnImpl(target.command, args, {
         cwd: options.cwd || process.cwd(),
-        env: { ...process.env, BRAINROUTER_ENGINE_AGENT: target.name },
+        // Instance env (isolated home) overrides the inherited environment; the
+        // engine-agent marker is stamped last so it always reflects this target.
+        env: { ...process.env, ...options.env, ...target.env, BRAINROUTER_ENGINE_AGENT: target.name },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err) {

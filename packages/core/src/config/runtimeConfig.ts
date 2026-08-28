@@ -15,6 +15,13 @@ export interface HostedAgentConfig {
   command?: string;
   args?: string[];
   protocol?: HostedAgentProtocol;
+  /**
+   * ADR-050 D5 — per-instance environment. The same agent CLI may appear under N
+   * hosted entries (the entry `name` is the instance id / routing key), each with
+   * an ISOLATED home so accounts never share auth state: `CLAUDE_CONFIG_DIR` /
+   * `CODEX_HOME` / `GEMINI_*`, etc. Merged over `process.env` at spawn time.
+   */
+  env?: Record<string, string>;
 }
 
 export interface ResolvedHostedAgentConfig {
@@ -22,6 +29,8 @@ export interface ResolvedHostedAgentConfig {
   command: string;
   args: string[];
   protocol: HostedAgentProtocol;
+  /** ADR-050 D5 — resolved per-instance env (isolated home); absent ⇒ inherit process.env only. */
+  env?: Record<string, string>;
 }
 
 export interface ContainerRuntimeLimits {

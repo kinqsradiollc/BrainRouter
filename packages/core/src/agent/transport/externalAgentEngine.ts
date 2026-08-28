@@ -60,9 +60,18 @@ import type { EngineTarget } from '../session/oneShotSpawn.js';
 export function resolveEngineTarget(config: LLMConfig): EngineTarget | undefined {
   const name = (config.model || config.provider || '').trim();
   if (!name) return undefined;
+  // ADR-050 D5 — a hosted entry is an INSTANCE: its `name` is the routing key
+  // (the same binary may appear N times), and its `env` is that instance's
+  // isolated home, so two seats of one CLI never share auth state.
   const hosted = getCliKnobs().agents.hosted.find((a) => a.name === name);
   if (hosted) {
-    return { name: hosted.name, command: hosted.command, args: hosted.args, protocol: hosted.protocol };
+    return {
+      name: hosted.name,
+      command: hosted.command,
+      args: hosted.args,
+      protocol: hosted.protocol,
+      ...(hosted.env ? { env: hosted.env } : {}),
+    };
   }
   const adapter = getAgentAdapter(name);
   if (adapter?.engineArgs && findExecutable(adapter.command)) {
@@ -136,8 +145,12 @@ export async function callExternalAgentEngine(
     {
       command: target.command,
       args,
+      agentId: target.name,
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.permissionMode ? { permissionMode: options.permissionMode } : {}),
+      // ADR-050 D5 — the instance's isolated-home env reaches every transport
+      // (one-shot and structured) through the session spec.
+      ...(target.env ? { env: target.env } : {}),
     },
     { ...(options.spawnImpl ? { spawnImpl: options.spawnImpl } : {}) },
   );

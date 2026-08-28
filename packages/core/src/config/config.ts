@@ -446,13 +446,28 @@ function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
       ? value.args.filter((arg): arg is string => typeof arg === 'string')
       : [];
     const protocol = value.protocol === 'stdio' ? 'stdio' : 'line-json';
-    out.push({ name, command, args, protocol });
+    // ADR-050 D5 — per-instance env: keep only string→string pairs (a home path
+    // is a string; anything else is dropped rather than coerced).
+    const env = resolveInstanceEnv(value.env);
+    out.push({ name, command, args, protocol, ...(env ? { env } : {}) });
     seen.add(name);
   }
   const liveSessions = input && typeof input === 'object' && !Array.isArray(input)
     ? (input as { liveSessions?: unknown }).liveSessions === true
     : false;
   return { hosted: out, liveSessions };
+}
+
+/** ADR-050 D5 — sanitize a hosted instance's `env` to a string→string map; a
+ *  non-object, or a map with no string values, yields undefined (inherit only). */
+function resolveInstanceEnv(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const k = typeof key === 'string' ? key.trim() : '';
+    if (k && typeof val === 'string') out[k] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function unitInterval(value: unknown, fallback: number): number {
