@@ -49,9 +49,26 @@ export interface AgentSessionSpec {
   resumeCursor?: string;
 }
 
+/** A permission the agent needs before proceeding (surfaced from a structured transport). */
+export interface SessionPermissionRequest {
+  requestId: string;
+  kind: 'command' | 'file-edit' | 'file-read' | 'other';
+  title: string;
+  detail?: string;
+}
+
+/** How the human answered a {@link SessionPermissionRequest}. */
+export type SessionPermissionDecision = 'approved' | 'approved-for-session' | 'declined';
+
 /** Per-turn callbacks. */
 export interface AgentSessionHandlers {
   onEvent: (event: AgentSessionEvent) => void;
+  /**
+   * Answer an agent-side permission request. ABSENT ⇒ the transport DEFAULT-DENIES
+   * (ADR-050 D3). The P3 bridge maps this to the host's InteractionPort so the
+   * request renders on Desktop/CLI/mobile and never auto-types `y`.
+   */
+  onPermission?: (request: SessionPermissionRequest) => Promise<SessionPermissionDecision>;
   signal?: AbortSignal;
 }
 
