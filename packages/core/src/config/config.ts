@@ -20,6 +20,7 @@ import type {
   LlmProfileConfig,
   RouterCliKnobs,
   DeclarativeProviderEntry,
+  ResolvedHostedAgentConfig,
 } from './configTypes.js';
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 import { stripTrailingSlashes } from '../util/trimEdges.js';
@@ -446,13 +447,43 @@ function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
       ? value.args.filter((arg): arg is string => typeof arg === 'string')
       : [];
     const protocol = value.protocol === 'stdio' ? 'stdio' : 'line-json';
-    out.push({ name, command, args, protocol });
+    // ADR-050 D5 — per-instance env: keep only string→string pairs (a home path
+    // is a string; anything else is dropped rather than coerced).
+    const env = resolveInstanceEnv(value.env);
+    // ADR-050 D2/P4 — a bring-your-own agent may declare a live session transport.
+    const transport = HOSTED_SESSION_TRANSPORTS.includes(value.transport as never)
+      ? (value.transport as ResolvedHostedAgentConfig['transport'])
+      : undefined;
+    const transportArgs = transport && Array.isArray(value.transportArgs)
+      ? value.transportArgs.filter((a): a is string => typeof a === 'string')
+      : undefined;
+    out.push({
+      name, command, args, protocol,
+      ...(env ? { env } : {}),
+      ...(transport ? { transport } : {}),
+      ...(transportArgs && transportArgs.length ? { transportArgs } : {}),
+    });
     seen.add(name);
   }
   const liveSessions = input && typeof input === 'object' && !Array.isArray(input)
     ? (input as { liveSessions?: unknown }).liveSessions === true
     : false;
   return { hosted: out, liveSessions };
+}
+
+/** ADR-050 D2/P4 — the session transports a bring-your-own hosted agent may declare. */
+const HOSTED_SESSION_TRANSPORTS: readonly string[] = ['stdio-oneshot', 'claude-stream-json', 'codex-app-server', 'acp-stdio'];
+
+/** ADR-050 D5 — sanitize a hosted instance's `env` to a string→string map; a
+ *  non-object, or a map with no string values, yields undefined (inherit only). */
+function resolveInstanceEnv(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const k = typeof key === 'string' ? key.trim() : '';
+    if (k && typeof val === 'string') out[k] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function unitInterval(value: unknown, fallback: number): number {

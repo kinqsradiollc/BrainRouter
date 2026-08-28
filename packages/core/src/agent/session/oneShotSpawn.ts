@@ -9,6 +9,7 @@
  * kills the child.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { AgentSessionTransport } from './types.js';
 
 /** How the agent's stdout is read: `stdio` = the whole output is the answer; `line-json` = a JSON envelope. */
 export type EngineProtocol = 'stdio' | 'line-json';
@@ -19,6 +20,16 @@ export interface EngineTarget {
   command: string;
   args: readonly string[];
   protocol: EngineProtocol;
+  /** ADR-050 D5 — per-instance env (isolated home) merged over process.env at spawn. */
+  env?: Record<string, string>;
+  /**
+   * ADR-050 D2/P4 — a live session transport DECLARED by the target itself (a
+   * bring-your-own hosted agent), taking precedence over any built-in catalog
+   * lookup. Absent ⇒ the engine derives the transport from the catalog adapter.
+   */
+  sessionTransport?: AgentSessionTransport;
+  /** ADR-050 D2/P4 — args that launch the CLI in `sessionTransport` mode. */
+  sessionArgs?: readonly string[];
 }
 
 /** In an engine's args, this token is replaced by the prompt (arg delivery); absent ⇒ prompt piped on stdin. */
@@ -47,6 +58,8 @@ export interface EngineRunOptions {
   spawnImpl?: typeof spawn;
   /** Working directory for the spawned agent. Defaults to process.cwd(). */
   cwd?: string;
+  /** ADR-050 D5 — per-instance env (isolated home) merged over process.env. */
+  env?: Record<string, string>;
 }
 
 /**
@@ -71,7 +84,9 @@ export function runExternalAgentTurn(
     try {
       child = spawnImpl(target.command, args, {
         cwd: options.cwd || process.cwd(),
-        env: { ...process.env, BRAINROUTER_ENGINE_AGENT: target.name },
+        // Instance env (isolated home) overrides the inherited environment; the
+        // engine-agent marker is stamped last so it always reflects this target.
+        env: { ...process.env, ...options.env, ...target.env, BRAINROUTER_ENGINE_AGENT: target.name },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err) {

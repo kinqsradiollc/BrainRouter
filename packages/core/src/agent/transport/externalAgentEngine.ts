@@ -32,13 +32,18 @@ import type { AgentSessionTransport, SessionPermissionMode } from '../session/ty
 import type { EngineRunOptions } from '../session/oneShotSpawn.js';
 
 /**
- * ADR-050 P4 — the session transport an engine model drives: the agent's DECLARED
- * transport when live sessions are enabled, else the one-shot fallback. An agent
- * with no declared transport (opencode, a custom hosted CLI) always uses one-shot.
+ * ADR-050 P4 — the session transport an engine model drives: the target's OWN
+ * declared transport (a bring-your-own hosted agent) first, then the built-in
+ * catalog adapter's, else the one-shot fallback. With live sessions off, always
+ * one-shot (byte-identical to the pre-ADR-050 spawn).
  */
-export function resolveEngineTransport(name: string, liveSessions: boolean): AgentSessionTransport {
+export function resolveEngineTransport(
+  name: string,
+  liveSessions: boolean,
+  declared?: AgentSessionTransport,
+): AgentSessionTransport {
   if (!liveSessions) return 'stdio-oneshot';
-  return getAgentAdapter(name)?.sessionTransport ?? 'stdio-oneshot';
+  return declared ?? getAgentAdapter(name)?.sessionTransport ?? 'stdio-oneshot';
 }
 // ADR-050 P1 — the one-shot spawn primitive moved into the session module (which
 // now owns it); re-exported here so existing importers/tests keep resolving them.
@@ -60,9 +65,22 @@ import type { EngineTarget } from '../session/oneShotSpawn.js';
 export function resolveEngineTarget(config: LLMConfig): EngineTarget | undefined {
   const name = (config.model || config.provider || '').trim();
   if (!name) return undefined;
+  // ADR-050 D5 — a hosted entry is an INSTANCE: its `name` is the routing key
+  // (the same binary may appear N times), and its `env` is that instance's
+  // isolated home, so two seats of one CLI never share auth state.
   const hosted = getCliKnobs().agents.hosted.find((a) => a.name === name);
   if (hosted) {
-    return { name: hosted.name, command: hosted.command, args: hosted.args, protocol: hosted.protocol };
+    return {
+      name: hosted.name,
+      command: hosted.command,
+      args: hosted.args,
+      protocol: hosted.protocol,
+      ...(hosted.env ? { env: hosted.env } : {}),
+      // ADR-050 D2/P4 — a bring-your-own agent may declare a LIVE transport, so
+      // live sessions are not limited to the built-in catalog.
+      ...(hosted.transport ? { sessionTransport: hosted.transport } : {}),
+      ...(hosted.transportArgs ? { sessionArgs: hosted.transportArgs } : {}),
+    };
   }
   const adapter = getAgentAdapter(name);
   if (adapter?.engineArgs && findExecutable(adapter.command)) {
@@ -123,21 +141,27 @@ export async function callExternalAgentEngine(
       : `declare it under cli.agents.hosted[], or use a known agent id (claude-code, codex, opencode, gemini-cli).`;
     throw new Error(`engine model "${name}" is not available — ${hint}`);
   }
-  // ADR-050 P4 — the engine drives the ONE session seam, selecting the agent's
+  // ADR-050 P4 — the engine drives the ONE session seam, selecting the target's
   // DECLARED transport when live sessions are enabled (opt-in) so a structured
   // session streams and narrates tool activity; otherwise the one-shot transport
-  // is byte-identical to the pre-ADR-050 spawn. A structured transport builds its
-  // own args (claude/codex) or takes the catalog's sessionArgs (ACP).
+  // is byte-identical to the pre-ADR-050 spawn. Precedence: a bring-your-own
+  // hosted agent's own `sessionTransport`, then the built-in catalog adapter. A
+  // structured transport builds its own args (claude/codex) or takes the
+  // declared/catalog session args (ACP).
   const adapter = getAgentAdapter(target.name);
-  const transport = resolveEngineTransport(target.name, getCliKnobs().agents.liveSessions ?? false);
-  const args = transport === 'stdio-oneshot' ? target.args : (adapter?.sessionArgs ?? []);
+  const transport = resolveEngineTransport(target.name, getCliKnobs().agents.liveSessions ?? false, target.sessionTransport);
+  const args = transport === 'stdio-oneshot' ? target.args : (target.sessionArgs ?? adapter?.sessionArgs ?? []);
   const session = createAgentSession(
     transport,
     {
       command: target.command,
       args,
+      agentId: target.name,
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.permissionMode ? { permissionMode: options.permissionMode } : {}),
+      // ADR-050 D5 — the instance's isolated-home env reaches every transport
+      // (one-shot and structured) through the session spec.
+      ...(target.env ? { env: target.env } : {}),
     },
     { ...(options.spawnImpl ? { spawnImpl: options.spawnImpl } : {}) },
   );
