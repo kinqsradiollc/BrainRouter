@@ -22,9 +22,21 @@ import type {
   AgentSessionSpec,
   AgentSessionTurn,
   SessionPermissionDecision,
+  SessionPermissionMode,
   SessionPermissionRequest,
   SessionStopReason,
 } from './types.js';
+
+/** Pure: map the permission posture to an ACP mode id (ADR-050 D3).
+ *  Undefined ⇒ no mode set (the agent's own default). */
+export function acpModeId(mode?: SessionPermissionMode): string | undefined {
+  switch (mode) {
+    case 'full-access': return 'bypassPermissions';
+    case 'auto-edit': return 'acceptEdits';
+    case 'default': return 'default';
+    default: return undefined;
+  }
+}
 
 export type AcpNormalized = { t: 'text'; text: string } | { t: 'tool'; name: string };
 
@@ -111,6 +123,11 @@ export class AcpStdioSession implements AgentSessionPort {
       const created = await this.rpc.request<{ sessionId?: string }>('session/new', { cwd: this.spec.cwd ?? process.cwd(), mcpServers: [] });
       this._resumeCursor = created?.sessionId;
       if (this._resumeCursor) this.turn?.onEvent({ kind: 'session', sessionId: this._resumeCursor });
+    }
+    // Best-effort posture: an agent that doesn't advertise the mode ignores it.
+    const modeId = acpModeId(this.spec.permissionMode);
+    if (this._resumeCursor && modeId) {
+      await this.rpc.request('session/set_mode', { sessionId: this._resumeCursor, modeId }).catch(() => { /* mode not supported */ });
     }
   }
 

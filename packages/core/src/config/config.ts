@@ -449,7 +449,10 @@ function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
     out.push({ name, command, args, protocol });
     seen.add(name);
   }
-  return { hosted: out };
+  const liveSessions = input && typeof input === 'object' && !Array.isArray(input)
+    ? (input as { liveSessions?: unknown }).liveSessions === true
+    : false;
+  return { hosted: out, liveSessions };
 }
 
 function unitInterval(value: unknown, fallback: number): number {

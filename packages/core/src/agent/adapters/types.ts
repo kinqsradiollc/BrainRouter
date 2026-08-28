@@ -1,3 +1,5 @@
+import type { AgentSessionTransport } from '../session/types.js';
+
 export type AgentAdapterId = 'brainrouter' | 'claude-code' | 'codex' | 'opencode' | 'gemini-cli';
 
 export type HostedAgentStatus = 'idle' | 'needs-trust' | 'starting' | 'working' | 'blocked' | 'waiting' | 'done' | 'failed';
@@ -15,6 +17,17 @@ export interface AgentAdapter {
    * agent is interactive-launch only and cannot be an engine.
    */
   engineArgs?: string[];
+  /**
+   * ADR-050 — the structured session transport this agent speaks when driven as a
+   * live session. Absent ⇒ the `stdio-oneshot` fallback (today's one-shot spawn).
+   */
+  sessionTransport?: AgentSessionTransport;
+  /**
+   * ADR-050 — extra launch args for the structured transport (e.g. an ACP agent's
+   * `--experimental-acp` flag). The claude-stream-json and codex-app-server
+   * transports build their own args and ignore this.
+   */
+  sessionArgs?: string[];
   resumeArgs: (sessionId: string) => string[];
   requiresWorkspaceTrust: boolean;
   controls: { interrupt: string; approve: string; submit: string };

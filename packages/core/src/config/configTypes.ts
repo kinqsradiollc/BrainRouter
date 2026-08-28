@@ -1494,7 +1494,18 @@ export interface ResolvedCliKnobs {
     /** ADR-047 D4 — advisory-database gate at install ('off' default). */
     advisoryPolicy: 'off' | 'warn' | 'block';
   };
-  agents: { hosted: ResolvedHostedAgentConfig[] };
+  agents: {
+    hosted: ResolvedHostedAgentConfig[];
+    /**
+     * ADR-050 — drive an engine-mode agent through its structured session
+     * transport (Claude stream-json / Codex app-server / ACP) instead of the
+     * one-shot spawn. Opt-in (default false): the one-shot fallback stays the
+     * safe default until a deployment verifies the structured transports against
+     * its installed CLIs. Always set by the resolver; optional here so test
+     * knob-overrides may omit it.
+     */
+    liveSessions?: boolean;
+  };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
    *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
    *  workspace-archive knobs: `archiveOnDispose` (default true),

@@ -25,8 +25,21 @@
 import type { LLMConfig } from '../../config/config.js';
 import { getCliKnobs } from '../../config/config.js';
 import { getAgentAdapter, findExecutable } from '../adapters/catalog.js';
+import type { InteractionPort } from '@kinqs/brainrouter-agent-protocol';
 import { createAgentSession } from '../session/factory.js';
+import { bridgeInteractionToPermission } from '../session/permissionBridge.js';
+import type { AgentSessionTransport, SessionPermissionMode } from '../session/types.js';
 import type { EngineRunOptions } from '../session/oneShotSpawn.js';
+
+/**
+ * ADR-050 P4 — the session transport an engine model drives: the agent's DECLARED
+ * transport when live sessions are enabled, else the one-shot fallback. An agent
+ * with no declared transport (opencode, a custom hosted CLI) always uses one-shot.
+ */
+export function resolveEngineTransport(name: string, liveSessions: boolean): AgentSessionTransport {
+  if (!liveSessions) return 'stdio-oneshot';
+  return getAgentAdapter(name)?.sessionTransport ?? 'stdio-oneshot';
+}
 // ADR-050 P1 — the one-shot spawn primitive moved into the session module (which
 // now owns it); re-exported here so existing importers/tests keep resolving them.
 export {
@@ -95,7 +108,11 @@ export interface EngineTurnResult {
 export async function callExternalAgentEngine(
   config: LLMConfig,
   messages: readonly unknown[],
-  options: EngineRunOptions & { onTextDelta?: (delta: string) => void } = {},
+  options: EngineRunOptions & {
+    onTextDelta?: (delta: string) => void;
+    permissionMode?: SessionPermissionMode;
+    interactionPort?: InteractionPort;
+  } = {},
 ): Promise<EngineTurnResult> {
   const target = resolveEngineTarget(config);
   if (!target) {
@@ -106,20 +123,37 @@ export async function callExternalAgentEngine(
       : `declare it under cli.agents.hosted[], or use a known agent id (claude-code, codex, opencode, gemini-cli).`;
     throw new Error(`engine model "${name}" is not available — ${hint}`);
   }
-  // ADR-050 P1 — the engine drives the ONE session seam. The one-shot transport
-  // is byte-identical to the pre-ADR-050 spawn (spawn → deliver the flattened
-  // prompt → read stdout until exit); P2 resolves the transport from the agent's
-  // declared session protocol so a structured session streams instead.
+  // ADR-050 P4 — the engine drives the ONE session seam, selecting the agent's
+  // DECLARED transport when live sessions are enabled (opt-in) so a structured
+  // session streams and narrates tool activity; otherwise the one-shot transport
+  // is byte-identical to the pre-ADR-050 spawn. A structured transport builds its
+  // own args (claude/codex) or takes the catalog's sessionArgs (ACP).
+  const adapter = getAgentAdapter(target.name);
+  const transport = resolveEngineTransport(target.name, getCliKnobs().agents.liveSessions ?? false);
+  const args = transport === 'stdio-oneshot' ? target.args : (adapter?.sessionArgs ?? []);
   const session = createAgentSession(
-    'stdio-oneshot',
-    { command: target.command, args: target.args, ...(options.cwd ? { cwd: options.cwd } : {}) },
+    transport,
+    {
+      command: target.command,
+      args,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.permissionMode ? { permissionMode: options.permissionMode } : {}),
+    },
     { ...(options.spawnImpl ? { spawnImpl: options.spawnImpl } : {}) },
   );
   await session.open();
   let content = '';
   let error: string | undefined;
+  // ADR-050 P3 — when the caller wires an InteractionPort, a live agent's
+  // permission requests (a command it wants to run, an edit it wants to make)
+  // surface as host confirms; without one, a structured transport default-denies
+  // (fail-closed) and a one-shot transport never asks.
+  const onPermission = options.interactionPort
+    ? bridgeInteractionToPermission(options.interactionPort)
+    : undefined;
   const turn = await session.prompt(flattenMessagesToPrompt(messages), {
     ...(options.signal ? { signal: options.signal } : {}),
+    ...(onPermission ? { onPermission } : {}),
     onEvent: (event) => {
       if (event.kind === 'text') {
         content += event.delta;
