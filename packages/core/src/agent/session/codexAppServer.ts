@@ -19,8 +19,20 @@ import type {
   AgentSessionPort,
   AgentSessionSpec,
   AgentSessionTurn,
+  SessionPermissionMode,
   SessionStopReason,
 } from './types.js';
+
+/** Pure: map the permission posture to Codex's approval policy + sandbox (ADR-050 D3).
+ *  Undefined ⇒ no override (the agent's own default). */
+export function codexApprovalParams(mode?: SessionPermissionMode): Record<string, string> {
+  switch (mode) {
+    case 'full-access': return { approval_policy: 'never', sandbox: 'danger-full-access' };
+    case 'auto-edit': return { approval_policy: 'on-request', sandbox: 'workspace-write' };
+    case 'default': return { approval_policy: 'untrusted', sandbox: 'read-only' };
+    default: return {};
+  }
+}
 
 export type CodexNormalized = { t: 'text'; text: string; final?: boolean } | { t: 'tool'; name: string };
 
@@ -127,7 +139,7 @@ export class CodexAppServerSession implements AgentSessionPort {
     try {
       if (!this.rpc?.running) await this.open();
       // The turn/start RESPONSE is the turn boundary; notifications stream in between.
-      await this.rpc!.request('turn/start', { thread_id: this._resumeCursor, input: [{ type: 'text', text }] });
+      await this.rpc!.request('turn/start', { thread_id: this._resumeCursor, input: [{ type: 'text', text }], ...codexApprovalParams(this.spec.permissionMode) });
       if (!t.done) this.settle('stop');
     } catch (err) {
       if (!t.done) this.settle('error', err instanceof Error ? err.message : String(err));

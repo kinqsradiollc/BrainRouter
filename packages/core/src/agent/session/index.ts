@@ -11,4 +11,5 @@ export * from './jsonRpcStdio.js';
 export * from './claudeStreamJson.js';
 export * from './codexAppServer.js';
 export * from './acpStdio.js';
+export * from './permissionBridge.js';
 export * from './factory.js';

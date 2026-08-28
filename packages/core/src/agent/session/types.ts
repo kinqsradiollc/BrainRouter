@@ -39,6 +39,14 @@ export type AgentSessionEvent =
   /** The turn ended. */
   | { kind: 'done'; reason: SessionStopReason; error?: string };
 
+/**
+ * The permission posture a session opens with (ADR-050 D3), mapped from the
+ * host's execution mode. Each transport translates it to its own protocol:
+ * `default` escalates every tool as a permission request; `auto-edit` lets edits
+ * through and escalates the rest; `full-access` escalates nothing.
+ */
+export type SessionPermissionMode = 'default' | 'auto-edit' | 'full-access';
+
 /** How to spawn (or reopen) a session. */
 export interface AgentSessionSpec {
   command: string;
@@ -47,6 +55,8 @@ export interface AgentSessionSpec {
   env?: Record<string, string>;
   /** Reopen an earlier session (opaque, transport-specific). */
   resumeCursor?: string;
+  /** Permission posture; defaults to `default` (escalate every tool). */
+  permissionMode?: SessionPermissionMode;
 }
 
 /** A permission the agent needs before proceeding (surfaced from a structured transport). */

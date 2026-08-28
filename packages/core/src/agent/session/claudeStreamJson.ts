@@ -19,8 +19,20 @@ import type {
   AgentSessionPort,
   AgentSessionSpec,
   AgentSessionTurn,
+  SessionPermissionMode,
   SessionStopReason,
 } from './types.js';
+
+/** Pure: map the permission posture to Claude's `--permission-mode` (ADR-050 D3).
+ *  Undefined ⇒ no override (the agent's own default). */
+export function claudePermissionArgs(mode?: SessionPermissionMode): string[] {
+  switch (mode) {
+    case 'full-access': return ['--permission-mode', 'bypassPermissions'];
+    case 'auto-edit': return ['--permission-mode', 'acceptEdits'];
+    case 'default': return ['--permission-mode', 'default'];
+    default: return [];
+  }
+}
 
 /** One normalized item from a stream-json line (an assistant line yields several). */
 export type ClaudeStreamParsed =
@@ -81,7 +93,7 @@ export class ClaudeStreamJsonSession implements AgentSessionPort {
 
   async open(): Promise<void> {
     if (this.proc?.running) return;
-    const args = [...BASE_ARGS, ...(this._resumeCursor ? ['--resume', this._resumeCursor] : [])];
+    const args = [...BASE_ARGS, ...claudePermissionArgs(this.spec.permissionMode), ...(this._resumeCursor ? ['--resume', this._resumeCursor] : [])];
     this.proc = new LineStdioProcess(
       this.spec.command, args,
       {

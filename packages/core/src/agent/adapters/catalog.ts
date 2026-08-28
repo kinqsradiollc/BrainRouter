@@ -23,6 +23,7 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
     id: 'claude-code', label: 'Claude Code', command: 'claude', aliases: [],
     // ADR-047 D2 — headless: `claude -p` (print mode) reads the prompt from stdin.
     interactiveArgs: [], engineArgs: ['-p'], resumeArgs: (id) => ['--resume', id],
+    sessionTransport: 'claude-stream-json',
     requiresWorkspaceTrust: true, ...common,
     integration: {
       mcp: { command: 'claude', args: ['mcp', 'add', '--scope', 'local', 'brainrouter', '--', 'brainrouter', 'mcp-proxy'] },
@@ -33,6 +34,7 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
     id: 'codex', label: 'Codex CLI', command: 'codex', aliases: [],
     // ADR-047 D2 — headless: `codex exec` runs a single non-interactive turn (prompt on stdin).
     interactiveArgs: [], engineArgs: ['exec'], resumeArgs: (id) => ['resume', id],
+    sessionTransport: 'codex-app-server',
     requiresWorkspaceTrust: true, ...common,
     integration: {
       mcp: { command: 'codex', args: ['mcp', 'add', 'brainrouter', '--', 'brainrouter', 'mcp-proxy'] },
@@ -52,6 +54,7 @@ export const AGENT_ADAPTERS: readonly AgentAdapter[] = [
     id: 'gemini-cli', label: 'Gemini CLI', command: 'gemini', aliases: [],
     // ADR-047 D2 — headless: `gemini -p "<prompt>"` (non-interactive, prompt as an arg).
     interactiveArgs: [], engineArgs: ['-p', '{prompt}'], resumeArgs: (id) => ['--resume', id],
+    sessionTransport: 'acp-stdio', sessionArgs: ['--experimental-acp'],
     requiresWorkspaceTrust: true, ...common,
     integration: {
       mcp: { command: 'gemini', args: ['mcp', 'add', '--scope', 'user', 'brainrouter', 'brainrouter', 'mcp-proxy'] },
