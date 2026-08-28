@@ -28,9 +28,15 @@ export type AgentSessionTransport =
 /** Why a turn ended. */
 export type SessionStopReason = 'stop' | 'interrupted' | 'error';
 
-/** A normalized event from a live external-agent session. Extended by P2/P3. */
+/** A normalized event from a live external-agent session. */
 export type AgentSessionEvent =
+  /** Assistant output text (a delta, or a whole block for non-streaming transports). */
   | { kind: 'text'; delta: string }
+  /** Read-only narration of the agent running its OWN tool (we render, we don't proxy). */
+  | { kind: 'tool'; phase: 'start' | 'end'; name: string; detail?: string }
+  /** The transport captured/updated its resumable session id (P4 persists it). */
+  | { kind: 'session'; sessionId: string }
+  /** The turn ended. */
   | { kind: 'done'; reason: SessionStopReason; error?: string };
 
 /** How to spawn (or reopen) a session. */

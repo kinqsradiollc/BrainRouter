@@ -8,6 +8,7 @@
  * call site (which knows whether a fallback is acceptable), not here.
  */
 import { OneShotStdioSession } from './oneShotSession.js';
+import { ClaudeStreamJsonSession } from './claudeStreamJson.js';
 import type {
   AgentSessionDeps,
   AgentSessionPort,
@@ -21,6 +22,8 @@ export function createAgentSession(
   deps: AgentSessionDeps = {},
 ): AgentSessionPort {
   switch (transport) {
+    case 'claude-stream-json':
+      return new ClaudeStreamJsonSession(spec, deps);
     case 'stdio-oneshot':
     default:
       return new OneShotStdioSession(spec, deps);

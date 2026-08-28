@@ -6,4 +6,6 @@
 export * from './types.js';
 export * from './oneShotSpawn.js';
 export * from './oneShotSession.js';
+export * from './lineStdioProcess.js';
+export * from './claudeStreamJson.js';
 export * from './factory.js';
