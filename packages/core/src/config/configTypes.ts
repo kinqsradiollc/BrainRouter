@@ -783,6 +783,13 @@ export interface CliKnobs {
    * settable per-launch via `--safe-mode` / `BRAINROUTER_SAFE_MODE`. Default false.
    */
   safeMode?: boolean;
+  /**
+   * ADR-052 D3 — a RESTRICTED session for an untrusted repo or a CI seat.
+   * Composable with `safeMode`: clamps the session to read-tier tools (no
+   * write/shell/exec), drops network/web tools, and refuses posture escalation.
+   * Default false.
+   */
+  restricted?: boolean;
   /*
    * `executionEngine` used to live here (ADR-027 D2, ADR-028 C1) and was
    * retired 2026-08-12 along with the graph executor it selected. It is left
@@ -1396,6 +1403,8 @@ export interface ResolvedCliKnobs {
   enforceVersionRange: boolean;
   /** CC-CONFIG-A1 — safe/troubleshooting mode. */
   safeMode: boolean;
+  /** ADR-052 D3 — restricted session (read-tier tools, no network, no escalation). */
+  restricted: boolean;
   stackingMode: 'auto' | 'always' | 'never';
   comprehension: { enabled: boolean; model: string; questions: number };
   autoInstallTools: 'off' | 'safe';

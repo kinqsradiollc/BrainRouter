@@ -36,6 +36,15 @@ export function registryParallelSafeLocal(): Set<string> {
   return new Set(effectiveToolRegistry().filter((tool) => tool.parallelSafe).map((tool) => tool.name));
 }
 
+/**
+ * ADR-052 D3 — the network/web tools (web_search, fetch_url, MCP calls,
+ * connector_run, the pentest replay tools): those a restricted session drops so
+ * an untrusted repo cannot reach the network even at read tier.
+ */
+export function registryNetworkToolNames(): Set<string> {
+  return new Set(effectiveToolRegistry().filter((tool) => tool.actionKind === 'network').map((tool) => tool.name));
+}
+
 export function registryEntry(name: string): LocalToolEntry | undefined {
   const tools = effectiveToolRegistry();
   return tools.find((tool) => tool.name === name)
