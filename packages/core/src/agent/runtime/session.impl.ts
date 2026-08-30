@@ -28,7 +28,7 @@ import { recordFileMutation } from '../../storage/fileSnapshotStore.js';
 import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../../util/indexing/autoReindex.js';
 import { gitChurnSignal } from '../../git/gitChurn.js';
 import { renderCompactSystemMessage, runCompaction } from '../../prompt/compaction/compactor.js';
-import { runHooks } from '../../hooks/hooksStore.js';
+import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
 import { callMcpTool } from '../../mcp/mcpUtils.js';
 import { emitAgentEvent } from '../../memory/memoryEvents.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
@@ -126,7 +126,15 @@ export function requestInterrupt(this: Agent): void {
 
   /** Runtime model switch. Used by `/model` slash command. */
 export function setModel(this: Agent, model: string): void {
+    const from = this.llmConfig.model;
+    if (from === model) return;
+    // ADR-052 P4.3 — a pre-model-switch hook may BLOCK or annotate the change
+    // (non-zero exit, or a {"decision":"deny"} on stdout); post fires after.
+    const pre = this.runExecutionHooks('pre-model-switch', { payload: { from, to: model } });
+    const blocked = pre.some((r) => r.exitCode !== 0 || parseHookDecision(r.stdout)?.decision === 'deny');
+    if (blocked) return;
     this.llmConfig = { ...this.llmConfig, model };
+    this.runExecutionHooks('post-model-switch', { payload: { from, to: model } });
   }
 export function getModel(this: Agent): string {
     return this.llmConfig.model;

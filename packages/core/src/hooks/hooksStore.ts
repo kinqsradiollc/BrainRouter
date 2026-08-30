@@ -25,7 +25,10 @@ export type HookEvent =
   | 'stop'            // Fired when the top-level agent finishes a turn; may return additionalContext injected into the next turn.
   | 'subagent-stop'   // Fired when a subagent/background worker finishes; may return additionalContext bubbled to the parent.
   | 'notification-agent-needs-input'   // Fired when a background/subagent blocks awaiting input — wire desktop/OS notifications.
-  | 'notification-agent-completed';    // Fired on agent/background completion — wire desktop/OS notifications.
+  | 'notification-agent-completed'    // Fired on agent/background completion — wire desktop/OS notifications.
+  // ---- ADR-052 P4.3 — model-switch lifecycle -----------------------------
+  | 'pre-model-switch'   // Fired before the session model changes ({from,to}); a deny decision (or non-zero exit) BLOCKS the switch.
+  | 'post-model-switch'; // Fired after the model changed ({from,to}); informational.
 
 export interface Hook {
   id: string;
