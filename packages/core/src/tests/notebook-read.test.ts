@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { renderNotebookDigest } from '../agent/fs/notebookRead.js';
+import { renderNotebookDigest, parseNotebookForRender } from '../agent/fs/notebookRead.js';
 import { invokeBuiltinToolRuntime } from '../extension/builtin/runtime.js';
 
 /** A small notebook: markdown intro, an executed code cell with a text output + a base64 image,
@@ -106,6 +106,29 @@ test('read_file falls back to raw content when a .ipynb is not a valid notebook'
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
+});
+
+// ── D3 — the structured view for the desktop renderer.
+test('parseNotebookForRender returns typed cells; images become data URIs (kept for the human view)', () => {
+  const view = parseNotebookForRender(sampleNotebook());
+  assert.ok(view, 'a valid notebook parses');
+  assert.equal(view!.nbformat, '4.5');
+  assert.equal(view!.cells.length, 4);
+  assert.equal(view!.cells[0]!.type, 'markdown');
+  assert.equal(view!.cells[1]!.type, 'code');
+  assert.equal(view!.cells[1]!.execution, 3);
+  assert.equal(view!.cells[2]!.execution, null, 'unexecuted cell → null');
+  const outs = view!.cells[1]!.outputs;
+  assert.ok(outs.some((o) => o.kind === 'text' && /loaded 42 rows/.test(o.text)), 'stream text kept');
+  const img = outs.find((o) => o.kind === 'image');
+  assert.ok(img && img.kind === 'image' && img.dataUri.startsWith('data:image/png;base64,'), 'image kept as a data URI');
+  const err = view!.cells[3]!.outputs.find((o) => o.kind === 'error');
+  assert.ok(err && err.kind === 'error' && err.ename === 'ZeroDivisionError');
+});
+
+test('parseNotebookForRender returns null on non-notebook input (renderer falls back to raw)', () => {
+  assert.equal(parseNotebookForRender('not json'), null);
+  assert.equal(parseNotebookForRender('{"no":"cells"}'), null);
 });
 
 test('a line range slices the notebook digest like any other file', async () => {

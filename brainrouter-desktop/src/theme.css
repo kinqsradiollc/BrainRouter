@@ -2280,6 +2280,23 @@ select.toolbar-input { cursor: pointer; }
 .pathbar { display: flex; align-items: center; gap: 8px; }
 .pathbar .path-text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
+/* ADR-051 D3 — the rendered notebook view in the File panel. */
+.nb-view { display: flex; flex-direction: column; gap: 10px; font-family: var(--sans, -apple-system, sans-serif); }
+.nb-toolbar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0 8px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.nb-meta { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.nb-raw-toggle { font-size: 11px; padding: 3px 10px; }
+.nb-cell { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.nb-cell-md { padding: 10px 14px; background: var(--surface); }
+.nb-cell-code { display: flex; align-items: stretch; background: var(--bg); }
+.nb-cell-gutter { flex: none; width: 46px; padding: 10px 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); text-align: right; border-right: 1px solid var(--border); user-select: none; }
+.nb-cell-body { flex: 1; min-width: 0; padding: 8px 12px; }
+.nb-cell-raw pre { margin: 0; padding: 10px 12px; }
+.nb-outputs { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+.nb-output { margin: 0; padding: 6px 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-x: auto; background: var(--ov-025); border-radius: 6px; color: var(--text-dim); }
+.nb-output-error { color: var(--danger, #ff7b72); background: rgba(255, 90, 90, 0.08); }
+.nb-output-other { color: var(--text-faint); font-style: italic; }
+.nb-output-img { max-width: 100%; border-radius: 6px; background: #fff; }
+
 /* DESK-5i — code blocks read as a SURFACE: visible bg + hairline border so
    they separate from the page; the bar and copy control are legible. */
 .md-code { background: #010409; border: 1px solid var(--ov-08); border-radius: var(--r-md); margin: 10px 0; overflow: hidden; }

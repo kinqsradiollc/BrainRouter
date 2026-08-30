@@ -91,6 +91,102 @@ function indent(text: string): string {
   return text.split('\n').map((l) => `  ${l}`).join('\n');
 }
 
+// ── ADR-051 D3 — the STRUCTURED view for a human-facing renderer (the desktop
+// File panel). Unlike the agent digest, this KEEPS an image output as a data URI
+// so a person sees the plot; the renderer stays a thin consumer of these types.
+
+/** One rendered output of a code cell. */
+export type NotebookRenderOutput =
+  /** stream / text-plain / html / json / markdown — shown as text by the renderer. */
+  | { kind: 'text'; text: string; mime?: string }
+  /** an image kept as a `data:` URI so the renderer can show it. */
+  | { kind: 'image'; mime: string; dataUri: string }
+  /** an execution error. */
+  | { kind: 'error'; ename: string; evalue: string; traceback: string }
+  /** a non-renderable payload — named, not carried. */
+  | { kind: 'other'; mime: string };
+
+/** One cell in the structured view. */
+export interface NotebookRenderCell {
+  index: number;
+  type: 'code' | 'markdown' | 'raw';
+  source: string;
+  /** Code cells: the execution count, or null when unexecuted. */
+  execution: number | null;
+  outputs: NotebookRenderOutput[];
+}
+
+/** A notebook parsed for rendering; `null` from {@link parseNotebookForRender} on bad input. */
+export interface NotebookView {
+  /** e.g. "4.5", or "" when unknown. */
+  nbformat: string;
+  cells: NotebookRenderCell[];
+}
+
+function base64Payload(data: unknown): string {
+  return typeof data === 'string' ? data : Array.isArray(data) ? data.join('') : '';
+}
+
+function parseOutput(output: unknown): NotebookRenderOutput | null {
+  if (!output || typeof output !== 'object') return null;
+  const o = output as Record<string, unknown>;
+  const type = typeof o.output_type === 'string' ? o.output_type : '';
+  if (type === 'stream') {
+    return { kind: 'text', text: joinSource(o.text), mime: 'text/plain' };
+  }
+  if (type === 'error') {
+    const tb = Array.isArray(o.traceback) ? (o.traceback as unknown[]).map((l) => String(l)).join('\n') : '';
+    return {
+      kind: 'error',
+      ename: typeof o.ename === 'string' ? o.ename : 'Error',
+      evalue: typeof o.evalue === 'string' ? o.evalue : '',
+      traceback: tb.replace(/\[[0-9;]*m/g, ''),
+    };
+  }
+  if (type === 'execute_result' || type === 'display_data') {
+    const data = (o.data && typeof o.data === 'object' ? o.data : {}) as Record<string, unknown>;
+    // Prefer a renderable image; then text; then name whatever is left.
+    const imageMime = Object.keys(data).find((m) => m.startsWith('image/'));
+    if (imageMime) {
+      return { kind: 'image', mime: imageMime, dataUri: `data:${imageMime};base64,${base64Payload(data[imageMime])}` };
+    }
+    for (const mime of ['text/plain', 'text/markdown', 'text/html', 'application/json']) {
+      if (mime in data) return { kind: 'text', text: joinSource(data[mime]), mime };
+    }
+    const first = Object.keys(data)[0];
+    return first ? { kind: 'other', mime: first } : null;
+  }
+  return null;
+}
+
+/**
+ * Parse a notebook into a structured, renderer-friendly view. Returns `null` when
+ * the content is not a valid nbformat notebook (the renderer falls back to a raw
+ * JSON view). Pure — no DOM, no node:* — so the renderer can import it directly.
+ */
+export function parseNotebookForRender(content: string): NotebookView | null {
+  let nb: { cells?: unknown[]; nbformat?: unknown; nbformat_minor?: unknown };
+  try {
+    nb = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!nb || !Array.isArray(nb.cells)) return null;
+  const nbformat = typeof nb.nbformat === 'number'
+    ? `${nb.nbformat}${typeof nb.nbformat_minor === 'number' ? `.${nb.nbformat_minor}` : ''}`
+    : '';
+  const cells: NotebookRenderCell[] = (nb.cells as Array<Record<string, unknown>>).map((cell, index) => {
+    const rawType = typeof cell.cell_type === 'string' ? cell.cell_type : 'code';
+    const type: NotebookRenderCell['type'] = rawType === 'markdown' ? 'markdown' : rawType === 'raw' ? 'raw' : 'code';
+    const ec = cell.execution_count;
+    const outputs = Array.isArray(cell.outputs)
+      ? (cell.outputs.map(parseOutput).filter(Boolean) as NotebookRenderOutput[])
+      : [];
+    return { index, type, source: joinSource(cell.source), execution: typeof ec === 'number' ? ec : null, outputs };
+  });
+  return { nbformat, cells };
+}
+
 /**
  * Render a notebook's JSON as a cell-indexed digest. Throws if the content is not
  * a valid nbformat notebook (the caller falls back to a raw read).
