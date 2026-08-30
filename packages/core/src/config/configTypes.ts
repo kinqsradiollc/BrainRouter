@@ -725,6 +725,13 @@ export interface CliKnobs {
   confirmRunWorkflow?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. */
   effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * ADR-052 D2 — per-model reasoning-depth defaults, keyed by model id. When set
+   * for the active model (and no explicit per-turn override is in force), this
+   * wins over the session `effort`, so switching models keeps each model's tuned
+   * level. Unrecognized values are dropped.
+   */
+  effortByModel?: Record<string, string>;
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
   /**
@@ -1383,6 +1390,8 @@ export interface ResolvedCliKnobs {
   atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** ADR-052 D2 — resolved per-model effort defaults (validated); empty when unset. */
+  effortByModel: Record<string, 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
   fallbackModel: string | null;
   /** CC-CONFIG-A2 — resolved ORDERED fallback chain (validated, capped at 3, deduped;
    *  `fallbackModel` appended last for back-compat). */

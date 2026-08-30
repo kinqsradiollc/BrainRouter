@@ -107,6 +107,8 @@ export async function invokeModelPhase(
       activeMode,
       agent.llmConfig.model,
       agent.effortOverride,
+      // ADR-052 D2 — a per-model effort default for the active model.
+      getCliKnobs().effortByModel[agent.llmConfig.model],
     );
     const effort = resolveEffortForTurn(
       selectedEffort,

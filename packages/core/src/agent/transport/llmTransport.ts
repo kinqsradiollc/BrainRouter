@@ -323,9 +323,13 @@ export function effortForTurnSelection(
   mode: { effort: EffortLevel; executionMode?: string },
   _model: string | undefined,
   override: EffortLevel | undefined,
+  perModelEffort?: EffortLevel,
 ): EffortLevel {
+  // A per-run override (a spawned child's fixed effort) always wins. Otherwise a
+  // per-model default (ADR-052 D2) wins over the session effort, so switching
+  // models keeps each model's tuned level.
   if (override) return override;
-  return mode.effort;
+  return perModelEffort ?? mode.effort;
 }
 
 export interface BuildPayloadOptions {
