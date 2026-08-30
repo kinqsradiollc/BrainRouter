@@ -420,7 +420,7 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'notebook_edit',
-    description: 'Edit a Jupyter notebook (.ipynb) cell by index. edit_mode="replace" (default) overwrites the cell source; "insert" adds a new cell AT cell_index (shifting the rest down); "delete" removes the cell. cell_type ("code"|"markdown") is required for insert and optional for replace. `source` is the new cell text (ignored for delete). Read the notebook first to get cell indices.',
+    description: 'Edit a Jupyter notebook (.ipynb) cell by index. edit_mode="replace" (default) overwrites the cell source and CLEARS its now-stale outputs and execution_count; "insert" adds a new cell AT cell_index (shifting the rest down); "delete" removes the cell. cell_type ("code"|"markdown") is required for insert and optional for replace. `source` is the new cell text (ignored for delete). Read the notebook first to get cell indices.',
     inputSchema: {
       type: 'object',
       properties: {
