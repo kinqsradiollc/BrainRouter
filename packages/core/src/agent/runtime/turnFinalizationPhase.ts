@@ -13,6 +13,8 @@ import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { readGoal } from '../../goal/store/goalStore.js';
+import { drainIdleNotices } from '../../session/messaging/idleNotifyStore.js';
+import { sendLocalSessionMessage } from '../../session/messaging/client.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { phaseHookHandlers, type PhaseHookContext } from '../../extension/registry.js';
@@ -195,6 +197,22 @@ export async function finalizeTurnPhase(
     } catch {
       // Usage history is observability only.
     }
+  }
+
+  // ADR-052 P4.2 — this session just finished a turn, i.e. it went idle. Deliver
+  // any one-shot "notify me when this session goes idle" notices, then they clear
+  // themselves. Best-effort and off the critical path (a peer that is gone just
+  // fails the delivery); only top-level sessions are notifiable peers.
+  if (!agent.silent) {
+    try {
+      const requesters = drainIdleNotices(agent.workspaceRoot, agent.sessionKey);
+      for (const requester of requesters) {
+        void sendLocalSessionMessage(requester, {
+          senderSessionKey: agent.sessionKey,
+          text: `Session ${agent.sessionKey} is now idle.`,
+        }).catch(() => { /* peer gone / unreachable — one-shot, don't retry */ });
+      }
+    } catch { /* idle-notify is advisory — never break a turn */ }
   }
 
   const shrinkResult = shrinkOversizedToolResults(agent.chatHistory, {
