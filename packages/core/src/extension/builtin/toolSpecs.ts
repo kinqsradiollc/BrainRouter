@@ -212,13 +212,14 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'read_file',
-    description: 'Read the contents of a file from the workspace. Optional line ranges can be provided.',
+    description: 'Read the contents of a file from the workspace. Optional line ranges can be provided. A Jupyter notebook (.ipynb) is rendered as a cell-indexed digest — each cell shown as `[cell N] code|markdown` with its source and outputs (text kept, images named not inlined); those indices are the ones `notebook_edit` takes. Pass raw=true to read the notebook as its underlying JSON instead.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Path to the file, relative to workspace root.' },
         startLine: { type: 'integer', description: 'Optional 1-based start line number to read from.' },
-        endLine: { type: 'integer', description: 'Optional 1-based end line number to read to.' }
+        endLine: { type: 'integer', description: 'Optional 1-based end line number to read to.' },
+        raw: { type: 'boolean', description: 'For a .ipynb notebook, read the raw JSON instead of the cell-indexed digest.' }
       },
       required: ['path']
     }
