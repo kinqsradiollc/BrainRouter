@@ -750,6 +750,13 @@ export interface CliKnobs {
   /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
   enforceAvailableModels?: boolean;
   /**
+   * ADR-052 P4.5 — an org-curated overlay applied OVER the live `GET /models`
+   * result in the model picker: `pinned` entries float to the top, then the
+   * declared order, then everything else; `label` renames a row for display.
+   * Presentation only — the endpoint stays the source of truth for what exists.
+   */
+  modelPicker?: Array<{ id: string; label?: string; pinned?: boolean }>;
+  /**
    * ADR-047 D1 — declarative providers: OpenAI-compatible vendors added as DATA
    * rather than a code module. Each entry is validated and registered into the
    * live `ProviderRegistry` at boot so it routes with its declared wire
@@ -1399,6 +1406,8 @@ export interface ResolvedCliKnobs {
   /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
   availableModels: string[];
   enforceAvailableModels: boolean;
+  /** ADR-052 P4.5 — resolved curated model-picker overlay (validated). */
+  modelPicker: Array<{ id: string; label?: string; pinned?: boolean }>;
   /** ADR-047 D1 — declarative provider entries (structurally sanitized; semantic
    *  validation + registration happens at boot in `registerDeclarativeProviders`). */
   customProviders: DeclarativeProviderEntry[];
