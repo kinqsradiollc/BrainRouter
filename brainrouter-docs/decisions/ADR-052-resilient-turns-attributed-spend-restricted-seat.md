@@ -1,11 +1,13 @@
 # ADR-052 — Resilient turns, attributed spend, and a restricted seat
 
-**Status:** IN PROGRESS (0.4.22) — core phases landed: P1c partial-marked delegates (#1628), P2c
-per-model effort (#1627), P3 restricted profile core (#1626). Found already-satisfied in the
-codebase: P1b (structured malformed-tool result), P4.1 banner refresh, P4.4 `personality:concise`.
-Remaining (surface-heavy / need the running stack): P1a stream continuation, P2a/P2b/P4.5 dashboard,
-P4.2 desktop messaging, P4.3 host-fired model-switch hooks, P4.7 CLI ticks; P4.6 blocked on unbuilt
-HTTP-marketplace fetch. See §4 for per-phase disposition. · **Builds on:** ADR-041 (token-meter extension,
+**Status:** IN PROGRESS (0.4.22) — **4 core phases landed**: P3 restricted-profile core (#1626), P2c
+per-model effort (#1627), P1c partial-marked delegates (#1628), P4.3 model-switch hooks (#1630).
+**5 phases were found already implemented** in the codebase (the ADR over-specified them): P1b
+(structured malformed-tool result), P4.1 banner refresh, P4.4 `personality:concise`, P4.7 in-place
+child-fleet row, P4.2 refusal-reporting (`notQueued`). **Blocked:** P4.6 (HTTP-marketplace fetch is
+not built). **Genuinely remaining new work — full-stack / needs the running stack:** P1a stream
+continuation (needs a live mid-stream cut to verify), P2a/P2b/P4.5 (dashboard), and P4.2's
+notify-when-idle subscription. See §4 for per-phase disposition. · **Builds on:** ADR-041 (token-meter extension,
 registry discipline), ADR-046 (surfaces that vouch for themselves), the safeMode/fallback work
 (#796), and the org-settings KV pattern (per-org recall settings). · **Informed by:** a study of
 contemporary agent-harness release notes (2026-08-20 → 2026-08-28); no external project is named
@@ -147,18 +149,22 @@ during implementation.
 - **P4.1 — Goal check-in backoff + banner fix** — ✅ **Already satisfied** — the desktop banner
   already refreshes on a terminal goal action (`handleQueryResult.ts` q-goalcont); BrainRouter's
   goal autonomy is turn-completion-driven, so the CC-style idle-background backoff does not map.
-- **P4.2 — Messaging refusal reporting** (desktop): 🔲 **Remaining** — desktop session-messaging
-  receipts exist; surfacing refused/dropped to the sender + notify-when-idle is the delta.
-- **P4.3 — Model-switch hook events**: 🔲 **Remaining** — add the events to the `HookEvent` union
-  and fire them at the host's `/model` switch + resume sites.
+- **P4.2 — Messaging refusal reporting** (desktop) — ✅ **Already satisfied** (refusal half) — the
+  desktop send already returns `notQueued(reason)` for `queue_full` / `not_found` / `unreachable`,
+  so a refused or dropped delivery is reported to the sender, not silently lost
+  (`sessionMessaging.ts`). 🔲 The one-shot **notify-when-idle** is a separate new subscription
+  feature, not a report — remaining.
+- **P4.3 — Model-switch hook events** — ✅ #1630. `pre-model-switch` (deny blocks) + `post-model-switch`
+  added to the `HookEvent` union and fired from `setModel`.
 - **P4.4 — Concise output style** — ✅ **Already exists** — `personality: 'concise'` overlay with a
   `cli.personalityDefault` knob, `/personality` command, and prompt wiring (`systemPrompt.ts`).
 - **P4.5 — Org-curated picker overlay**: 🔲 **Remaining** — dashboard/desktop presentation over the
   `GET /models` result (which stays the source of truth).
 - **P4.6 — Marketplace auth helper** — ⛔ **Blocked** — HTTP marketplace fetch is not built yet
   (`marketplace.ts` "http later"); an auth helper needs that fetch path to exist first.
-- **P4.7 — TUI progress-tick collapse** (CLI): 🔲 **Remaining** — collapse repeated per-second
-  ticks in the CLI transcript.
+- **P4.7 — TUI progress-tick collapse** (CLI) — ✅ **Already satisfied** — the parent status is a
+  replaced line (`setStatus`), and the child-fleet row updates IN PLACE (`setChildFleet` +
+  `childFleetIdRef`, "instead of pushing a new row"), with spawn-batch coalescing + debounce.
 
 ---
 
