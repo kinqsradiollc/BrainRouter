@@ -1,6 +1,11 @@
 # ADR-052 — Resilient turns, attributed spend, and a restricted seat
 
-**Status:** PROPOSED — awaiting owner review. · **Builds on:** ADR-041 (token-meter extension,
+**Status:** IN PROGRESS (0.4.22) — core phases landed: P1c partial-marked delegates (#1628), P2c
+per-model effort (#1627), P3 restricted profile core (#1626). Found already-satisfied in the
+codebase: P1b (structured malformed-tool result), P4.1 banner refresh, P4.4 `personality:concise`.
+Remaining (surface-heavy / need the running stack): P1a stream continuation, P2a/P2b/P4.5 dashboard,
+P4.2 desktop messaging, P4.3 host-fired model-switch hooks, P4.7 CLI ticks; P4.6 blocked on unbuilt
+HTTP-marketplace fetch. See §4 for per-phase disposition. · **Builds on:** ADR-041 (token-meter extension,
 registry discipline), ADR-046 (surfaces that vouch for themselves), the safeMode/fallback work
 (#796), and the org-settings KV pattern (per-org recall settings). · **Informed by:** a study of
 contemporary agent-harness release notes (2026-08-20 → 2026-08-28); no external project is named
@@ -119,20 +124,41 @@ appending them. *Acceptance: each lands (or is explicitly dropped) as its own PR
 
 ## 4. Dependency-ordered delivery board
 
-Rows are independent unless noted; each is one PR.
+Rows are independent unless noted; each is one PR. Disposition recorded per §5's
+"merged **or explicitly declined**" rule — grounding each phase in the code found
+during implementation.
 
-- **P1a — Stream continuation** (D1a): transport-level continue-on-cut for headless/server
-  paths; bounded by the retry budget; tests fake a mid-stream cut.
-- **P1b — Retry context hygiene** (D1b): malformed tool output dropped from retry context.
-- **P1c — Partial-marked delegates** (D1c): turn-budget stops marked partial + resumable.
-- **P2a — Automation attribution** (D2): attribution field through the meter; dashboard
-  per-automation view.
-- **P2b — Org pricing table** (D2): `system_settings` KV + admin surface + meter consumption.
-- **P2c — Per-model effort defaults** (D2): `cli.*` persistence + picker behavior.
-- **P3 — Restricted profile** (D3): config knob + builtin-set gating + project-config skip +
-  posture refusal + session stamp; desktop toggle.
-- **P4.1–P4.7 — The parity list** (D4), in the order given; each independently droppable at
-  owner's discretion.
+- **P1a — Stream continuation** (D1a): transport-level continue-on-cut. ⏳ **Deferred** — a
+  streaming-transport change whose correctness needs a live model + a real mid-stream cut to
+  verify; best done against the running stack, not unit mocks alone.
+- **P1b — Retry context hygiene** (D1b): ✅ **Already satisfied** — a malformed tool call already
+  surfaces as a structured `isError` tool_result echoing the raw args (`runTurn.impl.ts`), so the
+  next turn self-corrects rather than retrying garbage. No separate retry re-sends the broken block.
+- **P1c — Partial-marked delegates** (D1c) — ✅ #1628. A budget-capped turn preserves its work and
+  marks it `⚠️ PARTIAL` with the resume affordance, instead of discarding it for a bare ceiling.
+- **P2a — Automation attribution** (D2): 🔲 **Remaining** — needs the dashboard workspace (per-loop
+  / fleet-job token view); implement + verify against the running dashboard.
+- **P2b — Org pricing table** (D2): 🔲 **Remaining** — `system_settings` KV + dashboard admin
+  surface; same dashboard dependency.
+- **P2c — Per-model effort defaults** (D2) — ✅ #1627 (core resolver + consumer). Write-side
+  surfaces (CLI `/effort` per-model, desktop picker) are the remaining half.
+- **P3 — Restricted profile** (D3) — ✅ #1626 (tool-restriction core: read-tier clamp, escalation
+  refusal, network-tool drop). The project-config-ignore slice + desktop toggle remain.
+- **P4.1 — Goal check-in backoff + banner fix** — ✅ **Already satisfied** — the desktop banner
+  already refreshes on a terminal goal action (`handleQueryResult.ts` q-goalcont); BrainRouter's
+  goal autonomy is turn-completion-driven, so the CC-style idle-background backoff does not map.
+- **P4.2 — Messaging refusal reporting** (desktop): 🔲 **Remaining** — desktop session-messaging
+  receipts exist; surfacing refused/dropped to the sender + notify-when-idle is the delta.
+- **P4.3 — Model-switch hook events**: 🔲 **Remaining** — add the events to the `HookEvent` union
+  and fire them at the host's `/model` switch + resume sites.
+- **P4.4 — Concise output style** — ✅ **Already exists** — `personality: 'concise'` overlay with a
+  `cli.personalityDefault` knob, `/personality` command, and prompt wiring (`systemPrompt.ts`).
+- **P4.5 — Org-curated picker overlay**: 🔲 **Remaining** — dashboard/desktop presentation over the
+  `GET /models` result (which stays the source of truth).
+- **P4.6 — Marketplace auth helper** — ⛔ **Blocked** — HTTP marketplace fetch is not built yet
+  (`marketplace.ts` "http later"); an auth helper needs that fetch path to exist first.
+- **P4.7 — TUI progress-tick collapse** (CLI): 🔲 **Remaining** — collapse repeated per-second
+  ticks in the CLI transcript.
 
 ---
 
