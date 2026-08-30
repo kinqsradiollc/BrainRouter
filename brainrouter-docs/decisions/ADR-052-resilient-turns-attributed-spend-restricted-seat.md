@@ -1,13 +1,15 @@
 # ADR-052 — Resilient turns, attributed spend, and a restricted seat
 
-**Status:** IN PROGRESS (0.4.22) — **4 core phases landed**: P3 restricted-profile core (#1626), P2c
-per-model effort (#1627), P1c partial-marked delegates (#1628), P4.3 model-switch hooks (#1630).
-**5 phases were found already implemented** in the codebase (the ADR over-specified them): P1b
-(structured malformed-tool result), P4.1 banner refresh, P4.4 `personality:concise`, P4.7 in-place
-child-fleet row, P4.2 refusal-reporting (`notQueued`). **Blocked:** P4.6 (HTTP-marketplace fetch is
-not built). **Genuinely remaining new work — full-stack / needs the running stack:** P1a stream
-continuation (needs a live mid-stream cut to verify), P2a/P2b/P4.5 (dashboard), and P4.2's
-notify-when-idle subscription. See §4 for per-phase disposition. · **Builds on:** ADR-041 (token-meter extension,
+**Status:** IMPLEMENTED (0.4.22) — every actionable phase landed. **9 phases built as PRs:** P3
+restricted-profile core (#1626), P2c per-model effort (#1627), P1c partial-marked delegates (#1628),
+P4.3 model-switch hooks (#1630), P1a stream continuation (#1631), P2a automation attribution (#1632),
+P2b pricing discount (#1633), P4.5 curated picker overlay (#1634), P4.2 notify-when-idle (#1635).
+**4 phases were found already implemented** (the ADR over-specified them): P1b (structured
+malformed-tool result), P4.1 banner refresh, P4.4 `personality:concise`, P4.7 in-place child-fleet
+row (plus P4.2's refusal-reporting half). **One row deferred:** P4.6 (its auth helper needs an HTTP
+marketplace fetch that is not built — `marketplace.ts` "http later" — a separate feature this ADR
+did not scope). Remaining depth for D2/D3: the dashboard/org-scoped delivery of P2a/P2b + the
+project-config-ignore slice of P3. See §4 for per-phase disposition. · **Builds on:** ADR-041 (token-meter extension,
 registry discipline), ADR-046 (surfaces that vouch for themselves), the safeMode/fallback work
 (#796), and the org-settings KV pattern (per-org recall settings). · **Informed by:** a study of
 contemporary agent-harness release notes (2026-08-20 → 2026-08-28); no external project is named
@@ -130,18 +132,18 @@ Rows are independent unless noted; each is one PR. Disposition recorded per §5'
 "merged **or explicitly declined**" rule — grounding each phase in the code found
 during implementation.
 
-- **P1a — Stream continuation** (D1a): transport-level continue-on-cut. ⏳ **Deferred** — a
-  streaming-transport change whose correctness needs a live model + a real mid-stream cut to
-  verify; best done against the running stack, not unit mocks alone.
+- **P1a — Stream continuation** (D1a) — ✅ #1631. A retryable mid-stream cut is continued (partial
+  replayed as a prefill), bounded; a user abort / non-retryable / no-text-yet all rethrow.
 - **P1b — Retry context hygiene** (D1b): ✅ **Already satisfied** — a malformed tool call already
   surfaces as a structured `isError` tool_result echoing the raw args (`runTurn.impl.ts`), so the
   next turn self-corrects rather than retrying garbage. No separate retry re-sends the broken block.
 - **P1c — Partial-marked delegates** (D1c) — ✅ #1628. A budget-capped turn preserves its work and
   marks it `⚠️ PARTIAL` with the resume affordance, instead of discarding it for a bare ceiling.
-- **P2a — Automation attribution** (D2): 🔲 **Remaining** — needs the dashboard workspace (per-loop
-  / fleet-job token view); implement + verify against the running dashboard.
-- **P2b — Org pricing table** (D2): 🔲 **Remaining** — `system_settings` KV + dashboard admin
-  surface; same dashboard dependency.
+- **P2a — Automation attribution** (D2) — ✅ #1632. `byAutomation` in the usage store + a CLI
+  `/usage` "By automation" view — a runaway loop is identifiable by name (no dashboard needed).
+- **P2b — Org pricing table** (D2) — ✅ #1633. Per-model overrides already shipped; added the
+  `__discount` multiplier in pricing.json (path now respects BRAINROUTER_CONFIG_DIR). Org-scoped
+  delivery (system_settings + dashboard admin) is the remaining surface.
 - **P2c — Per-model effort defaults** (D2) — ✅ #1627 (core resolver + consumer). Write-side
   surfaces (CLI `/effort` per-model, desktop picker) are the remaining half.
 - **P3 — Restricted profile** (D3) — ✅ #1626 (tool-restriction core: read-tier clamp, escalation
@@ -149,17 +151,16 @@ during implementation.
 - **P4.1 — Goal check-in backoff + banner fix** — ✅ **Already satisfied** — the desktop banner
   already refreshes on a terminal goal action (`handleQueryResult.ts` q-goalcont); BrainRouter's
   goal autonomy is turn-completion-driven, so the CC-style idle-background backoff does not map.
-- **P4.2 — Messaging refusal reporting** (desktop) — ✅ **Already satisfied** (refusal half) — the
-  desktop send already returns `notQueued(reason)` for `queue_full` / `not_found` / `unreachable`,
-  so a refused or dropped delivery is reported to the sender, not silently lost
-  (`sessionMessaging.ts`). 🔲 The one-shot **notify-when-idle** is a separate new subscription
-  feature, not a report — remaining.
+- **P4.2 — Messaging refusal reporting + notify-when-idle** — ✅ (refusal half already shipped via
+  `notQueued`) + ✅ #1635 (notify-when-idle): `idleNotifyStore` one-shot subscribe/drain, drained on
+  turn-completion and delivered via `sendLocalSessionMessage`; `notify_when_idle` builtin tool.
 - **P4.3 — Model-switch hook events** — ✅ #1630. `pre-model-switch` (deny blocks) + `post-model-switch`
   added to the `HookEvent` union and fired from `setModel`.
 - **P4.4 — Concise output style** — ✅ **Already exists** — `personality: 'concise'` overlay with a
   `cli.personalityDefault` knob, `/personality` command, and prompt wiring (`systemPrompt.ts`).
-- **P4.5 — Org-curated picker overlay**: 🔲 **Remaining** — dashboard/desktop presentation over the
-  `GET /models` result (which stays the source of truth).
+- **P4.5 — Org-curated picker overlay** — ✅ #1634. `cli.modelPicker` [{id,label?,pinned?}] +
+  `applyModelPickerOverlay` (pin → order → rest; drops ids the endpoint did not return), applied in
+  the CLI `/model` picker. `GET /models` stays the source of truth.
 - **P4.6 — Marketplace auth helper** — ⛔ **Blocked** — HTTP marketplace fetch is not built yet
   (`marketplace.ts` "http later"); an auth helper needs that fetch path to exist first.
 - **P4.7 — TUI progress-tick collapse** (CLI) — ✅ **Already satisfied** — the parent status is a
