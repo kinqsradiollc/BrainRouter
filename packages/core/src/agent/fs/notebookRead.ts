@@ -188,6 +188,40 @@ export function parseNotebookForRender(content: string): NotebookView | null {
 }
 
 /**
+ * ADR-051 D4 — the approval preview for a `notebook_edit`. An approver should
+ * SEE the target cell's current content beside the change, not a bare index, so
+ * a wrong-index edit can be declined on sight. Says plainly when the notebook or
+ * the cell cannot be read. Pure; used to build the approval summary.
+ */
+export function buildNotebookEditApprovalPreview(
+  content: string,
+  edit: { editMode: 'replace' | 'insert' | 'delete'; cellIndex?: number; cellType?: 'code' | 'markdown'; source?: string },
+): string {
+  const view = parseNotebookForRender(content);
+  if (!view) return 'notebook cannot be read: not a valid .ipynb (JSON parse failed, or no cells array).';
+  const n = view.cells.length;
+  const idx = edit.cellIndex;
+  const clip = (s: string): string => (s.length > 600 ? `${s.slice(0, 600)}\n… [${s.length - 600} more chars]` : s);
+
+  if (edit.editMode === 'insert') {
+    const at = typeof idx === 'number' && Number.isFinite(idx) ? Math.max(0, Math.min(n, idx)) : n;
+    const where = at >= n ? 'at the end' : `before cell ${at}`;
+    return `Insert a ${edit.cellType ?? 'code'} cell ${where}:\n${clip(edit.source ?? '')}`;
+  }
+
+  if (typeof idx !== 'number' || !Number.isFinite(idx) || idx < 0 || idx >= n) {
+    return `cell ${String(idx)} cannot be read: index out of range (notebook has ${n} cell${n === 1 ? '' : 's'}).`;
+  }
+  const cell = view.cells[idx]!;
+  const label = cell.type === 'code'
+    ? `code, ${cell.execution === null ? 'unexecuted' : `executed: ${cell.execution}`}`
+    : cell.type;
+  const current = `Cell ${idx} (${label}) — current:\n${clip(cell.source)}`;
+  if (edit.editMode === 'delete') return `Delete ${current}`;
+  return `${current}\n\n→ replace with (${edit.cellType ?? cell.type}):\n${clip(edit.source ?? '')}`;
+}
+
+/**
  * Render a notebook's JSON as a cell-indexed digest. Throws if the content is not
  * a valid nbformat notebook (the caller falls back to a raw read).
  */

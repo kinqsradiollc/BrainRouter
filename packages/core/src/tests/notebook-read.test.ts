@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { renderNotebookDigest, parseNotebookForRender } from '../agent/fs/notebookRead.js';
+import { renderNotebookDigest, parseNotebookForRender, buildNotebookEditApprovalPreview } from '../agent/fs/notebookRead.js';
 import { invokeBuiltinToolRuntime } from '../extension/builtin/runtime.js';
 
 /** A small notebook: markdown intro, an executed code cell with a text output + a base64 image,
@@ -129,6 +129,25 @@ test('parseNotebookForRender returns typed cells; images become data URIs (kept 
 test('parseNotebookForRender returns null on non-notebook input (renderer falls back to raw)', () => {
   assert.equal(parseNotebookForRender('not json'), null);
   assert.equal(parseNotebookForRender('{"no":"cells"}'), null);
+});
+
+// ── D4 — the approval preview shows the target cell, not a bare index.
+test('the notebook_edit approval preview shows the current cell beside the replacement', () => {
+  const p = buildNotebookEditApprovalPreview(sampleNotebook(), { editMode: 'replace', cellIndex: 1, source: 'df.tail()' });
+  assert.match(p, /Cell 1 \(code, executed: 3\) — current:/);
+  assert.match(p, /import pandas as pd/, 'the CURRENT source is shown');
+  assert.match(p, /→ replace with \(code\):\ndf\.tail\(\)/, 'the proposed source is shown');
+});
+
+test('the approval preview handles delete and insert distinctly', () => {
+  assert.match(buildNotebookEditApprovalPreview(sampleNotebook(), { editMode: 'delete', cellIndex: 3 }), /Delete Cell 3 \(code, executed: 5\)/);
+  assert.match(buildNotebookEditApprovalPreview(sampleNotebook(), { editMode: 'insert', cellIndex: 2, cellType: 'markdown', source: '## new' }), /Insert a markdown cell before cell 2:\n## new/);
+  assert.match(buildNotebookEditApprovalPreview(sampleNotebook(), { editMode: 'insert', source: 'x=1' }), /Insert a code cell at the end:/);
+});
+
+test('the approval preview says plainly when the cell or notebook cannot be read', () => {
+  assert.match(buildNotebookEditApprovalPreview(sampleNotebook(), { editMode: 'replace', cellIndex: 99, source: 'x' }), /cell 99 cannot be read: index out of range \(notebook has 4 cells\)/);
+  assert.match(buildNotebookEditApprovalPreview('not a notebook', { editMode: 'replace', cellIndex: 0, source: 'x' }), /notebook cannot be read/);
 });
 
 test('a line range slices the notebook digest like any other file', async () => {
