@@ -486,6 +486,21 @@ function resolveInstanceEnv(raw: unknown): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/** ADR-052 D2 — sanitize per-model effort defaults to a model→effort map; a
+ *  non-object, or entries with an unrecognized effort, are dropped. */
+const VALID_EFFORTS: readonly string[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+function resolveEffortByModel(raw: unknown): ResolvedCliKnobs['effortByModel'] {
+  const out: ResolvedCliKnobs['effortByModel'] = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const model = typeof key === 'string' ? key.trim() : '';
+    if (model && typeof val === 'string' && VALID_EFFORTS.includes(val)) {
+      out[model] = val as ResolvedCliKnobs['effort'];
+    }
+  }
+  return out;
+}
+
 function unitInterval(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 }
@@ -866,6 +881,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     },
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
+    effortByModel: resolveEffortByModel(c.effortByModel),
     fallbackModel: c.fallbackModel ?? null,
     fallbackModels: resolveFallbackModels(c.fallbackModels, c.fallbackModel),
     availableModels: sanitizeStringList(c.availableModels),
