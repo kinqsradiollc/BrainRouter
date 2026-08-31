@@ -8,6 +8,7 @@ import {
   dayKey, recordDailyUsage, readUsageHistory, readAutomationUsage, totalUsage,
   type DailyUsage, type AutomationUsage,
 } from "./usageHistoryStore.js";
+import { pushUsageTelemetry } from "./telemetry.js";
 
 /** Usage delta accepted by {@link IUsageService.record}. */
 export type UsageDelta = Parameters<typeof recordDailyUsage>[0];
@@ -31,7 +32,13 @@ export class UsageService implements IUsageService {
     return dayKey(tsMs);
   }
   record(usage: UsageDelta, nowMs: number, attribution?: string): void {
-    return recordDailyUsage(usage, nowMs, attribution);
+    recordDailyUsage(usage, nowMs, attribution);
+    // ADR-054 D2 — best-effort push of this automation's slice to the server
+    // (no-op unless cli.usageTelemetry is on and the CLI installed a transport).
+    if (attribution) {
+      const u = usage as { promptTokens?: number; completionTokens?: number; calls?: number };
+      pushUsageTelemetry({ automation: attribution, promptTokens: u.promptTokens ?? 0, completionTokens: u.completionTokens ?? 0, calls: u.calls ?? 0, turns: 1 });
+    }
   }
   readHistory(days: number, nowMs: number): DailyUsage[] {
     return readUsageHistory(days, nowMs);

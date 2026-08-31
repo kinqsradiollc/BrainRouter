@@ -45,6 +45,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 051 | Notebooks the agent can read and the human can see | ✅ Implemented (P1–P4) — `.ipynb` as a cell-indexed digest in `read_file` (indices match `notebook_edit`, images named not inlined, raw opt-out; #1622), replace clears stale outputs (#1623), desktop rendered notebook view + Raw toggle (#1624), approval shows the affected cell (#1625). No execution, no new tool | 0.4.22 |
 | 052 | Resilient turns, attributed spend, and a restricted seat | ✅ Implemented (0.4.22) — 11 phases done: P1a/P1c/P2a-core/P2b-core/P2c/P3-core/P3-projconfig(#1637)/P4.2/P4.3/P4.5/P4.6(via ADR-053). P1b/P4.1/P4.4/P4.7 already in-tree. Sole remaining: the P2a/P2b **dashboard admin UI** (core+CLI data built; the brain-server API + dashboard panel needs the live dashboard to build/verify) | 0.4.22 |
 | 053 | HTTP plugin marketplaces (+ private-catalog auth helper) | ✅ Implemented (0.4.22) — P1 SSRF-guarded `fetchHttpMarketplace` + `fetchMarketplaceAsync` seam, P2 `headersHelper` auth (= ADR-052 P4.6), P3 async install adoption; tested end-to-end with a local tarball | 0.4.22 |
+| 054 | Org usage telemetry (priced per-automation dashboard view) | ✅ Implemented (0.4.22) — bounded per-org aggregate + priced view (`mergeOrgUsage`/`priceOrgUsage`), `POST /api/usage/automation` ingest + opt-in `cli.usageTelemetry` best-effort client push, `GET /api/admin/usage-automation` + dashboard `UsageAutomationPanel`. Satisfies ADR-052 §5.3 | 0.4.22 |
 
 ## In flight / next
 

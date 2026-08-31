@@ -17,6 +17,7 @@ import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { cliInteractionPort } from '../cli/prompt/cliInteractionPort.js';
 import { runChat } from '../cli/ink/runChat.js';
+import { installUsageTelemetryPush } from '../runtime/usage/installUsageTelemetry.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
@@ -261,6 +262,7 @@ export function registerChatCommand(program: Command): void {
       // hooks) before the first turn. Workspace-tier extensions only load in a
       // trusted workspace; best-effort, never blocks boot.
       await loadExtensions(workspace.workspaceRoot, { version: VERSION }).catch(() => undefined);
+      installUsageTelemetryPush(); // ADR-054 D2 — best-effort per-automation usage push (opt-in via cli.usageTelemetry)
       const learnedIdentity = await resolveCliLearnedTenant({ mcpClient, servers: targetServers });
       if (learnedIdentity.warning) console.error(chalk.yellow(`[BrainRouter] ${learnedIdentity.warning}`));
       const agent = new Agent(mcpClient, llm, {

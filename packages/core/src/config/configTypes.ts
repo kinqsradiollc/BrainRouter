@@ -811,6 +811,8 @@ export interface CliKnobs {
    * Default false.
    */
   restricted?: boolean;
+  /** ADR-054 D2 — opt-in: push per-automation usage aggregates to the brain server (default off). */
+  usageTelemetry?: boolean;
   /*
    * `executionEngine` used to live here (ADR-027 D2, ADR-028 C1) and was
    * retired 2026-08-12 along with the graph executor it selected. It is left
@@ -1430,6 +1432,8 @@ export interface ResolvedCliKnobs {
   safeMode: boolean;
   /** ADR-052 D3 — restricted session (read-tier tools, no network, no escalation). */
   restricted: boolean;
+  /** ADR-054 D2 — opt-in usage telemetry push. */
+  usageTelemetry: boolean;
   stackingMode: 'auto' | 'always' | 'never';
   comprehension: { enabled: boolean; model: string; questions: number };
   autoInstallTools: 'off' | 'safe';

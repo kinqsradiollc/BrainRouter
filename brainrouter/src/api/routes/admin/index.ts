@@ -11,3 +11,4 @@ export { adminOrgsRouter } from "./orgs.js";
 export { adminModelsRouter } from "./models.js";
 export { runtimeCompositionRouter } from "./runtimeComposition.js";
 export { pricingSettingsRouter } from "./pricingSettings.js";
+export { usageAutomationRouter } from "./usageAutomation.js";
