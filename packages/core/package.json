@@ -11,6 +11,10 @@
       "types": "./dist/agent/index.d.ts",
       "default": "./dist/agent/index.js"
     },
+    "./agent/notebook": {
+      "types": "./dist/agent/fs/notebookRead.d.ts",
+      "default": "./dist/agent/fs/notebookRead.js"
+    },
     "./annotation": {
       "types": "./dist/annotation/index.d.ts",
       "default": "./dist/annotation/index.js"
