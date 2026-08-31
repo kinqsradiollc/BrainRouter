@@ -321,6 +321,13 @@ export interface MarketplaceSource {
   sparsePaths?: string[];
   lastRevision?: string;
   lastUpdated?: string;
+  /**
+   * ADR-053 D3 / ADR-052 P4.6 — a command that mints request headers (e.g. a
+   * short-lived bearer token) for a PRIVATE http catalog fetch. Its stdout is a
+   * JSON header map; its secret lives in the Settings store, never here. Absent ⇒
+   * an unauthenticated (public) fetch.
+   */
+  headersHelper?: string;
 }
 
 /**

@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { loadOrInitConfig, resolveCliKnobs, saveConfig } from '../config/config.js';
 import type { Config, MarketplaceSource } from '../config/configTypes.js';
 import { stagingDir } from './paths.js';
+import { fetchHttpMarketplace, type HttpMarketplaceDeps } from './httpMarketplace.js';
 import { installPlugin, classifySource, type InstallOptions, type InstallResult } from './install.js';
 import { assertMarketplaceAllowed, assertPluginAllowed, type ManagedGates } from './trust.js';
 import { evaluatePluginAdvisory, osvAdvisorySource, type PluginAdvisorySource } from './advisory.js';
@@ -336,7 +337,21 @@ export function fetchMarketplace(entry: MarketplaceSource): FetchMarketplaceResu
     const revision = rev.status === 0 ? rev.stdout.trim() : undefined;
     return { ok: true, fetched: { dir, cleanup, revision } };
   }
-  return { ok: false, error: `http marketplace sources are not supported yet (${entry.name})` };
+  return { ok: false, error: `http marketplace sources are not supported yet (${entry.name}) — use fetchMarketplaceAsync` };
+}
+
+/**
+ * ADR-053 D2 — the async fetch seam: `local`/`git` delegate to the sync body
+ * above; `http` downloads + extracts a tarball (SSRF-guarded, byte-bounded) via
+ * `fetchHttpMarketplace`. Callers that can already await adopt this; the sync
+ * `fetchMarketplace` keeps its explanatory `http` error so nothing regresses.
+ */
+export async function fetchMarketplaceAsync(
+  entry: MarketplaceSource,
+  deps: HttpMarketplaceDeps = {},
+): Promise<FetchMarketplaceResult> {
+  if (entry.sourceType === 'http') return fetchHttpMarketplace(entry, deps);
+  return fetchMarketplace(entry);
 }
 
 // ---------------------------------------------------------------------------

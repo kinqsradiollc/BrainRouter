@@ -145,9 +145,8 @@ Rows are independent unless noted; each is one PR.
 - **P4.4 — Concise output style** — ✅ already in-tree (`personality: 'concise'` with the
   `cli.personalityDefault` knob).
 - **P4.5 — Org-curated picker overlay** — ✅ #1634 (`cli.modelPicker` overlays the `/models` result).
-- **P4.6 — Marketplace auth helper** — ⛔ blocked: HTTP marketplace fetch is not built yet
-  (`marketplace.ts` "http later"). Its prerequisite is decided in **ADR-053**; the auth helper lands
-  on top of it.
+- **P4.6 — Marketplace auth helper** — ✅ built on ADR-053: the HTTP marketplace fetch (ADR-053 P1)
+  carries a `headersHelper` that mints request headers (secret in Settings) for a private catalog.
 - **P4.7 — TUI progress-tick collapse** — ⏳ follow-up (CLI TUI).
 
 ---
