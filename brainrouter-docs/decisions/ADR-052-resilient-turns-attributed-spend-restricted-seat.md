@@ -2,9 +2,9 @@
 
 **Status:** IMPLEMENTED (0.4.22) — nine phases built and merged (P1a #1631, P1c #1628, P2a #1632,
 P2b #1633, P2c #1627, P3-core #1626, P4.2 #1635, P4.3 #1630, P4.5 #1634); three were already satisfied
-in-tree (P1b, P4.1, P4.4 — see §4); the remaining surface-heavy slices (P2a/P2b dashboard admin UI,
-P3 project-config-ignore, P4.7 CLI ticks) and P4.6 (blocked on an unbuilt HTTP-marketplace fetch —
-see ADR-053) are tracked as follow-ups. · **Builds on:** ADR-041 (token-meter extension,
+in-tree (P1b, P4.1, P4.4 — see §4); P3 project-config-ignore (#1637) and P4.6 (via ADR-053, #1638) since landed; P4.7 is already in-tree.
+The ONLY remaining slice is the P2a/P2b **dashboard admin UI** (the core + CLI data is built; surfacing it
+as a brain-server API + dashboard panel needs the live dashboard/server to build and verify). · **Builds on:** ADR-041 (token-meter extension,
 registry discipline), ADR-046 (surfaces that vouch for themselves), the safeMode/fallback work
 (#796), and the org-settings KV pattern (per-org recall settings). · **Informed by:** a study of
 contemporary agent-harness release notes (2026-08-20 → 2026-08-28); no external project is named
@@ -132,9 +132,11 @@ Rows are independent unless noted; each is one PR.
 - **P1c — Partial-marked delegates** (D1c) — ✅ #1628: a turn-budget stop is marked partial + carries
   a resume hint (`completionPhase.ts`).
 - **P2a — Automation attribution** (D2) — ✅ core #1632 (attribution through the usage meter +
-  `usageHistoryStore`); the dashboard per-automation view is a follow-up.
+  `usageHistoryStore`). Remaining: the dashboard per-automation VIEW (brain-server API + panel) — needs
+  the live dashboard to build/verify.
 - **P2b — Org pricing table** (D2) — ✅ core #1633 (contracted-discount multiplier on the CLI cost
-  surfaces); the `system_settings` admin UI is a follow-up.
+  surfaces). Remaining: the `system_settings` admin UI (brain-server API + dashboard panel, the
+  `AdvancedRecallPanel` pattern) — needs the live dashboard to build/verify.
 - **P2c — Per-model effort defaults** (D2) — ✅ #1627: `cli.effortByModel` resolved model→effort.
 - **P3 — Restricted profile** (D3) — ✅ core #1626 (read-tier clamp, no-network, no-escalation,
   session stamp); the project-config-ignore slice + desktop toggle are follow-ups.
@@ -147,7 +149,9 @@ Rows are independent unless noted; each is one PR.
 - **P4.5 — Org-curated picker overlay** — ✅ #1634 (`cli.modelPicker` overlays the `/models` result).
 - **P4.6 — Marketplace auth helper** — ✅ built on ADR-053: the HTTP marketplace fetch (ADR-053 P1)
   carries a `headersHelper` that mints request headers (secret in Settings) for a private catalog.
-- **P4.7 — TUI progress-tick collapse** — ⏳ follow-up (CLI TUI).
+- **P4.7 — TUI progress-tick collapse** — ✅ already in-tree: the CLI's `child-fleet` progress row
+  updates IN PLACE via a pinned stable id (`useScrollbackState.ts` — "Existing row → update in place"),
+  so per-second ticks never pile up in the transcript.
 
 ---
 
