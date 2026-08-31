@@ -1,6 +1,10 @@
 # ADR-052 — Resilient turns, attributed spend, and a restricted seat
 
-**Status:** PROPOSED — awaiting owner review. · **Builds on:** ADR-041 (token-meter extension,
+**Status:** IMPLEMENTED (0.4.22) — nine phases built and merged (P1a #1631, P1c #1628, P2a #1632,
+P2b #1633, P2c #1627, P3-core #1626, P4.2 #1635, P4.3 #1630, P4.5 #1634); three were already satisfied
+in-tree (P1b, P4.1, P4.4 — see §4); the remaining surface-heavy slices (P2a/P2b dashboard admin UI,
+P3 project-config-ignore, P4.7 CLI ticks) and P4.6 (blocked on an unbuilt HTTP-marketplace fetch —
+see ADR-053) are tracked as follow-ups. · **Builds on:** ADR-041 (token-meter extension,
 registry discipline), ADR-046 (surfaces that vouch for themselves), the safeMode/fallback work
 (#796), and the org-settings KV pattern (per-org recall settings). · **Informed by:** a study of
 contemporary agent-harness release notes (2026-08-20 → 2026-08-28); no external project is named
@@ -121,18 +125,30 @@ appending them. *Acceptance: each lands (or is explicitly dropped) as its own PR
 
 Rows are independent unless noted; each is one PR.
 
-- **P1a — Stream continuation** (D1a): transport-level continue-on-cut for headless/server
-  paths; bounded by the retry budget; tests fake a mid-stream cut.
-- **P1b — Retry context hygiene** (D1b): malformed tool output dropped from retry context.
-- **P1c — Partial-marked delegates** (D1c): turn-budget stops marked partial + resumable.
-- **P2a — Automation attribution** (D2): attribution field through the meter; dashboard
-  per-automation view.
-- **P2b — Org pricing table** (D2): `system_settings` KV + admin surface + meter consumption.
-- **P2c — Per-model effort defaults** (D2): `cli.*` persistence + picker behavior.
-- **P3 — Restricted profile** (D3): config knob + builtin-set gating + project-config skip +
-  posture refusal + session stamp; desktop toggle.
-- **P4.1–P4.7 — The parity list** (D4), in the order given; each independently droppable at
-  owner's discretion.
+- **P1a — Stream continuation** (D1a) — ✅ #1631: `streamContinuation.ts` continue-on-cut for the
+  headless/server model path, bounded by the retry budget; tests fake a mid-stream cut.
+- **P1b — Retry context hygiene** (D1b) — ✅ already in-tree: a malformed tool call already returns a
+  structured `isError` tool_result (with the raw args echoed) so the model self-corrects next turn.
+- **P1c — Partial-marked delegates** (D1c) — ✅ #1628: a turn-budget stop is marked partial + carries
+  a resume hint (`completionPhase.ts`).
+- **P2a — Automation attribution** (D2) — ✅ core #1632 (attribution through the usage meter +
+  `usageHistoryStore`); the dashboard per-automation view is a follow-up.
+- **P2b — Org pricing table** (D2) — ✅ core #1633 (contracted-discount multiplier on the CLI cost
+  surfaces); the `system_settings` admin UI is a follow-up.
+- **P2c — Per-model effort defaults** (D2) — ✅ #1627: `cli.effortByModel` resolved model→effort.
+- **P3 — Restricted profile** (D3) — ✅ core #1626 (read-tier clamp, no-network, no-escalation,
+  session stamp); the project-config-ignore slice + desktop toggle are follow-ups.
+- **P4.1 — Goal check-in backoff / banner** — ✅ already in-tree (the desktop goal banner refreshes
+  on a terminal action; check-in backoff is the existing behaviour).
+- **P4.2 — Messaging refusal reporting + notify-when-idle** — ✅ #1635 (`notify_when_idle` one-shot).
+- **P4.3 — Model-switch hook events** — ✅ #1630 (pre/post model-switch hook events).
+- **P4.4 — Concise output style** — ✅ already in-tree (`personality: 'concise'` with the
+  `cli.personalityDefault` knob).
+- **P4.5 — Org-curated picker overlay** — ✅ #1634 (`cli.modelPicker` overlays the `/models` result).
+- **P4.6 — Marketplace auth helper** — ⛔ blocked: HTTP marketplace fetch is not built yet
+  (`marketplace.ts` "http later"). Its prerequisite is decided in **ADR-053**; the auth helper lands
+  on top of it.
+- **P4.7 — TUI progress-tick collapse** — ⏳ follow-up (CLI TUI).
 
 ---
 
