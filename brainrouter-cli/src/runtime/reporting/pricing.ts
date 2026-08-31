@@ -21,15 +21,27 @@ import { loadModelsConfig, type ModelPricing } from '@kinqs/brainrouter-core/con
 export type { ModelPricing } from '@kinqs/brainrouter-core/config';
 
 let cachedOverride: Record<string, ModelPricing> | undefined;
+// ADR-052 P2b — a global discount multiplier over the resolved rates, so an org
+// with a contracted discount sees its real cost, not list price. Read from a
+// reserved `__discount` key in pricing.json; defaults to 1 (no discount).
+let cachedDiscount = 1;
 
 function loadOverride(): Record<string, ModelPricing> {
   if (cachedOverride !== undefined) return cachedOverride;
-  const overridePath = path.join(os.homedir(), '.config', 'brainrouter', 'pricing.json');
+  // Respect BRAINROUTER_CONFIG_DIR the same way config.ts does, so the override
+  // is redirectable (tests, hosts) — default stays ~/.config/brainrouter.
+  const dir = process.env.BRAINROUTER_CONFIG_DIR?.trim() || path.join(os.homedir(), '.config', 'brainrouter');
+  const overridePath = path.join(dir, 'pricing.json');
   try {
     if (fs.existsSync(overridePath)) {
       const raw = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
       if (raw && typeof raw === 'object') {
-        cachedOverride = raw as Record<string, ModelPricing>;
+        // ADR-052 P2b — pull the reserved discount key out of the model map.
+        const { __discount, ...models } = raw as Record<string, unknown>;
+        if (typeof __discount === 'number' && Number.isFinite(__discount) && __discount > 0) {
+          cachedDiscount = __discount;
+        }
+        cachedOverride = models as Record<string, ModelPricing>;
         return cachedOverride;
       }
     }
@@ -40,9 +52,16 @@ function loadOverride(): Record<string, ModelPricing> {
   return cachedOverride;
 }
 
+/** ADR-052 P2b — the contracted discount multiplier (1 = list price). */
+export function discountMultiplier(): number {
+  loadOverride(); // ensure the discount is read from disk
+  return cachedDiscount;
+}
+
 /** Test hook. */
 export function _resetPricingCache(): void {
   cachedOverride = undefined;
+  cachedDiscount = 1;
 }
 
 /**
@@ -85,12 +104,13 @@ export interface UsageLike {
 export function costUsd(modelId: string, usage: UsageLike): number {
   const p = pricingFor(modelId);
   if (!p) return 0;
-  return (
-    (usage.cachedTokens * (p.inputCacheHit ?? 0) +
-      usage.missedTokens * p.inputCacheMiss +
-      usage.completionTokens * p.output) /
-    1_000_000
-  );
+  const listCost = (
+    usage.cachedTokens * (p.inputCacheHit ?? 0) +
+    usage.missedTokens * p.inputCacheMiss +
+    usage.completionTokens * p.output
+  ) / 1_000_000;
+  // ADR-052 P2b — scale by the contracted discount so cost surfaces show real spend.
+  return listCost * discountMultiplier();
 }
 
 /**
