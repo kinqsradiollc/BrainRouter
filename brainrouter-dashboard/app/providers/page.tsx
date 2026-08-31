@@ -20,6 +20,7 @@ import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { ManagedModelsPanel } from "./ManagedModelsPanel";
 import { AdvancedRecallPanel } from "./AdvancedRecallPanel";
 import { PricingSettingsPanel } from "./PricingSettingsPanel";
+import { UsageAutomationPanel } from "./UsageAutomationPanel";
 import { InlineLoading } from "../../components/LoadingSpinner";
 
 // The configurable provider kinds are the LLM + the two vector stages.
@@ -245,6 +246,7 @@ function ProvidersInner() {
 
       {tab === "advanced" && canManageProviders && <AdvancedRecallPanel />}
       {tab === "advanced" && canManageProviders && <PricingSettingsPanel />}
+      {tab === "advanced" && canManageProviders && <UsageAutomationPanel />}
 
       {tab === "personal" && canManageProviders && (
         <>

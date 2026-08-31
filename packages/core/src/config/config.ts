@@ -916,6 +916,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     safeMode: resolveBoolWithEnv(c.safeMode, 'BRAINROUTER_SAFE_MODE'),
     // ADR-052 D3 — restricted session; config-only (a launch/CI sets cli.restricted).
     restricted: c.restricted === true,
+    usageTelemetry: c.usageTelemetry === true,
     // ADR-028 H3 — anything unrecognised falls back to `auto`, so a typo in
     // config cannot silently change how pull requests are opened.
     stackingMode: c.stackingMode === 'always' || c.stackingMode === 'never' ? c.stackingMode : 'auto',
