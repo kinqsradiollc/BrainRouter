@@ -12,6 +12,7 @@ import { collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
+import { readGoal } from '../../goal/store/goalStore.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { phaseHookHandlers, type PhaseHookContext } from '../../extension/registry.js';
@@ -187,6 +188,9 @@ export async function finalizeTurnPhase(
           missedTokens: agent.lastTurnUsage.missedTokens,
         },
         Date.now(),
+        // ADR-052 D2 — attribute the turn so a runaway automation is identifiable:
+        // a turn driven by an active goal loop vs. an ordinary interactive turn.
+        readGoal(agent.workspaceRoot, agent.sessionKey)?.status === 'active' ? 'goal' : 'interactive',
       );
     } catch {
       // Usage history is observability only.
