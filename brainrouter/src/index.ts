@@ -66,7 +66,7 @@ import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tena
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { connectorManageRouter } from './api/routes/connectors/manage.js';
 import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
-import { providersRouter, agentModelsRouter, recallSettingsRouter, contextSettingsRouter, egressSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter, runtimeCompositionRouter } from './api/routes/admin/index.js';
+import { providersRouter, agentModelsRouter, recallSettingsRouter, pricingSettingsRouter, contextSettingsRouter, egressSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter, runtimeCompositionRouter } from './api/routes/admin/index.js';
 import { modelsRouter } from './api/routes/models/index.js';
 import { remoteRouter } from './api/routes/remote/index.js';
 import {
@@ -389,6 +389,7 @@ if (USE_HTTP) {
     ["/api/remote", remoteRouter],
     ["/api/admin/agent-models", agentModelsRouter],
     ["/api/admin/recall-settings", recallSettingsRouter],
+    ["/api/admin/pricing-settings", pricingSettingsRouter],
     ["/api/admin/context-settings", contextSettingsRouter],
     ["/api/admin/runtime", runtimeCompositionRouter],
     ["/api/admin/egress-settings", egressSettingsRouter],
