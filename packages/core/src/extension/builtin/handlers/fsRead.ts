@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertSafeReviewerFilesystemPath, isSafeReviewerFilesystemPath, redactReviewSourceText } from '../../../review/sourceSafety.js';
 import { truncateFullRead } from '../../../agent/fs/readTruncation.js';
+import { renderNotebookDigest } from '../../../agent/fs/notebookRead.js';
 import { waitUntilCondition } from '../../../util/agentloop/waitUntil.js';
 import { getCliKnobs } from '../../../config/config.js';
 import { grepSearch, globFiles } from '../../../agent/fs/workspaceFs.js';
@@ -37,6 +38,25 @@ export const fsReadHandlers: Record<string, BuiltinToolHandler> = {
     const visibleContent = host.reviewSourceSafety ? redactReviewSourceText(content) : content;
     const startLine = args.startLine ? Number(args.startLine) : 1;
     const endLine = args.endLine ? Number(args.endLine) : undefined;
+
+    // ADR-051 D1 — a Jupyter notebook reads as a CELL-INDEXED DIGEST by default:
+    // cells named by the same 0-based index `notebook_edit` takes, outputs kept
+    // as text but images NAMED not inlined. `raw: true` (and any parse failure)
+    // falls back to the raw JSON read below — the digest is a rendering, never a
+    // gate. A line range slices the digest like any other file.
+    if (/\.ipynb$/i.test(resolved) && !args.raw) {
+      try {
+        let digest = renderNotebookDigest(content, { label: String(args.path) });
+        if (host.reviewSourceSafety) digest = redactReviewSourceText(digest);
+        if (startLine === 1 && endLine === undefined) return digest;
+        const dLines = digest.split('\n');
+        const dEnd = endLine !== undefined ? Math.min(endLine, dLines.length) : dLines.length;
+        const dStart = Math.max(1, Math.min(startLine, dLines.length));
+        return dStart > dEnd ? '' : dLines.slice(dStart - 1, dEnd).join('\n');
+      } catch {
+        // Not a valid notebook — fall through to the raw read.
+      }
+    }
 
     if (startLine === 1 && endLine === undefined) {
       // CC-P7.3 — cap an unbounded full-file read so a huge file can't blow
