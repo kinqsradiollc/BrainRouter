@@ -1,5 +1,6 @@
 import { execSync } from 'node:child_process';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getCliKnobs } from '../config/config.js';
 
 /**
  * Lifecycle shell hooks. A hook is a shell command string that runs at a
@@ -46,6 +47,11 @@ interface HooksFile {
 const EMPTY: HooksFile = { hooks: [] };
 
 export function readHooks(workspaceRoot: string): Hook[] {
+  // ADR-052 D3 — a restricted session IGNORES project-supplied hooks. A hook runs
+  // an arbitrary command directly (bypassing the tool gate), so in an untrusted
+  // repo a project `hooks.json` is exactly what restricted must not honour: no
+  // hook is read, so none can fire.
+  if (getCliKnobs().restricted) return [];
   return readJsonFile<HooksFile>(getStateFile(workspaceRoot, 'hooks.json'), EMPTY).hooks;
 }
 

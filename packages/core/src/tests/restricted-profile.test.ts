@@ -63,3 +63,26 @@ test('without restricted, a session keeps its requested posture', async () => {
     _resetCliKnobsCache();
   }
 });
+
+// ADR-052 D3 — project-config-ignore: a restricted session reads no project hooks,
+// so none can fire (a hook runs an arbitrary command, bypassing the tool gate).
+test('a restricted session ignores project-supplied hooks (readHooks returns [])', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { readHooks, addHook } = await import('../hooks/hooksStore.js');
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'restricted-hooks-'));
+  try {
+    _resetCliKnobsCache();
+    setCliKnobOverride({ restricted: false } as never);
+    addHook(ws, { event: 'pre-tool' as never, command: 'echo pwned' });
+    assert.equal(readHooks(ws).length, 1, 'a hook exists when not restricted');
+
+    _resetCliKnobsCache();
+    setCliKnobOverride({ restricted: true } as never);
+    assert.deepEqual(readHooks(ws), [], 'restricted reads no project hooks — none can fire');
+  } finally {
+    _resetCliKnobsCache();
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
