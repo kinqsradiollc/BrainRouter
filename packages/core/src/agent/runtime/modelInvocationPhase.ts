@@ -33,7 +33,8 @@ import {
   resolveRequestFormat,
 } from '../transport/llmTransport.js';
 // ADR-041 A41-5 — the provider-neutral streaming seam (wraps callOpenAIStream).
-import { callProviderStream, type ProviderStreamResult } from '../transport/providerStream.js';
+import { callProviderStream } from '../transport/providerStream.js';
+import { streamWithContinuation, buildContinuationMessages } from '../transport/streamContinuation.js';
 import { recoverAgentProviderRoute } from './providerRecovery.js';
 import { ReviewProviderRequestBudgetExceededError } from './modelRequestBudget.js';
 import { runPhaseWaterfall } from './phaseWaterfall.js';
@@ -150,27 +151,28 @@ export async function invokeModelPhase(
           // ADR-041 A41-5 — consume the provider-neutral StreamChunk stream instead
           // of registering delta callbacks + reading a separate return value. Same
           // deltas, same order, same final result (the terminal `done` chunk).
-          let final: ProviderStreamResult | undefined;
-          for await (const chunk of callProviderStream(
-            agent.llmConfig,
-            requestMessages,
-            allTools,
-            { effort, signal: agent.turnAbort?.signal, ...requestBudget },
-          )) {
-            if (chunk.type === 'text') {
+          // ADR-052 P1a — a mid-stream cut by a retryable server error is CONTINUED
+          // (partial replayed as a prefill), not failed. A user abort is never
+          // continued (isRetryableServerError excludes it; the catch below also
+          // rethrows on interrupt).
+          const done = await streamWithContinuation({
+            run: (seed) => callProviderStream(
+              agent.llmConfig,
+              seed ? buildContinuationMessages(requestMessages, seed) : requestMessages,
+              allTools,
+              { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+            ),
+            isRetryable: (err) => !isInterrupt(err) && !agent.interruptRequested && isRetryableServerError(err),
+            onText: (delta) => {
               if (!started) {
                 started = true;
                 callbacks.onAssistantTurnStart?.();
               }
-              callbacks.onAssistantDelta?.(chunk.delta);
-            } else if (chunk.type === 'reasoning') {
-              callbacks.onReasoningDelta?.(chunk.delta);
-            } else {
-              final = chunk.result;
-            }
-          }
-          // The stream always terminates with a `done` chunk on success.
-          const result = final!;
+              callbacks.onAssistantDelta?.(delta);
+            },
+            onReasoning: (delta) => callbacks.onReasoningDelta?.(delta),
+          });
+          const result = done.result;
           if (started) callbacks.onAssistantTurnEnd?.(result.content);
           return {
             content: result.content,
