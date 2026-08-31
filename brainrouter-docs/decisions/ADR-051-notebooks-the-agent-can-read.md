@@ -1,6 +1,9 @@
 # ADR-051 — Notebooks the agent can read and the human can see
 
-**Status:** PROPOSED — awaiting owner review. · **Builds on:** ADR-041 D8 (the builtin-tool handler
+**Status:** IMPLEMENTED (P1–P4, 0.4.22) — `read_file` renders a `.ipynb` as a cell-indexed digest
+(P1, #1622), `notebook_edit` replace clears stale outputs (P2, #1623), the desktop File panel shows a
+rendered notebook view with a Raw toggle (P3, #1624), and the `notebook_edit` approval shows the
+affected cell (P4, #1625). · **Builds on:** ADR-041 D8 (the builtin-tool handler
 registry that `notebook_edit` and `read_file` already live in), ADR-047 (tool honesty: a tool that
 cannot do the job says so), and the Editor's markdown mode (the precedent for a file-type-specific
 rendered experience inside an existing panel). · **Informed by:** a study of contemporary
@@ -104,14 +107,14 @@ human can decline a wrong-index edit because they SAW the wrong cell.*
 
 ## 4. Dependency-ordered delivery board
 
-- **P1 — The digest** (D1): notebook rendering in `read_file` (`agent/fs/` pure function +
+- **P1 — The digest** (D1) — ✅ #1622: notebook rendering in `read_file` (`agent/fs/` pure function +
   handler branch), `raw` opt-out, parse-failure fallback; tests pin digest shape, image-output
   naming, index parity with `notebook_edit`, and truncation behavior.
-- **P2 — Output honesty** (D2): `applyNotebookEdit` replace clears `outputs`/`execution_count`;
+- **P2 — Output honesty** (D2) — ✅ #1623: `applyNotebookEdit` replace clears `outputs`/`execution_count`;
   `notebook_edit` description updated to promise it; tests.
-- **P3 — The rendered view** (D3): `FileViewerPanel` notebook branch + Raw toggle; reuses the
+- **P3 — The rendered view** (D3) — ✅ #1624: `FileViewerPanel` notebook branch + Raw toggle; reuses the
   chat `Markdown` renderer and `CodeBlock`; no new dependencies.
-- **P4 — The approval cell** (D4): approval surface for `notebook_edit` shows current-vs-proposed
+- **P4 — The approval cell** (D4) — ✅ #1625: approval surface for `notebook_edit` shows current-vs-proposed
   cell content, with the read-failure notice.
 
 ---
