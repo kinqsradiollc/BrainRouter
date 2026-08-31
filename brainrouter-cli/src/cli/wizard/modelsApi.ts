@@ -1,5 +1,7 @@
 import { runPicker, type PickerRow } from '../ink/prompt/runPicker.js';
 import type { Theme } from '../theme/theme.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { applyModelPickerOverlay } from './modelPickerOverlay.js';
 import {
   inferModelReasoningCapabilities,
   registerModelReasoningCapabilities,
@@ -184,22 +186,26 @@ export async function selectModel(opts: SelectModelOptions): Promise<SelectModel
   }
 
   const finalList = modelsList.length > 0 ? modelsList : (currentModel ? [currentModel] : []);
-  const rows: PickerRow[] = finalList.map((m) => ({
+  // ADR-052 P4.5 — apply the org-curated overlay (pin / order / label) OVER the
+  // endpoint result; an empty overlay is a no-op (label = id).
+  const overlaid = applyModelPickerOverlay(finalList, getCliKnobs().modelPicker);
+  const rows: PickerRow[] = overlaid.map(({ id: m, label }) => ({
     id: m,
-    label: m,
+    label,
     value:
       m === currentModel ? 'current' :
       (provider.defaultModel && m === provider.defaultModel) ? 'default' : '',
   }));
 
-  // Cursor priority: currently-active model > provider default > top.
+  // Cursor priority: currently-active model > provider default > top. Indices
+  // follow the OVERLAID row order (P4.5), so the cursor lands on the right row.
   let initialCursor = 0;
   if (currentModel) {
-    const idx = finalList.indexOf(currentModel);
+    const idx = overlaid.findIndex((r) => r.id === currentModel);
     if (idx >= 0) initialCursor = idx;
   }
   if (initialCursor === 0 && !currentModel) {
-    const idx = provider.defaultModel ? finalList.indexOf(provider.defaultModel) : -1;
+    const idx = provider.defaultModel ? overlaid.findIndex((r) => r.id === provider.defaultModel) : -1;
     if (idx >= 0) initialCursor = idx;
   }
 

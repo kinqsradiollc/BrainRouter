@@ -121,6 +121,9 @@ const CONSUMED_ELSEWHERE = new Map<string, string>([
   // ADR-047 D1. The only in-core mention is PROSE in declarative-starter.ts; the
   // real reader is the CLI chat boot, which registers the declarative providers.
   ['customProviders', 'brainrouter-cli/src/entry/chatCommand.ts — registerDeclarativeProviders at boot'],
+  // ADR-052 P4.5 — the curated model-picker overlay is presentation, read by the
+  // picker UIs: brainrouter-cli/src/cli/wizard/modelsApi.ts (applyModelPickerOverlay).
+  ['modelPicker', 'brainrouter-cli/src/cli/wizard/modelsApi.ts — applyModelPickerOverlay'],
 ]);
 
 test('E1 — every resolved cli.* knob has a consumer', () => {

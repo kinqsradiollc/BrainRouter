@@ -501,6 +501,25 @@ function resolveEffortByModel(raw: unknown): ResolvedCliKnobs['effortByModel'] {
   return out;
 }
 
+/** ADR-052 P4.5 — sanitize the curated model-picker overlay: keep entries with a
+ *  non-empty string `id`; keep `label` only when a non-empty string; `pinned` is
+ *  a boolean. Invalid entries are dropped. */
+function resolveModelPicker(raw: unknown): ResolvedCliKnobs['modelPicker'] {
+  if (!Array.isArray(raw)) return [];
+  const out: ResolvedCliKnobs['modelPicker'] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const id = typeof e.id === 'string' ? e.id.trim() : '';
+    if (!id) continue;
+    const item: { id: string; label?: string; pinned?: boolean } = { id };
+    if (typeof e.label === 'string' && e.label.trim()) item.label = e.label.trim();
+    if (e.pinned === true) item.pinned = true;
+    out.push(item);
+  }
+  return out;
+}
+
 function unitInterval(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 }
@@ -886,6 +905,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     fallbackModels: resolveFallbackModels(c.fallbackModels, c.fallbackModel),
     availableModels: sanitizeStringList(c.availableModels),
     enforceAvailableModels: c.enforceAvailableModels === true,
+    modelPicker: resolveModelPicker(c.modelPicker),
     customProviders: sanitizeCustomProviders(c.customProviders),
     llmProfiles,
     activeLlmProfile,
