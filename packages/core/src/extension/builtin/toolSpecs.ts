@@ -755,6 +755,17 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'notify_when_idle',
+    description: 'Ask another local session (by its session key) to send you ONE message the next time it finishes a turn (goes idle), instead of polling it. One-shot: it fires once and clears itself. Use it when you are waiting on a peer session and want to be pinged the moment it is free.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target_session: { type: 'string', description: 'The session key of the session to watch. It must be a live local session.' }
+      },
+      required: ['target_session']
+    }
+  },
+  {
     name: 'remind',
     description: 'Schedule a session-local reminder that is delivered to you at a later turn boundary (never mid-turn). Use it to carry an intention across turns — "check the build in 10 minutes", "every hour, re-read the goal". action:"set" needs a message plus EXACTLY ONE of: at (absolute ISO time), in (relative duration like "30m", "2h", "1d", "90s"), or every (a 5-field cron rule, recurring). Delivery is catch-up: a missed window fires once, a recurring rule delivers only its latest due occurrence. Reminders are per-session (they do not wake an idle session and are gone when it ends). action:"list" shows this session\'s reminders; action:"cancel" removes one by id.',
     inputSchema: {

@@ -152,6 +152,8 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'task_output', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // CC-P12.3 — transcript chapter marker (writes session state, not workspace).
   { name: 'mark_chapter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // ADR-052 P4.2 — a one-shot idle-notice subscription; a read-tier session tap.
+  { name: 'notify_when_idle', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // MC-D3 — agent-initiated switch to a named LLM profile. Mutates session
   // state only (the active model preset), so it gates like update_plan:
   // read tier, read_only kind, serialized. Exposure is further runtime-gated
