@@ -3,8 +3,8 @@
 **Status:** IMPLEMENTED (0.4.22) — nine phases built and merged (P1a #1631, P1c #1628, P2a #1632,
 P2b #1633, P2c #1627, P3-core #1626, P4.2 #1635, P4.3 #1630, P4.5 #1634); three were already satisfied
 in-tree (P1b, P4.1, P4.4 — see §4); P3 project-config-ignore (#1637) and P4.6 (via ADR-053, #1638) since landed; P4.7 is already in-tree.
-The ONLY remaining slice is the P2a/P2b **dashboard admin UI** (the core + CLI data is built; surfacing it
-as a brain-server API + dashboard panel needs the live dashboard/server to build and verify). · **Builds on:** ADR-041 (token-meter extension,
+All §5 acceptance criteria are now met: P2b pricing admin shipped (brain route + dashboard panel), and
+the priced per-automation **dashboard view** (§5.3) shipped via **ADR-054** (usage telemetry → server → panel). · **Builds on:** ADR-041 (token-meter extension,
 registry discipline), ADR-046 (surfaces that vouch for themselves), the safeMode/fallback work
 (#796), and the org-settings KV pattern (per-org recall settings). · **Informed by:** a study of
 contemporary agent-harness release notes (2026-08-20 → 2026-08-28); no external project is named
