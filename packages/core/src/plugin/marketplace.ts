@@ -372,11 +372,13 @@ export interface UpdateMarketplaceResult {
  * sources there's nothing to pull, but the manifest is re-read + validated.
  * Returns the updated config alongside the result so callers can batch saves.
  */
-export function updateMarketplaceIn(config: Config, name: string): UpdateMarketplaceResult & { config?: Config } {
+export async function updateMarketplaceIn(config: Config, name: string, deps: HttpMarketplaceDeps = {}): Promise<UpdateMarketplaceResult & { config?: Config }> {
   const list = marketplacesOf(config);
   const entry = list.find((m) => m.name === name);
   if (!entry) return { ok: false, name, error: `marketplace "${name}" not found` };
-  const fetched = fetchMarketplace(entry);
+  // ADR-053 P3 — the async seam: an http catalog downloads + extracts here just
+  // like a git one; local/git still take the sync path inside fetchMarketplaceAsync.
+  const fetched = await fetchMarketplaceAsync(entry, deps);
   if (!fetched.ok) return { ok: false, name, error: fetched.error };
   try {
     const parsed = readMarketplaceManifestAt(fetched.fetched.dir, resolveCliKnobs(config).plugins.altManifestNames);
@@ -396,12 +398,12 @@ export function updateMarketplaceIn(config: Config, name: string): UpdateMarketp
 }
 
 /** Persisting convenience: update one marketplace (or all when name omitted). */
-export function updateMarketplaces(name?: string): UpdateMarketplaceResult[] {
+export async function updateMarketplaces(name?: string, deps: HttpMarketplaceDeps = {}): Promise<UpdateMarketplaceResult[]> {
   let config = loadOrInitConfig();
   const targets = name ? [name] : marketplacesOf(config).map((m) => m.name);
   const results: UpdateMarketplaceResult[] = [];
   for (const t of targets) {
-    const res = updateMarketplaceIn(config, t);
+    const res = await updateMarketplaceIn(config, t, deps);
     if (res.config) config = res.config;
     results.push({ ok: res.ok, name: res.name, revision: res.revision, plugins: res.plugins, error: res.error });
   }
@@ -428,7 +430,7 @@ export type ResolveResult =
  * in config order). Fetches each marketplace's manifest lazily. The caller MUST
  * call `resolved.fetched.cleanup?.()` when done (a git checkout leaves a temp).
  */
-export function resolvePluginByName(name: string, config?: Config): ResolveResult {
+export async function resolvePluginByName(name: string, config?: Config, deps: HttpMarketplaceDeps = {}): Promise<ResolveResult> {
   const cfg = config ?? loadOrInitConfig();
   const altManifestNames = resolveCliKnobs(cfg).plugins.altManifestNames;
   const list = marketplacesOf(cfg);
@@ -439,7 +441,8 @@ export function resolvePluginByName(name: string, config?: Config): ResolveResul
     // P3 — skip any marketplace the managed policy blocks / doesn't allowlist.
     const gateErr = assertMarketplaceAllowed(mkt.name, gates);
     if (gateErr) { errors.push(`${mkt.name}: ${gateErr}`); continue; }
-    const fetched = fetchMarketplace(mkt);
+    // ADR-053 P3 — async fetch so an http catalog resolves like a git one.
+    const fetched = await fetchMarketplaceAsync(mkt, deps);
     if (!fetched.ok) { errors.push(`${mkt.name}: ${fetched.error}`); continue; }
     const parsed = readMarketplaceManifestAt(fetched.fetched.dir, altManifestNames);
     if (!parsed.valid || !parsed.manifest) {
@@ -530,7 +533,7 @@ export async function installPluginByName(
   const config = opts.config ?? loadOrInitConfig();
   const altManifestNames = resolveCliKnobs(config).plugins.altManifestNames;
   const advisoryPolicy = resolveCliKnobs(config).plugins.advisoryPolicy;
-  const resolved = resolvePluginByName(name, config);
+  const resolved = await resolvePluginByName(name, config);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   let warning: string | undefined;
   try {

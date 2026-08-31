@@ -1,6 +1,6 @@
 # ADR-053 — HTTP plugin marketplaces (and the private-catalog auth helper)
 
-**Status:** PROPOSED — awaiting owner review. · **Builds on:** the plugin marketplace system
+**Status:** IMPLEMENTED (0.4.22) — P1 the SSRF-guarded `fetchHttpMarketplace` + `fetchMarketplaceAsync` seam, P2 the `headersHelper` private-catalog auth (= ADR-052 P4.6), and P3 the async install adoption (`updateMarketplaceIn`/`resolvePluginByName`/`updateMarketplaces` drive an http catalog like a git one). · **Builds on:** the plugin marketplace system
 (`packages/core/src/plugin/marketplace.ts`, git + local sources), ADR-039's SSRF guard
 (`validateUpstreamTarget` / the upstream allowlist), and ADR-052 P4.6 (the marketplace auth helper,
 which this unblocks). · **Informed by:** the "http later" TODO the marketplace fetch has carried
@@ -76,11 +76,11 @@ fetch, exactly as a public catalog.
 
 ## 4. Delivery board
 
-- **P1 — `fetchHttpMarketplace`** (D1): the SSRF-guarded, bounded, injected-fetch/extract function +
+- **P1 — `fetchHttpMarketplace`** (D1) — ✅: the SSRF-guarded, bounded, injected-fetch/extract function +
   `fetchMarketplaceAsync` seam; unit-tested end to end with a fake fetch and a local tarball.
-- **P2 — `headersHelper`** (D2/D3 = ADR-052 P4.6): the config field, the mint-before-fetch step,
+- **P2 — `headersHelper`** (D2/D3 = ADR-052 P4.6) — ✅: the config field, the mint-before-fetch step,
   and the Settings-stored secret; tested with a fake helper command.
-- **P3 — Async install adoption**: thread `fetchMarketplaceAsync` through the install/update path so
+- **P3 — Async install adoption** — ✅: thread `fetchMarketplaceAsync` through the install/update path so
   an HTTP catalog installs like a git one. Mechanical.
 
 ---

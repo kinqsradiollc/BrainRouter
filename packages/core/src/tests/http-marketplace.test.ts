@@ -16,9 +16,9 @@ import type { MarketplaceSource } from '../config/configTypes.js';
 /** Build a real .tgz containing a marketplace manifest, return its bytes. */
 function makeCatalogTarball(): Buffer {
   const src = fs.mkdtempSync(path.join(os.tmpdir(), 'mkt-src-'));
-  fs.writeFileSync(path.join(src, 'marketplace.json'), JSON.stringify({ name: 'acme', plugins: [{ name: 'p1', source: './p1' }] }));
+  fs.writeFileSync(path.join(src, 'brainrouter-marketplace.json'), JSON.stringify({ name: 'acme', plugins: [{ name: 'p1', source: './p1' }] }));
   const tgz = path.join(src, 'out.tgz');
-  const r = spawnSync('tar', ['-czf', tgz, '-C', src, 'marketplace.json'], { encoding: 'utf8' });
+  const r = spawnSync('tar', ['-czf', tgz, '-C', src, 'brainrouter-marketplace.json'], { encoding: 'utf8' });
   assert.equal(r.status, 0, 'tar czf succeeded');
   const bytes = fs.readFileSync(tgz);
   fs.rmSync(src, { recursive: true, force: true });
@@ -36,7 +36,7 @@ test('fetchHttpMarketplace downloads, extracts, and returns a dir with the manif
   });
   assert.ok(res.ok, `fetch ok: ${res.ok ? '' : res.error}`);
   if (res.ok) {
-    assert.ok(fs.existsSync(path.join(res.fetched.dir, 'marketplace.json')), 'the manifest was extracted');
+    assert.ok(fs.existsSync(path.join(res.fetched.dir, 'brainrouter-marketplace.json')), 'the manifest was extracted');
     assert.ok(!fs.existsSync(path.join(res.fetched.dir, 'catalog.tgz')), 'the tarball was cleaned up');
     res.fetched.cleanup?.();
     assert.ok(!fs.existsSync(res.fetched.dir), 'cleanup removed the staging dir');
@@ -86,4 +86,18 @@ test('buildMarketplaceHeaders: absent helper ⇒ no headers; a failing helper �
   assert.deepEqual(buildMarketplaceHeaders(httpEntry()), { ok: true, headers: {} });
   const failed = buildMarketplaceHeaders(httpEntry({ headersHelper: 'x' }), { runHeadersHelper: () => ({ ok: false, error: 'boom' }) });
   assert.deepEqual(failed, { ok: false, error: 'boom' });
+});
+
+// ADR-053 P3 — the async install seam: updateMarketplaceIn drives an http catalog
+// through fetchMarketplaceAsync exactly like a git one.
+test('updateMarketplaceIn refreshes an http marketplace via the async seam', async () => {
+  const { updateMarketplaceIn } = await import('../plugin/marketplace.js');
+  const bytes = makeCatalogTarball();
+  const cfg: any = { activeServer: '', servers: {}, cli: { plugins: { marketplaces: [httpEntry()] } } };
+  const res = await updateMarketplaceIn(cfg, 'acme-http', {
+    validateUrl: async () => {},
+    fetchImpl: (async () => new Response(new Uint8Array(bytes), { status: 200 })) as unknown as typeof fetch,
+  });
+  assert.ok(res.ok, `http marketplace update ok: ${res.ok ? '' : res.error}`);
+  if (res.ok) assert.equal(res.plugins, 1, 'the catalog manifest (1 plugin) was read from the extracted tarball');
 });

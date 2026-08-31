@@ -302,12 +302,12 @@ test('addMarketplaceIn: refuses a blocked marketplace', () => {
   assert.equal(addMarketplaceIn(cfg, 'fine', '/some/dir').ok, true);
 });
 
-test('resolvePluginByName: skips a blocked marketplace during resolution', () => {
+test('resolvePluginByName: skips a blocked marketplace during resolution', async () => {
   const cfg = cfgWithGates({
     blockedMarketplaces: ['evil'],
     marketplaces: [{ name: 'evil', sourceType: 'local', source: '/does/not/matter' }],
   });
-  const r = resolvePluginByName('anything', cfg);
+  const r = await resolvePluginByName('anything', cfg);
   assert.equal(r.ok, false);
   if (r.ok) return;
   assert.match(r.error, /blocked by managed policy/);
