@@ -713,6 +713,13 @@ export interface CliKnobs {
    */
   atlas?: { orient?: boolean; retrieval?: boolean; autoRefresh?: boolean };
   /**
+   * ADR-055 P1 (D2a) — browser behaviour. `vision`: 'auto' attaches a
+   * `browser_screenshot` as an image the model can see (same wire seam as a
+   * pasted image); 'off' keeps the text-only path (the saved artifact path).
+   * Default 'auto'.
+   */
+  browser?: { vision?: 'auto' | 'off' };
+  /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
    * usage, and the tools it requested with their render intents). Log-only —
@@ -1404,6 +1411,7 @@ export interface ResolvedCliKnobs {
   traceTrajectory: boolean;
   traceRequests: boolean;
   atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
+  browser: { vision: 'auto' | 'off' };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** ADR-052 D2 — resolved per-model effort defaults (validated); empty when unset. */

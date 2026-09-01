@@ -1,6 +1,6 @@
 # ADR-055 — A complete browser: Chrome parity for the human, human parity for the agent
 
-**Status:** PROPOSED — for review. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
+**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images the model can see) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
 there was decided but its browser rows were never built; this ADR refines and delivers them),
 ADR-037 (credentials the page cannot read), ADR-039/043 (SSRF and egress policy), ADR-044 (web pages
 the agent can actually read), ADR-046 (surfaces that vouch for themselves), ADR-052 (the restricted
@@ -237,8 +237,11 @@ bound recorded in the benchmark report.*
 Rows are one PR each into the current release branch; a row is done when its acceptance line in
 §2 holds and its harness gate (D7) exists.
 
-- **P1 — Images the model can see** (D2a): the tool-result `images` seam + `browser_screenshot`
-  image part + `cli.browser.vision`. Core + desktop.
+- **P1 — Images the model can see** (D2a) — ✅: a browser screenshot rides a companion
+  `role:'user'` image message (the one wire shape every provider accepts), flushed AFTER the
+  tool results so the batch stays valid; `cli.browser.vision` (`auto`|`off`, default auto) gates it;
+  `browserScreenshotImageHandoff` reads only the in-tree `.brainrouter/browser/screenshots/` PNG/JPG
+  and fails closed on anything else. Core-only (no desktop change — the artifact path already exists).
 - **P2 — Coordinates with a conscience** (D2b): `{x, y}` targets on click/hover/drag with hit
   resolution, credential refusal, and stale-revision rejection. Depends on P1.
 - **P3 — Snapshot v2** (D2c): outline + text/tables/lists, `scope`, shadow roots, frame-aware refs,
