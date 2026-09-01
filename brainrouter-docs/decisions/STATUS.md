@@ -1,6 +1,6 @@
 # ADR status tracker
 
-A single view of where each decision stands. Updated 2026-08-24. Foundational
+A single view of where each decision stands. Updated 2026-09-02. Foundational
 ADRs 001–016 (async store, core extraction, service decomposition, tenancy,
 providers-DB, GitHub linking, connectors) are implemented and long-shipped; the
 active era is tracked below. Status lives authoritatively in each ADR's own
@@ -46,6 +46,7 @@ active era is tracked below. Status lives authoritatively in each ADR's own
 | 052 | Resilient turns, attributed spend, and a restricted seat | ✅ Implemented (0.4.22) — all §5 acceptance met: P1a stream continuation, P1c partial delegates, P2a attribution + P2b pricing admin, the priced per-automation dashboard view (via ADR-054), P2c per-model effort, P3 restricted (tools + project-config-ignore), P4.2/4.3/4.5 + P4.6 (via ADR-053); P1b/P4.1/P4.4/P4.7 already in-tree | 0.4.22 |
 | 053 | HTTP plugin marketplaces (+ private-catalog auth helper) | ✅ Implemented (0.4.22) — P1 SSRF-guarded `fetchHttpMarketplace` + `fetchMarketplaceAsync` seam, P2 `headersHelper` auth (= ADR-052 P4.6), P3 async install adoption; tested end-to-end with a local tarball | 0.4.22 |
 | 054 | Org usage telemetry (priced per-automation dashboard view) | ✅ Implemented (0.4.22) — bounded per-org aggregate + priced view (`mergeOrgUsage`/`priceOrgUsage`), `POST /api/usage/automation` ingest + opt-in `cli.usageTelemetry` best-effort client push, `GET /api/admin/usage-automation` + dashboard `UsageAutomationPanel`. Satisfies ADR-052 §5.3 | 0.4.22 |
+| 055 | A complete browser: Chrome parity for the human, human parity for the agent | 📝 Proposed (2026-09-02) — one engine/two seats (D1); the agent sees pixels + snapshot v2 (outline, iframes, shadow roots, `scope`, `page.find`) + a locator ladder (D2); action receipts, two-way human-needed handoff, share-a-tab (D3); downloads inbox (D4); human chrome — bookmarks, history, omnibox autocomplete, tab search, site-info, per-site permissions, PDF, fullscreen, print (D5); coherent restricted seat + human-only certificate decisions (D6); agent-as-human harness battery (D7). 13 PR rows. | release/0.4.22 (target) |
 
 ## In flight / next
 
