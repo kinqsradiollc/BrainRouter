@@ -77,6 +77,7 @@ export type BrowserControlCommand =
   | ({ kind: 'page.stop' } & TabTarget)
   | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number } & TabTarget)
   | ({ kind: 'page.snapshot'; maxChars?: number; scope?: 'viewport' | 'page' } & TabTarget)
+  | ({ kind: 'page.find'; query: string; by?: 'role' | 'text' | 'label' | 'testid'; limit?: number; scope?: 'viewport' | 'page' } & TabTarget)
   | ({ kind: 'page.text'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.html'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.screenshot'; fullPage?: boolean } & TabTarget)
@@ -309,6 +310,13 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
       const maxChars = integer(row.maxChars, 'maxChars', 1_000, 200_000);
       const scope = enumValue(row.scope, 'scope', ['viewport', 'page'] as const);
       return { kind, ...target(), ...(maxChars !== undefined ? { maxChars } : {}), ...(scope ? { scope } : {}) };
+    }
+    case 'page.find': {
+      const query = boundedString(row.query, 'query', 512)!;
+      const by = enumValue(row.by, 'by', ['role', 'text', 'label', 'testid'] as const);
+      const limit = integer(row.limit, 'limit', 1, 100);
+      const scope = enumValue(row.scope, 'scope', ['viewport', 'page'] as const);
+      return { kind, query, ...target(), ...(by ? { by } : {}), ...(limit !== undefined ? { limit } : {}), ...(scope ? { scope } : {}) };
     }
     case 'page.text':
     case 'page.html': {

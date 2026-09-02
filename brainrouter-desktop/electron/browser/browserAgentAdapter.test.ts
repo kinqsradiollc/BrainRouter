@@ -241,3 +241,11 @@ test('mapAgentBrowserCommand threads snapshot scope', () => {
     { tabId: 'tab_x_1', command: { op: 'snapshot', mode: 'semantic', scope: 'page' } },
   );
 });
+
+// ADR-055 P4 — page.find threads to the find-nodes op.
+test('mapAgentBrowserCommand maps page.find to find-nodes', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.find', tabId: 'tab_x_1', query: 'Sign in', by: 'text', limit: 5, scope: 'page' } as BrowserControlCommand),
+    { tabId: 'tab_x_1', command: { op: 'find-nodes', query: 'Sign in', by: 'text', limit: 5, scope: 'page' } },
+  );
+});

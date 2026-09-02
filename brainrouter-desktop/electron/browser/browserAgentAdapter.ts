@@ -68,6 +68,7 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
     case 'page.reload': return { tabId: command.tabId, command: { op: 'reload', bypassCache: command.ignoreCache } };
     case 'page.stop': return { tabId: command.tabId, command: { op: 'stop' } };
     case 'page.snapshot': return { tabId: command.tabId, command: { op: 'snapshot', mode: 'semantic', scope: command.scope } };
+    case 'page.find': return { tabId: command.tabId, command: { op: 'find-nodes', query: command.query, by: command.by, limit: command.limit, scope: command.scope } };
     case 'page.text': return { tabId: command.tabId, command: { op: 'text', maxChars: command.maxChars } };
     case 'page.html': return { tabId: command.tabId, command: { op: 'html', maxChars: command.maxChars } };
     case 'page.screenshot': return { tabId: command.tabId, command: { op: 'screenshot', fullPage: command.fullPage } };
