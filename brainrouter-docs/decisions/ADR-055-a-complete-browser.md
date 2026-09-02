@@ -285,8 +285,13 @@ Rows are one PR each into the current release branch; a row is done when its acc
   (http(s) + `%s`, no credentials) with a fallback.
 - **P9b — Human chrome I, the UI** (D5): the bookmarks/history drawers, omnibox autocomplete
   dropdown, new-tab page, tab search, pinned tabs, and the missing shortcuts.
-- **P10 — Human chrome II** (D5): site-info popover, per-site permission memory, PDF viewer,
-  HTML5 fullscreen, print/save-as-PDF, context-menu parity.
+- **P10 — Human chrome II** (D5) — ✅ (engine side): **PDF viewer** in-tab (Chromium's own viewer —
+  a PDF opens instead of downloading), **HTML5 fullscreen** (a video fills the window and restores on
+  exit; `fullscreenTabId` on the state), **print / Save as PDF** (`print` op → the workspace
+  `.brainrouter/browser/prints/` folder, returning a workspace-relative path), **per-site permission
+  memory for EVERY promptable permission** (was geolocation-only; a remembered "allow camera" now
+  restores the real `media:video` grant), and **context-menu parity** (copy link address, copy image
+  address, open link in the default browser). The **site-info popover** is renderer work (P10b).
 - **P11 — Coherent safety** (D6) — ✅: a restricted session now drops the WHOLE embedded browser
   (`registryBrowserToolNames` — observation as well as navigation), so a restricted seat lists no
   `browser_*` tool at all; and the agent may **dismiss** but never **accept** a certificate dialog

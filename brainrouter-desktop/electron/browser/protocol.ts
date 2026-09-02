@@ -93,6 +93,8 @@ export interface BrowserState {
   dialogPrompt: BrowserDialogPrompt | null;
   /** ADR-055 P9 — the workspace's saved places (bounded for broadcast). */
   bookmarks: Array<{ url: string; title: string; addedAt: number }>;
+  /** ADR-055 P10 — the tab in HTML5 fullscreen (a video), if any. */
+  fullscreenTabId: BrowserTabId | null;
   capabilities: BrowserCapabilities;
 }
 
@@ -169,6 +171,7 @@ export type BrowserCommand =
   | { op: 'respond-permission'; promptId: string; allow: boolean }
   | { op: 'respond-dialog'; promptId: string; accept: boolean; value?: string }
   | { op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download'; downloadId: BrowserDownloadId }
+  | { op: 'print'; landscape?: boolean }
   | { op: 'add-bookmark'; url?: string; title?: string }
   | { op: 'remove-bookmark'; url: string }
   | { op: 'history'; query?: string; limit?: number }
@@ -223,7 +226,7 @@ const COMMAND_OPS = new Set<BrowserCommand['op']>([
   'set-muted', 'snapshot', 'find-nodes', 'screenshot', 'console', 'network', 'downloads', 'click',
   'double-click', 'hover', 'assert-visible', 'highlight', 'type', 'press', 'scroll',
   'drag', 'select', 'check', 'set-files', 'set-cursor', 'set-device', 'clear-highlight', 'respond-permission',
-  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',
+  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'print', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',
 ]);
 
 const SECRET_KEY = /(authorization|cookie|password|passwd|secret|token|api[-_]?key|credential|sessionid)/i;

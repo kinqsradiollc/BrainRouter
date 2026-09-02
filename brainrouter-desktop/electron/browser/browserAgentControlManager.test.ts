@@ -65,6 +65,7 @@ function browserState(): BrowserState {
     permissionPrompt: null,
     dialogPrompt: null,
     bookmarks: [],
+    fullscreenTabId: null,
     capabilities: {
       nativeTabs: true,
       sameVisibleTabAutomation: true,

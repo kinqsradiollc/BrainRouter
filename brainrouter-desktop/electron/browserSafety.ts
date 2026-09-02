@@ -139,3 +139,12 @@ export function isCredentialField(descriptor: { tag: string; type?: string; auto
   const identity = String(descriptor.identity || '').toLowerCase();
   return /(?:^|[^a-z])(password|passwd|secret|token|csrf|xsrf|session|authorization|api.?key|card.?number|credit.?card|cvv|cvc|csc|otp)(?:[^a-z]|$)/.test(identity);
 }
+
+/**
+ * ADR-055 P10 — where "Save as PDF" writes: a workspace folder under the
+ * already-gitignored `.brainrouter/`, so a print is reachable by the workspace
+ * file tools and never lands somewhere surprising.
+ */
+export function browserPrintDir(workspaceRoot: string): string {
+  return path.join(workspaceRoot, '.brainrouter', 'browser', 'prints');
+}

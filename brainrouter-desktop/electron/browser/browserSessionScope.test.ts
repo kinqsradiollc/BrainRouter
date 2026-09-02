@@ -21,6 +21,7 @@ function state(): BrowserState {
     permissionPrompt: null,
     dialogPrompt: null,
     bookmarks: [],
+    fullscreenTabId: null,
     capabilities: { nativeTabs: true, sameVisibleTabAutomation: true, downloads: true, permissions: true, semanticSnapshot: true, maxTabs: 20 },
   };
 }

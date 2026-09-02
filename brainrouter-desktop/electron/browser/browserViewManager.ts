@@ -3,6 +3,7 @@ import {
   Menu,
   session,
   shell,
+  clipboard,
   WebContentsView,
   type BrowserWindow,
   type ContextMenuParams,
@@ -31,7 +32,7 @@ import {
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import { BrowserManagerError } from './browserManagerError.js';
 import { BrowserPromptManager } from './browserPromptManager.js';
-import { agentDownloadDir } from '../browserSafety.js';
+import { agentDownloadDir, browserPrintDir, workspaceRelativeDownloadPath, safeName } from '../browserSafety.js';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import {
   availableDownloadPath,
@@ -299,6 +300,8 @@ export class BrowserViewManager {
   private history: BrowserHistoryEntry[] = [];
   /** Last url recorded per tab, so one page load counts as one visit. */
   private readonly lastHistoryUrl = new Map<BrowserTabId, string>();
+  /** ADR-055 P10 — the tab currently in HTML5 fullscreen (a video), if any. */
+  private htmlFullscreenTabId: BrowserTabId | null = null;
   private readonly trustedUserPrivateOrigins = new Set<string>();
   private readonly userOriginChecks = new Map<string, Promise<void>>();
   private readonly syntheticInputUntil = new Map<BrowserTabId, number>();
@@ -332,6 +335,9 @@ export class BrowserViewManager {
           // throttling an active tab stalls JS-heavy sites and login flows.
           backgroundThrottling: false,
           spellcheck: true,
+          // ADR-055 P10 — Chromium's built-in PDF viewer, so a PDF opens IN the
+          // tab like every other browser instead of becoming a download.
+          plugins: true,
         },
       }),
       attachView: (view) => { this.win.contentView.addChildView(view); },
@@ -396,6 +402,7 @@ export class BrowserViewManager {
       permissionPrompt: this.promptManager.getPermissionPrompt(),
       dialogPrompt: this.promptManager.getDialogPrompt(),
       bookmarks: this.bookmarks.slice(0, MAX_BROADCAST_BOOKMARKS),
+      fullscreenTabId: this.htmlFullscreenTabId,
       capabilities: {
         nativeTabs: true,
         sameVisibleTabAutomation: true,
@@ -796,6 +803,16 @@ export class BrowserViewManager {
         ) ?? null;
         this.emitState();
       },
+      enterHtmlFullScreen: () => {
+        this.htmlFullscreenTabId = tab.id;
+        this.attachActiveView();
+        this.emitState();
+      },
+      leaveHtmlFullScreen: () => {
+        if (this.htmlFullscreenTabId === tab.id) this.htmlFullscreenTabId = null;
+        this.attachActiveView();
+        this.emitState();
+      },
       mediaStarted: () => {
         tab.audible = true;
         this.emitState();
@@ -1153,6 +1170,7 @@ export class BrowserViewManager {
       case 'history': return this.historyView(command.query, command.limit);
       case 'omnibox-suggest':
         return omniboxSuggest(command.query, { bookmarks: this.bookmarks, history: this.history, limit: command.limit });
+      case 'print': return this.printToPdf(this.requireTab(tab), command.landscape);
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
       case 'clear-session-data': {
@@ -1613,7 +1631,18 @@ export class BrowserViewManager {
   private showContextMenu(tab: BrowserTab, params: ContextMenuParams): void {
     const contents = this.requireContents(tab.id);
     const template: Electron.MenuItemConstructorOptions[] = [];
-    if (params.linkURL && this.isSafeUrl(params.linkURL)) template.push({ label: 'Open link in new tab', click: () => this.createTab(params.linkURL, true) }, { type: 'separator' });
+    if (params.linkURL && this.isSafeUrl(params.linkURL)) {
+      template.push(
+        { label: 'Open link in new tab', click: () => this.createTab(params.linkURL, true) },
+        // ADR-055 P10 — ordinary context-menu parity.
+        { label: 'Copy link address', click: () => clipboard.writeText(params.linkURL) },
+        { label: 'Open link in default browser', click: () => { void shell.openExternal(params.linkURL); } },
+        { type: 'separator' },
+      );
+    }
+    if (params.srcURL && this.isSafeUrl(params.srcURL)) {
+      template.push({ label: 'Copy image address', click: () => clipboard.writeText(params.srcURL) }, { type: 'separator' });
+    }
     if (params.isEditable) template.push({ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' });
     else if (params.selectionText) template.push({ role: 'copy' });
     if (template.length) template.push({ type: 'separator' });
@@ -1651,7 +1680,15 @@ export class BrowserViewManager {
   }
 
   private attachActiveView(): void {
-    this.nativeViews.attach(this.tabState.activeTabId, this.surface);
+    // ADR-055 P10 — a tab in HTML5 fullscreen fills the window, ignoring the
+    // panel surface the renderer would otherwise dictate.
+    const activeId = this.tabState.activeTabId;
+    if (this.htmlFullscreenTabId === activeId && !this.win.isDestroyed()) {
+      const bounds = this.win.getContentBounds();
+      this.nativeViews.attach(activeId, { x: 0, y: 0, width: bounds.width, height: bounds.height, visible: true });
+      return;
+    }
+    this.nativeViews.attach(activeId, this.surface);
   }
 
   private safeUrl(raw: string): string {
@@ -1754,6 +1791,22 @@ export class BrowserViewManager {
       ? this.history.filter((entry) => entry.url.toLowerCase().includes(needle) || entry.title.toLowerCase().includes(needle))
       : this.history;
     return rows.slice(0, cap);
+  }
+
+  /**
+   * ADR-055 P10 — Save as PDF. Writes into the workspace print folder and
+   * returns the workspace-relative path, so the result is reachable by the
+   * workspace file tools rather than a hidden temp file.
+   */
+  private async printToPdf(tab: BrowserTab, landscape?: boolean): Promise<{ ok: true; path: string }> {
+    const data = await this.requireContents(tab.id).printToPDF({ landscape: landscape === true, printBackground: true });
+    const directory = browserPrintDir(this.workspaceRoot);
+    fs.mkdirSync(directory, { recursive: true });
+    const absolute = availableDownloadPath(directory, `${safeName(tab.title || 'page', 'page')}.pdf`);
+    fs.writeFileSync(absolute, data, { mode: 0o600 });
+    const relative = workspaceRelativeDownloadPath(absolute, this.workspaceRoot);
+    if (!relative) throw new BrowserManagerError('DENIED', 'The print destination escaped the workspace.');
+    return { ok: true, path: relative };
   }
 
   private updateHumanChallenge(tab: BrowserTab): void {
