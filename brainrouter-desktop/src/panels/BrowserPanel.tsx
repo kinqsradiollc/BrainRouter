@@ -32,7 +32,15 @@ import {
 } from '../lib/browser/browserPanelModel.js';
 import { rowSource, symbolKindIcon } from '../lib/browser/rowSource.js';
 
-type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'downloads' | 'flows' | null;
+type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'downloads' | 'flows' | 'bookmarks' | 'history' | null;
+
+type OmniboxSuggestion = { url: string; title: string; source: 'bookmark' | 'history' };
+
+/** Display-only origin for the site-info popover; falls back to the raw value. */
+function originOf(raw: string): string {
+  try { return new URL(raw).origin; } catch { return raw; }
+}
+type HistoryRow = { url: string; title: string; visitedAt: number; visits: number };
 type Device = 'desktop' | 'tablet' | 'phone';
 type ElementAction = 'tap' | 'type' | 'assertVisible' | 'navigate';
 type LiveElement = BrowserSemanticNode & { target: string; action: ElementAction; label: string };
@@ -107,6 +115,12 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
   const [customW, setCustomW] = useState<number | null>(null);
   const [drawerH, setDrawerH] = useState<number>(240);
   const [drawer, setDrawer] = useState<Drawer>(null);
+  // ADR-055 P9b/P10b — omnibox autocomplete, history rows, and the site-info popover.
+  const [suggestions, setSuggestions] = useState<OmniboxSuggestion[]>([]);
+  const [suggestIndex, setSuggestIndex] = useState(-1);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
+  const [siteInfoOpen, setSiteInfoOpen] = useState(false);
   const [elements, setElements] = useState<LiveElement[]>([]);
   const [consoleMsgs, setConsoleMsgs] = useState<BrowserConsoleEntry[]>([]);
   const [network, setNetwork] = useState<BrowserNetworkEntry[]>([]);
@@ -187,6 +201,37 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
   const fireBrowser = useCallback((command: BrowserCommand, after?: () => void): void => {
     void mutateBrowser(command).then(after).catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
   }, [mutateBrowser]);
+
+  // ── ADR-055 P9b — bookmarks, history, omnibox autocomplete ────────────────
+  const bookmarks = browserState?.bookmarks ?? [];
+  const activeBookmarked = !!activeTab && bookmarks.some((entry) => entry.url === activeTab.url
+    || entry.url === activeTab.url.replace(/[?#].*$/, ''));
+
+  const toggleBookmark = useCallback((): void => {
+    if (!activeTab) return;
+    fireBrowser(activeBookmarked
+      ? { op: 'remove-bookmark', url: activeTab.url }
+      : { op: 'add-bookmark' });
+  }, [activeBookmarked, activeTab, fireBrowser]);
+
+  const loadHistory = useCallback(async (): Promise<void> => {
+    try { setHistoryRows(await runBrowser<HistoryRow[]>({ op: 'history', limit: 200 })); }
+    catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  }, [runBrowser]);
+
+  // Local-only autocomplete: bookmarks + history, never a remote suggest service.
+  useEffect(() => {
+    const query = urlDraft.trim();
+    if (!suggestOpen || !query) { setSuggestions([]); return; }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      void runBrowser<OmniboxSuggestion[]>({ op: 'omnibox-suggest', query, limit: 8 })
+        .then((rows) => { if (!cancelled) { setSuggestions(rows ?? []); setSuggestIndex(-1); } })
+        .catch(() => { if (!cancelled) setSuggestions([]); });
+    }, 90);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [urlDraft, suggestOpen, runBrowser]);
+
 
   // Subscribe once. State events are animation-frame batched so rapid title,
   // loading and favicon events never rerender the complete panel individually.
@@ -701,12 +746,14 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
   // Custom drag width overrides the device preset; null on desktop = full width.
   const effectiveW = customW ?? DEVICE_W[device];
   const tabs = browserState?.tabs ?? [];
+  // ADR-055 P10b — HTML5 fullscreen: the page owns the whole panel.
+  const htmlFullscreen = !!browserState?.fullscreenTabId && browserState.fullscreenTabId === activeTab?.id;
   const permission = browserState?.permissionPrompt;
   const dialog = browserState?.dialogPrompt;
   const downloads = browserState?.downloads ?? [];
 
   return (
-    <div className="browser-panel">
+    <div className={`browser-panel${htmlFullscreen ? ' browser-fullscreen' : ''}`}>
       <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
         {tabs.map((tab, index) => (
           <div key={tab.id} role="presentation" className={`browser-tab${tab.id === activeTab?.id ? ' active' : ''}`} title={browserTabTitle(tab.title, tab.url)} draggable
@@ -726,6 +773,12 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
             </button>
             {tab.audible && <button className="browser-tab-audio" aria-label={tab.muted ? 'Unmute tab' : 'Mute tab'} title={tab.muted ? 'Unmute tab' : 'Mute tab'}
               onClick={() => void toggleTabMuted(tab)}>{tab.muted ? '×' : '♪'}</button>}
+            <button className={`browser-tab-share${tab.sharedWithAgent ? ' on' : ''}`} aria-pressed={!!tab.sharedWithAgent}
+              aria-label={tab.sharedWithAgent ? `Stop sharing ${browserTabTitle(tab.title, tab.url)} with the agent` : `Let the agent use ${browserTabTitle(tab.title, tab.url)}`}
+              title={tab.sharedWithAgent ? 'Shared with the agent — click to take it back' : 'Let the agent use this tab'}
+              onClick={(event) => { event.stopPropagation(); fireBrowser({ op: tab.sharedWithAgent ? 'unshare-tab' : 'share-tab', tabId: tab.id }); }}>
+              <Icon name="brain" size={10} />
+            </button>
             <button className="browser-tab-close" aria-label={`Close ${browserTabTitle(tab.title, tab.url)}`} title="Close tab (⌘W)"
               onClick={() => fireBrowser({ op: 'close-tab', tabId: tab.id })}>
               <Icon name="close" size={10} />
@@ -750,12 +803,62 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
           disabled={!activeTab} onClick={() => fireBrowser(activeTab?.loading ? { op: 'stop' } : { op: 'reload' })}>
           <Icon name={activeTab?.loading ? 'stop' : 'refresh'} size={13} />
         </button>
-        <span className="browser-origin-status" title={activeTab?.url.startsWith('https://') ? 'Secure connection' : 'Page information'}><Icon name={activeTab?.url.startsWith('https://') ? 'shield' : 'globe'} size={13} /></span>
-        <input ref={omniboxRef} className="browser-url" value={urlDraft} aria-label="Address and search bar" placeholder="Search or enter address"
-          spellCheck={false} onChange={(event) => setUrlDraft(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
-          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void go(urlDraft); } }} />
+        <button className="browser-origin-status" aria-label="Site information" aria-expanded={siteInfoOpen}
+          onClick={() => setSiteInfoOpen((open) => !open)}
+          title={activeTab?.url.startsWith('https://') ? 'Secure connection' : 'Page information'}><Icon name={activeTab?.url.startsWith('https://') ? 'shield' : 'globe'} size={13} /></button>
+        {siteInfoOpen && activeTab && (
+          <div className="browser-siteinfo" role="dialog" aria-label="Site information">
+            <div className="browser-siteinfo-origin">{originOf(activeTab.url)}</div>
+            <div className="browser-siteinfo-tls">
+              {activeTab.url.startsWith('https://')
+                ? 'Connection is encrypted (HTTPS).'
+                : 'Connection is not encrypted — do not enter anything sensitive.'}
+            </div>
+            <div className="browser-siteinfo-actions">
+              <button className="chip" onClick={() => { setSiteInfoOpen(false); fireBrowser({ op: 'clear-data', dataTypes: ['cookies', 'storage'] }); }}>
+                Clear site data
+              </button>
+              <button className="chip" onClick={() => { setSiteInfoOpen(false); setDrawer('history'); void loadHistory(); }}>History</button>
+            </div>
+          </div>
+        )}
+        <div className="browser-omnibox">
+          <input ref={omniboxRef} className="browser-url" value={urlDraft} aria-label="Address and search bar" placeholder="Search or enter address"
+            spellCheck={false} autoComplete="off" role="combobox" aria-expanded={suggestOpen && suggestions.length > 0} aria-controls="browser-omnibox-suggestions"
+            onChange={(event) => { setUrlDraft(event.target.value); setSuggestOpen(true); }}
+            onFocus={(event) => { event.currentTarget.select(); setSuggestOpen(true); }}
+            onBlur={() => { window.setTimeout(() => setSuggestOpen(false), 120); }}
+            onKeyDown={(event) => {
+              const rows = suggestions;
+              if (event.key === 'ArrowDown' && rows.length) { event.preventDefault(); setSuggestIndex((i) => (i + 1) % rows.length); return; }
+              if (event.key === 'ArrowUp' && rows.length) { event.preventDefault(); setSuggestIndex((i) => (i <= 0 ? rows.length : i) - 1); return; }
+              if (event.key === 'Escape') { setSuggestOpen(false); return; }
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                const picked = suggestIndex >= 0 ? rows[suggestIndex] : undefined;
+                setSuggestOpen(false);
+                void go(picked ? picked.url : urlDraft);
+              }
+            }} />
+          {suggestOpen && suggestions.length > 0 && (
+            <ul className="browser-suggest" id="browser-omnibox-suggestions" role="listbox" aria-label="Address suggestions">
+              {suggestions.map((row, index) => (
+                <li key={row.url} role="option" aria-selected={index === suggestIndex}
+                  className={`browser-suggest-row${index === suggestIndex ? ' active' : ''}`}
+                  onMouseDown={(event) => { event.preventDefault(); setSuggestOpen(false); void go(row.url); }}>
+                  <Icon name={row.source === 'bookmark' ? 'pin' : 'clock'} size={11} />
+                  <span className="browser-suggest-title">{row.title}</span>
+                  <span className="browser-suggest-url">{row.url}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <button className="br-go" title="Go — navigate to the address, or search" aria-label="Go" onClick={() => void go(urlDraft)}>Go</button>
+        <button className={`br-nav${activeBookmarked ? ' on' : ''}`} disabled={!activeTab}
+          title={activeBookmarked ? 'Remove bookmark (⌘D)' : 'Bookmark this page (⌘D)'}
+          aria-label={activeBookmarked ? 'Remove bookmark' : 'Bookmark this page'} aria-pressed={activeBookmarked}
+          onClick={toggleBookmark}><Icon name="pin" size={13} /></button>
         <button className="br-nav" title="Find in page (⌘F)" aria-label="Find in page" onClick={() => { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()); }}><Icon name="search" size={13} /></button>
         <div className="browser-zoom" aria-label="Page zoom">
           <button aria-label="Zoom out" title="Zoom out (⌘−)" onClick={() => void changeZoom(-0.1)}>−</button>
@@ -815,6 +918,13 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
           {railBtn('file', 'Screenshot', drawer === 'shot', () => void doScreenshot(), !ready)}
           {railBtn('review', 'Accessibility tree', drawer === 'a11y', () => void doA11y(), !ready)}
           {railBtn('folder-open', `Downloads (${downloads.length})`, drawer === 'downloads', () => setDrawer('downloads'))}
+          {railBtn('pin', `Bookmarks (${bookmarks.length})`, drawer === 'bookmarks', () => setDrawer('bookmarks'))}
+          {railBtn('clock', 'History', drawer === 'history', () => { setDrawer('history'); void loadHistory(); })}
+          {railBtn('file', 'Save as PDF — print this page into the workspace', false, () => {
+            void runBrowser<{ path: string }>({ op: 'print' })
+              .then((result) => setStatus(`Saved ${result.path}`))
+              .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+          }, !ready)}
           <div className="br-rail-sep" />
           {railBtn('play', recording ? `Recording (${recorded.length})` : 'Record a flow', recording, () => setRecording((value) => !value))}
           {railBtn('clock', 'Flows', drawer === 'flows', () => setDrawer('flows'))}
@@ -859,7 +969,7 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
                 title="Drag to resize the panel height"
               />
               <div className="browser-drawer-head">
-                <b>{drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : drawer === 'downloads' ? `Downloads (${downloads.length})` : 'Flows'}</b>
+                <b>{drawer === 'bookmarks' ? `Bookmarks (${bookmarks.length})` : drawer === 'history' ? `History (${historyRows.length})` : drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : drawer === 'downloads' ? `Downloads (${downloads.length})` : 'Flows'}</b>
                 <span className="br-drawer-actions">
                   {drawer === 'console' && <button className="chip" onClick={() => void doConsole()}>refresh</button>}
                   {drawer === 'network' && <button className="chip" onClick={() => void doNetwork()}>refresh</button>}
@@ -911,6 +1021,23 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
                   const paused = download.state === 'progressing' && pausedDownloads.has(download.id);
                   return <div className="br-download" key={download.id}><span className="br-download-name" title={download.filename}>{download.filename}</span><span className={`br-download-state s-${download.state}`}>{paused ? 'paused' : download.state}{progress != null && download.state === 'progressing' ? ` · ${progress}%` : ''}</span><span className="br-download-actions">{download.state === 'completed' && <><button className="chip" onClick={() => fireBrowser({ op: 'open-download', downloadId: download.id })}>Open</button><button className="chip" onClick={() => fireBrowser({ op: 'show-download', downloadId: download.id })}>Show</button></>}{download.state === 'progressing' && <><button className="chip" onClick={() => void toggleDownloadPaused(download.id, paused)}>{paused ? 'Resume' : 'Pause'}</button><button className="chip" onClick={() => fireBrowser({ op: 'cancel-download', downloadId: download.id })}>Cancel</button></>}</span></div>;
                 }) : <div className="br-empty">No downloads yet.</div>)}
+
+                {drawer === 'bookmarks' && (bookmarks.length ? bookmarks.map((entry) => (
+                  <div className="br-place" key={entry.url}>
+                    <button className="br-place-open" title={entry.url} onClick={() => void go(entry.url)}>{entry.title}</button>
+                    <span className="br-place-url">{entry.url}</span>
+                    <button className="chip" aria-label={`Remove bookmark ${entry.title}`}
+                      onClick={() => fireBrowser({ op: 'remove-bookmark', url: entry.url })}>remove</button>
+                  </div>
+                )) : <div className="br-empty">No bookmarks yet — use the star in the toolbar.</div>)}
+
+                {drawer === 'history' && (historyRows.length ? historyRows.map((entry) => (
+                  <div className="br-place" key={entry.url}>
+                    <button className="br-place-open" title={entry.url} onClick={() => void go(entry.url)}>{entry.title || entry.url}</button>
+                    <span className="br-place-url">{entry.url}</span>
+                    <span className="br-place-visits">{entry.visits > 1 ? `${entry.visits}×` : ''}</span>
+                  </div>
+                )) : <div className="br-empty">No history yet.</div>)}
 
                 {drawer === 'flows' && <div className="br-flows">
                   {recorded.length > 0 && <div className="br-flow-save"><span>Recorded {recorded.length} step(s)</span><input className="br-type" placeholder="flow name" value={flowName} onChange={(event) => setFlowName(event.target.value)} /><button className="chip" onClick={saveFlow}>Save</button></div>}

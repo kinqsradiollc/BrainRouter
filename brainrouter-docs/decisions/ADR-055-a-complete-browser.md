@@ -287,8 +287,12 @@ Rows are one PR each into the current release branch; a row is done when its acc
   visit log (bookmarks survive). Agent-controlled tabs are excluded from history so research never
   floods the person's. `cli.browser.searchEngine` sets the omnibox search template, validated
   (http(s) + `%s`, no credentials) with a fallback.
-- **P9b — Human chrome I, the UI** (D5): the bookmarks/history drawers, omnibox autocomplete
-  dropdown, new-tab page, tab search, pinned tabs, and the missing shortcuts.
+- **P9b / P10b / P7b — the chrome UI** (D5/D3c) — ✅: an **omnibox autocomplete dropdown** (local
+  bookmarks + history, arrow-key/Enter selection), a **bookmark star** + **⌘D**, **Bookmarks** and
+  **History** drawers, a **site-info popover** on the padlock (origin, TLS state, clear site data),
+  a **Save as PDF** rail button, a per-tab **share-with-agent toggle** with its badge (P7b), and
+  **HTML5 fullscreen** hiding the chrome so the page owns the panel (P10b). Remaining niceties: the
+  new-tab page, tab search (⌘⇧A), and pinned tabs.
 - **P10 — Human chrome II** (D5) — ✅ (engine side): **PDF viewer** in-tab (Chromium's own viewer —
   a PDF opens instead of downloading), **HTML5 fullscreen** (a video fills the window and restores on
   exit; `fullscreenTabId` on the state), **print / Save as PDF** (`print` op → the workspace
