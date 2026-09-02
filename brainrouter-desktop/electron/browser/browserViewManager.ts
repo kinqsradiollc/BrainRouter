@@ -158,10 +158,12 @@ function targetScript(tabId: string, revision: number, ref?: string, target?: st
   })()`;
 }
 
-function semanticSnapshotScript(tabId: string, revision: number): string {
+function semanticSnapshotScript(tabId: string, revision: number, scope: 'viewport' | 'page' = 'viewport'): string {
   return `(() => {
+    const SCOPE = ${JSON.stringify(scope)};
     const roleFor = (el) => el.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:(el.type==='checkbox'?'checkbox':el.type==='radio'?'radio':'textbox'),TEXTAREA:'textbox',SELECT:'combobox',NAV:'navigation',MAIN:'main',HEADER:'banner',FOOTER:'contentinfo',H1:'heading',H2:'heading',H3:'heading',IMG:'img'})[el.tagName] || '';
-    const visible = (el) => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && r.bottom>0 && r.right>0 && r.top<innerHeight && r.left<innerWidth && s.visibility!=='hidden' && s.display!=='none' && Number(s.opacity||1)>0; };
+    const styleVisible = (el) => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none' && Number(s.opacity||1)>0; };
+    const inViewport = (el) => { const r=el.getBoundingClientRect(); return r.bottom>0 && r.right>0 && r.top<innerHeight && r.left<innerWidth; };
     const nameFor = (el) => String(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title') || el.getAttribute('placeholder') || el.textContent || '').replace(/\\s+/g,' ').trim().slice(0,200);
     const valueIsSensitive = (el,type) => {
       if (['password','hidden','file'].includes(type)) return true;
@@ -170,27 +172,41 @@ function semanticSnapshotScript(tabId: string, revision: number): string {
       const identity=String([el.id,el.getAttribute('name'),el.getAttribute('data-testid'),el.getAttribute('aria-label')].filter(Boolean).join(' ')).toLowerCase();
       return /(?:^|[^a-z])(password|passwd|secret|token|csrf|xsrf|session|authorization|api.?key|card.?number|credit.?card|cvv|cvc|csc|otp)(?:[^a-z]|$)/.test(identity);
     };
+    const SELECTOR='a,button,input,textarea,select,option,summary,nav,main,header,footer,[role],[data-testid],h1,h2,h3,img';
+    // ADR-055 P3 — walk open shadow roots too, so a control inside a web
+    // component is observable. Bounded + guarded: a failing subtree degrades to
+    // the light DOM rather than breaking the whole snapshot.
+    const collectDeep = (root, depth, acc) => {
+      if (depth>6 || acc.length>=3000) return acc;
+      try { for (const el of root.querySelectorAll(SELECTOR)) { acc.push(el); if (acc.length>=3000) return acc; } } catch (e) {}
+      try { for (const host of root.querySelectorAll('*')) { if (host.shadowRoot) { collectDeep(host.shadowRoot, depth+1, acc); if (acc.length>=3000) return acc; } } } catch (e) {}
+      return acc;
+    };
+    const all=collectDeep(document, 0, []).slice(0,2500);
     const nodes = new Map(); const rows=[];
-    const all=Array.from(document.querySelectorAll('a,button,input,textarea,select,option,summary,nav,main,header,footer,[role],[data-testid],h1,h2,h3,img')).slice(0,2500);
     let index=0;
     for (const el of all) {
-      const isVisible=visible(el), role=roleFor(el), testid=el.getAttribute('data-testid')||'';
+      const vis=styleVisible(el), role=roleFor(el), testid=(el.getAttribute&&el.getAttribute('data-testid'))||'';
       if (!role && !testid) continue;
-      // The model controls the exact visible page, so hidden DOM content is not
-      // an observation surface. This also prevents hidden data-testid, ARIA,
-      // title, placeholder, and text nodes from disclosing application secrets.
-      if (!isVisible) continue;
+      // Hidden DOM content is never an observation surface (it also stops hidden
+      // data-testid/ARIA/placeholder/text nodes from leaking application secrets).
+      if (!vis) continue;
+      const within=inViewport(el);
+      // ADR-055 P3 — scope 'page' keeps scrolled-out (but visible) nodes so the
+      // model need not scroll-and-re-snapshot; 'viewport' (default) is the old
+      // behaviour. Off-DOM/hidden nodes stay excluded in BOTH scopes.
+      if (SCOPE!=='page' && !within) continue;
       const ref='br:${tabId}:${revision}:node_'+(++index); nodes.set(ref,el);
-      const r=el.getBoundingClientRect(), type=String(el.getAttribute('type')||'').slice(0,40);
-      const valueBearing=isVisible&&(el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement||(el instanceof HTMLInputElement&&['','text','search','email','url','tel','number','range','date','time','month','week','datetime-local','color'].includes(type)));
+      const r=el.getBoundingClientRect(), type=String((el.getAttribute&&el.getAttribute('type'))||'').slice(0,40);
+      const valueBearing=(el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement||(el instanceof HTMLInputElement&&['','text','search','email','url','tel','number','range','date','time','month','week','datetime-local','color'].includes(type)));
       rows.push({ref,role,name:nameFor(el),tag:(el.tagName||'').toLowerCase(),testid:testid||undefined,type:type||undefined,
         value:!valueBearing||valueIsSensitive(el,type)?undefined:String(el.value||'').slice(0,200),
         checked:typeof el.checked==='boolean'?el.checked:undefined,selected:typeof el.selected==='boolean'?el.selected:undefined,
-        disabled:typeof el.disabled==='boolean'?el.disabled:undefined,visible:isVisible,rect:{x:r.x,y:r.y,width:r.width,height:r.height}});
+        disabled:typeof el.disabled==='boolean'?el.disabled:undefined,visible:vis,inViewport:within,rect:{x:r.x,y:r.y,width:r.width,height:r.height}});
       if(rows.length>=${MAX_BROWSER_ROWS}) break;
     }
     window.__brainrouterAgentRefs={revision:${revision},nodes};
-    return {url:location.href,title:document.title,nodes:rows};
+    return {url:location.href,title:document.title,scope:SCOPE,nodes:rows};
   })()`;
 }
 
@@ -1049,7 +1065,7 @@ export class BrowserViewManager {
       case 'set-muted': {
         const current = this.requireTab(tab); this.requireContents(current.id).setAudioMuted(command.muted); current.muted = command.muted; this.emitState(); return { muted: command.muted };
       }
-      case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode);
+      case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode, command.scope);
       case 'text': return this.pageText(this.requireTab(tab), command.maxChars);
       case 'html': return this.pageHtml(this.requireTab(tab), command.maxChars);
       case 'screenshot': return this.screenshot(this.requireTab(tab), command.maxDimension, command.fullPage);
@@ -1137,9 +1153,9 @@ export class BrowserViewManager {
     return tabs;
   }
 
-  private async snapshot(tab: BrowserTab, mode: 'semantic' | 'testids' | 'accessibility' = 'semantic'): Promise<unknown> {
+  private async snapshot(tab: BrowserTab, mode: 'semantic' | 'testids' | 'accessibility' = 'semantic', scope: 'viewport' | 'page' = 'viewport'): Promise<unknown> {
     tab.revision += 1;
-    const snapshot = await this.isolated<{ url: string; title: string; nodes: BrowserSemanticNode[] }>(tab.id, semanticSnapshotScript(tab.id, tab.revision));
+    const snapshot = await this.isolated<{ url: string; title: string; scope?: string; nodes: BrowserSemanticNode[] }>(tab.id, semanticSnapshotScript(tab.id, tab.revision, scope));
     this.emitState();
     if (mode === 'testids') return { ...snapshot, nodes: snapshot.nodes.filter((node) => node.testid) };
     if (mode === 'accessibility') return { ...snapshot, nodes: snapshot.nodes.filter((node) => node.role) };

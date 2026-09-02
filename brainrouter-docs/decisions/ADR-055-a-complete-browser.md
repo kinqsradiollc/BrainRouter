@@ -1,6 +1,6 @@
 # ADR-055 — A complete browser: Chrome parity for the human, human parity for the agent
 
-**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images) and P2 (coordinate clicks) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
+**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
 there was decided but its browser rows were never built; this ADR refines and delivers them),
 ADR-037 (credentials the page cannot read), ADR-039/043 (SSRF and egress policy), ADR-044 (web pages
 the agent can actually read), ADR-046 (surfaces that vouch for themselves), ADR-052 (the restricted
@@ -247,8 +247,12 @@ Rows are one PR each into the current release branch; a row is done when its acc
   **refuses a credential field** (the snapshot's `valueIsSensitive` rule), reuses the existing
   `pageRevision`→`expectedRevision` staleness gate, and returns the hit element as a receipt.
   Parser accepts a ref/testId OR a full point, never a guess.
-- **P3 — Snapshot v2** (D2c): outline + text/tables/lists, `scope`, shadow roots, frame-aware refs,
-  `page.find`. Adapter + page script + protocol.
+- **P3 — Snapshot v2** (D2c) — ✅ (scope + shadow DOM): `page.snapshot` gains `scope: 'viewport' |
+  'page'` — `page` returns visible nodes scrolled OUT of the viewport (flagged `inViewport:false`),
+  ending the scroll-and-re-snapshot loop; the walk now descends **open shadow roots** (bounded,
+  guarded — a failing subtree degrades to the light DOM). `page.find` moves to **P4** (it is the
+  same mechanism as the locator ladder). Rich table/heading outline and cross-origin iframe frames
+  (main-process frame handles) remain follow-ups.
 - **P4 — Locator ladder** (D2d): role+name / text / label targets across every `page.*` op;
   ambiguity as a bounded candidate list. Depends on P3.
 - **P5 — Action receipts** (D3a): `BrowserActionReceipt` on every mutating op; `browser_wait`

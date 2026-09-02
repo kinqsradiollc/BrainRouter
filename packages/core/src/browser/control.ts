@@ -76,7 +76,7 @@ export type BrowserControlCommand =
   | ({ kind: 'page.reload'; ignoreCache?: boolean } & TabTarget)
   | ({ kind: 'page.stop' } & TabTarget)
   | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number } & TabTarget)
-  | ({ kind: 'page.snapshot'; maxChars?: number } & TabTarget)
+  | ({ kind: 'page.snapshot'; maxChars?: number; scope?: 'viewport' | 'page' } & TabTarget)
   | ({ kind: 'page.text'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.html'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.screenshot'; fullPage?: boolean } & TabTarget)
@@ -306,8 +306,9 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
       return { kind, ...target(), ...(loadState ? { loadState } : {}), ...(urlIncludes ? { urlIncludes } : {}), ...(text !== undefined ? { text } : {}), ...(ref ? { ref } : {}), ...(testId ? { testId } : {}), ...(pageRevision !== undefined ? { pageRevision } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
     }
     case 'page.snapshot': {
-      const maxChars = integer(row.maxChars, 'maxChars', 1_000, 50_000);
-      return { kind, ...target(), ...(maxChars !== undefined ? { maxChars } : {}) };
+      const maxChars = integer(row.maxChars, 'maxChars', 1_000, 200_000);
+      const scope = enumValue(row.scope, 'scope', ['viewport', 'page'] as const);
+      return { kind, ...target(), ...(maxChars !== undefined ? { maxChars } : {}), ...(scope ? { scope } : {}) };
     }
     case 'page.text':
     case 'page.html': {
