@@ -154,3 +154,37 @@ test('download filenames and collision paths stay bounded inside the chosen dire
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ADR-055 P8 — an agent download routes to the workspace inbox and carries a
+// workspace-relative path the agent can read_file.
+test('agent download lands in the workspace inbox with a readable relative path', () => {
+  let sawAgentControlled: boolean | undefined;
+  let listener: Parameters<BrowserDownloadHost['listen']>[1] | undefined;
+  const events: BrowserEvent[] = [];
+  const host: BrowserDownloadHost = {
+    listen: (_partition, next) => { listener = next; return () => {}; },
+    prepareSavePath: (filename, agentControlled) => {
+      sawAgentControlled = agentControlled;
+      return agentControlled
+        ? `/workspace/one/.brainrouter/browser/downloads/${filename}`
+        : `/downloads/${filename}`;
+    },
+    showItemInFolder: () => {},
+    openPath: async () => '',
+  };
+  const manager = new BrowserDownloadManager(host, {
+    tabForContents: (contentsId) => contentsId === 7 ? tab() : null,
+    isAgentControlled: () => true,
+    emit: (event) => events.push(event),
+    emitState: () => {},
+  }, 'window', '/workspace/one', 'partition-one');
+  manager.allowAgentInteraction('tab-one', Date.now() + 1_000);
+  const item = new FakeItem();
+  listener?.({ preventDefault: () => assert.fail('allowed download') }, item, 7);
+
+  assert.equal(sawAgentControlled, true, 'prepareSavePath is told the download is agent-controlled');
+  const row = manager.list()[0]!;
+  assert.equal(row.savePath, '/workspace/one/.brainrouter/browser/downloads/report.txt');
+  assert.equal(row.workspacePath, '.brainrouter/browser/downloads/report.txt');
+  manager.dispose();
+});

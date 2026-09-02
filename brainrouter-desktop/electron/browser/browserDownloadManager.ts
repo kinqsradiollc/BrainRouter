@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { BrowserManagerError } from './browserManagerError.js';
+import { workspaceRelativeDownloadPath } from '../browserSafety.js';
 import {
   boundBrowserText,
   type BrowserDownload,
@@ -38,7 +39,7 @@ export interface BrowserDownloadHost {
       contentsId: number,
     ) => void,
   ): () => void;
-  prepareSavePath(filename: string): string;
+  prepareSavePath(filename: string, agentControlled: boolean): string;
   showItemInFolder(path: string): void;
   openPath(path: string): Promise<string>;
 }
@@ -209,14 +210,16 @@ export class BrowserDownloadManager {
       }
       if (agentControlled) this.agentAllowances.delete(tab.id);
 
-      const savePath = this.host.prepareSavePath(filename);
+      const savePath = this.host.prepareSavePath(filename, agentControlled);
       item.setSavePath(savePath);
+      const workspacePath = agentControlled ? workspaceRelativeDownloadPath(savePath, this.workspaceRoot) : null;
       const row: BrowserDownload = {
         id,
         tabId: tab.id,
         filename,
         url: boundBrowserText(item.getURL(), 8_192),
         savePath,
+        workspacePath,
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
         state: 'progressing',
