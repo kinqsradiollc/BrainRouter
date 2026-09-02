@@ -264,8 +264,11 @@ Rows are one PR each into the current release branch; a row is done when its acc
   dialogOpened, permissionPrompted, downloadStarted, tabOpened) — captured in the adapter by freezing
   the pre-dispatch state and diffing the post-dispatch state, so Observe→Act→Verify is one call.
   Read-only ops carry none. (Deep async-navigation settling still uses `page.wait`.)
-- **P6 — Human-needed both ways** (D3b): `HUMAN_NEEDED`, `browser_wait { human }`, hand-back
-  button, takeover banner + resume.
+- **P6 — Human-needed both ways** (D3b) — ✅ (agent side): a tab on a verification challenge now
+  carries a `humanNeeded` flag, and `browser_wait { human: true }` blocks (up to 10 min) until the
+  person clears it — challenge-clear IS the hand-back, so control returns automatically with no new
+  user prompt; the block message points the agent at it. The explicit **Hand back to agent** button
+  and the takeover banner are renderer follow-ups (screenshot-driven with the owner).
 - **P7 — Share a tab** (D3c): per-tab, per-chat grant + badge + revocation; rules §4a amended.
 - **P8 — Files like a human** (D4) — ✅ (downloads inbox): an AGENT-initiated download now lands in
   `.brainrouter/browser/downloads/` (already gitignored) instead of the OS Downloads folder, and the

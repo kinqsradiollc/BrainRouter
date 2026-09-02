@@ -29,6 +29,8 @@ export interface BrowserTab {
   title: string;
   faviconUrl: string | null;
   loading: boolean;
+  /** ADR-055 P6 — the tab is on a human-verification challenge; the agent is paused on it. */
+  humanNeeded?: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   crashed: boolean;

@@ -131,13 +131,14 @@ export async function activate(host) {
     (args, runtime) => invoke(runtime, { kind: 'page.reload', tabId: args.tabId, ignoreCache: args.ignoreCache }));
   network('browser_stop', 'Stop the tab\'s current navigation.', objSchema(tabProps),
     (args, runtime) => invoke(runtime, { kind: 'page.stop', tabId: args.tabId }));
-  network('browser_wait', 'Wait for load state, URL text, page text, or an element ref/test-id, with a bounded timeout.', objSchema({
+  network('browser_wait', 'Wait for load state, URL text, page text, an element ref/test-id, or (human:true) for a human-verification challenge on the tab to CLEAR, with a bounded timeout. When an action fails with a human-verification message, call this with human:true to wait for the person to finish, then continue.', objSchema({
     ...targetProps,
     loadState: { type: 'string', enum: ['domcontentloaded', 'load', 'networkidle'] },
     urlIncludes: { type: 'string', maxLength: 2048 },
     text: { type: 'string', maxLength: 4096 },
-    timeoutMs: { type: 'integer', minimum: 1, maximum: 60000 },
-  }), (args, runtime) => invoke(runtime, { kind: 'page.wait', tabId: args.tabId, loadState: args.loadState, urlIncludes: args.urlIncludes, text: args.text, ref: args.ref, testID: args.testID, timeoutMs: args.timeoutMs }));
+    human: { type: 'boolean', description: 'Wait for a human-verification challenge on the tab to clear (hand-back). Allows a longer timeout.' },
+    timeoutMs: { type: 'integer', minimum: 1, maximum: 600000 },
+  }), (args, runtime) => invoke(runtime, { kind: 'page.wait', tabId: args.tabId, loadState: args.loadState, urlIncludes: args.urlIncludes, text: args.text, ref: args.ref, testID: args.testID, human: args.human, timeoutMs: args.timeoutMs }));
 
   // Visible computer interactions. Shell tier + computer action kind means they
   // inherit the existing local-computer policy and audit boundary.

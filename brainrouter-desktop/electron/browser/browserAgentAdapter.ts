@@ -388,7 +388,10 @@ async function targetIsVisible(
 
 async function waitForPage(manager: BrowserManagerPort, requestId: string, command: Extract<BrowserControlCommand, { kind: 'page.wait' }>, signal?: AbortSignal): Promise<BrowserControlResult> {
   const startedAt = Date.now();
-  const timeout = Math.min(60_000, Math.max(1, command.timeoutMs ?? 15_000));
+  // ADR-055 P6 — a human-verification wait may take minutes; others stay short.
+  const timeout = command.human
+    ? Math.min(600_000, Math.max(1, command.timeoutMs ?? 300_000))
+    : Math.min(60_000, Math.max(1, command.timeoutMs ?? 15_000));
   const deadline = startedAt + timeout;
   let networkSignature: string | undefined;
   let networkStableSince = 0;
@@ -439,6 +442,9 @@ async function waitForPage(manager: BrowserManagerPort, requestId: string, comma
         }
       }
     }
+    // ADR-055 P6 — resolve when the human-verification challenge has CLEARED
+    // (the tab left the challenge state); this is the two-way hand-back.
+    if (command.human) ready = ready && tab.humanNeeded !== true;
     if (command.urlIncludes) ready = ready && tab.url.includes(command.urlIncludes);
     if (ready && command.text !== undefined) {
       const textMatch = await pageTextMatches(manager, requestId, tab.id, command.text, signal);

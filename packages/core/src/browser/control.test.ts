@@ -258,3 +258,16 @@ test('P4: page.find requires a query and accepts by/limit/scope', () => {
   assert.throws(() => parseBrowserControlCommand({ kind: 'page.find', query: 'x', by: 'guess' }), /by/i);
   assert.throws(() => parseBrowserControlCommand({ kind: 'page.find', query: 'x', limit: 0 }), /limit/i);
 });
+
+// ADR-055 P6 — page.wait human hand-back option.
+test('P6: page.wait accepts human:true with a longer timeout', () => {
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.wait', human: true }), { kind: 'page.wait', human: true });
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.wait', human: true, timeoutMs: 300000 }),
+    { kind: 'page.wait', timeoutMs: 300000, human: true },
+  );
+  // A non-human wait keeps the 60s cap.
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.wait', timeoutMs: 120000 }), /timeoutMs/i);
+  // A human wait may exceed it (up to 10 min).
+  assert.doesNotThrow(() => parseBrowserControlCommand({ kind: 'page.wait', human: true, timeoutMs: 120000 }));
+});
