@@ -457,3 +457,38 @@ test('A25-6b5 background observations do not request or occupy the visible surfa
   assert.equal(response(h.host, 'snapshot-background').ok, true);
   assert.equal(h.window.surfaceRequests.length, surfaceCount);
 });
+
+// ADR-055 P7 — share a tab: an explicit, per-tab, per-chat, revocable grant.
+test('P7 a shared tab grants ONE chat authority, and revoking takes it back', () => {
+  const { control } = harness();
+  const root = '/ws';
+
+  // A chat holds no authority over a tab it did not open.
+  assert.equal(control.ownsTab(root, 'chat-a', 'tab-human'), false);
+
+  control.grantTab(root, 'chat-a', 'tab-human');
+  assert.equal(control.ownsTab(root, 'chat-a', 'tab-human'), true);
+  // The grant is per-CHAT: another chat gets nothing from it.
+  assert.equal(control.ownsTab(root, 'chat-b', 'tab-human'), false);
+  // ...and per-TAB: it does not spill to other tabs.
+  assert.equal(control.ownsTab(root, 'chat-a', 'tab-other'), false);
+  // ...and per-WORKSPACE.
+  assert.equal(control.ownsTab('/other-ws', 'chat-a', 'tab-human'), false);
+
+  control.revokeTab(root, 'chat-a', 'tab-human');
+  assert.equal(control.ownsTab(root, 'chat-a', 'tab-human'), false, 'revocation takes the tab back');
+
+  // A closed tab is dropped from every chat that held it.
+  control.grantTab(root, 'chat-a', 'tab-x');
+  control.grantTab(root, 'chat-b', 'tab-x');
+  control.revokeTabEverywhere(root, 'tab-x');
+  assert.equal(control.ownsTab(root, 'chat-a', 'tab-x'), false);
+  assert.equal(control.ownsTab(root, 'chat-b', 'tab-x'), false);
+
+  // Blank identifiers never grant anything.
+  control.grantTab(root, '   ', 'tab-y');
+  assert.equal(control.ownsTab(root, '   ', 'tab-y'), false);
+  control.grantTab(root, 'chat-a', '');
+  assert.equal(control.ownsTab(root, 'chat-a', ''), false);
+  control.dispose();
+});
