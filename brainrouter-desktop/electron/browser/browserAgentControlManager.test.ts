@@ -64,6 +64,7 @@ function browserState(): BrowserState {
     downloads: [],
     permissionPrompt: null,
     dialogPrompt: null,
+    bookmarks: [],
     capabilities: {
       nativeTabs: true,
       sameVisibleTabAutomation: true,

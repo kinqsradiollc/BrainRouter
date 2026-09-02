@@ -713,12 +713,14 @@ export interface CliKnobs {
    */
   atlas?: { orient?: boolean; retrieval?: boolean; autoRefresh?: boolean };
   /**
-   * ADR-055 P1 (D2a) — browser behaviour. `vision`: 'auto' attaches a
+   * ADR-055 — browser behaviour. `vision` (P1): 'auto' attaches a
    * `browser_screenshot` as an image the model can see (same wire seam as a
    * pasted image); 'off' keeps the text-only path (the saved artifact path).
-   * Default 'auto'.
+   * Default 'auto'. `searchEngine` (P9): the omnibox search template for typed
+   * text — an http(s) URL containing `%s` (e.g.
+   * 'https://duckduckgo.com/?q=%s'). Invalid values fall back to the default.
    */
-  browser?: { vision?: 'auto' | 'off' };
+  browser?: { vision?: 'auto' | 'off'; searchEngine?: string };
   /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
@@ -1411,7 +1413,7 @@ export interface ResolvedCliKnobs {
   traceTrajectory: boolean;
   traceRequests: boolean;
   atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
-  browser: { vision: 'auto' | 'off' };
+  browser: { vision: 'auto' | 'off'; searchEngine: string };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** ADR-052 D2 — resolved per-model effort defaults (validated); empty when unset. */

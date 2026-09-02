@@ -32,6 +32,7 @@ import { promptForHttpAuth } from './httpAuthPrompt.js';
 import { BrowserManagerError } from './browserManagerError.js';
 import { BrowserPromptManager } from './browserPromptManager.js';
 import { agentDownloadDir } from '../browserSafety.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import {
   availableDownloadPath,
   BrowserDownloadManager,
@@ -45,6 +46,13 @@ import {
 import {
   BrowserWorkspacePersistenceQueue,
   BrowserWorkspaceStore,
+  addBrowserBookmark,
+  removeBrowserBookmark,
+  recordBrowserVisit,
+  omniboxSuggest,
+  MAX_BROADCAST_BOOKMARKS,
+  type BrowserBookmark,
+  type BrowserHistoryEntry,
   persistableBrowserUrl,
   type PersistedBrowserWorkspace,
 } from './browserWorkspaceStore.js';
@@ -286,6 +294,11 @@ export class BrowserViewManager {
   private readonly agentNavigationPolicies = new Map<BrowserTabId, AgentNavigationPolicy>();
   private readonly agentControlledTabs = new Set<BrowserTabId>();
   private readonly humanChallengeTabs = new Set<BrowserTabId>();
+  // ADR-055 P9 — the workspace's saved places and visit history.
+  private bookmarks: BrowserBookmark[] = [];
+  private history: BrowserHistoryEntry[] = [];
+  /** Last url recorded per tab, so one page load counts as one visit. */
+  private readonly lastHistoryUrl = new Map<BrowserTabId, string>();
   private readonly trustedUserPrivateOrigins = new Set<string>();
   private readonly userOriginChecks = new Map<string, Promise<void>>();
   private readonly syntheticInputUntil = new Map<BrowserTabId, number>();
@@ -382,6 +395,7 @@ export class BrowserViewManager {
       downloads: this.downloadManager.list(),
       permissionPrompt: this.promptManager.getPermissionPrompt(),
       dialogPrompt: this.promptManager.getDialogPrompt(),
+      bookmarks: this.bookmarks.slice(0, MAX_BROADCAST_BOOKMARKS),
       capabilities: {
         nativeTabs: true,
         sameVisibleTabAutomation: true,
@@ -744,7 +758,10 @@ export class BrowserViewManager {
       tab.zoomFactor = contents.getZoomFactor();
       tab.crashed = false;
       this.updateHumanChallenge(tab);
-      if (!this.agentControlledTabs.has(tab.id)) void this.recordUserPrivateOrigin(tab.url);
+      if (!this.agentControlledTabs.has(tab.id)) {
+        void this.recordUserPrivateOrigin(tab.url);
+        this.noteVisit(tab);
+      }
       tab.revision += 1;
       this.workspacePersistence.schedule();
       this.emitState();
@@ -769,6 +786,7 @@ export class BrowserViewManager {
       updateTitle: (title) => {
         tab.title = boundBrowserText(title || 'New tab', 256);
         this.updateHumanChallenge(tab);
+        if (!this.agentControlledTabs.has(tab.id)) this.refreshVisitTitle(tab);
         this.workspacePersistence.schedule();
         this.emitState();
       },
@@ -1118,6 +1136,23 @@ export class BrowserViewManager {
       case 'respond-permission': return this.promptManager.respondPermission(command.promptId, command.allow);
       case 'respond-dialog': return this.promptManager.respondDialog(command);
       case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadManager.execute(command.op, command.downloadId);
+      case 'add-bookmark': {
+        const target = command.url ? command.url : this.requireTab(tab).url;
+        const title = command.title ?? (command.url ? '' : this.requireTab(tab).title);
+        this.bookmarks = addBrowserBookmark(this.bookmarks, { url: target, title, at: Date.now() });
+        this.workspacePersistence.schedule();
+        this.emitState();
+        return { ok: true, bookmarks: this.bookmarks.length };
+      }
+      case 'remove-bookmark': {
+        this.bookmarks = removeBrowserBookmark(this.bookmarks, command.url);
+        this.workspacePersistence.schedule();
+        this.emitState();
+        return { ok: true, bookmarks: this.bookmarks.length };
+      }
+      case 'history': return this.historyView(command.query, command.limit);
+      case 'omnibox-suggest':
+        return omniboxSuggest(command.query, { bookmarks: this.bookmarks, history: this.history, limit: command.limit });
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
       case 'clear-session-data': {
@@ -1545,6 +1580,14 @@ export class BrowserViewManager {
     if (types.includes('cookies')) storages.push('cookies');
     if (types.includes('storage')) storages.push('localstorage', 'indexdb', 'serviceworkers', 'cachestorage');
     if (storages.length) await ses.clearStorageData({ storages });
+    // ADR-055 P9 — 'history' clears the workspace visit log too (bookmarks are
+    // deliberate saves and survive; Reset browser only clears browsing traces).
+    if (types.includes('history')) {
+      this.history = [];
+      this.lastHistoryUrl.clear();
+      this.workspacePersistence.schedule();
+      this.emitState();
+    }
     return { ok: true };
   }
 
@@ -1612,7 +1655,10 @@ export class BrowserViewManager {
   }
 
   private safeUrl(raw: string): string {
-    const normalized = raw === BROWSER_BLANK_URL ? raw : normalizeBrowserAddress(raw);
+    // ADR-055 P9 — typed text becomes a search on the CONFIGURED engine.
+    let searchEngine = '';
+    try { searchEngine = getCliKnobs().browser.searchEngine; } catch { searchEngine = ''; }
+    const normalized = raw === BROWSER_BLANK_URL ? raw : normalizeBrowserAddress(raw, searchEngine);
     if (!normalized || !this.isSafeUrl(normalized)) throw new BrowserManagerError('UNSAFE_URL', 'The browser refused an unsafe or invalid URL.');
     return normalized;
   }
@@ -1673,6 +1719,41 @@ export class BrowserViewManager {
     contents.debugger.attach('1.3');
     void contents.debugger.sendCommand('Page.enable').catch(() => undefined);
     return true;
+  }
+
+  /**
+   * ADR-055 P9 — record one visit per page load. Agent-controlled tabs are
+   * excluded so research browsing never floods the person's history.
+   */
+  private noteVisit(tab: BrowserTab): void {
+    const url = tab.url;
+    if (!url || this.lastHistoryUrl.get(tab.id) === url) return;
+    this.lastHistoryUrl.set(tab.id, url);
+    this.history = recordBrowserVisit(this.history, { url, title: tab.title, at: Date.now() });
+    this.workspacePersistence.schedule();
+  }
+
+  /** A title usually arrives after the navigation; refresh it without re-counting the visit. */
+  private refreshVisitTitle(tab: BrowserTab): void {
+    if (this.lastHistoryUrl.get(tab.id) !== tab.url) return;
+    const persisted = persistableBrowserUrl(tab.url);
+    let changed = false;
+    this.history = this.history.map((entry) => {
+      if (entry.url !== persisted || !tab.title || entry.title === tab.title) return entry;
+      changed = true;
+      return { ...entry, title: tab.title.slice(0, 300) };
+    });
+    if (changed) this.workspacePersistence.schedule();
+  }
+
+  /** ADR-055 P9 — the omnibox/history view, newest-first and bounded. */
+  private historyView(query?: string, limit?: number): BrowserHistoryEntry[] {
+    const cap = Math.max(1, Math.min(Math.floor(limit ?? 200), 1_000));
+    const needle = String(query ?? '').trim().toLowerCase();
+    const rows = needle
+      ? this.history.filter((entry) => entry.url.toLowerCase().includes(needle) || entry.title.toLowerCase().includes(needle))
+      : this.history;
+    return rows.slice(0, cap);
   }
 
   private updateHumanChallenge(tab: BrowserTab): void {
@@ -1786,6 +1867,8 @@ export class BrowserViewManager {
       ? persisted.permissions.slice(0, 200)
       : [];
     this.promptManager.restorePermissions(decisions);
+    this.bookmarks = persisted?.version === 1 && Array.isArray(persisted.bookmarks) ? persisted.bookmarks : [];
+    this.history = persisted?.version === 1 && Array.isArray(persisted.history) ? persisted.history : [];
     const tabs = this.tabState.all();
     if (tabs.length > 0) {
       this.selectTab(
@@ -1817,6 +1900,8 @@ export class BrowserViewManager {
         (tab) => ({ url: persistableBrowserUrl(tab.url) }),
       ),
       permissions: this.promptManager.persistedPermissions(),
+      bookmarks: this.bookmarks,
+      history: this.history,
     };
     try {
       this.workspaceStore.save(state);

@@ -16,6 +16,7 @@ function state(): BrowserState {
     }],
     permissionPrompt: { id: 'permission_1', tabId: 'tab_permission', origin: 'https://example.com', permission: 'camera' },
     dialogPrompt: { id: 'dialog_1', tabId: 'tab_dialog', kind: 'confirm', message: 'Continue?' },
+    bookmarks: [],
     capabilities: {
       nativeTabs: true,
       sameVisibleTabAutomation: true,
