@@ -1,6 +1,6 @@
 # ADR-055 — A complete browser: Chrome parity for the human, human parity for the agent
 
-**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
+**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) and P4 (page.find locator) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
 there was decided but its browser rows were never built; this ADR refines and delivers them),
 ADR-037 (credentials the page cannot read), ADR-039/043 (SSRF and egress policy), ADR-044 (web pages
 the agent can actually read), ADR-046 (surfaces that vouch for themselves), ADR-052 (the restricted
@@ -253,8 +253,11 @@ Rows are one PR each into the current release branch; a row is done when its acc
   guarded — a failing subtree degrades to the light DOM). `page.find` moves to **P4** (it is the
   same mechanism as the locator ladder). Rich table/heading outline and cross-origin iframe frames
   (main-process frame handles) remain follow-ups.
-- **P4 — Locator ladder** (D2d): role+name / text / label targets across every `page.*` op;
-  ambiguity as a bounded candidate list. Depends on P3.
+- **P4 — Locator ladder** (D2d) — ✅ (`page.find`): a new `browser_find` / `page.find` locates live
+  nodes **by role, visible text, label, or test-id** and returns their fresh revision-bound refs, so
+  the model targets by what it SEES; multiple matches come back as candidates, never a silent pick
+  (the ambiguity rule). Find→ref→act is one extra call; folding the ladder INTO each `page.*` op
+  (single-call) is a thin follow-up.
 - **P5 — Action receipts** (D3a): `BrowserActionReceipt` on every mutating op; `browser_wait`
   becomes the exception, not the rule.
 - **P6 — Human-needed both ways** (D3b): `HUMAN_NEEDED`, `browser_wait { human }`, hand-back

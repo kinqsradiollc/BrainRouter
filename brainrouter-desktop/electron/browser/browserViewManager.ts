@@ -1066,6 +1066,7 @@ export class BrowserViewManager {
         const current = this.requireTab(tab); this.requireContents(current.id).setAudioMuted(command.muted); current.muted = command.muted; this.emitState(); return { muted: command.muted };
       }
       case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode, command.scope);
+      case 'find-nodes': return this.findNodes(this.requireTab(tab), command.query, command.by, command.limit, command.scope);
       case 'text': return this.pageText(this.requireTab(tab), command.maxChars);
       case 'html': return this.pageHtml(this.requireTab(tab), command.maxChars);
       case 'screenshot': return this.screenshot(this.requireTab(tab), command.maxDimension, command.fullPage);
@@ -1160,6 +1161,33 @@ export class BrowserViewManager {
     if (mode === 'testids') return { ...snapshot, nodes: snapshot.nodes.filter((node) => node.testid) };
     if (mode === 'accessibility') return { ...snapshot, nodes: snapshot.nodes.filter((node) => node.role) };
     return snapshot;
+  }
+
+  /** ADR-055 P4 — locate live-page nodes by role, visible text, label, or
+   *  test-id and return their fresh revision-bound refs. A snapshot under the
+   *  hood (scope 'page' by default) so a match scrolled out of view is still
+   *  found; ambiguity surfaces as multiple candidates, never a silent guess. */
+  private async findNodes(
+    tab: BrowserTab,
+    query: string,
+    by: 'role' | 'text' | 'label' | 'testid' = 'text',
+    limit = 20,
+    scope: 'viewport' | 'page' = 'page',
+  ): Promise<unknown> {
+    tab.revision += 1;
+    const snap = await this.isolated<{ url: string; title: string; nodes: BrowserSemanticNode[] }>(tab.id, semanticSnapshotScript(tab.id, tab.revision, scope));
+    this.emitState();
+    const q = String(query || '').trim().toLowerCase();
+    const nodes = (snap.nodes ?? []).filter((node) => {
+      const name = String(node.name || '').toLowerCase();
+      const testid = String(node.testid || '').toLowerCase();
+      const role = String(node.role || '').toLowerCase();
+      if (by === 'testid') return testid === q || testid.includes(q);
+      if (by === 'role') return role === q || (role.length > 0 && name.includes(q));
+      // 'text' | 'label' — accessible name / label / test-id substring.
+      return name.includes(q) || testid.includes(q);
+    }).slice(0, Math.max(1, Math.min(Math.floor(limit) || 20, 100)));
+    return { url: snap.url, title: snap.title, query, by, count: nodes.length, nodes };
   }
 
   /** Clean, readable page text (rendered innerText) — the primitive `fetch_url`

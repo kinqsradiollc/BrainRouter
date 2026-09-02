@@ -246,3 +246,15 @@ test('P3: snapshot accepts scope viewport|page and rejects other values', () => 
   assert.deepEqual(parseBrowserControlCommand({ kind: 'page.snapshot' }), { kind: 'page.snapshot' });
   assert.throws(() => parseBrowserControlCommand({ kind: 'page.snapshot', scope: 'everything' }), /scope/i);
 });
+
+// ADR-055 P4 — page.find (locator by role/text/label/testid).
+test('P4: page.find requires a query and accepts by/limit/scope', () => {
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.find', query: 'Sign in' }), { kind: 'page.find', query: 'Sign in' });
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.find', query: 'submit', by: 'role', limit: 5, scope: 'page' }),
+    { kind: 'page.find', query: 'submit', by: 'role', limit: 5, scope: 'page' },
+  );
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.find' }), /query/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.find', query: 'x', by: 'guess' }), /by/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.find', query: 'x', limit: 0 }), /limit/i);
+});

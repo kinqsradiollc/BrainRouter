@@ -72,6 +72,14 @@ export async function activate(host) {
     (args, runtime) => invoke(runtime, { kind: 'page.state', tabId: args.tabId }));
   read('browser_snapshot', 'Capture a bounded semantic snapshot of the page (interactive nodes with opaque, page-revision-bound refs). scope "page" also returns visible nodes scrolled out of the viewport (flagged inViewport:false) so you need not scroll-and-re-snapshot; open shadow-DOM roots are walked.', objSchema({ ...tabProps, maxChars: { type: 'integer', minimum: 1000, maximum: 200000 }, scope: { type: 'string', enum: ['viewport', 'page'], description: 'viewport (default) or page (include scrolled-out visible nodes).' } }),
     (args, runtime) => invoke(runtime, { kind: 'page.snapshot', tabId: args.tabId, maxChars: args.maxChars, scope: args.scope }));
+  read('browser_find', 'Locate live-page elements by role, visible text, label, or test-id and return their opaque, page-revision-bound refs. Use it to target by what you SEE (role+name / text / label) instead of guessing a ref; multiple matches are returned as candidates rather than a silent pick.', objSchema({
+    ...tabProps,
+    query: { type: 'string', maxLength: 512, description: 'The role value, visible text, label, or test-id to match (case-insensitive).' },
+    by: { type: 'string', enum: ['role', 'text', 'label', 'testid'], description: 'How to match query. Default text (accessible name / label).' },
+    limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max candidates. Default 20.' },
+    scope: { type: 'string', enum: ['viewport', 'page'], description: 'viewport or page (default page — also finds scrolled-out matches).' },
+  }, ['query']),
+    (args, runtime) => invoke(runtime, { kind: 'page.find', tabId: args.tabId, query: args.query, by: args.by, limit: args.limit, scope: args.scope }), true);
   read('browser_screenshot', 'Capture the current tab as a bounded browser artifact. This is explicit and is not run after normal actions.', objSchema({ ...tabProps, fullPage: { type: 'boolean' } }),
     (args, runtime) => invoke(runtime, { kind: 'page.screenshot', tabId: args.tabId, fullPage: args.fullPage }));
   read('browser_console', 'Read a bounded page-console batch. Sensitive fields are redacted.', objSchema({ ...tabProps, after: { type: 'string', maxLength: 256 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }),
@@ -215,5 +223,5 @@ export async function activate(host) {
     return pkg.serializeBrowserControlResult(pkg.normalizeBrowserControlResult({ ok: true, kind: 'flow.run', durationMs: 0, data: { results } }, 'flow.run'));
   });
 
-  host.log(`browser: registered ${39} embedded browser tools`);
+  host.log(`browser: registered ${40} embedded browser tools`);
 }
