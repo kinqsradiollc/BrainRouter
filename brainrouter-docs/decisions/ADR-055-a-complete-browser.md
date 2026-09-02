@@ -269,7 +269,11 @@ Rows are one PR each into the current release branch; a row is done when its acc
   person clears it — challenge-clear IS the hand-back, so control returns automatically with no new
   user prompt; the block message points the agent at it. The explicit **Hand back to agent** button
   and the takeover banner are renderer follow-ups (screenshot-driven with the owner).
-- **P7 — Share a tab** (D3c): per-tab, per-chat grant + badge + revocation; rules §4a amended.
+- **P7 — Share a tab** (D3c) — ✅ (authority side): `share-tab`/`unshare-tab` hand ONE human tab to
+  the current chat's agent via `BrowserAgentControlManager.grantTab`/`revokeTab` — explicit, per-tab,
+  per-chat, per-workspace, badged (`sharedWithAgent`), and revoked by unsharing, closing the tab, or
+  switching chats (a new chat never inherits a share). **Rules §4a amended** to name this as the one
+  permitted widening of agent tab authority. The tab-strip menu item is renderer work (P7b).
 - **P8 — Files like a human** (D4) — ✅ (downloads inbox): an AGENT-initiated download now lands in
   `.brainrouter/browser/downloads/` (already gitignored) instead of the OS Downloads folder, and the
   download row carries a POSIX `workspacePath` the agent can `read_file`; a human download is

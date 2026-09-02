@@ -302,6 +302,9 @@ export class BrowserViewManager {
   private readonly lastHistoryUrl = new Map<BrowserTabId, string>();
   /** ADR-055 P10 — the tab currently in HTML5 fullscreen (a video), if any. */
   private htmlFullscreenTabId: BrowserTabId | null = null;
+  /** ADR-055 P7 — tabs the person handed to the current chat's agent. */
+  private readonly sharedTabs = new Set<BrowserTabId>();
+  private tabShareHandler: ((info: { workspaceRoot: string; sessionKey: string; tabId: BrowserTabId; share: boolean }) => void) | null = null;
   private readonly trustedUserPrivateOrigins = new Set<string>();
   private readonly userOriginChecks = new Map<string, Promise<void>>();
   private readonly syntheticInputUntil = new Map<BrowserTabId, number>();
@@ -393,9 +396,13 @@ export class BrowserViewManager {
     return {
       version: BROWSER_PROTOCOL_VERSION,
       activeTabId: this.tabState.activeTabId,
-      tabs: this.humanChallengeTabs.size === 0
+      tabs: this.humanChallengeTabs.size === 0 && this.sharedTabs.size === 0
         ? this.tabState.snapshot()
-        : this.tabState.snapshot().map((t) => this.humanChallengeTabs.has(t.id) ? { ...t, humanNeeded: true } : t),
+        : this.tabState.snapshot().map((t) => ({
+          ...t,
+          ...(this.humanChallengeTabs.has(t.id) ? { humanNeeded: true } : {}),
+          ...(this.sharedTabs.has(t.id) ? { sharedWithAgent: true } : {}),
+        })),
       closedTabCount: this.tabState.closedCount,
       surface: { ...this.surface },
       downloads: this.downloadManager.list(),
@@ -656,6 +663,12 @@ export class BrowserViewManager {
    * Browser tabs, sign-ins, cookies, and completed challenges intentionally
    * remain continuous across chats in the same workspace. */
   setSession(sessionKey: string | null): void {
+    // ADR-055 P7 — a share is per-chat: switching chats revokes every grant the
+    // previous chat held, so a new chat never inherits a shared human tab.
+    if (this.sessionKey !== sessionKey && this.sharedTabs.size > 0) {
+      for (const tabId of [...this.sharedTabs]) this.notifyShare(tabId, false);
+      this.sharedTabs.clear();
+    }
     this.sessionKey = sessionKey;
   }
 
@@ -1170,6 +1183,8 @@ export class BrowserViewManager {
       case 'history': return this.historyView(command.query, command.limit);
       case 'omnibox-suggest':
         return omniboxSuggest(command.query, { bookmarks: this.bookmarks, history: this.history, limit: command.limit });
+      case 'share-tab': return this.shareTab(command.tabId, true);
+      case 'unshare-tab': return this.shareTab(command.tabId, false);
       case 'print': return this.printToPdf(this.requireTab(tab), command.landscape);
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
@@ -1809,6 +1824,33 @@ export class BrowserViewManager {
     return { ok: true, path: relative };
   }
 
+  /**
+   * ADR-055 P7 — main wires this so a share/unshare reaches the agent-control
+   * manager, which owns per-chat tab authority.
+   */
+  setTabShareHandler(handler: ((info: { workspaceRoot: string; sessionKey: string; tabId: BrowserTabId; share: boolean }) => void) | null): void {
+    this.tabShareHandler = handler;
+  }
+
+  private notifyShare(tabId: BrowserTabId, share: boolean): void {
+    this.tabShareHandler?.({
+      workspaceRoot: this.workspaceRoot,
+      sessionKey: this.sessionKey ?? '',
+      tabId,
+      share,
+    });
+  }
+
+  private shareTab(tabId: BrowserTabId, share: boolean): { ok: true; shared: boolean } {
+    const tab = this.resolveTab(tabId);
+    if (!tab) throw new BrowserManagerError('TAB_NOT_FOUND', `Browser tab ${tabId} was not found.`);
+    if (share) this.sharedTabs.add(tab.id);
+    else this.sharedTabs.delete(tab.id);
+    this.notifyShare(tab.id, share);
+    this.emitState();
+    return { ok: true, shared: share };
+  }
+
   private updateHumanChallenge(tab: BrowserTab): void {
     const reason = humanChallengeReason(tab.url, tab.title);
     if (!reason) {
@@ -1977,6 +2019,7 @@ export class BrowserViewManager {
 
   private cleanupNativeViewOwnership(id: BrowserTabId, contents: WebContents): void {
     this.humanChallengeTabs.delete(id);
+    if (this.sharedTabs.delete(id)) this.notifyShare(id, false);
     managersByWebContents.delete(contents.id);
     this.releaseAgentControl(id);
     this.cleanupStagedUpload(id);

@@ -31,6 +31,8 @@ export interface BrowserTab {
   loading: boolean;
   /** ADR-055 P6 — the tab is on a human-verification challenge; the agent is paused on it. */
   humanNeeded?: boolean;
+  /** ADR-055 P7 — the person handed this tab to the current chat's agent. */
+  sharedWithAgent?: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   crashed: boolean;
@@ -171,6 +173,8 @@ export type BrowserCommand =
   | { op: 'respond-permission'; promptId: string; allow: boolean }
   | { op: 'respond-dialog'; promptId: string; accept: boolean; value?: string }
   | { op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download'; downloadId: BrowserDownloadId }
+  | { op: 'share-tab'; tabId: BrowserTabId }
+  | { op: 'unshare-tab'; tabId: BrowserTabId }
   | { op: 'print'; landscape?: boolean }
   | { op: 'add-bookmark'; url?: string; title?: string }
   | { op: 'remove-bookmark'; url: string }
@@ -226,7 +230,7 @@ const COMMAND_OPS = new Set<BrowserCommand['op']>([
   'set-muted', 'snapshot', 'find-nodes', 'screenshot', 'console', 'network', 'downloads', 'click',
   'double-click', 'hover', 'assert-visible', 'highlight', 'type', 'press', 'scroll',
   'drag', 'select', 'check', 'set-files', 'set-cursor', 'set-device', 'clear-highlight', 'respond-permission',
-  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'print', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',
+  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'share-tab', 'unshare-tab', 'print', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',
 ]);
 
 const SECRET_KEY = /(authorization|cookie|password|passwd|secret|token|api[-_]?key|credential|sessionid)/i;
