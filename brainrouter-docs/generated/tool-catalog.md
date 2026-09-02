@@ -5,7 +5,7 @@
 
 # BrainRouter tool catalog
 
-88 built-in agent tools, by access tier and action kind.
+89 built-in agent tools, by access tier and action kind.
 
 | Tool | Tier | Action kind | Parallel-safe | Description |
 |------|------|-------------|---------------|-------------|
@@ -42,6 +42,7 @@
 | `mcp_refresh_catalog` | read | read_only | no | Re-scan connected MCP servers and return a summary of available tools grouped by server (with counts). |
 | `mcp_search` | read | read_only | yes | Search the connected MCP tool catalog by keyword (matches tool name, server, and description) and return the best-matching tools, each with a one-line summary. |
 | `notebook_edit` | write | file_edit | no | Edit a Jupyter notebook (.ipynb) cell by index. |
+| `notify_when_idle` | read | read_only | no | Ask another local session (by its session key) to send you ONE message the next time it finishes a turn (goes idle), instead of polling it. |
 | `planner_add` | read | file_edit | no | Capture an item in the planner. |
 | `planner_complete` | read | file_edit | no | Mark a planner item done. |
 | `planner_find` | read | read_only | yes | Search the planner by text across titles and notes. |
