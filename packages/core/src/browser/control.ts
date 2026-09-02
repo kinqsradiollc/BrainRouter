@@ -75,7 +75,7 @@ export type BrowserControlCommand =
   | ({ kind: 'page.forward' } & TabTarget)
   | ({ kind: 'page.reload'; ignoreCache?: boolean } & TabTarget)
   | ({ kind: 'page.stop' } & TabTarget)
-  | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number } & TabTarget)
+  | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number; human?: boolean } & TabTarget)
   | ({ kind: 'page.snapshot'; maxChars?: number; scope?: 'viewport' | 'page' } & TabTarget)
   | ({ kind: 'page.find'; query: string; by?: 'role' | 'text' | 'label' | 'testid'; limit?: number; scope?: 'viewport' | 'page' } & TabTarget)
   | ({ kind: 'page.text'; maxChars?: number } & TabTarget)
@@ -303,8 +303,10 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
       const ref = boundedString(row.ref, 'ref', 512, false);
       const testId = boundedString(row.testId ?? row.testID, 'testId', 512, false);
       const pageRevision = revision(row);
-      const timeoutMs = integer(row.timeoutMs, 'timeoutMs', 1, 60_000);
-      return { kind, ...target(), ...(loadState ? { loadState } : {}), ...(urlIncludes ? { urlIncludes } : {}), ...(text !== undefined ? { text } : {}), ...(ref ? { ref } : {}), ...(testId ? { testId } : {}), ...(pageRevision !== undefined ? { pageRevision } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+      const human = bool(row.human, 'human');
+      // A human-verification wait may legitimately take minutes; other waits stay short.
+      const timeoutMs = integer(row.timeoutMs, 'timeoutMs', 1, human ? 600_000 : 60_000);
+      return { kind, ...target(), ...(loadState ? { loadState } : {}), ...(urlIncludes ? { urlIncludes } : {}), ...(text !== undefined ? { text } : {}), ...(ref ? { ref } : {}), ...(testId ? { testId } : {}), ...(pageRevision !== undefined ? { pageRevision } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(human ? { human } : {}) };
     }
     case 'page.snapshot': {
       const maxChars = integer(row.maxChars, 'maxChars', 1_000, 200_000);

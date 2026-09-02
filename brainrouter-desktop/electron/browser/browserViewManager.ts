@@ -365,7 +365,9 @@ export class BrowserViewManager {
     return {
       version: BROWSER_PROTOCOL_VERSION,
       activeTabId: this.tabState.activeTabId,
-      tabs: this.tabState.snapshot(),
+      tabs: this.humanChallengeTabs.size === 0
+        ? this.tabState.snapshot()
+        : this.tabState.snapshot().map((t) => this.humanChallengeTabs.has(t.id) ? { ...t, humanNeeded: true } : t),
       closedTabCount: this.tabState.closedCount,
       surface: { ...this.surface },
       downloads: this.downloadManager.list(),
@@ -528,7 +530,7 @@ export class BrowserViewManager {
           this.selectTab(tab.id);
           throw new BrowserManagerError(
             'NOT_READY',
-            'This site requires human verification. Complete it in the visible Browser tab, then ask the agent to continue.',
+            'This site requires human verification. It is shown in the visible Browser tab for the person to complete. Call browser_wait with human:true to wait for them to finish, then continue.',
           );
         }
         if (signal && tab) {

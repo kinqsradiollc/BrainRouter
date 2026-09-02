@@ -308,3 +308,25 @@ test('a read-only op carries NO receipt', async () => {
   const data = (result as { data?: Record<string, unknown> }).data as { receipt?: unknown };
   assert.equal(data.receipt, undefined);
 });
+
+// ADR-055 P6 — browser_wait{human} resolves when the challenge clears (hand-back).
+test('a human wait resolves once the tab leaves the verification challenge', async () => {
+  const manager = new FakeManager();
+  const base = state();
+  base.tabs = base.tabs.map((t) => t.id === 'tab_x_1' ? { ...t, humanNeeded: true } : t);
+  manager.current = base;
+  let reads = 0;
+  (manager as unknown as { getState: () => BrowserState }).getState = () => {
+    reads += 1;
+    // The person clears the challenge after a couple of polls.
+    if (reads >= 3) manager.current = { ...base, tabs: base.tabs.map((t) => ({ ...t, humanNeeded: false })) };
+    return manager.current;
+  };
+  const result = await executeAgentBrowserCommand(
+    manager,
+    { id: 'wait-h', command: { kind: 'page.wait', tabId: 'tab_x_1', human: true, timeoutMs: 5000 } },
+    '/tmp/workspace',
+  );
+  assert.equal(result.ok, true, 'the wait resolves after the challenge clears');
+  assert.ok(reads >= 3, 'it polled until the challenge cleared');
+});
