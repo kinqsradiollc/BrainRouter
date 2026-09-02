@@ -1,6 +1,6 @@
 # ADR-055 — A complete browser: Chrome parity for the human, human parity for the agent
 
-**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) and P4 (page.find locator) and P11 (coherent safety) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
+**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) and P4 (page.find locator) and P11 (coherent safety) and P8 (downloads inbox) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
 there was decided but its browser rows were never built; this ADR refines and delivers them),
 ADR-037 (credentials the page cannot read), ADR-039/043 (SSRF and egress policy), ADR-044 (web pages
 the agent can actually read), ADR-046 (surfaces that vouch for themselves), ADR-052 (the restricted
@@ -263,7 +263,11 @@ Rows are one PR each into the current release branch; a row is done when its acc
 - **P6 — Human-needed both ways** (D3b): `HUMAN_NEEDED`, `browser_wait { human }`, hand-back
   button, takeover banner + resume.
 - **P7 — Share a tab** (D3c): per-tab, per-chat grant + badge + revocation; rules §4a amended.
-- **P8 — Files like a human** (D4): downloads inbox, `page.selection`, page-scoped clipboard.
+- **P8 — Files like a human** (D4) — ✅ (downloads inbox): an AGENT-initiated download now lands in
+  `.brainrouter/browser/downloads/` (already gitignored) instead of the OS Downloads folder, and the
+  download row carries a POSIX `workspacePath` the agent can `read_file`; a human download is
+  unchanged (OS folder, no workspace path). `page.selection` and a page-scoped clipboard are
+  follow-ups.
 - **P9 — Human chrome I** (D5): bookmarks, history, omnibox autocomplete, search-engine knob,
   new-tab page, tab search, pinned tabs, the missing shortcuts.
 - **P10 — Human chrome II** (D5): site-info popover, per-site permission memory, PDF viewer,

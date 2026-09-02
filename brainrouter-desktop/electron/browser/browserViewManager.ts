@@ -31,6 +31,7 @@ import {
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import { BrowserManagerError } from './browserManagerError.js';
 import { BrowserPromptManager } from './browserPromptManager.js';
+import { agentDownloadDir } from '../browserSafety.js';
 import {
   availableDownloadPath,
   BrowserDownloadManager,
@@ -339,8 +340,11 @@ export class BrowserViewManager {
         browserSession.on('will-download', handler);
         return () => { browserSession.off('will-download', handler); };
       },
-      prepareSavePath: (filename) => {
-        const directory = app.getPath('downloads');
+      prepareSavePath: (filename, agentControlled) => {
+        // ADR-055 P8 — an agent-initiated download lands in the workspace inbox
+        // so the agent's workspace-jailed file tools can read it; a human
+        // download keeps the ordinary OS Downloads folder.
+        const directory = agentControlled ? agentDownloadDir(workspaceRoot) : app.getPath('downloads');
         fs.mkdirSync(directory, { recursive: true });
         return availableDownloadPath(directory, filename);
       },

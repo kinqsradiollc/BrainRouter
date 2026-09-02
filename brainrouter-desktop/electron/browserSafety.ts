@@ -95,3 +95,25 @@ export function mdSafe(s: unknown): string {
     .replace(/'/g, '&#39;')
     .slice(0, 500);
 }
+
+/**
+ * ADR-055 P8 (D4) — where an AGENT-initiated browser download lands: a
+ * workspace inbox under `.brainrouter/browser/downloads/` (already gitignored),
+ * so the agent's workspace-jailed file tools can read what it just downloaded.
+ * Human downloads keep the OS Downloads folder.
+ */
+export function agentDownloadDir(workspaceRoot: string): string {
+  return path.join(workspaceRoot, '.brainrouter', 'browser', 'downloads');
+}
+
+/**
+ * The POSIX workspace-relative path for a saved download, or null when it is not
+ * inside the workspace (e.g. a human download in the OS folder). Lets the agent
+ * `read_file` an in-workspace download by a relative path.
+ */
+export function workspaceRelativeDownloadPath(savePath: string, workspaceRoot: string): string | null {
+  if (!savePath || !workspaceRoot) return null;
+  const rel = path.relative(path.resolve(workspaceRoot), path.resolve(savePath));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return rel.split(path.sep).join('/');
+}

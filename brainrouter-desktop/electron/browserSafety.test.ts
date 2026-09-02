@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand } from './browserSafety.js';
+import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand, agentDownloadDir, workspaceRelativeDownloadPath } from './browserSafety.js';
 
 test('safeName strips directory traversal + absolute paths to a single segment', () => {
   assert.equal(safeName('../../etc/passwd'), 'passwd');
@@ -78,4 +78,13 @@ test('isPathWithinRoot accepts in-tree paths and rejects escapes', () => {
   assert.equal(isPathWithinRoot(root, '../../etc/passwd.ts'), false);
   assert.equal(isPathWithinRoot(root, '../repo-sibling/x.ts'), false);
   assert.equal(isPathWithinRoot(root, path.resolve('/etc/passwd')), false, 'absolute escape');
+});
+
+// ADR-055 P8 — the agent-download inbox helpers.
+test('agentDownloadDir + workspaceRelativeDownloadPath', () => {
+  assert.equal(agentDownloadDir('/ws'), '/ws/.brainrouter/browser/downloads');
+  assert.equal(workspaceRelativeDownloadPath('/ws/.brainrouter/browser/downloads/a.pdf', '/ws'), '.brainrouter/browser/downloads/a.pdf');
+  // Outside the workspace (a human download) → null.
+  assert.equal(workspaceRelativeDownloadPath('/Users/alice/Downloads/a.pdf', '/ws'), null);
+  assert.equal(workspaceRelativeDownloadPath('', '/ws'), null);
 });

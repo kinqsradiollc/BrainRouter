@@ -45,6 +45,9 @@ export interface BrowserDownload {
   filename: string;
   url: string;
   savePath: string | null;
+  /** ADR-055 P8 — POSIX workspace-relative path when an agent download landed in
+   *  the workspace inbox, so the agent can read_file it; null for human downloads. */
+  workspacePath?: string | null;
   receivedBytes: number;
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
