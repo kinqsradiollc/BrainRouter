@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand, agentDownloadDir, workspaceRelativeDownloadPath } from './browserSafety.js';
+import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand, agentDownloadDir, workspaceRelativeDownloadPath, isCredentialField } from './browserSafety.js';
 
 test('safeName strips directory traversal + absolute paths to a single segment', () => {
   assert.equal(safeName('../../etc/passwd'), 'passwd');
@@ -87,4 +87,31 @@ test('agentDownloadDir + workspaceRelativeDownloadPath', () => {
   // Outside the workspace (a human download) → null.
   assert.equal(workspaceRelativeDownloadPath('/Users/alice/Downloads/a.pdf', '/ws'), null);
   assert.equal(workspaceRelativeDownloadPath('', '/ws'), null);
+});
+
+// ADR-055 P2 (fix) — the coordinate-click credential-field predicate: form
+// controls only, so ordinary buttons/links are never refused.
+test('isCredentialField flags only sensitive FORM controls, never plain elements', () => {
+  // The over-refusal the review found: a plain control whose id/label contains a
+  // "sensitive" word must NOT be treated as a credential field.
+  assert.equal(isCredentialField({ tag: 'BUTTON', identity: 'session-end' }), false, 'a Log out button is not a credential field');
+  assert.equal(isCredentialField({ tag: 'A', identity: 'session settings' }), false, 'a nav link is not a credential field');
+  assert.equal(isCredentialField({ tag: 'DIV', identity: 'token display' }), false);
+  assert.equal(isCredentialField({ tag: 'BUTTON', identity: 'refresh-token-btn' }), false);
+
+  // Real credential fields (form controls) are still flagged.
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'password' }), true);
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'hidden' }), true);
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'text', autocomplete: 'current-password' }), true);
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'text', autocomplete: 'one-time-code' }), true);
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'text', identity: 'session_token' }), true);
+  assert.equal(isCredentialField({ tag: 'TEXTAREA', identity: 'api-key' }), true);
+  assert.equal(isCredentialField({ tag: 'INPUT', identity: 'cvv' }), true);
+
+  // Ordinary form controls (no sensitive marker) are NOT flagged.
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'text', identity: 'email' }), false);
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'search', identity: 'query' }), false);
+  assert.equal(isCredentialField({ tag: 'SELECT', identity: 'country' }), false);
+  // "session" as a substring of another word must not trip the word-bounded regex.
+  assert.equal(isCredentialField({ tag: 'INPUT', type: 'text', identity: 'obsession' }), false);
 });

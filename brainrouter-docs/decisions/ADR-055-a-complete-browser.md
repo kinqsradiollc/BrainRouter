@@ -246,7 +246,7 @@ Rows are one PR each into the current release branch; a row is done when its acc
   `{x, y}` points; the desktop resolves the element under the point first (`elementFromPoint`),
   **refuses a credential field** (the snapshot's `valueIsSensitive` rule), reuses the existing
   `pageRevision`→`expectedRevision` staleness gate, and returns the hit element as a receipt.
-  Parser accepts a ref/testId OR a full point, never a guess.
+  Parser accepts a ref/testId OR a full point, never a guess. (Refined 2026-09-02 after an adversarial self-review: the credential refusal now applies only to real form controls, so an ordinary button/link whose id contains a word like "session" is no longer wrongly denied — `isCredentialField`.)
 - **P3 — Snapshot v2** (D2c) — ✅ (scope + shadow DOM): `page.snapshot` gains `scope: 'viewport' |
   'page'` — `page` returns visible nodes scrolled OUT of the viewport (flagged `inViewport:false`),
   ending the scroll-and-re-snapshot loop; the walk now descends **open shadow roots** (bounded,

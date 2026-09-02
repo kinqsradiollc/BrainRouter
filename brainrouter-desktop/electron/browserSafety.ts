@@ -117,3 +117,25 @@ export function workspaceRelativeDownloadPath(savePath: string, workspaceRoot: s
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
   return rel.split(path.sep).join('/');
 }
+
+/**
+ * ADR-055 P2 (fix) — is the element under a coordinate click a CREDENTIAL FIELD
+ * the agent must not target? A credential field is a value-bearing FORM CONTROL
+ * (input/textarea/select) whose type/autocomplete/identity marks it sensitive.
+ * An ordinary button/link/div is NEVER one, even if its id or aria-label merely
+ * contains a word like "session" or "token" — that over-refusal was the bug.
+ * This mirrors the in-page `isSensitive` in browserViewManager's pointHitScript
+ * (kept in lockstep) and the snapshot's `valueIsSensitive`, which likewise only
+ * applies to form inputs. `identity` is the lowercased join of id + name +
+ * aria-label.
+ */
+export function isCredentialField(descriptor: { tag: string; type?: string; autocomplete?: string; identity?: string }): boolean {
+  const tag = String(descriptor.tag || '').toUpperCase();
+  if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return false;
+  const type = String(descriptor.type || '').toLowerCase();
+  if (['password', 'hidden'].includes(type)) return true;
+  const autocomplete = String(descriptor.autocomplete || '').toLowerCase();
+  if (/(?:current|new)-password|cc-(?:number|csc|exp)|one-time-code/.test(autocomplete)) return true;
+  const identity = String(descriptor.identity || '').toLowerCase();
+  return /(?:^|[^a-z])(password|passwd|secret|token|csrf|xsrf|session|authorization|api.?key|card.?number|credit.?card|cvv|cvc|csc|otp)(?:[^a-z]|$)/.test(identity);
+}

@@ -215,12 +215,19 @@ function pointHitScript(x: number, y: number): string {
   // ADR-055 P2 — resolve the element under a screenshot-frame point (viewport
   // CSS pixels), report its role/name for the receipt, and flag a credential
   // field so the caller refuses a coordinate action on it. Mirrors the
-  // snapshot's valueIsSensitive rule so a coordinate click is no less safe.
+  // snapshot's valueIsSensitive rule (form controls only) so a coordinate click
+  // is no less safe, without over-refusing ordinary buttons/links.
   return `(() => {
     const roleFor = (el) => (el.getAttribute && el.getAttribute('role')) || ({A:'link',BUTTON:'button',INPUT:(el.type==='checkbox'?'checkbox':el.type==='radio'?'radio':'textbox'),TEXTAREA:'textbox',SELECT:'combobox'}[el.tagName]||'');
     const nameFor = (el) => String((el.getAttribute&&(el.getAttribute('aria-label')||el.getAttribute('alt')||el.getAttribute('title')||el.getAttribute('placeholder')))||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,200);
+    // A credential field is a value-bearing FORM CONTROL only. The identity
+    // regex must never gate an ordinary button/link/div whose id or aria-label
+    // merely contains a word like "session"/"token" — that would refuse
+    // clicking a "Log out" (id="session-end") button. This mirrors the
+    // snapshot's valueIsSensitive, which only ever applies to form inputs.
+    const isFormControl = (el) => !!el && ['INPUT','TEXTAREA','SELECT'].includes((el.tagName||'').toUpperCase());
     const isSensitive = (el) => {
-      if (!el || !el.getAttribute) return false;
+      if (!isFormControl(el) || !el.getAttribute) return false;
       const type=String(el.getAttribute('type')||'').toLowerCase();
       if (['password','hidden'].includes(type)) return true;
       const ac=String(el.getAttribute('autocomplete')||'').toLowerCase();
@@ -230,9 +237,11 @@ function pointHitScript(x: number, y: number): string {
     };
     const el=document.elementFromPoint(${x}, ${y});
     if(!el) return {ok:false};
-    const control=(el.closest && el.closest('input,textarea,select'))||el;
+    // Only a form control under the point can be a credential field; a plain
+    // element (button/link/div) is never refused.
+    const control=(el.closest && el.closest('input,textarea,select'))||(isFormControl(el)?el:null);
     const r=el.getBoundingClientRect();
-    return {ok:true, sensitive: isSensitive(control)||isSensitive(el),
+    return {ok:true, sensitive: isSensitive(control),
       element:{role:roleFor(el)||'', name:nameFor(el), tag:(el.tagName||'').toLowerCase(), type:String((el.getAttribute&&el.getAttribute('type'))||'')||undefined},
       rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
   })()`;
