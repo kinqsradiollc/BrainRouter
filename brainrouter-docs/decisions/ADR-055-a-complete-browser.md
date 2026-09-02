@@ -275,8 +275,16 @@ Rows are one PR each into the current release branch; a row is done when its acc
   download row carries a POSIX `workspacePath` the agent can `read_file`; a human download is
   unchanged (OS folder, no workspace path). `page.selection` and a page-scoped clipboard are
   follow-ups.
-- **P9 — Human chrome I** (D5): bookmarks, history, omnibox autocomplete, search-engine knob,
-  new-tab page, tab search, pinned tabs, the missing shortcuts.
+- **P9a — Bookmarks, history, omnibox engine (store + ops)** (D5) — ✅: the workspace store now keeps
+  **bookmarks** and a **visit history** (bounded 2,000 / 5,000, deduped by url, newest-first), with
+  pure mutators + a local-only `omniboxSuggest` ranking (bookmark > prefix > visit count — no remote
+  suggest service, so typing never leaves the machine). New ops `add-bookmark`/`remove-bookmark`/
+  `history`/`omnibox-suggest`; bookmarks ride the broadcast state; `clear-data history` clears the
+  visit log (bookmarks survive). Agent-controlled tabs are excluded from history so research never
+  floods the person's. `cli.browser.searchEngine` sets the omnibox search template, validated
+  (http(s) + `%s`, no credentials) with a fallback.
+- **P9b — Human chrome I, the UI** (D5): the bookmarks/history drawers, omnibox autocomplete
+  dropdown, new-tab page, tab search, pinned tabs, and the missing shortcuts.
 - **P10 — Human chrome II** (D5): site-info popover, per-site permission memory, PDF viewer,
   HTML5 fullscreen, print/save-as-PDF, context-menu parity.
 - **P11 — Coherent safety** (D6) — ✅: a restricted session now drops the WHOLE embedded browser

@@ -20,6 +20,7 @@ function state(): BrowserState {
     downloads: [],
     permissionPrompt: null,
     dialogPrompt: null,
+    bookmarks: [],
     capabilities: { nativeTabs: true, sameVisibleTabAutomation: true, downloads: true, permissions: true, semanticSnapshot: true, maxTabs: 20 },
   };
 }

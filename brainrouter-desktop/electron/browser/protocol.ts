@@ -91,6 +91,8 @@ export interface BrowserState {
   downloads: BrowserDownload[];
   permissionPrompt: BrowserPermissionPrompt | null;
   dialogPrompt: BrowserDialogPrompt | null;
+  /** ADR-055 P9 — the workspace's saved places (bounded for broadcast). */
+  bookmarks: Array<{ url: string; title: string; addedAt: number }>;
   capabilities: BrowserCapabilities;
 }
 
@@ -167,6 +169,10 @@ export type BrowserCommand =
   | { op: 'respond-permission'; promptId: string; allow: boolean }
   | { op: 'respond-dialog'; promptId: string; accept: boolean; value?: string }
   | { op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download'; downloadId: BrowserDownloadId }
+  | { op: 'add-bookmark'; url?: string; title?: string }
+  | { op: 'remove-bookmark'; url: string }
+  | { op: 'history'; query?: string; limit?: number }
+  | { op: 'omnibox-suggest'; query: string; limit?: number }
   | { op: 'clear-data'; dataTypes?: Array<'cache' | 'cookies' | 'storage' | 'history'> }
   | { op: 'reset-browser' }
   | { op: 'clear-session-data'; sessionKey: string };
@@ -217,7 +223,7 @@ const COMMAND_OPS = new Set<BrowserCommand['op']>([
   'set-muted', 'snapshot', 'find-nodes', 'screenshot', 'console', 'network', 'downloads', 'click',
   'double-click', 'hover', 'assert-visible', 'highlight', 'type', 'press', 'scroll',
   'drag', 'select', 'check', 'set-files', 'set-cursor', 'set-device', 'clear-highlight', 'respond-permission',
-  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'clear-data', 'reset-browser', 'clear-session-data',
+  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',
 ]);
 
 const SECRET_KEY = /(authorization|cookie|password|passwd|secret|token|api[-_]?key|credential|sessionid)/i;
@@ -244,7 +250,7 @@ export function redactBrowserValue(value: unknown, key = '', depth = 0): unknown
   return out;
 }
 
-export function normalizeBrowserAddress(raw: string | null | undefined): string | null {
+export function normalizeBrowserAddress(raw: string | null | undefined, searchTemplate?: string | null): string | null {
   const value = (raw ?? '').trim();
   if (!value) return null;
   if (value.toLowerCase() === 'about:blank') return BROWSER_BLANK_URL;
@@ -262,7 +268,33 @@ export function normalizeBrowserAddress(raw: string | null | undefined): string 
   if (!/\s/.test(value) && /\./.test(value) && /^[\w.\-~:/?#[\]@!$&'()*+,;=%]+$/.test(value)) {
     try { return new URL(`https://${value}`).href; } catch { /* search below */ }
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  return browserSearchUrl(value, searchTemplate);
+}
+
+export const DEFAULT_BROWSER_SEARCH_TEMPLATE = 'https://www.google.com/search?q=%s';
+
+/**
+ * ADR-055 P9 — a search template is an http(s) URL containing the `%s` query
+ * placeholder. Anything else (a bad scheme, embedded credentials, a missing
+ * placeholder, an unparseable value) falls back to the default rather than
+ * sending the user's typing somewhere unexpected.
+ */
+export function resolveBrowserSearchTemplate(raw: string | null | undefined): string {
+  const value = String(raw ?? '').trim();
+  if (!value || !value.includes('%s')) return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+  try {
+    const url = new URL(value.replace('%s', 'placeholder'));
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+    if (url.username || url.password) return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+    return value;
+  } catch {
+    return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+  }
+}
+
+/** Build the search URL for typed omnibox text using the configured engine. */
+export function browserSearchUrl(query: string, template?: string | null): string {
+  return resolveBrowserSearchTemplate(template).replace('%s', encodeURIComponent(query));
 }
 
 export function clampBrowserSurface(

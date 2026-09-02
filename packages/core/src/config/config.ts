@@ -898,7 +898,10 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       retrieval: c.atlas?.retrieval ?? true,
       autoRefresh: c.atlas?.autoRefresh ?? true,
     },
-    browser: { vision: c.browser?.vision === 'off' ? 'off' : 'auto' },
+    browser: {
+      vision: c.browser?.vision === 'off' ? 'off' : 'auto',
+      searchEngine: typeof c.browser?.searchEngine === 'string' ? c.browser.searchEngine.trim() : '',
+    },
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     effortByModel: resolveEffortByModel(c.effortByModel),
