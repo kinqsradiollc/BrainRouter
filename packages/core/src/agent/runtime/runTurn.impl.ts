@@ -100,6 +100,7 @@ import {
   repairOrphanToolResults,
 } from './toolBatchExecutionPhase.js';
 import { frameToolResultForModel } from './toolResultTrustBoundary.js';
+import { browserScreenshotImageHandoff, type BrowserVisionImage } from '../browser/browserVision.js';
 import {
   finalizeTurnPhase,
   resolveTurnTerminationReason,
@@ -1313,7 +1314,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         this.sessionKey,
       );
       const provenanceBatch = beginToolProvenanceBatch(this.sessionProvenance);
-      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any; imageMsg?: any }> => {
         this.lastTurnToolCalls += 1;
         const delegationLaunch = registryDelegationLaunchTool(name);
         if (executionIntentBatchViolation) {
@@ -1913,6 +1914,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // Browser observations contain page-controlled text. Frame them before
         // compaction, result handoff, and transcript persistence so restored
         // sessions keep the same trust boundary as the live turn.
+        // ADR-055 P1 — attach a browser screenshot the model can SEE. Read from
+        // the (pre-trust-frame, pre-clamp) result path; advisory, never blocks.
+        let browserImageMsg: { role: 'user'; content: string; images: BrowserVisionImage[] } | undefined;
+        if (!this.silent && name === 'browser_screenshot' && getCliKnobs().browser.vision !== 'off') {
+          const shot = browserScreenshotImageHandoff(name, resultText, this.workspaceRoot);
+          if (shot) browserImageMsg = { role: 'user', content: `[Browser screenshot for tool_call ${tc.id} — attached as an image below.]`, images: [shot] };
+        }
         const trustFrame = frameToolResultForModel(name, resultText);
         resultText = trustFrame.content;
 
@@ -1966,7 +1974,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // /transcript. Doing the push here would let parallel batches land
         // in finish order, which the LLM's next turn would see as a
         // non-deterministic trace.
-        return { toolMsg, fullResultText: resultText, systemMsg };
+        return { toolMsg, fullResultText: resultText, systemMsg, imageMsg: browserImageMsg };
       };
 
       // Partition the tool_calls into runs of consecutive parallel-safe
@@ -2002,6 +2010,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         publishSystemMessage: (systemMsg) => {
           this.chatHistory.push(systemMsg);
           this.recordTranscript(systemMsg);
+        },
+        publishImageMessage: (imageMsg) => {
+          // Full base64 rides chatHistory (like a pasted image); the transcript
+          // keeps only a light placeholder so the on-disk log stays readable.
+          this.chatHistory.push(imageMsg as never);
+          const content = (imageMsg as { content?: unknown })?.content;
+          this.recordTranscript({ role: 'user', content: typeof content === 'string' ? content : '[browser screenshot]' } as never);
         },
       });
 
