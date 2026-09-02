@@ -15,7 +15,8 @@ import { BROWSER_BLANK_URL } from './protocol.js';
 
 export type PersistedPermissionDecision = {
   origin: string;
-  permission: 'geolocation';
+  /** ADR-055 P10 — any promptable permission, not just geolocation. */
+  permission: string;
   decision: 'allow' | 'block';
 };
 

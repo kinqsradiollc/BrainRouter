@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand, agentDownloadDir, workspaceRelativeDownloadPath, isCredentialField } from './browserSafety.js';
+import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand, agentDownloadDir, workspaceRelativeDownloadPath, isCredentialField, browserPrintDir } from './browserSafety.js';
 
 test('safeName strips directory traversal + absolute paths to a single segment', () => {
   assert.equal(safeName('../../etc/passwd'), 'passwd');
@@ -114,4 +114,10 @@ test('isCredentialField flags only sensitive FORM controls, never plain elements
   assert.equal(isCredentialField({ tag: 'SELECT', identity: 'country' }), false);
   // "session" as a substring of another word must not trip the word-bounded regex.
   assert.equal(isCredentialField({ tag: 'INPUT', type: 'text', identity: 'obsession' }), false);
+});
+
+// ADR-055 P10 — Save as PDF writes inside the workspace.
+test('browserPrintDir is a workspace path under .brainrouter', () => {
+  assert.equal(browserPrintDir('/ws'), '/ws/.brainrouter/browser/prints');
+  assert.equal(workspaceRelativeDownloadPath('/ws/.brainrouter/browser/prints/page.pdf', '/ws'), '.brainrouter/browser/prints/page.pdf');
 });

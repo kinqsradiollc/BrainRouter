@@ -16,6 +16,7 @@ function state(): BrowserState {
     surface: { x: 0, y: 0, width: 800, height: 600, visible: true },
     downloads: [], permissionPrompt: null, dialogPrompt: null,
     bookmarks: [],
+    fullscreenTabId: null,
     capabilities: { nativeTabs: true, sameVisibleTabAutomation: true, downloads: true, permissions: true, semanticSnapshot: true, maxTabs: 50 },
   };
 }
