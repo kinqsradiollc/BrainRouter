@@ -194,6 +194,33 @@ function semanticSnapshotScript(tabId: string, revision: number): string {
   })()`;
 }
 
+function pointHitScript(x: number, y: number): string {
+  // ADR-055 P2 — resolve the element under a screenshot-frame point (viewport
+  // CSS pixels), report its role/name for the receipt, and flag a credential
+  // field so the caller refuses a coordinate action on it. Mirrors the
+  // snapshot's valueIsSensitive rule so a coordinate click is no less safe.
+  return `(() => {
+    const roleFor = (el) => (el.getAttribute && el.getAttribute('role')) || ({A:'link',BUTTON:'button',INPUT:(el.type==='checkbox'?'checkbox':el.type==='radio'?'radio':'textbox'),TEXTAREA:'textbox',SELECT:'combobox'}[el.tagName]||'');
+    const nameFor = (el) => String((el.getAttribute&&(el.getAttribute('aria-label')||el.getAttribute('alt')||el.getAttribute('title')||el.getAttribute('placeholder')))||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,200);
+    const isSensitive = (el) => {
+      if (!el || !el.getAttribute) return false;
+      const type=String(el.getAttribute('type')||'').toLowerCase();
+      if (['password','hidden'].includes(type)) return true;
+      const ac=String(el.getAttribute('autocomplete')||'').toLowerCase();
+      if (/(?:current|new)-password|cc-(?:number|csc|exp)|one-time-code/.test(ac)) return true;
+      const id=String([el.id,el.getAttribute('name'),el.getAttribute('aria-label')].filter(Boolean).join(' ')).toLowerCase();
+      return /(?:^|[^a-z])(password|passwd|secret|token|csrf|xsrf|session|authorization|api.?key|card.?number|credit.?card|cvv|cvc|csc|otp)(?:[^a-z]|$)/.test(id);
+    };
+    const el=document.elementFromPoint(${x}, ${y});
+    if(!el) return {ok:false};
+    const control=(el.closest && el.closest('input,textarea,select'))||el;
+    const r=el.getBoundingClientRect();
+    return {ok:true, sensitive: isSensitive(control)||isSensitive(el),
+      element:{role:roleFor(el)||'', name:nameFor(el), tag:(el.tagName||'').toLowerCase(), type:String((el.getAttribute&&el.getAttribute('type'))||'')||undefined},
+      rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
+  })()`;
+}
+
 function performanceNetworkScript(): string {
   return `(() => performance.getEntriesByType('resource').slice(-${MAX_NETWORK_ROWS}).map((entry) => ({
     url:String(entry.name||'').slice(0,4096), method:'GET', status:Number(entry.responseStatus||0),
@@ -1178,6 +1205,26 @@ export class BrowserViewManager {
     assertCurrent: BrowserOperationGuard,
   ): Promise<unknown> {
     this.validateRef(tab, command.ref);
+    // ADR-055 P2 — a coordinate action: the model clicks where the screenshot
+    // shows. Resolve the element under the point, refuse a credential field, and
+    // report the hit element (a receipt) instead of a bare ok.
+    if (command.x !== undefined && command.y !== undefined && !command.ref && !command.target
+        && (command.op === 'click' || command.op === 'double-click' || command.op === 'hover')) {
+      const x = Math.round(command.x), y = Math.round(command.y);
+      const hit = await this.isolated<{ ok: boolean; sensitive?: boolean; element?: { role: string; name: string; tag: string; type?: string }; rect?: { x: number; y: number; width: number; height: number } }>(tab.id, pointHitScript(x, y));
+      assertCurrent();
+      if (!hit.ok) throw new BrowserManagerError('REF_NOT_FOUND', `No element was found at (${x}, ${y}).`);
+      if (hit.sensitive) throw new BrowserManagerError('DENIED', 'Refused a coordinate action on a credential field. Use the field label instead.');
+      this.showAgentPointer(tab.id, x, y, command.op !== 'hover');
+      this.sendAgentInput(tab.id, { type: 'mouseMove', x, y });
+      if (command.op === 'hover') return { ok: true, x, y, element: hit.element };
+      const count = command.op === 'double-click' ? 2 : 1;
+      const button = command.button ?? 'left';
+      const modifiers = (command.modifiers ?? []).map((value) => value.toLowerCase() as 'alt' | 'control' | 'meta' | 'shift');
+      this.sendAgentInput(tab.id, { type: 'mouseDown', x, y, button, clickCount: count, modifiers });
+      this.sendAgentInput(tab.id, { type: 'mouseUp', x, y, button, clickCount: count, modifiers });
+      tab.revision += 1; this.emitState(); return { ok: true, x, y, element: hit.element };
+    }
     if (command.op === 'highlight' && !command.ref && !command.target && !command.label) {
       assertCurrent();
       return this.isolated(tab.id, `(() => { const id='__brainrouter_testid_highlights__';document.getElementById(id)?.remove();const style=document.createElement('style');style.id=id;style.textContent='[data-testid]{outline:2px solid #7c5cff !important;outline-offset:1px !important}';document.documentElement.appendChild(style);return {ok:true,count:document.querySelectorAll('[data-testid]').length};})()`);
@@ -1241,6 +1288,18 @@ export class BrowserViewManager {
     assertCurrent: BrowserOperationGuard,
   ): Promise<{ ok: true }> {
     this.validateRef(tab, command.fromRef); this.validateRef(tab, command.toRef);
+    // ADR-055 P2 — drag between two screenshot-frame points.
+    if (command.fromX !== undefined && command.fromY !== undefined && command.toX !== undefined && command.toY !== undefined
+        && !command.fromRef && !command.toRef) {
+      const sx = Math.round(command.fromX), sy = Math.round(command.fromY);
+      const tx = Math.round(command.toX), ty = Math.round(command.toY);
+      assertCurrent();
+      this.showAgentPointer(tab.id, sx, sy, true);
+      this.sendAgentInput(tab.id, { type: 'mouseMove', x: sx, y: sy }); this.sendAgentInput(tab.id, { type: 'mouseDown', x: sx, y: sy, button: 'left', clickCount: 1 });
+      this.showAgentPointer(tab.id, tx, ty, false);
+      this.sendAgentInput(tab.id, { type: 'mouseMove', x: tx, y: ty, movementX: tx - sx, movementY: ty - sy }); this.sendAgentInput(tab.id, { type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 });
+      tab.revision += 1; this.emitState(); return { ok: true };
+    }
     const from = await this.isolated<{ ok: boolean; rect?: { x: number; y: number; width: number; height: number } }>(tab.id, targetScript(tab.id, tab.revision, command.fromRef));
     const to = await this.isolated<{ ok: boolean; rect?: { x: number; y: number; width: number; height: number } }>(tab.id, targetScript(tab.id, tab.revision, command.toRef));
     assertCurrent();

@@ -76,14 +76,14 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
     case 'page.downloads': return { tabId: command.tabId, command: { op: 'downloads' } };
     case 'page.click': {
       const target = refTarget(command);
-      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'click', ref: target.ref, target: target.target, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
+      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'click', ref: target.ref, target: target.target, x: command.x, y: command.y, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
     }
     case 'page.doubleClick': {
       const target = refTarget(command);
-      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'double-click', ref: target.ref, target: target.target, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
+      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'double-click', ref: target.ref, target: target.target, x: command.x, y: command.y, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
     }
     case 'page.hover': {
-      const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'hover', ref: target.ref, target: target.target } };
+      const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'hover', ref: target.ref, target: target.target, x: command.x, y: command.y } };
     }
     case 'page.type': {
       const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'type', ref: target.ref, target: target.target, text: command.text, replace: command.replace } };
@@ -106,7 +106,7 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
         ...(target.ref || target.target ? { targetPreparation: { kind: 'pointer' as const, ref: target.ref, target: target.target } } : {}),
       };
     }
-    case 'page.drag': return { tabId: command.tabId, expectedRevision: command.pageRevision, command: { op: 'drag', fromRef: command.fromRef, toRef: command.toRef } };
+    case 'page.drag': return { tabId: command.tabId, expectedRevision: command.pageRevision, command: { op: 'drag', fromRef: command.fromRef, toRef: command.toRef, fromX: command.fromX, fromY: command.fromY, toX: command.toX, toY: command.toY } };
     case 'page.select': {
       const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'select', ref: target.ref, target: target.target, values: command.values } };
     }

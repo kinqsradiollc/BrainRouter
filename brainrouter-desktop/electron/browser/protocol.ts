@@ -145,11 +145,11 @@ export type BrowserCommand =
   | { op: 'console'; clear?: boolean }
   | { op: 'network'; clear?: boolean }
   | { op: 'downloads' }
-  | { op: 'click' | 'double-click' | 'hover' | 'assert-visible' | 'highlight'; ref?: OpaqueBrowserRef; target?: string; label?: string; targetType?: string; button?: 'left' | 'middle' | 'right'; modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'> }
+  | { op: 'click' | 'double-click' | 'hover' | 'assert-visible' | 'highlight'; ref?: OpaqueBrowserRef; target?: string; label?: string; targetType?: string; button?: 'left' | 'middle' | 'right'; modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>; x?: number; y?: number }
   | { op: 'type'; ref?: OpaqueBrowserRef; target?: string; text: string; replace?: boolean }
   | { op: 'press'; key: string; modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'> }
   | { op: 'scroll'; x?: number; y?: number; deltaX?: number; deltaY: number }
-  | { op: 'drag'; fromRef: OpaqueBrowserRef; toRef: OpaqueBrowserRef }
+  | { op: 'drag'; fromRef?: OpaqueBrowserRef; toRef?: OpaqueBrowserRef; fromX?: number; fromY?: number; toX?: number; toY?: number }
   | { op: 'select'; ref?: OpaqueBrowserRef; target?: string; values: string[] }
   | { op: 'check'; ref?: OpaqueBrowserRef; target?: string; checked: boolean }
   | { op: 'set-files'; ref?: OpaqueBrowserRef; target?: string; files: string[] }

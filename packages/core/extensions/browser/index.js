@@ -142,23 +142,25 @@ export async function activate(host) {
   computer('browser_reorder_tab', 'Move a tab to a zero-based position.', objSchema({ tabId, index: { type: 'integer', minimum: 0, maximum: 999 } }, ['tabId', 'index']),
     (args, runtime) => invoke(runtime, { kind: 'tabs.reorder', tabId: args.tabId, index: args.index }));
 
-  const clickSchema = objSchema({ ...targetProps, button: { type: 'string', enum: ['left', 'middle', 'right'] }, modifiers: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 32 } } });
-  computer('browser_click', 'Click an opaque semantic ref or compatibility test-id.', clickSchema,
-    (args, runtime) => invoke(runtime, { kind: 'page.click', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, button: args.button, modifiers: args.modifiers }));
-  computer('browser_double_click', 'Double-click an opaque semantic ref or compatibility test-id.', clickSchema,
-    (args, runtime) => invoke(runtime, { kind: 'page.doubleClick', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, button: args.button, modifiers: args.modifiers }));
+  const coordX = { type: 'number', minimum: 0, maximum: 100000, description: 'Viewport CSS-pixel x from the last browser_screenshot; a target when no ref/testID is given.' };
+  const coordY = { type: 'number', minimum: 0, maximum: 100000, description: 'Viewport CSS-pixel y from the last browser_screenshot; a target when no ref/testID is given.' };
+  const clickSchema = objSchema({ ...targetProps, x: coordX, y: coordY, button: { type: 'string', enum: ['left', 'middle', 'right'] }, modifiers: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 32 } } });
+  computer('browser_click', 'Click an opaque semantic ref, a compatibility test-id, or a screenshot {x,y} point (a coordinate hit on a credential field is refused).', clickSchema,
+    (args, runtime) => invoke(runtime, { kind: 'page.click', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, x: args.x, y: args.y, button: args.button, modifiers: args.modifiers }));
+  computer('browser_double_click', 'Double-click an opaque semantic ref, a compatibility test-id, or a screenshot {x,y} point.', clickSchema,
+    (args, runtime) => invoke(runtime, { kind: 'page.doubleClick', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, x: args.x, y: args.y, button: args.button, modifiers: args.modifiers }));
   computer('browser_tap', 'Compatibility alias: click an element by UI-map test-id.', objSchema({ ...tabProps, testID }, ['testID']),
     (args, runtime) => invoke(runtime, { kind: 'page.click', tabId: args.tabId, testID: args.testID }));
-  computer('browser_hover', 'Hover an opaque semantic ref or compatibility test-id.', objSchema(targetProps),
-    (args, runtime) => invoke(runtime, { kind: 'page.hover', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision }));
+  computer('browser_hover', 'Hover an opaque semantic ref, a compatibility test-id, or a screenshot {x,y} point.', objSchema({ ...targetProps, x: coordX, y: coordY }),
+    (args, runtime) => invoke(runtime, { kind: 'page.hover', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, x: args.x, y: args.y }));
   computer('browser_type', 'Type bounded text into an opaque ref/test-id; replace defaults to the page manager\'s safe behavior.', objSchema({ ...targetProps, text: { type: 'string', maxLength: 20000 }, replace: { type: 'boolean' } }, ['text']),
     (args, runtime) => invoke(runtime, { kind: 'page.type', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, text: args.text, replace: args.replace }));
   computer('browser_press', 'Press a key or shortcut, optionally targeting an element.', objSchema({ ...targetProps, key: { type: 'string', maxLength: 128 }, modifiers: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 32 } } }, ['key']),
     (args, runtime) => invoke(runtime, { kind: 'page.press', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, key: args.key, modifiers: args.modifiers }));
   computer('browser_scroll', 'Scroll the page or a referenced element by bounded CSS-pixel deltas.', objSchema({ ...targetProps, deltaX: { type: 'number', minimum: -100000, maximum: 100000 }, deltaY: { type: 'number', minimum: -100000, maximum: 100000 } }),
     (args, runtime) => invoke(runtime, { kind: 'page.scroll', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, deltaX: args.deltaX, deltaY: args.deltaY }));
-  computer('browser_drag', 'Drag from one opaque ref to another within the same page revision.', objSchema({ ...tabProps, fromRef: ref, toRef: ref, pageRevision }, ['fromRef', 'toRef']),
-    (args, runtime) => invoke(runtime, { kind: 'page.drag', tabId: args.tabId, fromRef: args.fromRef, toRef: args.toRef, pageRevision: args.pageRevision }));
+  computer('browser_drag', 'Drag between two opaque refs within one page revision, or between two screenshot {x,y} points.', objSchema({ ...tabProps, fromRef: ref, toRef: ref, fromX: coordX, fromY: coordY, toX: coordX, toY: coordY, pageRevision }),
+    (args, runtime) => invoke(runtime, { kind: 'page.drag', tabId: args.tabId, fromRef: args.fromRef, toRef: args.toRef, fromX: args.fromX, fromY: args.fromY, toX: args.toX, toY: args.toY, pageRevision: args.pageRevision }));
   computer('browser_select_option', 'Select one or more bounded option values.', objSchema({ ...targetProps, values: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', maxLength: 1024 } } }, ['values']),
     (args, runtime) => invoke(runtime, { kind: 'page.select', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, values: args.values }));
   computer('browser_check', 'Set a checkbox/radio-like control to the requested checked state.', objSchema({ ...targetProps, checked: { type: 'boolean' } }, ['checked']),
