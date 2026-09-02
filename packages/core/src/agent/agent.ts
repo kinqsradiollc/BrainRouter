@@ -135,7 +135,7 @@ import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
 import { normalizeToolName } from '../tool/specs/names.js';
-import { registryAllowedTools, registryEntry, registryNetworkToolNames } from '../tool/registry/registry.js';
+import { registryAllowedTools, registryEntry, registryNetworkToolNames, registryBrowserToolNames } from '../tool/registry/registry.js';
 import { resolveMcpCatalogTool, searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
@@ -2605,7 +2605,12 @@ export class Agent implements IAgent {
     const allowed = registryAllowedTools(this.accessMode);
     // ADR-052 D3 — a restricted session also drops network/web tools, so an
     // untrusted repo cannot reach out even though they sit at read tier.
-    if (this.restricted) for (const name of registryNetworkToolNames()) allowed.delete(name);
+    if (this.restricted) {
+      for (const name of registryNetworkToolNames()) allowed.delete(name);
+      // ADR-055 P11 — also drop the whole embedded browser (observation too),
+      // so a restricted seat advertises no browser_* tool at all.
+      for (const name of registryBrowserToolNames()) allowed.delete(name);
+    }
     return allowed;
   }
 
