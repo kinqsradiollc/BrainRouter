@@ -45,6 +45,15 @@ export function registryNetworkToolNames(): Set<string> {
   return new Set(effectiveToolRegistry().filter((tool) => tool.actionKind === 'network').map((tool) => tool.name));
 }
 
+/**
+ * ADR-055 P11 (D6) — every embedded-browser tool (the browser-control runtime
+ * port), dropped wholesale by a restricted session so "cannot browse" is
+ * coherent: no navigation AND no observation, not navigation-only.
+ */
+export function registryBrowserToolNames(): Set<string> {
+  return new Set(effectiveToolRegistry().filter((tool) => tool.runtimePort === 'browser-control').map((tool) => tool.name));
+}
+
 export function registryEntry(name: string): LocalToolEntry | undefined {
   const tools = effectiveToolRegistry();
   return tools.find((tool) => tool.name === name)

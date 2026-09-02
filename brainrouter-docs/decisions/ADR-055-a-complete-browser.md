@@ -1,6 +1,6 @@
 # ADR-055 — A complete browser: Chrome parity for the human, human parity for the agent
 
-**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) and P4 (page.find locator) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
+**Status:** ACCEPTED — phased implementation on `release/0.4.22`; P1 (images), P2 (coordinate clicks) and P3 (snapshot scope + shadow DOM) and P4 (page.find locator) and P11 (coherent safety) shipped. · **Builds on:** ADR-024 (the browser action loop and lanes — §5
 there was decided but its browser rows were never built; this ADR refines and delivers them),
 ADR-037 (credentials the page cannot read), ADR-039/043 (SSRF and egress policy), ADR-044 (web pages
 the agent can actually read), ADR-046 (surfaces that vouch for themselves), ADR-052 (the restricted
@@ -268,8 +268,11 @@ Rows are one PR each into the current release branch; a row is done when its acc
   new-tab page, tab search, pinned tabs, the missing shortcuts.
 - **P10 — Human chrome II** (D5): site-info popover, per-site permission memory, PDF viewer,
   HTML5 fullscreen, print/save-as-PDF, context-menu parity.
-- **P11 — Coherent safety** (D6): restricted seat drops the port; certificate prompts human-only;
-  the §5.3 invariant tests.
+- **P11 — Coherent safety** (D6) — ✅: a restricted session now drops the WHOLE embedded browser
+  (`registryBrowserToolNames` — observation as well as navigation), so a restricted seat lists no
+  `browser_*` tool at all; and the agent may **dismiss** but never **accept** a certificate dialog
+  (`permission_denied`) — certificate trust is the human's. (The private-address fail-closed and
+  no-credential-in-snapshot invariants already hold from prior work and P1/P2.)
 - **P12 — The battery** (D7): agent-as-human scenarios + snapshot bound in the harness; required
   gate.
 - **P13 — Pop-out window** (D5, optional, last): detached tab on the same manager.

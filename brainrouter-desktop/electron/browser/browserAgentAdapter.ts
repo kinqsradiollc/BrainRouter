@@ -704,6 +704,11 @@ export async function executeAgentBrowserCommand(
     if (kind === 'dialog.respond') {
       const prompt = state.dialogPrompt;
       if (!prompt || (request.command.tabId && prompt.tabId !== request.command.tabId)) return failure(kind, startedAt, 'not_found', 'No matching browser dialog is waiting.', request.command.tabId);
+      // ADR-055 P11 (D6) — a certificate trust decision is the human's, never the
+      // agent's; the agent may dismiss a certificate dialog but not accept one.
+      if (prompt.kind === 'certificate' && request.command.action === 'accept') {
+        return failure(kind, startedAt, 'permission_denied', 'Certificate trust decisions are for a human. Ask the person to accept or reject it in the visible Browser tab.', prompt.tabId);
+      }
       const result = await manager.execute({ version: BROWSER_PROTOCOL_VERSION, id: request.id, tabId: prompt.tabId, command: { op: 'respond-dialog', promptId: prompt.id, accept: request.command.action === 'accept', value: request.command.promptText } }, signal);
       return adaptManagerResult(kind, startedAt, result);
     }

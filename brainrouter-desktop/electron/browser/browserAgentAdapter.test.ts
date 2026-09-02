@@ -249,3 +249,22 @@ test('mapAgentBrowserCommand maps page.find to find-nodes', () => {
     { tabId: 'tab_x_1', command: { op: 'find-nodes', query: 'Sign in', by: 'text', limit: 5, scope: 'page' } },
   );
 });
+
+// ADR-055 P11 — the agent may dismiss but never ACCEPT a certificate dialog.
+test('certificate trust decisions are refused for the agent (accept), allowed to dismiss', async () => {
+  const certState = state();
+  certState.dialogPrompt = { id: 'dlg_1', tabId: 'tab_x_1', kind: 'certificate', message: 'The certificate for example.com is not trusted.' };
+
+  const rejecting = new FakeManager();
+  rejecting.current = certState;
+  const accept = await executeAgentBrowserCommand(rejecting, { id: 'cert-accept', command: { kind: 'dialog.respond', action: 'accept' } }, '/tmp/workspace');
+  assert.equal(accept.ok, false);
+  assert.equal((accept as { error?: { code?: string } }).error?.code, 'permission_denied');
+  assert.equal(rejecting.calls.length, 0, 'a refused certificate accept never reaches the manager');
+
+  const dismissing = new FakeManager();
+  dismissing.current = certState;
+  const dismiss = await executeAgentBrowserCommand(dismissing, { id: 'cert-dismiss', command: { kind: 'dialog.respond', action: 'dismiss' } }, '/tmp/workspace');
+  assert.equal(dismiss.ok, true, 'dismissing a certificate dialog is allowed');
+  assert.equal(dismissing.calls.length, 1);
+});
