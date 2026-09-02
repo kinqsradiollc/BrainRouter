@@ -202,3 +202,40 @@ test('browser-use availability is restricted to an interactive depth-zero local 
   assert.equal(browserUseAvailableFor({ ...base, tier: 'worker' }), false);
   assert.equal(browserUseAvailableFor({ ...base, remoteBrain: true }), false);
 });
+
+// ADR-055 P2 — coordinate targeting on click/hover/drag.
+test('P2: click/hover accept a screenshot {x,y} point and still accept refs', () => {
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.click', tabId: 'tab_x_1', x: 120, y: 40 }),
+    { kind: 'page.click', tabId: 'tab_x_1', x: 120, y: 40 },
+  );
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.hover', x: 5, y: 6 }),
+    { kind: 'page.hover', x: 5, y: 6 },
+  );
+  // A ref still works and carries no coordinates.
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.click', ref: 'r1', pageRevision: 2 }),
+    { kind: 'page.click', ref: 'r1', pageRevision: 2 },
+  );
+});
+
+test('P2: click/hover require a ref, testId, or BOTH x and y', () => {
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.click' }), /ref, testId, or both x and y/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.click', x: 10 }), /ref, testId, or both x and y/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.hover', y: 10 }), /ref, testId, or both x and y/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.click', x: -1, y: 4 }), /x must be/i);
+});
+
+test('P2: drag accepts two points OR two refs, and rejects neither', () => {
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.drag', fromX: 1, fromY: 2, toX: 3, toY: 4 }),
+    { kind: 'page.drag', fromX: 1, fromY: 2, toX: 3, toY: 4 },
+  );
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.drag', fromRef: 'a', toRef: 'b' }),
+    { kind: 'page.drag', fromRef: 'a', toRef: 'b' },
+  );
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.drag', fromX: 1, fromY: 2 }), /fromRef\+toRef or fromX/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.drag' }), /fromRef\+toRef or fromX/i);
+});

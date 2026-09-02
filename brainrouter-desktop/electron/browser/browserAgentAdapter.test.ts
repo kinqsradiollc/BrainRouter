@@ -31,7 +31,7 @@ test('agent browser command mapping targets exact tab/revision and never exposes
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'tabs.open', url: 'https://example.com/', activate: true }), { command: { op: 'create-tab', url: 'https://example.com/', active: true } });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'tabs.open', url: 'https://example.com/' }), { command: { op: 'create-tab', url: 'https://example.com/', active: false } });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'page.click', tabId: 'tab_x_1', ref: 'br:tab_x_1:4:node_1', pageRevision: 4 }), {
-    tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'click', ref: 'br:tab_x_1:4:node_1', target: undefined, button: undefined, modifiers: undefined },
+    tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'click', ref: 'br:tab_x_1:4:node_1', target: undefined, x: undefined, y: undefined, button: undefined, modifiers: undefined },
   });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'page.setFiles', tabId: 'tab_x_1', testId: 'avatar', pageRevision: 4, files: ['fixtures/avatar.png'] }), {
     tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'set-files', ref: undefined, target: 'avatar', files: ['fixtures/avatar.png'] },
@@ -216,4 +216,20 @@ test('screenshot artifact target creation is exclusive and no-follow without lea
     fs.openSync = originalOpen;
     fs.rmSync(parent, { recursive: true, force: true });
   }
+});
+
+// ADR-055 P2 — coordinate targeting maps through to the desktop op.
+test('mapAgentBrowserCommand threads {x,y} for click/hover and coords for drag', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.click', tabId: 'tab_x_1', x: 120, y: 40 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'click', ref: undefined, target: undefined, x: 120, y: 40, button: undefined, modifiers: undefined } },
+  );
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.hover', tabId: 'tab_x_1', x: 5, y: 6 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'hover', ref: undefined, target: undefined, x: 5, y: 6 } },
+  );
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.drag', tabId: 'tab_x_1', fromX: 1, fromY: 2, toX: 3, toY: 4 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'drag', fromRef: undefined, toRef: undefined, fromX: 1, fromY: 2, toX: 3, toY: 4 } },
+  );
 });
