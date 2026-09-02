@@ -233,3 +233,11 @@ test('mapAgentBrowserCommand threads {x,y} for click/hover and coords for drag',
     { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'drag', fromRef: undefined, toRef: undefined, fromX: 1, fromY: 2, toX: 3, toY: 4 } },
   );
 });
+
+// ADR-055 P3 — snapshot scope threads to the desktop op.
+test('mapAgentBrowserCommand threads snapshot scope', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.snapshot', tabId: 'tab_x_1', scope: 'page' } as BrowserControlCommand),
+    { tabId: 'tab_x_1', command: { op: 'snapshot', mode: 'semantic', scope: 'page' } },
+  );
+});

@@ -70,8 +70,8 @@ export async function activate(host) {
     (_args, runtime) => invoke(runtime, { kind: 'tabs.list' }));
   read('browser_get_state', 'Get navigation and lifecycle state for one tab (defaults to the visible tab).', objSchema(tabProps),
     (args, runtime) => invoke(runtime, { kind: 'page.state', tabId: args.tabId }));
-  read('browser_snapshot', 'Capture a bounded semantic snapshot of the visible page with opaque, page-revision-bound element refs.', objSchema({ ...tabProps, maxChars: { type: 'integer', minimum: 1000, maximum: 50000 } }),
-    (args, runtime) => invoke(runtime, { kind: 'page.snapshot', tabId: args.tabId, maxChars: args.maxChars }));
+  read('browser_snapshot', 'Capture a bounded semantic snapshot of the page (interactive nodes with opaque, page-revision-bound refs). scope "page" also returns visible nodes scrolled out of the viewport (flagged inViewport:false) so you need not scroll-and-re-snapshot; open shadow-DOM roots are walked.', objSchema({ ...tabProps, maxChars: { type: 'integer', minimum: 1000, maximum: 200000 }, scope: { type: 'string', enum: ['viewport', 'page'], description: 'viewport (default) or page (include scrolled-out visible nodes).' } }),
+    (args, runtime) => invoke(runtime, { kind: 'page.snapshot', tabId: args.tabId, maxChars: args.maxChars, scope: args.scope }));
   read('browser_screenshot', 'Capture the current tab as a bounded browser artifact. This is explicit and is not run after normal actions.', objSchema({ ...tabProps, fullPage: { type: 'boolean' } }),
     (args, runtime) => invoke(runtime, { kind: 'page.screenshot', tabId: args.tabId, fullPage: args.fullPage }));
   read('browser_console', 'Read a bounded page-console batch. Sensitive fields are redacted.', objSchema({ ...tabProps, after: { type: 'string', maxLength: 256 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }),

@@ -94,6 +94,8 @@ export interface BrowserSemanticNode {
   role: string;
   name: string;
   tag: string;
+  /** ADR-055 P3 — false when the node is visible but scrolled out of the viewport (scope:'page'). */
+  inViewport?: boolean;
   testid?: string;
   type?: string;
   value?: string;
@@ -138,7 +140,7 @@ export type BrowserCommand =
   | { op: 'stop-find'; action?: 'clearSelection' | 'keepSelection' | 'activateSelection' }
   | { op: 'set-zoom'; factor: number }
   | { op: 'set-muted'; muted: boolean }
-  | { op: 'snapshot'; mode?: 'semantic' | 'testids' | 'accessibility' }
+  | { op: 'snapshot'; mode?: 'semantic' | 'testids' | 'accessibility'; scope?: 'viewport' | 'page' }
   | { op: 'text'; maxChars?: number }
   | { op: 'html'; maxChars?: number }
   | { op: 'screenshot'; maxDimension?: number; fullPage?: boolean }

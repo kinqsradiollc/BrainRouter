@@ -67,7 +67,7 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
     case 'page.forward': return { tabId: command.tabId, command: { op: 'forward' } };
     case 'page.reload': return { tabId: command.tabId, command: { op: 'reload', bypassCache: command.ignoreCache } };
     case 'page.stop': return { tabId: command.tabId, command: { op: 'stop' } };
-    case 'page.snapshot': return { tabId: command.tabId, command: { op: 'snapshot', mode: 'semantic' } };
+    case 'page.snapshot': return { tabId: command.tabId, command: { op: 'snapshot', mode: 'semantic', scope: command.scope } };
     case 'page.text': return { tabId: command.tabId, command: { op: 'text', maxChars: command.maxChars } };
     case 'page.html': return { tabId: command.tabId, command: { op: 'html', maxChars: command.maxChars } };
     case 'page.screenshot': return { tabId: command.tabId, command: { op: 'screenshot', fullPage: command.fullPage } };

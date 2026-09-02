@@ -239,3 +239,10 @@ test('P2: drag accepts two points OR two refs, and rejects neither', () => {
   assert.throws(() => parseBrowserControlCommand({ kind: 'page.drag', fromX: 1, fromY: 2 }), /fromRef\+toRef or fromX/i);
   assert.throws(() => parseBrowserControlCommand({ kind: 'page.drag' }), /fromRef\+toRef or fromX/i);
 });
+
+// ADR-055 P3 — snapshot scope.
+test('P3: snapshot accepts scope viewport|page and rejects other values', () => {
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.snapshot', scope: 'page' }), { kind: 'page.snapshot', scope: 'page' });
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.snapshot' }), { kind: 'page.snapshot' });
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.snapshot', scope: 'everything' }), /scope/i);
+});
