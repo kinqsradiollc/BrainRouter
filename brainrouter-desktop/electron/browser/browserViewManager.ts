@@ -1680,6 +1680,16 @@ export class BrowserViewManager {
     if (mod && key === 'l') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-location', tabId: this.tabState.activeTabId }); return; }
     if (mod && key === 'f') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-find', tabId: this.tabState.activeTabId }); return; }
     if (mod && key === 'r') { event.preventDefault(); this.requireContents(this.tabState.activeTabId).reload(); return; }
+    // ADR-055 P9b — bookmark this page (the page has focus, so main owns ⌘D).
+    if (mod && key === 'd') {
+      event.preventDefault();
+      const current = this.activeTab();
+      this.bookmarks = addBrowserBookmark(this.bookmarks, { url: current.url, title: current.title, at: Date.now() });
+      this.workspacePersistence.schedule();
+      this.setStatus(current, 'Bookmarked.');
+      this.emitState();
+      return;
+    }
     if (mod && /^[1-9]$/.test(key)) {
       event.preventDefault();
       const tabs = this.tabState.all();
