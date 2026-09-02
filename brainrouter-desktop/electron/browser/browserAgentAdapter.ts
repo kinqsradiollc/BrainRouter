@@ -680,6 +680,9 @@ export async function executeAgentBrowserCommand(
   const kind = request.command.kind;
   try {
     const state = manager.getState();
+    // ADR-055 P5 — freeze the pre-dispatch view now; getState() may hand back a
+    // live object the execute() below mutates in place.
+    const receiptBefore: ReceiptSnapshot = MUTATING_RECEIPT_KINDS.has(kind) ? snapshotForReceipt(state) : EMPTY_RECEIPT_SNAPSHOT;
     if (kind === 'capabilities') {
       return success(kind, startedAt, {
         protocolVersion: 1, tabs: true, semanticSnapshot: true, screenshot: true,
@@ -758,11 +761,77 @@ export async function executeAgentBrowserCommand(
       const rows = Array.isArray(adapted.data) ? adapted.data.slice(-limit) : adapted.data;
       adapted = { ...adapted, data: rows };
     }
+    // ADR-055 P5 — attach the action receipt for a mutating op (`state` was read
+    // BEFORE dispatch; re-read AFTER for the delta).
+    if (adapted.ok && MUTATING_RECEIPT_KINDS.has(kind)) {
+      const receipt = buildActionReceipt(receiptBefore, snapshotForReceipt(manager.getState()), adapted.tabId);
+      const base = adapted.data && typeof adapted.data === 'object' && !Array.isArray(adapted.data)
+        ? adapted.data as Record<string, unknown>
+        : { result: adapted.data };
+      adapted = { ...adapted, data: { ...base, receipt } };
+    }
     return adapted;
   } catch (error) {
     const code = error instanceof AdapterError ? error.code : signal?.aborted ? 'aborted' : 'internal';
     return failure(kind, startedAt, code, error instanceof Error ? error.message : String(error));
   }
+}
+
+// ADR-055 P5 (D3a) — the mutating page.* ops that return a BrowserActionReceipt:
+// before/after {revision,url,title} + what the action was OBSERVED to change, so
+// Observe -> Act -> Verify is ONE call instead of act + wait + snapshot.
+const MUTATING_RECEIPT_KINDS = new Set([
+  'page.click', 'page.doubleClick', 'page.type', 'page.press', 'page.scroll',
+  'page.drag', 'page.select', 'page.check', 'page.navigate', 'page.back',
+  'page.forward', 'page.reload',
+]);
+
+interface ReceiptSnapshot {
+  activeTabId: string;
+  tabs: Array<{ id: string; revision: number; url: string; title: string }>;
+  dialogId: string | null;
+  permissionId: string | null;
+  downloadCount: number;
+  tabCount: number;
+}
+
+const EMPTY_RECEIPT_SNAPSHOT: ReceiptSnapshot = { activeTabId: '', tabs: [], dialogId: null, permissionId: null, downloadCount: 0, tabCount: 0 };
+
+/** Freeze the receipt-relevant view of the browser into plain primitives, so a
+ *  later live mutation of the state object cannot corrupt the before/after diff. */
+function snapshotForReceipt(s: BrowserState): ReceiptSnapshot {
+  return {
+    activeTabId: s.activeTabId,
+    tabs: s.tabs.map((t) => ({ id: t.id, revision: t.revision, url: t.url, title: t.title })),
+    dialogId: s.dialogPrompt?.id ?? null,
+    permissionId: s.permissionPrompt?.id ?? null,
+    downloadCount: s.downloads.length,
+    tabCount: s.tabs.length,
+  };
+}
+
+function receiptTabView(snap: ReceiptSnapshot, tabId?: string): { revision: number; url: string; title: string } {
+  const id = tabId ?? snap.activeTabId;
+  const tab = snap.tabs.find((t) => t.id === id);
+  return tab ? { revision: tab.revision, url: tab.url, title: tab.title } : { revision: 0, url: '', title: '' };
+}
+
+function buildActionReceipt(before: ReceiptSnapshot, after: ReceiptSnapshot, tabId?: string): Record<string, unknown> {
+  const b = receiptTabView(before, tabId);
+  const a = receiptTabView(after, tabId);
+  return {
+    before: b,
+    after: a,
+    observed: {
+      navigated: b.url !== a.url,
+      titleChanged: b.title !== a.title,
+      revisionChanged: b.revision !== a.revision,
+      dialogOpened: after.dialogId !== null && before.dialogId !== after.dialogId,
+      permissionPrompted: after.permissionId !== null && before.permissionId !== after.permissionId,
+      downloadStarted: after.downloadCount > before.downloadCount,
+      tabOpened: after.tabCount > before.tabCount,
+    },
+  };
 }
 
 function adaptManagerResult(kind: string, startedAt: number, result: BrowserCommandResult): BrowserControlResult {

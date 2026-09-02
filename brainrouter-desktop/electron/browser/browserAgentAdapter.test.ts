@@ -268,3 +268,43 @@ test('certificate trust decisions are refused for the agent (accept), allowed to
   assert.equal(dismiss.ok, true, 'dismissing a certificate dialog is allowed');
   assert.equal(dismissing.calls.length, 1);
 });
+
+// ADR-055 P5 — a mutating op returns an action receipt (before/after + observed).
+test('a mutating op returns an action receipt reflecting what changed', async () => {
+  const manager = new FakeManager();
+  manager.current = state();
+  // Simulate a navigation: the execute() mutates the live state object in place.
+  (manager as unknown as { execute: (r: BrowserCommandRequest) => Promise<BrowserCommandResult> }).execute = async (req) => {
+    manager.calls.push(req);
+    manager.current = {
+      ...manager.current,
+      tabs: manager.current.tabs.map((t) => t.id === 'tab_x_1'
+        ? { ...t, url: 'https://example.com/next', title: 'Next', revision: t.revision + 1 }
+        : t),
+    };
+    return { ok: true, requestId: req.id, tabId: 'tab_x_1', revision: 9, value: { url: 'https://example.com/next' } };
+  };
+
+  const result = await executeAgentBrowserCommand(
+    manager,
+    { id: 'nav-1', command: { kind: 'page.navigate', url: 'https://example.com/next', tabId: 'tab_x_1' } },
+    '/tmp/workspace',
+  );
+  assert.equal(result.ok, true);
+  const data = (result as { data?: Record<string, unknown> }).data as { receipt?: any };
+  assert.ok(data.receipt, 'the mutating op carries a receipt');
+  assert.equal(data.receipt.before.url, 'https://example.com/');
+  assert.equal(data.receipt.after.url, 'https://example.com/next');
+  assert.equal(data.receipt.observed.navigated, true);
+  assert.equal(data.receipt.observed.titleChanged, true);
+  assert.equal(data.receipt.observed.revisionChanged, true);
+  assert.equal(data.receipt.observed.tabOpened, false);
+});
+
+test('a read-only op carries NO receipt', async () => {
+  const manager = new FakeManager();
+  const result = await executeAgentBrowserCommand(manager, { id: 'list-r', command: { kind: 'tabs.list' } }, '/tmp/workspace');
+  assert.equal(result.ok, true);
+  const data = (result as { data?: Record<string, unknown> }).data as { receipt?: unknown };
+  assert.equal(data.receipt, undefined);
+});

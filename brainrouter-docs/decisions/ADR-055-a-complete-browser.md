@@ -258,8 +258,12 @@ Rows are one PR each into the current release branch; a row is done when its acc
   the model targets by what it SEES; multiple matches come back as candidates, never a silent pick
   (the ambiguity rule). Find→ref→act is one extra call; folding the ladder INTO each `page.*` op
   (single-call) is a thin follow-up.
-- **P5 — Action receipts** (D3a): `BrowserActionReceipt` on every mutating op; `browser_wait`
-  becomes the exception, not the rule.
+- **P5 — Action receipts** (D3a) — ✅: every mutating `page.*` op (click/type/scroll/drag/select/
+  check/navigate/back/forward/reload) now returns a **receipt** — `before`/`after`
+  `{revision,url,title}` and an `observed` set (navigated, titleChanged, revisionChanged,
+  dialogOpened, permissionPrompted, downloadStarted, tabOpened) — captured in the adapter by freezing
+  the pre-dispatch state and diffing the post-dispatch state, so Observe→Act→Verify is one call.
+  Read-only ops carry none. (Deep async-navigation settling still uses `page.wait`.)
 - **P6 — Human-needed both ways** (D3b): `HUMAN_NEEDED`, `browser_wait { human }`, hand-back
   button, takeover banner + resume.
 - **P7 — Share a tab** (D3c): per-tab, per-chat grant + badge + revocation; rules §4a amended.
