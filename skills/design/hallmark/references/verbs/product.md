@@ -6,6 +6,8 @@
 
 Write or refresh `product.md`: who the product serves, what it must let them do, what it must never do, the vocabulary it uses, and how it wants to feel. Every other verb reads it; `critique` judges fit against it.
 
+**Where it lives:** `product.md` at the project root (or `.brainrouter/product.md`, or `docs/product.md` — first match wins). BrainRouter reads it beside `design.md` and hands both to the agent as data.
+
 ## Inputs
 
 - the codebase, README, and any brief
