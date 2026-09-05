@@ -77,3 +77,27 @@ test('B4 /design <verb> hands a bounded brief to the skill runner and the agent 
     fs.rmSync(ws, { recursive: true, force: true });
   }
 });
+
+test('B5 /design critique runs the review in an isolated side agent, then the detector, then synthesis through the skill', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-cli-design-critique-'));
+  try {
+    fs.mkdirSync(path.join(ws, 'src'));
+    fs.writeFileSync(path.join(ws, 'src', 'page.html'), '<!doctype html><html><head><style>.card{border-left:4px solid #e11d48}</style></head><body><div class="card">x</div></body></html>');
+    const agent = makeAgent(ws);
+    const turns: string[] = []; const sidePrompts: string[] = [];
+    const repl = {
+      runAgentTurnAsync: async (p: string, o: any) => { sidePrompts.push(p); assert.equal(o.agent.silent, true, 'the review agent must be silent/isolated'); o.agent.chatHistory.push({ role: 'assistant', content: 'Fit: weak.\n{"hierarchy": 6, "clarity": 5, "resonance": 4}' }); },
+      runAgentTurn: (p: string) => { turns.push(p); },
+    };
+    const mcpClient = { callTool: async () => { throw new Error('no mcp in this test'); } };
+    const out = await captureLogs(async () => { assert.equal(await tryHandleDesignCommand({ command: '/design', args: ['critique', 'src/page.html'], agent, mcpClient, config: {}, rl: {}, repl } as any), true); });
+    assert.equal(sidePrompts.length, 1); assert.ok(!/side-stripe-border/.test(sidePrompts[0]), 'the review saw detector output');
+    assert.equal(turns.length, 1, `no synthesis turn; output: ${out}`);
+    assert.match(turns[0], /Design review \(isolated subagent\)/); assert.match(turns[0], /Fit: weak/); assert.match(turns[0], /side-stripe-border/);
+    assert.equal(turns[0].startsWith('Degraded'), false);
+    assert.equal(agent.activeSkill, 'hallmark');
+    assert.ok(fs.existsSync(path.join(ws, '.brainrouter', 'design', 'critiques', 'src-page-html')), 'no snapshot dir');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});

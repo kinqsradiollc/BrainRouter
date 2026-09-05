@@ -28,12 +28,14 @@ import {
   isDesignVerb,
   isDesignMode,
   designVerbPrompt,
+  runDesignCritique,
   type DesignVerbId,
   type DesignModeId,
 } from '@kinqs/brainrouter-core/design';
 import { loadConfig, saveConfig, resolveCliKnobs, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
 import { runSkillByName } from '../_helpers.js';
+import { createEphemeralSideAgent } from '../session/ephemeralSideAgent.js';
 
 export type DesignCommandAction =
   | { action: 'help' }
@@ -128,6 +130,24 @@ export async function tryHandleDesignCommand(ctx: CommandContext): Promise<boole
       return true;
     }
     case 'verb': {
+      if (parsed.verb === 'critique') {
+        // ADR-056 D-B4 — two assessments that cannot see each other. The design
+        // review runs in an isolated, ephemeral side agent (the /side seam); the
+        // detector evidence pass runs only after it ends; synthesis gets both.
+        const seam = {
+          run: async (prompt: string): Promise<string> => {
+            const side = createEphemeralSideAgent(agent, `${agent.sessionKey ?? 'design'}:critique:${Date.now()}`);
+            await ctx.repl.runAgentTurnAsync(prompt, { agent: side, ephemeral: true });
+            const last = [...side.chatHistory].reverse().find((m: any) => m?.role === 'assistant' && typeof m.content === 'string');
+            return typeof last?.content === 'string' ? last.content : '';
+          },
+        };
+        const run = await runDesignCritique({ workspaceRoot: root, targets: parsed.targets, ...(parsed.mode ? { mode: parsed.mode } : {}), seam });
+        if (run.degraded) console.log(chalk.yellow(`\n${run.synthesisPrompt.split('\n')[0]}`));
+        console.log(chalk.gray(`  evidence: ${run.evidence.files} file(s), ${run.evidence.errors} errors, ${run.evidence.warnings} warnings · snapshot ${run.snapshotPath}${run.trend ? `\n  ${run.trend}` : ''}\n`));
+        await runSkillByName(agent, ctx.mcpClient, DESIGN_SKILL_ID, run.synthesisPrompt, undefined, (p) => ctx.repl.runAgentTurn(p));
+        return true;
+      }
       const prompt = designVerbPrompt({ verb: parsed.verb, targets: parsed.targets, ...(parsed.mode ? { mode: parsed.mode } : {}), ...(parsed.world ? { world: parsed.world } : {}) });
       await runSkillByName(agent, ctx.mcpClient, DESIGN_SKILL_ID, prompt, undefined, (p) => ctx.repl.runAgentTurn(p));
       return true;
