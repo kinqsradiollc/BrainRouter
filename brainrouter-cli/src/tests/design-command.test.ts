@@ -26,6 +26,10 @@ test('B1 parseDesignArgs routes subcommands and validates rule ids', () => {
   assert.deepEqual(parseDesignArgs(['detect', 'src', 'index.html', '--rules', 'missing-alt,marquee', '--json']), { action: 'detect', paths: ['src', 'index.html'], rules: ['missing-alt', 'marquee'], json: true });
   assert.equal(parseDesignArgs(['detect', '--rules', 'nope']).action, 'error');
   assert.equal(parseDesignArgs(['polish']).action, 'error');
+  assert.deepEqual(parseDesignArgs(['hooks']), { action: 'hooks' });
+  assert.deepEqual(parseDesignArgs(['hooks', 'on']), { action: 'hooks', tier: 'full' });
+  assert.deepEqual(parseDesignArgs(['hooks', 'immediate']), { action: 'hooks', tier: 'immediate' });
+  assert.equal(parseDesignArgs(['hooks', 'loud']).action, 'error');
 });
 
 test('B1 /design detect runs over a workspace file and prints grouped findings; /design rules lists the catalogue', async () => {

@@ -905,6 +905,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     diagram: {
       theme: c.diagram?.theme === 'dark' || c.diagram?.theme === 'light' ? c.diagram.theme : 'auto',
     },
+    design: {
+      hook: c.design?.hook === 'immediate' || c.design?.hook === 'full' ? c.design.hook : 'off',
+    },
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     effortByModel: resolveEffortByModel(c.effortByModel),

@@ -728,6 +728,13 @@ export interface CliKnobs {
    */
   diagram?: { theme?: 'auto' | 'dark' | 'light' };
   /**
+   * ADR-056 D-B2 — the design hook: `off` (default) runs nothing; `immediate`
+   * checks each UI file a write tool touched (≤ 5 findings into the next turn);
+   * `full` adds a turn-end pass over every UI file the turn wrote. Findings ride
+   * the stop-context channel, never the tool result; the hook never denies a write.
+   */
+  design?: { hook?: 'off' | 'immediate' | 'full' };
+  /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
    * usage, and the tools it requested with their render intents). Log-only —
@@ -1421,6 +1428,7 @@ export interface ResolvedCliKnobs {
   atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
   browser: { vision: 'auto' | 'off'; searchEngine: string };
   diagram: { theme: 'auto' | 'dark' | 'light' };
+  design: { hook: 'off' | 'immediate' | 'full' };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** ADR-052 D2 — resolved per-model effort defaults (validated); empty when unset. */

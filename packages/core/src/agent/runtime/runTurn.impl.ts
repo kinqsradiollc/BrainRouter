@@ -115,6 +115,7 @@ import { beginToolProvenanceBatch, noteToolProvenance } from './contentProvenanc
 import { getLearnedItem } from '../../learning/index.js';
 import { learnedTenantForAgent } from './learningPhase.js';
 import { resolveMcpCatalogTool } from '../../mcp/discovery/discovery.js';
+import { designHookAfterWrite } from '../../design/hook.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -1465,7 +1466,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             const p = typeof args?.path === 'string' ? args.path
               : typeof args?.file === 'string' ? args.file
               : typeof args?.filePath === 'string' ? args.filePath : '';
-            if (p) this.filesWrittenThisTurn.push(p);
+            if (p) {
+              this.filesWrittenThisTurn.push(p);
+              // ADR-056 D-B2 — immediate design check of the one UI file just written.
+              designHookAfterWrite(this, p);
+            }
           }
         } else if (verificationSignal === 'verified') {
           this.verifiedThisTurn = true;
