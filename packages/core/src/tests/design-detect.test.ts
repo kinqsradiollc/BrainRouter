@@ -148,7 +148,9 @@ test('B1 the collector stays inside the workspace and skips build output', () =>
 test('B1 every catalogue rule is exercised by the suite or is a document-level rule', () => {
   const ids = new Set(DESIGN_RULES.map((r) => r.id));
   const covered = new Set(['side-stripe-border', 'gradient-text', 'ai-palette', 'nested-cards', 'glow-halo', 'bounce-easing', 'pulsing-dot', 'marquee', 'eyebrow-label', 'numbered-sections', 'icon-tile-stack', 'buzzword-copy', 'flat-type-hierarchy', 'overused-font', 'identical-card-grid', 'hero-metric', 'low-contrast', 'gray-on-color', 'tiny-text', 'tight-leading', 'justified-text', 'all-caps-body', 'wide-tracking', 'skipped-heading', 'missing-alt', 'unlabelled-control', 'small-touch-target', 'fixed-width-layout', 'inline-color-literal', 'focus-outline-removed', 'reduced-motion-ignored', 'design-system-font', 'design-system-color', 'design-system-radius', 'em-dash-overuse']);
-  for (const id of ids) assert.ok(covered.has(id), `rule ${id} has no fixture`);
+  // Browser-only rules (engine: 'browser') are exercised by design-browser.test.ts against a fake page audit.
+  const browserOnly = new Set(DESIGN_RULES.filter((r) => r.engine === 'browser').map((r) => r.id));
+  for (const id of ids) assert.ok(covered.has(id) || browserOnly.has(id), `rule ${id} has no fixture`);
   const words = Array.from({ length: 90 }, (_, i) => (i % 20 === 0 ? 'clause — clause' : 'word')).join(' ');
   assert.ok(one(`<p>${words}</p>`).includes('em-dash-overuse'));
 });

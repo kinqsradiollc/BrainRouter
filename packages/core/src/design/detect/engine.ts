@@ -41,6 +41,8 @@ export interface DesignFinding {
   guideline: string;
   /** The matched value when the rule has one (font, colour, radius) — what a suppression can name. */
   value?: string;
+  /** ADR-056 D-B1 — set when the in-app browser engine raised it from computed styles. */
+  engine?: 'browser';
 }
 
 export interface DesignDetectOptions {

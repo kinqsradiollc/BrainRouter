@@ -153,6 +153,7 @@ export type BrowserCommand =
   | { op: 'set-muted'; muted: boolean }
   | { op: 'snapshot'; mode?: 'semantic' | 'testids' | 'accessibility'; scope?: 'viewport' | 'page' }
   | { op: 'find-nodes'; query: string; by?: 'role' | 'text' | 'label' | 'testid'; limit?: number; scope?: 'viewport' | 'page' }
+  | { op: 'design-audit'; rules?: string[]; maxFindings?: number }
   | { op: 'text'; maxChars?: number }
   | { op: 'html'; maxChars?: number }
   | { op: 'screenshot'; maxDimension?: number; fullPage?: boolean }
@@ -227,7 +228,7 @@ export interface BrowserControlPort {
 const COMMAND_OPS = new Set<BrowserCommand['op']>([
   'state', 'create-tab', 'select-tab', 'close-tab', 'reopen-tab', 'reorder-tab',
   'navigate', 'back', 'forward', 'reload', 'stop', 'find', 'stop-find', 'set-zoom',
-  'set-muted', 'snapshot', 'find-nodes', 'screenshot', 'console', 'network', 'downloads', 'click',
+  'set-muted', 'snapshot', 'find-nodes', 'design-audit', 'screenshot', 'console', 'network', 'downloads', 'click',
   'double-click', 'hover', 'assert-visible', 'highlight', 'type', 'press', 'scroll',
   'drag', 'select', 'check', 'set-files', 'set-cursor', 'set-device', 'clear-highlight', 'respond-permission',
   'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'share-tab', 'unshare-tab', 'print', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',

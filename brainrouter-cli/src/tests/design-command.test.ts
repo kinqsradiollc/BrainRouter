@@ -33,6 +33,7 @@ test('B1 parseDesignArgs routes subcommands and validates rule ids', () => {
   assert.equal(parseDesignArgs(['sparkle']).action, 'error');
   assert.deepEqual(parseDesignArgs(['verbs']), { action: 'verbs' });
   assert.equal(parseDesignArgs(['audit']).action, 'verb', 'audit is the skill verb, not a detector alias');
+  assert.deepEqual(parseDesignArgs(['detect', '--browser']), { action: 'detect', paths: [], browser: true });
   assert.deepEqual(parseDesignArgs(['hooks']), { action: 'hooks' });
   assert.deepEqual(parseDesignArgs(['hooks', 'on']), { action: 'hooks', tier: 'full' });
   assert.deepEqual(parseDesignArgs(['hooks', 'immediate']), { action: 'hooks', tier: 'immediate' });
@@ -48,6 +49,8 @@ test('B1 /design detect runs over a workspace file and prints grouped findings; 
     const ctx = (args: string[]) => ({ command: '/design', args, agent, mcpClient: {}, config: {}, rl: {}, repl: {} }) as any;
     const out = await captureLogs(async () => { assert.equal(await tryHandleDesignCommand(ctx(['detect', 'src'])), true); });
     assert.match(out, /Design detector/); assert.match(out, /src\/page\.html/); assert.match(out, /side-stripe-border/); assert.match(out, /missing-alt/);
+    const browser = await captureLogs(async () => { await tryHandleDesignCommand(ctx(['detect', 'src', '--browser'])); });
+    assert.match(browser, /Browser engine unavailable here/);
     const json = await captureLogs(async () => { await tryHandleDesignCommand(ctx(['detect', 'src/page.html', '--json'])); });
     const parsed = JSON.parse(json) as { findings: Array<{ rule: string }>; errors: number };
     assert.ok(parsed.findings.some((f) => f.rule === 'missing-alt')); assert.equal(parsed.errors, 1);

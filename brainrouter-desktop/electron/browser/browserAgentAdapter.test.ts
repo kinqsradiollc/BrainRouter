@@ -332,3 +332,11 @@ test('a human wait resolves once the tab leaves the verification challenge', asy
   assert.equal(result.ok, true, 'the wait resolves after the challenge clears');
   assert.ok(reads >= 3, 'it polled until the challenge cleared');
 });
+
+// ADR-056 D-B1 — page.designAudit threads to the design-audit op (the browser design engine).
+test('mapAgentBrowserCommand maps page.designAudit to design-audit', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.designAudit', tabId: 'tab_x_1', rules: ['low-contrast'], maxFindings: 40 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', command: { op: 'design-audit', rules: ['low-contrast'], maxFindings: 40 } },
+  );
+});

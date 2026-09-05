@@ -16,7 +16,7 @@
  * pattern worth a look, not a defect.
  */
 
-export const DESIGN_RULES_VERSION = '1.0.0';
+export const DESIGN_RULES_VERSION = '1.1.0';
 
 export type DesignRuleCategory = 'slop' | 'quality' | 'design-system';
 export type DesignRuleSeverity = 'error' | 'warning' | 'info';
@@ -31,6 +31,12 @@ export interface DesignRule {
   description: string;
   /** The guideline a finding cites — the sentence a reviewer would write. */
   guideline: string;
+  /**
+   * ADR-056 D-B1 — which engine can raise it. `static` (default) reads markup
+   * and CSS; `browser` reads computed styles in the in-app browser (desktop
+   * only); `both` is raised by either, with the browser's numbers when it ran.
+   */
+  engine?: 'static' | 'browser' | 'both';
 }
 
 export const DESIGN_RULES: readonly DesignRule[] = [
@@ -54,8 +60,8 @@ export const DESIGN_RULES: readonly DesignRule[] = [
   { id: 'em-dash-overuse', category: 'slop', severity: 'info', advisory: true, name: 'Em-dash cadence', description: 'More than one em dash per forty words of visible copy.', guideline: 'The em-dash cadence is a generator tell; use full stops.' },
   // ── quality ───────────────────────────────────────────────────────────────
   { id: 'gray-on-color', category: 'quality', severity: 'warning', name: 'Gray text on a coloured surface', description: 'Neutral gray text over a chromatic background.', guideline: 'On a coloured surface, tint secondary text from the hue or the foreground; never gray.' },
-  { id: 'low-contrast', category: 'quality', severity: 'error', name: 'Low contrast', description: 'Text/background contrast under 4.5:1 (3:1 for large text) where both colours are resolvable.', guideline: 'Body text ≥ 4.5:1, large text ≥ 3:1 (WCAG AA).' },
-  { id: 'tiny-text', category: 'quality', severity: 'warning', name: 'Tiny text', description: 'Body-copy font-size under 12px.', guideline: 'Body text is at least 12px; 14–16px reads.' },
+  { id: 'low-contrast', category: 'quality', severity: 'error', engine: 'both', name: 'Low contrast', description: 'Text/background contrast under 4.5:1 (3:1 for large text) where both colours are resolvable.', guideline: 'Body text ≥ 4.5:1, large text ≥ 3:1 (WCAG AA).' },
+  { id: 'tiny-text', category: 'quality', severity: 'warning', engine: 'both', name: 'Tiny text', description: 'Body-copy font-size under 12px.', guideline: 'Body text is at least 12px; 14–16px reads.' },
   { id: 'tight-leading', category: 'quality', severity: 'warning', name: 'Tight leading', description: 'Body-copy line-height under 1.2.', guideline: 'Body line-height 1.4–1.6.' },
   { id: 'justified-text', category: 'quality', severity: 'warning', name: 'Justified text', description: 'text-align: justify on body copy.', guideline: 'Ragged-right; justified text rivers on screens.' },
   { id: 'all-caps-body', category: 'quality', severity: 'warning', name: 'All-caps body copy', description: 'text-transform: uppercase on a paragraph-length element.', guideline: 'Uppercase is for short labels; body copy keeps its case.' },
@@ -65,9 +71,13 @@ export const DESIGN_RULES: readonly DesignRule[] = [
   { id: 'unlabelled-control', category: 'quality', severity: 'error', name: 'Unlabelled form control', description: 'An input, select, or textarea with no label, aria-label, aria-labelledby, or placeholder-only labelling.', guideline: 'Every control has a visible label or an accessible name.' },
   { id: 'focus-outline-removed', category: 'quality', severity: 'error', name: 'Focus outline removed', description: 'outline: none / 0 without a :focus-visible rule that restores a visible focus style.', guideline: 'Keyboard focus is always visible; replace the outline, never remove it.' },
   { id: 'reduced-motion-ignored', category: 'quality', severity: 'warning', name: 'Motion without a reduced-motion path', description: 'Animations or transitions with no prefers-reduced-motion rule anywhere.', guideline: 'Every animation has a prefers-reduced-motion alternative that keeps the state change.' },
-  { id: 'small-touch-target', category: 'quality', severity: 'warning', name: 'Small touch target', description: 'A button or link with an explicit height or min-height under 44px and no padding to make up for it.', guideline: 'Interactive targets are at least 44×44 CSS px.' },
+  { id: 'small-touch-target', category: 'quality', severity: 'warning', engine: 'both', name: 'Small touch target', description: 'A button or link with an explicit height or min-height under 44px and no padding to make up for it.', guideline: 'Interactive targets are at least 44×44 CSS px.' },
   { id: 'fixed-width-layout', category: 'quality', severity: 'warning', name: 'Fixed pixel width', description: 'A layout container with a fixed width over 960px and no max-width.', guideline: 'Layouts flow; use max-width and let the container shrink.' },
   { id: 'inline-color-literal', category: 'quality', severity: 'info', advisory: true, name: 'Colour literal in markup', description: 'A hex/rgb colour written inline in a style attribute.', guideline: 'Colours come from tokens, not from the element.' },
+  // ── browser engine only (computed styles in the in-app browser) ──
+  { id: 'text-overflow', category: 'quality', severity: 'error', engine: 'browser', name: 'Text clipped or covered', description: 'Rendered text overflows a box with overflow hidden, or another element covers its centre.', guideline: 'Every piece of text is fully readable at rest — nothing clipped, nothing covered.' },
+  { id: 'horizontal-overflow', category: 'quality', severity: 'error', engine: 'browser', name: 'Horizontal overflow in the first viewport', description: 'The document is wider than the viewport, so the page scrolls sideways.', guideline: 'No horizontal scroll at any supported viewport width.' },
+  { id: 'hidden-at-rest', category: 'quality', severity: 'warning', engine: 'browser', name: 'Content hidden at rest', description: 'Text that is invisible (opacity 0 / visibility hidden) until a transition reveals it on hover or focus.', guideline: 'Content is readable without hovering; reveal-on-hover is for enhancement, never for the message.' },
   // ── design-system ─────────────────────────────────────────────────────────
   { id: 'design-system-font', category: 'design-system', severity: 'warning', name: 'Font outside the design system', description: 'A font-family not declared in design.md typography tokens.', guideline: 'The typefaces in design.md are the typefaces; add a token or use one.' },
   { id: 'design-system-color', category: 'design-system', severity: 'warning', name: 'Colour outside the design system', description: 'A literal colour not declared in design.md colour tokens.', guideline: 'The palette in design.md is the palette; add a token or use one.' },

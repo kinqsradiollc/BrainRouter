@@ -78,6 +78,8 @@ export type BrowserControlCommand =
   | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number; human?: boolean } & TabTarget)
   | ({ kind: 'page.snapshot'; maxChars?: number; scope?: 'viewport' | 'page' } & TabTarget)
   | ({ kind: 'page.find'; query: string; by?: 'role' | 'text' | 'label' | 'testid'; limit?: number; scope?: 'viewport' | 'page' } & TabTarget)
+  /** ADR-056 D-B1 — the browser design engine: computed-style rules over the live page (desktop only). */
+  | ({ kind: 'page.designAudit'; rules?: string[]; maxFindings?: number } & TabTarget)
   | ({ kind: 'page.text'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.html'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.screenshot'; fullPage?: boolean } & TabTarget)
@@ -312,6 +314,11 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
       const maxChars = integer(row.maxChars, 'maxChars', 1_000, 200_000);
       const scope = enumValue(row.scope, 'scope', ['viewport', 'page'] as const);
       return { kind, ...target(), ...(maxChars !== undefined ? { maxChars } : {}), ...(scope ? { scope } : {}) };
+    }
+    case 'page.designAudit': {
+      const rules = Array.isArray(row.rules) ? row.rules.filter((r): r is string => typeof r === 'string' && /^[a-z0-9-]{1,64}$/.test(r)).slice(0, 64) : undefined;
+      const maxFindings = integer(row.maxFindings, 'maxFindings', 1, 200);
+      return { kind, ...target(), ...(rules?.length ? { rules } : {}), ...(maxFindings !== undefined ? { maxFindings } : {}) };
     }
     case 'page.find': {
       const query = boundedString(row.query, 'query', 512)!;
