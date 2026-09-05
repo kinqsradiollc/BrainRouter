@@ -36,7 +36,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setMarket,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setDiagrams, setDiagramView, setDiagramDelta, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -484,6 +484,10 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       case 'q-req': if (Array.isArray(result)) setRequirements(result as RequirementRecord[]); return;
       case 'q-atlas': setAtlasGraph(result && typeof result === 'object' && Array.isArray((result as { nodes?: unknown }).nodes) ? (result as AtlasGraph) : null); return;
       case 'q-atlas-build': { const g = (result as { graph?: AtlasGraph } | null)?.graph ?? null; if (g) setAtlasGraph(g); setAtlasBuilding(false); return; }
+      // ADR-056 D-A5 — Diagrams panel data: the list, one opened diagram, its delta.
+      case 'q-diagrams': setDiagrams(Array.isArray(result) ? (result as import('../../diagrams/types.js').DiagramListRow[]) : []); return;
+      case 'q-diagram-read': setDiagramView(result && typeof result === 'object' ? (result as import('../../diagrams/types.js').DiagramReadResult) : null); return;
+      case 'q-diagram-delta': setDiagramDelta(result && typeof result === 'object' ? (result as import('../../diagrams/types.js').DiagramDeltaResult) : null); return;
       case 'q-atlas-enrich': {
         const r = result as { graph?: AtlasGraph; error?: string; enrichResult?: { summarized: number; layers: number; tourSteps: number; batchesFailed: number } } | null;
         setAtlasEnriching(false);

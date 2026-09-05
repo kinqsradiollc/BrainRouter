@@ -124,6 +124,9 @@ export interface AgentEventsCtx {
   setAtlasEnriching: React.Dispatch<React.SetStateAction<boolean>>;
   setAtlasAssessing: React.Dispatch<React.SetStateAction<string | null>>;
   setAtlasAssessments: React.Dispatch<React.SetStateAction<Record<string, import('../../atlas/atlasView.js').AtlasChangeAssessment>>>;
+  setDiagrams: React.Dispatch<React.SetStateAction<import('../../diagrams/types.js').DiagramListRow[]>>;
+  setDiagramView: React.Dispatch<React.SetStateAction<import('../../diagrams/types.js').DiagramReadResult | null>>;
+  setDiagramDelta: React.Dispatch<React.SetStateAction<import('../../diagrams/types.js').DiagramDeltaResult | null>>;
   setAtlasUiMap: React.Dispatch<React.SetStateAction<UiMap | null>>;
   setAtlasStories: React.Dispatch<React.SetStateAction<Story[]>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;

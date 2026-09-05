@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isDiagramKind, type Diagram, type DiagramKind } from '@kinqs/brainrouter-types';
-import { canonicalDiagramJson } from './render/checks.js';
+import { canonicalDiagramJson, type DiagramReceipt } from './render/checks.js';
 
 export const DIAGRAM_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
@@ -79,4 +79,19 @@ export function listDiagrams(workspaceRoot: string): DiagramListEntry[] {
     out.push(entry);
   }
   return out;
+}
+
+/** The delivered artifact for a slug, or null when it has not been rendered. */
+export function readDiagramHtml(workspaceRoot: string, slug: string): string | null {
+  if (!isDiagramSlug(slug)) return null;
+  try { return fs.readFileSync(diagramPaths(workspaceRoot, slug).html, 'utf8'); } catch { return null; }
+}
+
+/** The receipt written beside the artifact, or null when absent or unparseable. */
+export function readDiagramReceipt(workspaceRoot: string, slug: string): DiagramReceipt | null {
+  if (!isDiagramSlug(slug)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(diagramPaths(workspaceRoot, slug).receipt, 'utf8')) as DiagramReceipt;
+    return raw && raw.receiptVersion === 1 && Array.isArray(raw.checks) ? raw : null;
+  } catch { return null; }
 }

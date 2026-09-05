@@ -686,3 +686,121 @@ html[data-visual-system="v2"] :is(
     forced-color-adjust: auto;
   }
 }
+
+/* ADR-056 D-A5 — Diagrams panel: list + detail, sealed artifact frame, receipt
+   line, delta facts. Semantic tokens only; flat surfaces; no motion. */
+html[data-visual-system="v2"] .dgp {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The side rail is narrow: the list sits above the detail, capped so the
+   artifact keeps most of the height. */
+html[data-visual-system="v2"] .dgp-list {
+  flex: 0 0 auto;
+  max-height: 34%;
+  border-bottom: 1px solid var(--shell-divider-strong);
+  overflow: auto;
+  padding: 6px 0;
+}
+
+html[data-visual-system="v2"] .dgp-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .dgp-row.selected {
+  background: var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] .dgp-row-meta,
+html[data-visual-system="v2"] .dgp-receipt,
+html[data-visual-system="v2"] .dgp-fields {
+  font-size: 11px;
+  color: var(--shell-text-secondary);
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+html[data-visual-system="v2"] .dgp-receipt.warn,
+html[data-visual-system="v2"] .dgp-checks.warn {
+  color: var(--shell-danger, inherit);
+}
+
+html[data-visual-system="v2"] .dgp-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+html[data-visual-system="v2"] .dgp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .dgp-title {
+  font-weight: 600;
+}
+
+html[data-visual-system="v2"] .dgp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+html[data-visual-system="v2"] .dgp-frame {
+  flex: 1 1 auto;
+  min-height: 360px;
+  width: 100%;
+  border: 0;
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .dgp-delta,
+html[data-visual-system="v2"] .dgp-sources {
+  padding: 10px 12px;
+  border-top: 1px solid var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .dgp-facts {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+
+html[data-visual-system="v2"] .dgp-fact,
+html[data-visual-system="v2"] .dgp-evidence,
+html[data-visual-system="v2"] .dgp-kind {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--shell-divider-strong);
+  border-radius: 0;
+  font-size: 11px;
+}
+
+html[data-visual-system="v2"] .dgp-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 10px;
+}
+
+html[data-visual-system="v2"] .dgp-source-el {
+  margin: 4px 0;
+}

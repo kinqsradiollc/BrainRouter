@@ -11,6 +11,7 @@ import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { UiMap, Story } from '@kinqs/brainrouter-core/browser';
 import { PANEL_DEFS, type PanelId, type SearchHit } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
+import type { DiagramListRow, DiagramReadResult, DiagramDeltaResult } from './lib/diagrams/types.js';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/list/sessionPagination.js';
@@ -286,6 +287,11 @@ export function App(): React.ReactElement {
   const [atlasEnriching, setAtlasEnriching] = useState(false); // ATLAS-4b — LLM enrichment in flight
   const [atlasAssessing, setAtlasAssessing] = useState<string | null>(null); // ATLAS-14 — path being assessed
   const [atlasAssessments, setAtlasAssessments] = useState<Record<string, import('./lib/atlas/atlasView.js').AtlasChangeAssessment>>({});
+  // ADR-056 D-A5 — the workspace's diagrams (list, the opened one, its delta) and the file the Diagrams panel asks Atlas to focus.
+  const [diagrams, setDiagrams] = useState<DiagramListRow[]>([]);
+  const [diagramView, setDiagramView] = useState<DiagramReadResult | null>(null);
+  const [diagramDelta, setDiagramDelta] = useState<DiagramDeltaResult | null>(null);
+  const [atlasFocusPath, setAtlasFocusPath] = useState<string | null>(null);
   const [atlasUiMap, setAtlasUiMap] = useState<UiMap | null>(null); // UI-TEST fusion — generated screen map for the Atlas Screens mode
   const [atlasStories, setAtlasStories] = useState<Story[]>([]); // UI Stories — named user journeys for the Atlas Screens mode
   // §a11y-inspect — component reference tags dragged from the Browser panel's
@@ -508,7 +514,7 @@ export function App(): React.ReactElement {
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setMarket,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setDiagrams, setDiagramView, setDiagramDelta, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -690,7 +696,7 @@ export function App(): React.ReactElement {
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
-    review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
+    review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching, diagrams, diagramView, diagramDelta, atlasFocusPath, setAtlasFocusPath,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts,
     // ADR-028 B2 — the Artifacts panel opens scoped to this session and labels

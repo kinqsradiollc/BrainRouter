@@ -28,6 +28,7 @@ import {
 } from '@kinqs/brainrouter-core/notes/editing';
 import type { NoteCommentDto } from '@kinqs/brainrouter-ui/notes';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
+import { devDiagramDelta, devDiagramList, devDiagramRead } from './diagrams.js';
 import type { DevState } from './state.js';
 import {
   previewDevWorkspaceInstruction,
@@ -640,6 +641,10 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // REQUIREMENT-RECORDS — mock the requirementStore wrappers (mutate in-memory).
     // ATLAS — a small synthetic codebase graph so the Atlas panel renders in
     // browser-only dev (real builds come from the host's deterministic builder).
+    // ADR-056 D-A5 — Diagrams panel fixtures (see ./diagrams.ts).
+    'diagram-list': () => devDiagramList(),
+    'diagram-read': (a) => devDiagramRead(String(a.slug ?? '')),
+    'diagram-delta': (a) => devDiagramDelta(String(a.slug ?? '')),
     'atlas-graph': () => devAtlasEnriched(),
     'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 20, functions: 1, classes: 1, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
     'atlas-enrich': () => {

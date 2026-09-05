@@ -32,6 +32,8 @@ export {
   slugifyDiagramTitle,
   writeDiagramSpec,
   readDiagramSpec,
+  readDiagramHtml,
+  readDiagramReceipt,
   listDiagrams,
   DIAGRAM_SLUG_RE,
   type DiagramPaths,
