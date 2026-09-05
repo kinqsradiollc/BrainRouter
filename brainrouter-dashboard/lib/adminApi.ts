@@ -315,6 +315,14 @@ export interface ReviewPullRequestDetail {
   reviews: ReviewJob[];
 }
 
+/** ADR-056 A7 — a diagram a pull request carries at its head, read-only. */
+export interface ReviewPrDiagram {
+  slug: string; title: string; kind: string;
+  receipt: { ok: boolean; artifactSha256: string; specificationSha256: string; rendererVersion: string } | null;
+  /** Self-contained HTML for a sandboxed viewer. */
+  html: string;
+}
+
 export interface ReviewIssue {
   reviewId: string;
   lens: ReviewJob["lens"];
@@ -480,6 +488,15 @@ export const adminApi = {
     return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
   },
   getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
+  // ADR-056 A7 — the PR's diagrams at its head, and a 1200×630 share image (SVG) for one of them.
+  getReviewPrDiagrams: (repo: string, number: number, orgId?: string) => {
+    const [owner, name] = repo.split("/");
+    return authFetch<{ headSha: string; diagrams: ReviewPrDiagram[] }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/diagrams`, { orgId });
+  },
+  getReviewPrDiagramShare: (repo: string, number: number, slug: string, orgId?: string) => {
+    const [owner, name] = repo.split("/");
+    return authFetch<{ slug: string; filename: string; contentType: string; svg: string }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/diagrams/${encodeURIComponent(slug)}/share`, { orgId });
+  },
   // ADR-041 D14 — the runtime composition snapshot ("what is running").
   getRuntimeComposition: (orgId?: string) => authFetch<RuntimeComposition>("/api/admin/runtime/composition", { orgId }),
   getReviewPrActivity: (repo: string, number: number, orgId?: string) => {

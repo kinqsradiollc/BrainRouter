@@ -8,9 +8,10 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { EmptyState } from "../../../components/EmptyState";
 import { PageHeader } from "../../../components/PageHeader";
 import { PremiumCard } from "../../../components/PremiumCard";
+import { PremiumButton } from "../../../components/PremiumButton";
 import { StatusBadge } from "../../../components/Analytics";
 import { AgentTraceGraph } from "../../../components/AgentTraceGraph";
-import { adminApi, type ReviewJob, type ReviewPullRequestDetail } from "../../../lib/adminApi";
+import { adminApi, type ReviewJob, type ReviewPullRequestDetail, type ReviewPrDiagram } from "../../../lib/adminApi";
 import { invalidateDashboardQueries, queryDashboard } from "../../../lib/dashboardQuery";
 import { InlineLoading } from "../../../components/LoadingSpinner";
 import {
@@ -40,6 +41,62 @@ function formatTimestamp(value: string): string {
   return Number.isFinite(date.getTime())
     ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     : value;
+}
+
+// ADR-056 A7 — the diagrams a pull request carries at its head: a read-only,
+// sandboxed viewer (no scripts run; the artifact is self-contained) and a
+// 1200×630 share image built from the same artifact.
+function ReviewDiagramsCard({ repo, number, orgId }: { repo: string; number: number; orgId?: string }) {
+  const [diagrams, setDiagrams] = useState<ReviewPrDiagram[] | null>(null);
+  const [selected, setSelected] = useState<string>("");
+  const [error, setError] = useState("");
+  const [sharing, setSharing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setDiagrams(null); setError("");
+    adminApi.getReviewPrDiagrams(repo, number, orgId).then((result) => {
+      if (cancelled) return;
+      setDiagrams(result.diagrams); setSelected(result.diagrams[0]?.slug ?? "");
+    }).catch((caught) => { if (!cancelled) { setDiagrams([]); setError(caught instanceof Error ? caught.message : "Failed to load diagrams"); } });
+    return () => { cancelled = true; };
+  }, [repo, number, orgId]);
+  const current = diagrams?.find((d) => d.slug === selected) ?? null;
+  const share = async () => {
+    if (!current) return;
+    setSharing(true);
+    try {
+      const file = await adminApi.getReviewPrDiagramShare(repo, number, current.slug, orgId);
+      const url = URL.createObjectURL(new Blob([file.svg], { type: file.contentType }));
+      const a = document.createElement("a"); a.href = url; a.download = file.filename; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Failed to build the share image"); }
+    finally { setSharing(false); }
+  };
+  if (diagrams && diagrams.length === 0 && !error) return null;
+  return (
+    <PremiumCard level={2} className="review-detail__diagrams-card">
+      <div className="settings-cardhead">
+        <div><h3>Diagrams</h3><div className="settings-hint">Maps this pull request carries at its head, each with a receipt</div></div>
+        {current && <PremiumButton size="small" onClick={() => void share()} disabled={sharing}>{sharing ? "Building…" : "Share image (1200×630)"}</PremiumButton>}
+      </div>
+      {error && <div className="settings-empty-inline">{error}</div>}
+      {diagrams === null && !error && <InlineLoading label="Loading diagrams" />}
+      {diagrams && diagrams.length > 1 && (
+        <div className="review-detail__diagram-tabs" role="tablist" aria-label="Diagrams">
+          {diagrams.map((d) => <button key={d.slug} type="button" role="tab" aria-selected={d.slug === selected} className={`review-detail__diagram-tab${d.slug === selected ? " is-active" : ""}`} onClick={() => setSelected(d.slug)}>{d.title}<span>{d.kind}</span></button>)}
+        </div>
+      )}
+      {current && (
+        <>
+          <div className="review-detail__diagram-meta">
+            <strong>{current.title}</strong><span>{current.kind}</span>
+            {current.receipt ? <StatusBadge tone={current.receipt.ok ? "ok" : "warn"}>{current.receipt.ok ? "receipt ok" : "receipt failed"} · {current.receipt.artifactSha256.slice(0, 12)}</StatusBadge> : <StatusBadge tone="neutral">no receipt</StatusBadge>}
+          </div>
+          <iframe className="review-detail__diagram-frame" title={`Diagram: ${current.title}`} sandbox="" srcDoc={current.html} loading="lazy" />
+        </>
+      )}
+    </PremiumCard>
+  );
 }
 
 function ReviewFindingsCard({ review }: { review: ReviewJob }) {
@@ -241,6 +298,8 @@ function Detail() {
                 return check.html_url ? <a className="review-detail__check" key={check.id ?? index} href={check.html_url} target="_blank" rel="noreferrer">{content}</a> : <div className="review-detail__check" key={check.id ?? index}>{content}</div>;
               }) : <div className="settings-empty-inline">No check runs yet.</div>}
             </PremiumCard>
+
+            <ReviewDiagramsCard repo={repo} number={number} orgId={orgId} />
 
             <PremiumCard level={2} className="review-detail__timeline-card">
               <div className="settings-cardhead"><div><h3>Timeline</h3><div className="settings-hint">Latest review work first</div></div>{timeline.length > 0 && <span className="settings-badge settings-badge--muted">{timeline.length}</span>}</div>
