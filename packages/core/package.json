@@ -63,6 +63,10 @@
       "types": "./dist/diagram/index.d.ts",
       "default": "./dist/diagram/index.js"
     },
+    "./design": {
+      "types": "./dist/design/index.d.ts",
+      "default": "./dist/design/index.js"
+    },
     "./exec": {
       "types": "./dist/exec/index.d.ts",
       "default": "./dist/exec/index.js"

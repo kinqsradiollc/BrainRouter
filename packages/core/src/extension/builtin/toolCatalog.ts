@@ -71,6 +71,8 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'diagram_validate', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'diagram_draft', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'diagram_render', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
+  // ADR-056 D-B1 — the design detector reads UI files under the workspace; pure.
+  { name: 'design_detect', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
