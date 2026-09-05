@@ -117,7 +117,10 @@ services:
       context: ../..
       dockerfile: deploy/brain/Dockerfile
     restart: unless-stopped
-    command: ["node", "dist/services/gateway/index.js"]
+    # ADR-041 A41-12 — boot through the generic service loader; the provider-gateway
+    # service profile is the authoritative boot source (id → entrypoint, defaultPort
+    # → :3748). Guarded by services/compose-gateway-invariant.test.ts.
+    command: ["node", "dist/services/loader.js", "provider-gateway"]
     depends_on:
       postgres:
         condition: service_healthy

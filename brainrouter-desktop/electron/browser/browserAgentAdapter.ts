@@ -67,7 +67,10 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
     case 'page.forward': return { tabId: command.tabId, command: { op: 'forward' } };
     case 'page.reload': return { tabId: command.tabId, command: { op: 'reload', bypassCache: command.ignoreCache } };
     case 'page.stop': return { tabId: command.tabId, command: { op: 'stop' } };
-    case 'page.snapshot': return { tabId: command.tabId, command: { op: 'snapshot', mode: 'semantic' } };
+    case 'page.snapshot': return { tabId: command.tabId, command: { op: 'snapshot', mode: 'semantic', scope: command.scope } };
+    case 'page.find': return { tabId: command.tabId, command: { op: 'find-nodes', query: command.query, by: command.by, limit: command.limit, scope: command.scope } };
+    // ADR-056 D-B1 — the browser design engine threads to the design-audit op.
+    case 'page.designAudit': return { tabId: command.tabId, command: { op: 'design-audit', rules: command.rules, maxFindings: command.maxFindings } };
     case 'page.text': return { tabId: command.tabId, command: { op: 'text', maxChars: command.maxChars } };
     case 'page.html': return { tabId: command.tabId, command: { op: 'html', maxChars: command.maxChars } };
     case 'page.screenshot': return { tabId: command.tabId, command: { op: 'screenshot', fullPage: command.fullPage } };
@@ -76,14 +79,14 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
     case 'page.downloads': return { tabId: command.tabId, command: { op: 'downloads' } };
     case 'page.click': {
       const target = refTarget(command);
-      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'click', ref: target.ref, target: target.target, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
+      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'click', ref: target.ref, target: target.target, x: command.x, y: command.y, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
     }
     case 'page.doubleClick': {
       const target = refTarget(command);
-      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'double-click', ref: target.ref, target: target.target, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
+      return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'double-click', ref: target.ref, target: target.target, x: command.x, y: command.y, button: command.button, modifiers: command.modifiers as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> | undefined } };
     }
     case 'page.hover': {
-      const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'hover', ref: target.ref, target: target.target } };
+      const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'hover', ref: target.ref, target: target.target, x: command.x, y: command.y } };
     }
     case 'page.type': {
       const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'type', ref: target.ref, target: target.target, text: command.text, replace: command.replace } };
@@ -106,7 +109,7 @@ export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAg
         ...(target.ref || target.target ? { targetPreparation: { kind: 'pointer' as const, ref: target.ref, target: target.target } } : {}),
       };
     }
-    case 'page.drag': return { tabId: command.tabId, expectedRevision: command.pageRevision, command: { op: 'drag', fromRef: command.fromRef, toRef: command.toRef } };
+    case 'page.drag': return { tabId: command.tabId, expectedRevision: command.pageRevision, command: { op: 'drag', fromRef: command.fromRef, toRef: command.toRef, fromX: command.fromX, fromY: command.fromY, toX: command.toX, toY: command.toY } };
     case 'page.select': {
       const target = refTarget(command); return { tabId: target.tabId, expectedRevision: target.expectedRevision, command: { op: 'select', ref: target.ref, target: target.target, values: command.values } };
     }
@@ -387,7 +390,10 @@ async function targetIsVisible(
 
 async function waitForPage(manager: BrowserManagerPort, requestId: string, command: Extract<BrowserControlCommand, { kind: 'page.wait' }>, signal?: AbortSignal): Promise<BrowserControlResult> {
   const startedAt = Date.now();
-  const timeout = Math.min(60_000, Math.max(1, command.timeoutMs ?? 15_000));
+  // ADR-055 P6 — a human-verification wait may take minutes; others stay short.
+  const timeout = command.human
+    ? Math.min(600_000, Math.max(1, command.timeoutMs ?? 300_000))
+    : Math.min(60_000, Math.max(1, command.timeoutMs ?? 15_000));
   const deadline = startedAt + timeout;
   let networkSignature: string | undefined;
   let networkStableSince = 0;
@@ -438,6 +444,9 @@ async function waitForPage(manager: BrowserManagerPort, requestId: string, comma
         }
       }
     }
+    // ADR-055 P6 — resolve when the human-verification challenge has CLEARED
+    // (the tab left the challenge state); this is the two-way hand-back.
+    if (command.human) ready = ready && tab.humanNeeded !== true;
     if (command.urlIncludes) ready = ready && tab.url.includes(command.urlIncludes);
     if (ready && command.text !== undefined) {
       const textMatch = await pageTextMatches(manager, requestId, tab.id, command.text, signal);
@@ -679,6 +688,9 @@ export async function executeAgentBrowserCommand(
   const kind = request.command.kind;
   try {
     const state = manager.getState();
+    // ADR-055 P5 — freeze the pre-dispatch view now; getState() may hand back a
+    // live object the execute() below mutates in place.
+    const receiptBefore: ReceiptSnapshot = MUTATING_RECEIPT_KINDS.has(kind) ? snapshotForReceipt(state) : EMPTY_RECEIPT_SNAPSHOT;
     if (kind === 'capabilities') {
       return success(kind, startedAt, {
         protocolVersion: 1, tabs: true, semanticSnapshot: true, screenshot: true,
@@ -703,6 +715,11 @@ export async function executeAgentBrowserCommand(
     if (kind === 'dialog.respond') {
       const prompt = state.dialogPrompt;
       if (!prompt || (request.command.tabId && prompt.tabId !== request.command.tabId)) return failure(kind, startedAt, 'not_found', 'No matching browser dialog is waiting.', request.command.tabId);
+      // ADR-055 P11 (D6) — a certificate trust decision is the human's, never the
+      // agent's; the agent may dismiss a certificate dialog but not accept one.
+      if (prompt.kind === 'certificate' && request.command.action === 'accept') {
+        return failure(kind, startedAt, 'permission_denied', 'Certificate trust decisions are for a human. Ask the person to accept or reject it in the visible Browser tab.', prompt.tabId);
+      }
       const result = await manager.execute({ version: BROWSER_PROTOCOL_VERSION, id: request.id, tabId: prompt.tabId, command: { op: 'respond-dialog', promptId: prompt.id, accept: request.command.action === 'accept', value: request.command.promptText } }, signal);
       return adaptManagerResult(kind, startedAt, result);
     }
@@ -752,11 +769,77 @@ export async function executeAgentBrowserCommand(
       const rows = Array.isArray(adapted.data) ? adapted.data.slice(-limit) : adapted.data;
       adapted = { ...adapted, data: rows };
     }
+    // ADR-055 P5 — attach the action receipt for a mutating op (`state` was read
+    // BEFORE dispatch; re-read AFTER for the delta).
+    if (adapted.ok && MUTATING_RECEIPT_KINDS.has(kind)) {
+      const receipt = buildActionReceipt(receiptBefore, snapshotForReceipt(manager.getState()), adapted.tabId);
+      const base = adapted.data && typeof adapted.data === 'object' && !Array.isArray(adapted.data)
+        ? adapted.data as Record<string, unknown>
+        : { result: adapted.data };
+      adapted = { ...adapted, data: { ...base, receipt } };
+    }
     return adapted;
   } catch (error) {
     const code = error instanceof AdapterError ? error.code : signal?.aborted ? 'aborted' : 'internal';
     return failure(kind, startedAt, code, error instanceof Error ? error.message : String(error));
   }
+}
+
+// ADR-055 P5 (D3a) — the mutating page.* ops that return a BrowserActionReceipt:
+// before/after {revision,url,title} + what the action was OBSERVED to change, so
+// Observe -> Act -> Verify is ONE call instead of act + wait + snapshot.
+const MUTATING_RECEIPT_KINDS = new Set([
+  'page.click', 'page.doubleClick', 'page.type', 'page.press', 'page.scroll',
+  'page.drag', 'page.select', 'page.check', 'page.navigate', 'page.back',
+  'page.forward', 'page.reload',
+]);
+
+interface ReceiptSnapshot {
+  activeTabId: string;
+  tabs: Array<{ id: string; revision: number; url: string; title: string }>;
+  dialogId: string | null;
+  permissionId: string | null;
+  downloadCount: number;
+  tabCount: number;
+}
+
+const EMPTY_RECEIPT_SNAPSHOT: ReceiptSnapshot = { activeTabId: '', tabs: [], dialogId: null, permissionId: null, downloadCount: 0, tabCount: 0 };
+
+/** Freeze the receipt-relevant view of the browser into plain primitives, so a
+ *  later live mutation of the state object cannot corrupt the before/after diff. */
+function snapshotForReceipt(s: BrowserState): ReceiptSnapshot {
+  return {
+    activeTabId: s.activeTabId,
+    tabs: s.tabs.map((t) => ({ id: t.id, revision: t.revision, url: t.url, title: t.title })),
+    dialogId: s.dialogPrompt?.id ?? null,
+    permissionId: s.permissionPrompt?.id ?? null,
+    downloadCount: s.downloads.length,
+    tabCount: s.tabs.length,
+  };
+}
+
+function receiptTabView(snap: ReceiptSnapshot, tabId?: string): { revision: number; url: string; title: string } {
+  const id = tabId ?? snap.activeTabId;
+  const tab = snap.tabs.find((t) => t.id === id);
+  return tab ? { revision: tab.revision, url: tab.url, title: tab.title } : { revision: 0, url: '', title: '' };
+}
+
+function buildActionReceipt(before: ReceiptSnapshot, after: ReceiptSnapshot, tabId?: string): Record<string, unknown> {
+  const b = receiptTabView(before, tabId);
+  const a = receiptTabView(after, tabId);
+  return {
+    before: b,
+    after: a,
+    observed: {
+      navigated: b.url !== a.url,
+      titleChanged: b.title !== a.title,
+      revisionChanged: b.revision !== a.revision,
+      dialogOpened: after.dialogId !== null && before.dialogId !== after.dialogId,
+      permissionPrompted: after.permissionId !== null && before.permissionId !== after.permissionId,
+      downloadStarted: after.downloadCount > before.downloadCount,
+      tabOpened: after.tabCount > before.tabCount,
+    },
+  };
 }
 
 function adaptManagerResult(kind: string, startedAt: number, result: BrowserCommandResult): BrowserControlResult {

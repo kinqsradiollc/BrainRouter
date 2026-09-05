@@ -11,7 +11,12 @@ import { getCliKnobs } from '../../config/config.js';
 import { recordTrajectoryEvent } from '../../session/trace/trajectoryStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
-import { parseHookDecision } from '../../hooks/hooksStore.js';
+import { parseHookDecision, parseSessionStartDirectives } from '../../hooks/hooksStore.js';
+import { setSessionMeta } from '../../session/state/sessionMetaStore.js';
+import { readAtlasGraphCached } from '../../atlas/store/atlasStore.js';
+import { atlasOrientation, atlasPromptRetrieval } from '../../atlas/agentContext.js';
+import { maybeRefreshAtlasInBackground } from '../../atlas/autoRefresh.js';
+import { gitHeadSha } from '../../git/workspaceGit.js';
 import {
   buildFanOutHint,
   shouldSuggestFanOut,
@@ -77,6 +82,12 @@ export interface PreparedTurnContext {
   blockedAnswer?: string;
 }
 
+// ADR-048 S1 — sessionKeys whose session-start moment has passed, per agent
+// (WeakMap so a discarded agent frees its set; same pattern as the learning
+// phase's endingSessions). Marked at the FIRST prepared turn of a session,
+// independent of whether hooks were gated off for it.
+const startedSessions = new WeakMap<Agent, Set<string>>();
+
 export async function prepareTurnContextPhase(
   agent: Agent,
   input: PrepareTurnContextInput,
@@ -140,6 +151,76 @@ export async function prepareTurnContextPhase(
 
   await agent.injectRecallContext(prompt, input.mcpTools as any[], input.callbacks);
   input.assertReviewedExecutionCurrent?.();
+
+  // ADR-048 S1 — the session-start moment: the FIRST prepared turn of each
+  // sessionKey on this agent. `session-start` shell hooks fire here (completing
+  // the CC-parity pair that was declared but never fired); their folded
+  // directives apply — additionalContext joins this prompt exactly as
+  // user-prompt-submit context does, sessionTitle renames via the meta store.
+  // Deny is NOT honored (a session is not a prompt — there is nothing to block),
+  // and reloadSkills has no in-core application (core owns no skill index; a
+  // host that caches one consults the directive). Suppressed for subagents,
+  // reviewed launches, and the isolated reviewer (checkout-controlled hooks
+  // must not feed a reviewer's context), and marked seen regardless so later
+  // session-start work never re-fires on a gated first turn.
+  const started = startedSessions.get(agent) ?? new Set<string>();
+  startedSessions.set(agent, started);
+  const isSessionStart = !started.has(agent.sessionKey);
+  if (isSessionStart) started.add(agent.sessionKey);
+  if (
+    isSessionStart
+    && !agent.silent
+    && !input.reviewedExecution
+    && !agent.reviewSourceSafety
+    && agent.hookNotifyActive()
+  ) {
+    try {
+      const results = agent.runExecutionHooks('session-start', {
+        payload: { sessionKey: agent.sessionKey },
+      });
+      const directives = parseSessionStartDirectives(results);
+      if (directives.sessionTitle) {
+        try {
+          setSessionMeta(agent.workspaceRoot, agent.sessionKey, { title: directives.sessionTitle });
+        } catch { /* a failed rename never blocks the turn */ }
+      }
+      if (directives.additionalContext) {
+        prompt = `${prompt}\n\n[session context]\n${directives.additionalContext}`;
+      }
+    } catch { /* session-start hooks are advisory */ }
+  }
+
+  // ADR-048 S2/S3/S4 — the codebase-map taps. Deterministic code, never model
+  // discretion (D1); byte-neutral when no graph exists — every branch is a cheap
+  // cached existence check first (D2). Injected blocks are DATA for the model,
+  // fenced by the same untrusted-content posture as any workspace text (D3).
+  if (!agent.silent && !input.reviewedExecution && !agent.reviewSourceSafety) {
+    try {
+      const atlasKnobs = getCliKnobs().atlas;
+      const graph = (atlasKnobs.orient || atlasKnobs.retrieval || atlasKnobs.autoRefresh)
+        ? readAtlasGraphCached(agent.workspaceRoot)
+        : null;
+      if (graph) {
+        if (isSessionStart) {
+          // S3 — schedule the background base-graph rebuild FIRST, so the scan
+          // runs while this turn idles on the model call; the orientation below
+          // still reads the prior graph and states the drift honestly.
+          if (atlasKnobs.autoRefresh) maybeRefreshAtlasInBackground(agent.workspaceRoot);
+          if (atlasKnobs.orient) {
+            const orientation = atlasOrientation(graph, {
+              currentHeadSha: gitHeadSha(agent.workspaceRoot),
+            });
+            if (orientation) prompt = `${prompt}\n\n${orientation}`;
+          }
+        }
+        if (atlasKnobs.retrieval) {
+          // Match on the person's ORIGINAL words, not the accumulated context.
+          const retrieval = atlasPromptRetrieval(graph, input.prompt);
+          if (retrieval) prompt = `${prompt}\n\n${retrieval}`;
+        }
+      }
+    } catch { /* the map enriches a turn; it must never break one */ }
+  }
 
   if (agent.hookAdvisoryActive()) {
     agent.runExecutionHooks('pre-turn', { payload: { prompt } });

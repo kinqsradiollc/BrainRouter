@@ -51,6 +51,7 @@ import {
   memoryCaptureAnnotationToolSchema,
   memoryRecordLessonToolSchema,
   memoryCreateRequirementToolSchema,
+  memoryIngestRepoToolSchema,
 } from '../tools/capture/index.js';
 import {
   memoryGovernanceToolSchemas, handleHostLearningRequest,
@@ -362,6 +363,7 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
         },
       },
       memoryCaptureTurnToolSchema,
+      memoryIngestRepoToolSchema,
       memoryRecallToolSchema,
       memoryPersonaToolSchema,
       memoryPersonaRefreshToolSchema,

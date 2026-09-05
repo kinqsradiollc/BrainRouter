@@ -37,7 +37,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setDiagrams, setDiagramView, setDiagramDelta, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -459,7 +459,10 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
           // UI-TEST fusion — the screen map + stories are per-workspace too; clear
           // the old project's and load the NEW workspace's stored ones.
           setAtlasUiMap(null); setAtlasStories([]);
+          // ADR-056 D-A5 — diagrams are per-workspace too.
+          setDiagrams([]); setDiagramView(null); setDiagramDelta(null);
           q('q-atlas', 'atlas-graph');
+          q('q-diagrams', 'diagram-list');
           q('q-browser-manifest', 'browser:manifest');
           q('q-browser-stories', 'browser:list-stories');
           refreshSidebar();

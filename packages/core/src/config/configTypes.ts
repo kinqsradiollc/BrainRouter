@@ -75,6 +75,14 @@ export interface LLMConfig {
   cachedModels?: string[];
   /** ISO timestamp for `cachedModels`. */
   cachedAt?: string;
+  /**
+   * ADR-041 A41-9 — the owning session key, set when a session runs an ad-hoc
+   * BYOK provider registered only for it (`host.scope(sessionKey)`). Provider
+   * resolution passes this to `PROVIDER_REGISTRY.get(id, sessionKey)` so the
+   * session's own provider definition is used. Absent for every ordinary config —
+   * resolution is then byte-for-byte the global path.
+   */
+  sessionKey?: string;
 }
 
 /**
@@ -93,6 +101,45 @@ export interface LlmProfileConfig {
   /** Optional Fast-mode preference. Only honored by the user-driven `/profile use`
    *  (never by the agent's `switch_model` — an agent must not loosen approvals). */
   fast?: boolean;
+}
+
+/**
+ * ADR-047 D1 — a provider you add with DATA, not a code module.
+ *
+ * Every built-in provider is a directory module registered in `BUILTIN_PROVIDERS`.
+ * That is the right home for a provider with real behavioural quirks, but it makes
+ * the twentieth OpenAI-compatible vendor — a name, an endpoint, an env-key, a wire
+ * format — a code change and a release. A `DeclarativeProviderEntry` in
+ * `cli.customProviders` carries exactly that, is validated and registered into the
+ * SAME live `ProviderRegistry` as the code modules, and routes a turn with its
+ * declared wire behaviour. The golden rule holds: model *lists* still come from the
+ * endpoint's `/models`, never from this entry. A misdeclared entry fails loud at
+ * load; an id that collides with a built-in is skipped (the code module wins).
+ */
+export interface DeclarativeProviderEntry {
+  /** Stable id used in config + the picker (e.g. 'together', 'fireworks'). Lowercase, `[a-z0-9-]`. */
+  id: string;
+  /** Human-readable picker label. Defaults to the id when omitted. */
+  label?: string;
+  /** One-line picker hint shown after the em-dash. */
+  hint?: string;
+  /** OpenAI-compatible BASE URL (ends in `/v1` or `/api/v1`). Required and non-empty —
+   *  a declarative provider with no endpoint has nothing to route to. */
+  endpoint: string;
+  /** Env var checked to pre-detect a usable key. Defaults to `OPENAI_API_KEY`. */
+  envKey?: string;
+  /** True when the provider runs locally and a blank API key is fine. Default false. */
+  local?: boolean;
+  /** Show in the `/config` + desktop pickers. Default true. */
+  pickerVisible?: boolean;
+  /** Which model kinds this provider serves. Default `['chat']`. */
+  capabilities?: Array<'chat' | 'embedding' | 'reranker'>;
+  /** Seed models for a provider whose endpoint has no live `GET /models`. A live list still wins. */
+  defaultModels?: string[];
+  /** Primary generation wire format. Default `'chat-completions'`. */
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+  /** How this endpoint handles reasoning-effort. Default `'param'` (the OpenAI-compatible default). */
+  reasoningEffort?: 'param' | 'ignored' | 'unsupported';
 }
 
 /**
@@ -172,6 +219,14 @@ export interface WebSearchCliKnobs {
   google?: { apiKey?: string; cx?: string };
   braveApiKey?: string;
   searxngBaseUrl?: string;
+  /**
+   * ADR-044 M4 — when true, a successful `fetch_url` lands the page as a durable
+   * workspace artifact (markdown with provenance + addressable sections) and
+   * captures it into session memory, so a later turn can cite it instead of it
+   * being ephemeral tool output. Default false (opt-in — not every fetch is
+   * worth keeping).
+   */
+  persistToMemory?: boolean;
   crawler?: {
     respectRobots?: boolean;
     maxContentChars?: number;
@@ -190,6 +245,8 @@ export interface ResolvedWebSearchKnobs {
   google: { apiKey: string; cx: string };
   braveApiKey: string;
   searxngBaseUrl: string;
+  /** ADR-044 M4 — persist a fetched page as a durable, recallable artifact. Default false. */
+  persistToMemory: boolean;
   crawler: {
     respectRobots: boolean;
     maxContentChars: number;
@@ -264,6 +321,13 @@ export interface MarketplaceSource {
   sparsePaths?: string[];
   lastRevision?: string;
   lastUpdated?: string;
+  /**
+   * ADR-053 D3 / ADR-052 P4.6 — a command that mints request headers (e.g. a
+   * short-lived bearer token) for a PRIVATE http catalog fetch. Its stdout is a
+   * JSON header map; its secret lives in the Settings store, never here. Absent ⇒
+   * an unauthenticated (public) fetch.
+   */
+  headersHelper?: string;
 }
 
 /**
@@ -320,6 +384,14 @@ export interface PluginsCliKnobs {
   approved?: Record<string, PluginCapabilityConsent>;
   allowedMarketplaces?: string[];
   blockedMarketplaces?: string[];
+  /**
+   * ADR-047 D4 — managed allowlist of PLUGIN names. Non-empty ⇒ only listed
+   * plugins install (finer than `allowedMarketplaces`, which gates whole
+   * marketplaces); a plugin off the list is refused by name of the policy.
+   */
+  allowedPlugins?: string[];
+  /** ADR-047 D4 — managed denylist of plugin names; any listed plugin is refused. */
+  blockedPlugins?: string[];
   allowManagedHooksOnly?: boolean;
   /** MC-E4 — surface org convention repositories as a read-only plugin/skill scope. Default false. */
   orgScope?: boolean;
@@ -337,6 +409,15 @@ export interface PluginsCliKnobs {
    * false (off) — additive + inert.
    */
   autoUpdateCheck?: boolean;
+  /**
+   * ADR-047 D4 (P4b) — advisory-database gate at the plugin install path:
+   *  - `off`   (default) — no check, no network call, byte-neutral.
+   *  - `warn`  — a plugin with a published advisory installs with a warning.
+   *  - `block` — a plugin with a published advisory is refused, citing it.
+   * A lookup that cannot complete always fails OPEN (warns), so a flaky advisory
+   * service never wedges every install.
+   */
+  advisoryPolicy?: 'off' | 'warn' | 'block';
 }
 
 export interface SkillsCliKnobs {
@@ -529,6 +610,16 @@ export interface CliKnobs {
   // ---- compaction + shrink ----------------------------------------------
   /** Cap on chat-history tokens before auto-compact fires. Default 80000. */
   autoCompactTokens?: number;
+  /**
+   * ADR-045 — per-model context-window override in tokens, keyed by model id
+   * (exact or vendor-prefix-stripped, case-insensitive). Wins over the shipped
+   * `models.json` table and the legacy `~/.config/brainrouter/contextWindows.json`
+   * file, so a user's own setting is authoritative for their backend. Drives
+   * context assembly + the auto-compact threshold + child budgets + the desktop
+   * ring. Unset ⇒ the model table is used (byte-neutral). Example:
+   * `{ "gpt-5": 200000, "my-local-model": 32000 }`.
+   */
+  contextWindows?: Record<string, number>;
   /** Cap on tokens kept in a single tool-result message at turn-end. Default 3000. */
   turnEndResultCapTokens?: number;
   /** Proactive shrink ratio (mid-iter trigger). Default 0.4. */
@@ -613,6 +704,37 @@ export interface CliKnobs {
    * model, route) to the session's request-trace.jsonl for `/inspect`. Default false. */
   traceRequests?: boolean;
   /**
+   * ADR-048 — the codebase-map (Atlas) turn-loop taps. All default ON and are
+   * byte-neutral for a workspace with no built graph (`/atlas` builds one).
+   * `orient`: inject the once-per-session orientation block. `retrieval`:
+   * inject prompt-matched map nodes each turn. `autoRefresh`: rebuild the
+   * deterministic base graph in the background when HEAD moved since the graph
+   * was built (never from nothing, never the LLM enrichment).
+   */
+  atlas?: { orient?: boolean; retrieval?: boolean; autoRefresh?: boolean };
+  /**
+   * ADR-055 — browser behaviour. `vision` (P1): 'auto' attaches a
+   * `browser_screenshot` as an image the model can see (same wire seam as a
+   * pasted image); 'off' keeps the text-only path (the saved artifact path).
+   * Default 'auto'. `searchEngine` (P9): the omnibox search template for typed
+   * text — an http(s) URL containing `%s` (e.g.
+   * 'https://duckduckgo.com/?q=%s'). Invalid values fall back to the default.
+   */
+  browser?: { vision?: 'auto' | 'off'; searchEngine?: string };
+  /**
+   * ADR-056 D-A5 — the initial theme of a delivered diagram artifact (`auto`
+   * follows the viewer's colour scheme; the artifact's own toggle can still
+   * switch). Default 'auto'.
+   */
+  diagram?: { theme?: 'auto' | 'dark' | 'light' };
+  /**
+   * ADR-056 D-B2 — the design hook: `off` (default) runs nothing; `immediate`
+   * checks each UI file a write tool touched (≤ 5 findings into the next turn);
+   * `full` adds a turn-end pass over every UI file the turn wrote. Findings ride
+   * the stop-context channel, never the tool result; the hook never denies a write.
+   */
+  design?: { hook?: 'off' | 'immediate' | 'full' };
+  /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
    * usage, and the tools it requested with their render intents). Log-only —
@@ -632,6 +754,13 @@ export interface CliKnobs {
   confirmRunWorkflow?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. */
   effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * ADR-052 D2 — per-model reasoning-depth defaults, keyed by model id. When set
+   * for the active model (and no explicit per-turn override is in force), this
+   * wins over the session `effort`, so switching models keeps each model's tuned
+   * level. Unrecognized values are dropped.
+   */
+  effortByModel?: Record<string, string>;
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
   /**
@@ -649,6 +778,20 @@ export interface CliKnobs {
   availableModels?: string[];
   /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
   enforceAvailableModels?: boolean;
+  /**
+   * ADR-052 P4.5 — an org-curated overlay applied OVER the live `GET /models`
+   * result in the model picker: `pinned` entries float to the top, then the
+   * declared order, then everything else; `label` renames a row for display.
+   * Presentation only — the endpoint stays the source of truth for what exists.
+   */
+  modelPicker?: Array<{ id: string; label?: string; pinned?: boolean }>;
+  /**
+   * ADR-047 D1 — declarative providers: OpenAI-compatible vendors added as DATA
+   * rather than a code module. Each entry is validated and registered into the
+   * live `ProviderRegistry` at boot so it routes with its declared wire
+   * behaviour. Empty/absent (default) = only the built-in + starter providers.
+   */
+  customProviders?: DeclarativeProviderEntry[];
   /**
    * MC-D3 — NAMED LLM PROFILES: reusable model presets layered over the base
    * `llm` config. A profile carries a model (required) plus an optional
@@ -683,6 +826,15 @@ export interface CliKnobs {
    * settable per-launch via `--safe-mode` / `BRAINROUTER_SAFE_MODE`. Default false.
    */
   safeMode?: boolean;
+  /**
+   * ADR-052 D3 — a RESTRICTED session for an untrusted repo or a CI seat.
+   * Composable with `safeMode`: clamps the session to read-tier tools (no
+   * write/shell/exec), drops network/web tools, and refuses posture escalation.
+   * Default false.
+   */
+  restricted?: boolean;
+  /** ADR-054 D2 — opt-in: push per-automation usage aggregates to the brain server (default off). */
+  usageTelemetry?: boolean;
   /*
    * `executionEngine` used to live here (ADR-027 D2, ADR-028 C1) and was
    * retired 2026-08-12 along with the graph executor it selected. It is left
@@ -1242,6 +1394,8 @@ export interface ResolvedCliKnobs {
   briefingMaxCharsPerSource: number;
   briefingMaxSources: number;
   autoCompactTokens: number;
+  /** ADR-045 — per-model context-window overrides (tokens), validated + lowercased. */
+  contextWindows: Record<string, number>;
   turnEndResultCapTokens: number;
   turnEndShrinkRatio: number;
   childResultSystemChars: number;
@@ -1271,8 +1425,14 @@ export interface ResolvedCliKnobs {
   disableStream: boolean;
   traceTrajectory: boolean;
   traceRequests: boolean;
+  atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
+  browser: { vision: 'auto' | 'off'; searchEngine: string };
+  diagram: { theme: 'auto' | 'dark' | 'light' };
+  design: { hook: 'off' | 'immediate' | 'full' };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** ADR-052 D2 — resolved per-model effort defaults (validated); empty when unset. */
+  effortByModel: Record<string, 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
   fallbackModel: string | null;
   /** CC-CONFIG-A2 — resolved ORDERED fallback chain (validated, capped at 3, deduped;
    *  `fallbackModel` appended last for back-compat). */
@@ -1280,6 +1440,11 @@ export interface ResolvedCliKnobs {
   /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
   availableModels: string[];
   enforceAvailableModels: boolean;
+  /** ADR-052 P4.5 — resolved curated model-picker overlay (validated). */
+  modelPicker: Array<{ id: string; label?: string; pinned?: boolean }>;
+  /** ADR-047 D1 — declarative provider entries (structurally sanitized; semantic
+   *  validation + registration happens at boot in `registerDeclarativeProviders`). */
+  customProviders: DeclarativeProviderEntry[];
   /** MC-D3 — validated named LLM profiles (blank names / model-less entries dropped). */
   llmProfiles: Record<string, LlmProfileConfig>;
   /** MC-D3 — active profile name; '' when unset or not among `llmProfiles`. */
@@ -1290,6 +1455,10 @@ export interface ResolvedCliKnobs {
   enforceVersionRange: boolean;
   /** CC-CONFIG-A1 — safe/troubleshooting mode. */
   safeMode: boolean;
+  /** ADR-052 D3 — restricted session (read-tier tools, no network, no escalation). */
+  restricted: boolean;
+  /** ADR-054 D2 — opt-in usage telemetry push. */
+  usageTelemetry: boolean;
   stackingMode: 'auto' | 'always' | 'never';
   comprehension: { enabled: boolean; model: string; questions: number };
   autoInstallTools: 'off' | 'safe';
@@ -1374,6 +1543,9 @@ export interface ResolvedCliKnobs {
     approved: Record<string, PluginCapabilityConsent>;
     allowedMarketplaces: string[];
     blockedMarketplaces: string[];
+    /** ADR-047 D4 — validated plugin-name allowlist / denylist (finer than the marketplace gate). */
+    allowedPlugins: string[];
+    blockedPlugins: string[];
     allowManagedHooksOnly: boolean;
     orgScope: boolean;
     /** PLUGIN-MARKETPLACE P5 — community registry repo for `plugin publish`
@@ -1382,8 +1554,21 @@ export interface ResolvedCliKnobs {
     /** PLUGIN-MARKETPLACE P5 — surface (never install) an "updates available"
      *  notice on session start. Default false. */
     autoUpdateCheck: boolean;
+    /** ADR-047 D4 — advisory-database gate at install ('off' default). */
+    advisoryPolicy: 'off' | 'warn' | 'block';
   };
-  agents: { hosted: ResolvedHostedAgentConfig[] };
+  agents: {
+    hosted: ResolvedHostedAgentConfig[];
+    /**
+     * ADR-050 — drive an engine-mode agent through its structured session
+     * transport (Claude stream-json / Codex app-server / ACP) instead of the
+     * one-shot spawn. Opt-in (default false): the one-shot fallback stays the
+     * safe default until a deployment verifies the structured transports against
+     * its installed CLIs. Always set by the resolver; optional here so test
+     * knob-overrides may omit it.
+     */
+    liveSessions?: boolean;
+  };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
    *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
    *  workspace-archive knobs: `archiveOnDispose` (default true),

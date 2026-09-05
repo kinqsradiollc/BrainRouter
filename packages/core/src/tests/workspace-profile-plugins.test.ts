@@ -220,7 +220,8 @@ test('C2 frontend stays a capability plugin and owns the design verification ski
   assert.ok(frontend);
   assert.equal(frontend.kind, 'capability');
   assert.equal(frontend.pluginName, 'capability-frontend');
-  assert.deepEqual(frontend.skillIds, ['a11y-skill', 'browser-testing-skill', 'taste-skill']);
+  // ADR-056 D-B4 — one visual-craft skill (hallmark, via librarySkillIds); the style skills are worlds it routes to.
+  assert.deepEqual(frontend.skillIds, ['a11y-skill', 'browser-testing-skill']);
   assert.deepEqual(frontend.personaIds, []);
   assert.equal(frontend.personasRoot, undefined);
   assert.equal(WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.some((plugin) => plugin.pluginName.includes('builder')), false);

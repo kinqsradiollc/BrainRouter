@@ -19,6 +19,8 @@ import type {
   PluginCapabilityConsent,
   LlmProfileConfig,
   RouterCliKnobs,
+  DeclarativeProviderEntry,
+  ResolvedHostedAgentConfig,
 } from './configTypes.js';
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 import { stripTrailingSlashes } from '../util/trimEdges.js';
@@ -393,10 +395,13 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   let approved: Record<string, PluginCapabilityConsent> = {};
   let allowedMarketplaces: string[] = [];
   let blockedMarketplaces: string[] = [];
+  let allowedPlugins: string[] = [];
+  let blockedPlugins: string[] = [];
   let allowManagedHooksOnly = false;
   let orgScope = false;
   let publishRepo = '';
   let autoUpdateCheck = false;
+  let advisoryPolicy: 'off' | 'warn' | 'block' = 'off';
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
     if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
@@ -414,12 +419,15 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     approved = resolveApprovedMap(obj.approved);
     allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
     blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
+    allowedPlugins = resolveStringList(obj.allowedPlugins);
+    blockedPlugins = resolveStringList(obj.blockedPlugins);
     allowManagedHooksOnly = obj.allowManagedHooksOnly === true;
     orgScope = obj.orgScope === true;
     if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
     autoUpdateCheck = obj.autoUpdateCheck === true;
+    if (obj.advisoryPolicy === 'warn' || obj.advisoryPolicy === 'block') advisoryPolicy = obj.advisoryPolicy;
   }
-  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck };
+  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowedPlugins, blockedPlugins, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck, advisoryPolicy };
 }
 
 function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
@@ -439,10 +447,77 @@ function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
       ? value.args.filter((arg): arg is string => typeof arg === 'string')
       : [];
     const protocol = value.protocol === 'stdio' ? 'stdio' : 'line-json';
-    out.push({ name, command, args, protocol });
+    // ADR-050 D5 — per-instance env: keep only string→string pairs (a home path
+    // is a string; anything else is dropped rather than coerced).
+    const env = resolveInstanceEnv(value.env);
+    // ADR-050 D2/P4 — a bring-your-own agent may declare a live session transport.
+    const transport = HOSTED_SESSION_TRANSPORTS.includes(value.transport as never)
+      ? (value.transport as ResolvedHostedAgentConfig['transport'])
+      : undefined;
+    const transportArgs = transport && Array.isArray(value.transportArgs)
+      ? value.transportArgs.filter((a): a is string => typeof a === 'string')
+      : undefined;
+    out.push({
+      name, command, args, protocol,
+      ...(env ? { env } : {}),
+      ...(transport ? { transport } : {}),
+      ...(transportArgs && transportArgs.length ? { transportArgs } : {}),
+    });
     seen.add(name);
   }
-  return { hosted: out };
+  const liveSessions = input && typeof input === 'object' && !Array.isArray(input)
+    ? (input as { liveSessions?: unknown }).liveSessions === true
+    : false;
+  return { hosted: out, liveSessions };
+}
+
+/** ADR-050 D2/P4 — the session transports a bring-your-own hosted agent may declare. */
+const HOSTED_SESSION_TRANSPORTS: readonly string[] = ['stdio-oneshot', 'claude-stream-json', 'codex-app-server', 'acp-stdio'];
+
+/** ADR-050 D5 — sanitize a hosted instance's `env` to a string→string map; a
+ *  non-object, or a map with no string values, yields undefined (inherit only). */
+function resolveInstanceEnv(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const k = typeof key === 'string' ? key.trim() : '';
+    if (k && typeof val === 'string') out[k] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** ADR-052 D2 — sanitize per-model effort defaults to a model→effort map; a
+ *  non-object, or entries with an unrecognized effort, are dropped. */
+const VALID_EFFORTS: readonly string[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+function resolveEffortByModel(raw: unknown): ResolvedCliKnobs['effortByModel'] {
+  const out: ResolvedCliKnobs['effortByModel'] = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    const model = typeof key === 'string' ? key.trim() : '';
+    if (model && typeof val === 'string' && VALID_EFFORTS.includes(val)) {
+      out[model] = val as ResolvedCliKnobs['effort'];
+    }
+  }
+  return out;
+}
+
+/** ADR-052 P4.5 — sanitize the curated model-picker overlay: keep entries with a
+ *  non-empty string `id`; keep `label` only when a non-empty string; `pinned` is
+ *  a boolean. Invalid entries are dropped. */
+function resolveModelPicker(raw: unknown): ResolvedCliKnobs['modelPicker'] {
+  if (!Array.isArray(raw)) return [];
+  const out: ResolvedCliKnobs['modelPicker'] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const id = typeof e.id === 'string' ? e.id.trim() : '';
+    if (!id) continue;
+    const item: { id: string; label?: string; pinned?: boolean } = { id };
+    if (typeof e.label === 'string' && e.label.trim()) item.label = e.label.trim();
+    if (e.pinned === true) item.pinned = true;
+    out.push(item);
+  }
+  return out;
 }
 
 function unitInterval(value: unknown, fallback: number): number {
@@ -499,6 +574,7 @@ function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWe
     },
     braveApiKey: input?.braveApiKey ?? '',
     searxngBaseUrl: input?.searxngBaseUrl ?? '',
+    persistToMemory: input?.persistToMemory === true,
     crawler: {
       respectRobots: input?.crawler?.respectRobots ?? true,
       maxContentChars: positiveInt(input?.crawler?.maxContentChars, 15_000, { min: 1 }),
@@ -652,6 +728,82 @@ export function sanitizeLlmProfiles(raw: unknown): Record<string, LlmProfileConf
   return out;
 }
 
+/**
+ * ADR-045 — validate a per-model context-window override map: model id → a
+ * positive finite integer token count. Keys are trimmed + lowercased so the
+ * lookup matches `contextWindowFor`'s lowercased ids; bad entries are dropped
+ * (a misconfigured value never sizes a real budget).
+ */
+export function sanitizeContextWindows(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const key = (name ?? '').trim().toLowerCase();
+    if (key && typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      out[key] = Math.floor(value);
+    }
+  }
+  return out;
+}
+
+/**
+ * ADR-045 M5 — retire the legacy `contextWindows.json` override file by folding
+ * it into `cli.contextWindows` once, at boot. Reads the sibling file, merges any
+ * entries NOT already set in `cli.contextWindows` (an explicit knob value always
+ * wins), persists config.json, and renames the file to `.migrated` so it is
+ * retired and never re-read. Idempotent — no file (or a renamed one) ⇒ a no-op.
+ * Returns how many entries moved so the boot can surface a one-time notice.
+ */
+export function migrateLegacyContextWindowsFile(): { migrated: number } {
+  const legacyPath = path.join(configDir(), 'contextWindows.json');
+  if (!fs.existsSync(legacyPath)) return { migrated: 0 };
+  let legacy: Record<string, number> = {};
+  try {
+    legacy = sanitizeContextWindows(JSON.parse(fs.readFileSync(legacyPath, 'utf8')));
+  } catch {
+    // A corrupt legacy file is retired without touching config.
+  }
+  let migrated = 0;
+  if (Object.keys(legacy).length > 0) {
+    const config = loadOrInitConfig();
+    const cli = config.cli ?? {};
+    const merged = { ...(cli.contextWindows ?? {}) };
+    // legacy keys are lowercased by sanitizeContextWindows; compare
+    // case-insensitively against the (possibly mixed-case) config keys.
+    const existingKeys = new Set(Object.keys(merged).map((k) => k.toLowerCase()));
+    for (const [key, value] of Object.entries(legacy)) {
+      if (!existingKeys.has(key)) { merged[key] = value; migrated += 1; }
+    }
+    if (migrated > 0) {
+      config.cli = { ...cli, contextWindows: merged };
+      saveConfig(config);
+    }
+  }
+  try { fs.renameSync(legacyPath, `${legacyPath}.migrated`); } catch { /* best-effort retirement */ }
+  return { migrated };
+}
+
+/**
+ * ADR-047 D1 — STRUCTURAL sanitize of the declarative-provider list: keep only
+ * plain objects carrying a non-empty string `id` and `endpoint`. This is the
+ * cheap gate that keeps the resolved knob well-shaped; the LOUD semantic
+ * validation (valid URL, id vs built-in collision, enum membership, duplicates)
+ * lives in `registerDeclarativeProviders` at boot, where a misdeclaration can be
+ * reported with a precise reason rather than silently dropped here.
+ */
+export function sanitizeCustomProviders(raw: unknown): DeclarativeProviderEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DeclarativeProviderEntry[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const e = value as Partial<DeclarativeProviderEntry>;
+    if (typeof e.id !== 'string' || !e.id.trim()) continue;
+    if (typeof e.endpoint !== 'string' || !e.endpoint.trim()) continue;
+    out.push(e as DeclarativeProviderEntry);
+  }
+  return out;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   // MC-D3 — validated profiles; the active pointer only survives when it names one.
@@ -701,6 +853,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
     briefingMaxSources: c.briefingMaxSources ?? 6,
     autoCompactTokens: c.autoCompactTokens ?? 80_000,
+    contextWindows: sanitizeContextWindows(c.contextWindows),
     turnEndResultCapTokens: c.turnEndResultCapTokens ?? 3_000,
     turnEndShrinkRatio: c.turnEndShrinkRatio ?? 0.4,
     childResultSystemChars: c.childResultSystemChars ?? 12_000,
@@ -740,12 +893,30 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     disableStream: c.disableStream ?? false,
     traceTrajectory: c.traceTrajectory === true,
     traceRequests: c.traceRequests ?? false,
+    atlas: {
+      orient: c.atlas?.orient ?? true,
+      retrieval: c.atlas?.retrieval ?? true,
+      autoRefresh: c.atlas?.autoRefresh ?? true,
+    },
+    browser: {
+      vision: c.browser?.vision === 'off' ? 'off' : 'auto',
+      searchEngine: typeof c.browser?.searchEngine === 'string' ? c.browser.searchEngine.trim() : '',
+    },
+    diagram: {
+      theme: c.diagram?.theme === 'dark' || c.diagram?.theme === 'light' ? c.diagram.theme : 'auto',
+    },
+    design: {
+      hook: c.design?.hook === 'immediate' || c.design?.hook === 'full' ? c.design.hook : 'off',
+    },
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
+    effortByModel: resolveEffortByModel(c.effortByModel),
     fallbackModel: c.fallbackModel ?? null,
     fallbackModels: resolveFallbackModels(c.fallbackModels, c.fallbackModel),
     availableModels: sanitizeStringList(c.availableModels),
     enforceAvailableModels: c.enforceAvailableModels === true,
+    modelPicker: resolveModelPicker(c.modelPicker),
+    customProviders: sanitizeCustomProviders(c.customProviders),
     llmProfiles,
     activeLlmProfile,
     requiredMinimumVersion: typeof c.requiredMinimumVersion === 'string' ? c.requiredMinimumVersion.trim() : '',
@@ -753,6 +924,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     enforceVersionRange: c.enforceVersionRange === true,
     // CC-CONFIG-A1 — env override wins (opt-in troubleshooting from any shell).
     safeMode: resolveBoolWithEnv(c.safeMode, 'BRAINROUTER_SAFE_MODE'),
+    // ADR-052 D3 — restricted session; config-only (a launch/CI sets cli.restricted).
+    restricted: c.restricted === true,
+    usageTelemetry: c.usageTelemetry === true,
     // ADR-028 H3 — anything unrecognised falls back to `auto`, so a typo in
     // config cannot silently change how pull requests are opened.
     stackingMode: c.stackingMode === 'always' || c.stackingMode === 'never' ? c.stackingMode : 'auto',

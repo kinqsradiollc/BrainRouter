@@ -339,3 +339,158 @@ html[data-visual-system="v2"] .terminal-new-button:focus-visible {
     outline-offset: -1px;
   }
 }
+
+/* ADR-055 P9b/P10b — omnibox autocomplete, site info, saved places, sharing,
+   and HTML5 fullscreen. Preview-scoped and semantic-token-only, like the rest
+   of this surface: no literal colors, no gradients. */
+html[data-visual-system="v2"] .browser-omnibox {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html[data-visual-system="v2"] .browser-omnibox > .browser-url {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html[data-visual-system="v2"] .browser-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 30;
+  max-height: 280px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  color: var(--shell-text);
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .browser-suggest-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .browser-suggest-row:hover {
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .browser-suggest-row.active {
+  background: var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] .browser-suggest-title {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-visual-system="v2"] .browser-suggest-url {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--shell-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-visual-system="v2"] .browser-siteinfo {
+  position: absolute;
+  top: 40px;
+  left: 8px;
+  z-index: 30;
+  width: 300px;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--shell-text);
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .browser-siteinfo-origin {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+html[data-visual-system="v2"] .browser-siteinfo-tls {
+  margin: 6px 0 8px;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .browser-siteinfo-actions {
+  display: flex;
+  gap: 6px;
+}
+
+html[data-visual-system="v2"] .br-place {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+html[data-visual-system="v2"] .br-place-open {
+  flex: 0 1 auto;
+  padding: 0;
+  overflow: hidden;
+  color: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+html[data-visual-system="v2"] .br-place-open:hover {
+  text-decoration: underline;
+}
+
+html[data-visual-system="v2"] .br-place-url {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--shell-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-visual-system="v2"] .br-place-visits {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .browser-tab-share {
+  padding: 0 2px;
+  color: var(--shell-text-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+html[data-visual-system="v2"] .browser-tab-share:hover {
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .browser-tab-share.on {
+  color: var(--shell-focus);
+}
+
+/* A page in HTML5 fullscreen owns the panel: the chrome steps out of the way
+   (main already resizes the native view to the window). */
+html[data-visual-system="v2"] .browser-panel.browser-fullscreen > .browser-tabs,
+html[data-visual-system="v2"] .browser-panel.browser-fullscreen > .browser-toolbar,
+html[data-visual-system="v2"] .browser-panel.browser-fullscreen .browser-rail {
+  display: none;
+}

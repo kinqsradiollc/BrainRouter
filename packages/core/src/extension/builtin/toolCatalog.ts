@@ -62,6 +62,21 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // §A41-16 — session-native reminders persist per-session state (reminders.json),
   // like the research ledger: read tier, read_only, serialized (read-modify-write).
   { name: 'remind', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // ADR-048 S6 — the codebase-map query: pure read over the per-workspace Atlas
+  // graph file; no mutation, safe to parallelize.
+  { name: 'atlas_context', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // ADR-056 D-A5 — diagram_validate is a pure function of its argument;
+  // diagram_render writes under .brainrouter/diagrams/ (write tier, serialized so
+  // two renders of one slug cannot interleave the atomic replace).
+  { name: 'diagram_validate', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'diagram_draft', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'diagram_render', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
+  // ADR-056 D-B1 — the design detector reads UI files under the workspace; pure.
+  { name: 'design_detect', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // ADR-056 D-B7 — design_fidelity reads two PNGs and writes artifacts under .brainrouter/design/fidelity/ (write tier, serialized).
+  { name: 'design_fidelity', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
+  // ADR-056 D-B5 — design_variants edits ONE source file (wrap/accept/discard) and a session record; write tier, serialized.
+  { name: 'design_variants', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
@@ -149,6 +164,8 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'task_output', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // CC-P12.3 — transcript chapter marker (writes session state, not workspace).
   { name: 'mark_chapter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // ADR-052 P4.2 — a one-shot idle-notice subscription; a read-tier session tap.
+  { name: 'notify_when_idle', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // MC-D3 — agent-initiated switch to a named LLM profile. Mutates session
   // state only (the active model preset), so it gates like update_plan:
   // read tier, read_only kind, serialized. Exposure is further runtime-gated

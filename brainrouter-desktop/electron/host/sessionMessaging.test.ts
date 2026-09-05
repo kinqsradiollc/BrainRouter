@@ -52,6 +52,24 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   assert.fail('timed out waiting for Desktop session-messaging state');
 }
 
+// Await a deferred that a deterministic microtask chain resolves, but keep the
+// old fail-fast: node:test has no default per-test timeout, so a bare await on a
+// genuinely broken production path would hang the whole CI job instead of
+// failing with a clear message. The happy path still settles in ~ms and the
+// deadline timer is cleared the instant it does, so nothing lingers to keep the
+// process alive (or to leave an unref'd timer dangling behind a pending promise,
+// which node:test reports as "event loop already resolved"). Only a real
+// regression lets the timer reach its deadline and reject.
+function withDeadline(promise: Promise<void>, what: string, ms = 15_000): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what}.`)), ms);
+    promise.then(
+      () => { clearTimeout(timer); resolve(); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 function fakeTransport(
   sessionKey: string,
   onMessageAvailable?: (message: LocalSessionMessage) => void,
@@ -845,7 +863,13 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
     const receivedAt = Date.now();
     let clock = receivedAt;
     let settle!: (value: boolean | null) => void;
-    let promptStarted = false;
+    // Await the exact code-path signals rather than poll a real-wall-clock
+    // predicate: `promptStarted` fires when the service invokes confirmHeld, and
+    // `expiredAcked` fires when the post-settle expiry flow reaches session_inbox_ack.
+    // Both are deterministic microtask chains, so the wait no longer depends on a
+    // real-time poll budget (the clock-jump fix below removes the actual race).
+    const promptStarted = deferred<void>();
+    const expiredAcked = deferred<void>();
     let deliveries = 0;
     const acknowledgements: string[] = [];
     const row = {
@@ -876,7 +900,9 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
           if (name === 'session_list') return result({ sessions: [] });
           if (name === 'session_inbox_read') return result({ messages: [row] });
           if (name === 'session_inbox_ack') {
-            acknowledgements.push(String(args.status));
+            const status = String(args.status);
+            acknowledgements.push(status);
+            if (status === 'expired') expiredAcked.resolve();
             return result({ updated: 1, status: args.status });
           }
           return result({ deleted: true, updated: true });
@@ -885,8 +911,8 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
       getActiveAgent: () => ({ sessionKey: recipientKey, getAccessMode: () => 'read' }),
       deliverPeer: () => { deliveries += 1; return { accepted: true, state: 'steered' }; },
       confirmHeld: () => new Promise<boolean | null>((resolve) => {
-        promptStarted = true;
         settle = resolve;
+        promptStarted.resolve();
       }),
       pollIntervalMs: 60_000,
       local: {
@@ -898,10 +924,22 @@ test('delayed Desktop approval and decline acknowledge expired and never deliver
     });
     try {
       await service.start();
-      await waitUntil(() => promptStarted);
-      clock = receivedAt + HELD_SESSION_MESSAGE_MAX_AGE_MS + 1;
+      await withDeadline(promptStarted.promise, 'confirmHeld to prompt for the held message');
+      // DO NOT change the `Date.now()` below back to the captured `receivedAt` —
+      // that 1ms margin WAS the flake. The row's absolute expiry is stamped by the
+      // fake transport from real wall-clock at admission (message.receivedAt =
+      // Date.now(); expiry = that + MAX_AGE), NOT from this injected clock.
+      // Admission runs inside start(), strictly after this iteration captured
+      // `receivedAt`, so `receivedAt + MAX_AGE + 1` only clears the row's expiry
+      // when admit happened to land <=1ms after start — false on a loaded runner,
+      // where the delayed decision then terminalizes as declined/approved and the
+      // 'expired' acknowledgement never fires (and the approve branch would even
+      // deliver, tripping `deliveries === 0`). Anchoring the jump to Date.now() at
+      // settle (>= message.receivedAt by causality) makes the row provably expired
+      // before the decision applies, whatever the admit-time jitter.
+      clock = Date.now() + HELD_SESSION_MESSAGE_MAX_AGE_MS + 1;
       settle(approved);
-      await waitUntil(() => acknowledgements.includes('expired'));
+      await withDeadline(expiredAcked.promise, "the 'expired' inbox acknowledgement");
 
       assert.equal(acknowledgements.includes('declined'), false);
       assert.equal(acknowledgements.includes('rejected'), false);

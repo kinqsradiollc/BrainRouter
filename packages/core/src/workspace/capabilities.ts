@@ -12,9 +12,10 @@
 import type { WorkspaceManifest } from './manifest.js';
 import { getWorkspaceProfile } from './profiles.js';
 import {
-  renderDesignArtifactBlock,
+  renderWorkspaceArtifactsBlock,
   type WorkspaceDesignArtifact,
-} from './designArtifactPrompt.js';
+  type WorkspaceProductArtifact,
+} from './workspaceArtifactsPrompt.js';
 
 export interface WorkspaceCapabilityResolutionInput {
   manifest: Pick<WorkspaceManifest, 'profile' | 'persona' | 'capabilities'> | null | undefined;
@@ -36,6 +37,8 @@ export interface WorkspaceCapabilityResolutionInput {
    * is the reader; this is where its result becomes something the model sees.
    */
   designArtifact?: WorkspaceDesignArtifact | null;
+  /** ADR-056 D-B6 — the workspace's product artifact, read the same way, handed over the same way. */
+  productArtifact?: WorkspaceProductArtifact | null;
 }
 
 export interface WorkspaceCapabilityAvailability {
@@ -88,7 +91,7 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     // and available-but-off in `design`, and it comes from the shipped skill
     // library rather than this pack's own files (profilePlugins.ts
     // `librarySkillIds`). Keep this list and that one in agreement — a test does.
-    skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'hallmark'],
+    skillIds: ['a11y-skill', 'browser-testing-skill', 'hallmark'],
     toolProfileIds: ['browser', 'artifacts', 'interactive-browser'],
   },
   {
@@ -376,7 +379,8 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
       // workspace design artifact" and there was no artifact, no convention for
       // where one lives, and no way for a workspace that HAD one to be treated
       // differently from one that did not. This is the difference.
-      if (input.designArtifact) appendUnique(promptBlocks, [renderDesignArtifactBlock(input.designArtifact)]);
+      const artifactsBlock = renderWorkspaceArtifactsBlock({ design: input.designArtifact, product: input.productArtifact });
+      if (artifactsBlock) appendUnique(promptBlocks, [artifactsBlock]);
     }
   }
 

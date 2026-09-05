@@ -290,6 +290,8 @@ export interface ReviewJob {
   findingsDetail?: {
     file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
     codeExcerpt?: string; replacement?: string; diffHunk?: string;
+    /** ADR-056 D-B8 — absent = the model lens; "design-static" = the deterministic design detector (advisory). */
+    producer?: string; advisory?: boolean; rule?: string;
     preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
     firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
   }[];
@@ -311,6 +313,14 @@ export interface ReviewPullRequestDetail {
   availability: RepositoryReviewAvailability;
   checks: { id?: number; name?: string; conclusion?: string | null; status?: string; html_url?: string }[];
   reviews: ReviewJob[];
+}
+
+/** ADR-056 A7 — a diagram a pull request carries at its head, read-only. */
+export interface ReviewPrDiagram {
+  slug: string; title: string; kind: string;
+  receipt: { ok: boolean; artifactSha256: string; specificationSha256: string; rendererVersion: string } | null;
+  /** Self-contained HTML for a sandboxed viewer. */
+  html: string;
 }
 
 export interface ReviewIssue {
@@ -397,7 +407,13 @@ export interface RuntimeComposition {
   extensions: { tools: string[]; providers: string[]; hooks: number; panels: string[] };
   providers: string[];
   slashCommands: string[];
-  invariants: { areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>; violations: number };
+  invariants: {
+    areas: Array<{ area: string; invariants: string[]; emptyReason?: string }>;
+    violations: number;
+    // ADR-046 D2 — tripwire firings this process (advisory, separate from violations).
+    // Optional so the panel stays forward-compatible with a backend before this lands.
+    runtimeReports?: Array<{ id: string; count: number }>;
+  };
   loopDriver: string;
   executionWorld?: string;
 }
@@ -472,6 +488,15 @@ export const adminApi = {
     return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
   },
   getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
+  // ADR-056 A7 — the PR's diagrams at its head, and a 1200×630 share image (SVG) for one of them.
+  getReviewPrDiagrams: (repo: string, number: number, orgId?: string) => {
+    const [owner, name] = repo.split("/");
+    return authFetch<{ headSha: string; diagrams: ReviewPrDiagram[] }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/diagrams`, { orgId });
+  },
+  getReviewPrDiagramShare: (repo: string, number: number, slug: string, orgId?: string) => {
+    const [owner, name] = repo.split("/");
+    return authFetch<{ slug: string; filename: string; contentType: string; svg: string }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/diagrams/${encodeURIComponent(slug)}/share`, { orgId });
+  },
   // ADR-041 D14 — the runtime composition snapshot ("what is running").
   getRuntimeComposition: (orgId?: string) => authFetch<RuntimeComposition>("/api/admin/runtime/composition", { orgId }),
   getReviewPrActivity: (repo: string, number: number, orgId?: string) => {

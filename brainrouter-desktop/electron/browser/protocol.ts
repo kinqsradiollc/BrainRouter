@@ -29,6 +29,10 @@ export interface BrowserTab {
   title: string;
   faviconUrl: string | null;
   loading: boolean;
+  /** ADR-055 P6 — the tab is on a human-verification challenge; the agent is paused on it. */
+  humanNeeded?: boolean;
+  /** ADR-055 P7 — the person handed this tab to the current chat's agent. */
+  sharedWithAgent?: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   crashed: boolean;
@@ -45,6 +49,9 @@ export interface BrowserDownload {
   filename: string;
   url: string;
   savePath: string | null;
+  /** ADR-055 P8 — POSIX workspace-relative path when an agent download landed in
+   *  the workspace inbox, so the agent can read_file it; null for human downloads. */
+  workspacePath?: string | null;
   receivedBytes: number;
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
@@ -86,6 +93,10 @@ export interface BrowserState {
   downloads: BrowserDownload[];
   permissionPrompt: BrowserPermissionPrompt | null;
   dialogPrompt: BrowserDialogPrompt | null;
+  /** ADR-055 P9 — the workspace's saved places (bounded for broadcast). */
+  bookmarks: Array<{ url: string; title: string; addedAt: number }>;
+  /** ADR-055 P10 — the tab in HTML5 fullscreen (a video), if any. */
+  fullscreenTabId: BrowserTabId | null;
   capabilities: BrowserCapabilities;
 }
 
@@ -94,6 +105,8 @@ export interface BrowserSemanticNode {
   role: string;
   name: string;
   tag: string;
+  /** ADR-055 P3 — false when the node is visible but scrolled out of the viewport (scope:'page'). */
+  inViewport?: boolean;
   testid?: string;
   type?: string;
   value?: string;
@@ -138,18 +151,20 @@ export type BrowserCommand =
   | { op: 'stop-find'; action?: 'clearSelection' | 'keepSelection' | 'activateSelection' }
   | { op: 'set-zoom'; factor: number }
   | { op: 'set-muted'; muted: boolean }
-  | { op: 'snapshot'; mode?: 'semantic' | 'testids' | 'accessibility' }
+  | { op: 'snapshot'; mode?: 'semantic' | 'testids' | 'accessibility'; scope?: 'viewport' | 'page' }
+  | { op: 'find-nodes'; query: string; by?: 'role' | 'text' | 'label' | 'testid'; limit?: number; scope?: 'viewport' | 'page' }
+  | { op: 'design-audit'; rules?: string[]; maxFindings?: number }
   | { op: 'text'; maxChars?: number }
   | { op: 'html'; maxChars?: number }
   | { op: 'screenshot'; maxDimension?: number; fullPage?: boolean }
   | { op: 'console'; clear?: boolean }
   | { op: 'network'; clear?: boolean }
   | { op: 'downloads' }
-  | { op: 'click' | 'double-click' | 'hover' | 'assert-visible' | 'highlight'; ref?: OpaqueBrowserRef; target?: string; label?: string; targetType?: string; button?: 'left' | 'middle' | 'right'; modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'> }
+  | { op: 'click' | 'double-click' | 'hover' | 'assert-visible' | 'highlight'; ref?: OpaqueBrowserRef; target?: string; label?: string; targetType?: string; button?: 'left' | 'middle' | 'right'; modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>; x?: number; y?: number }
   | { op: 'type'; ref?: OpaqueBrowserRef; target?: string; text: string; replace?: boolean }
   | { op: 'press'; key: string; modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'> }
   | { op: 'scroll'; x?: number; y?: number; deltaX?: number; deltaY: number }
-  | { op: 'drag'; fromRef: OpaqueBrowserRef; toRef: OpaqueBrowserRef }
+  | { op: 'drag'; fromRef?: OpaqueBrowserRef; toRef?: OpaqueBrowserRef; fromX?: number; fromY?: number; toX?: number; toY?: number }
   | { op: 'select'; ref?: OpaqueBrowserRef; target?: string; values: string[] }
   | { op: 'check'; ref?: OpaqueBrowserRef; target?: string; checked: boolean }
   | { op: 'set-files'; ref?: OpaqueBrowserRef; target?: string; files: string[] }
@@ -159,6 +174,13 @@ export type BrowserCommand =
   | { op: 'respond-permission'; promptId: string; allow: boolean }
   | { op: 'respond-dialog'; promptId: string; accept: boolean; value?: string }
   | { op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download'; downloadId: BrowserDownloadId }
+  | { op: 'share-tab'; tabId: BrowserTabId }
+  | { op: 'unshare-tab'; tabId: BrowserTabId }
+  | { op: 'print'; landscape?: boolean }
+  | { op: 'add-bookmark'; url?: string; title?: string }
+  | { op: 'remove-bookmark'; url: string }
+  | { op: 'history'; query?: string; limit?: number }
+  | { op: 'omnibox-suggest'; query: string; limit?: number }
   | { op: 'clear-data'; dataTypes?: Array<'cache' | 'cookies' | 'storage' | 'history'> }
   | { op: 'reset-browser' }
   | { op: 'clear-session-data'; sessionKey: string };
@@ -206,10 +228,10 @@ export interface BrowserControlPort {
 const COMMAND_OPS = new Set<BrowserCommand['op']>([
   'state', 'create-tab', 'select-tab', 'close-tab', 'reopen-tab', 'reorder-tab',
   'navigate', 'back', 'forward', 'reload', 'stop', 'find', 'stop-find', 'set-zoom',
-  'set-muted', 'snapshot', 'screenshot', 'console', 'network', 'downloads', 'click',
+  'set-muted', 'snapshot', 'find-nodes', 'design-audit', 'screenshot', 'console', 'network', 'downloads', 'click',
   'double-click', 'hover', 'assert-visible', 'highlight', 'type', 'press', 'scroll',
   'drag', 'select', 'check', 'set-files', 'set-cursor', 'set-device', 'clear-highlight', 'respond-permission',
-  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'clear-data', 'reset-browser', 'clear-session-data',
+  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'share-tab', 'unshare-tab', 'print', 'add-bookmark', 'remove-bookmark', 'history', 'omnibox-suggest', 'clear-data', 'reset-browser', 'clear-session-data',
 ]);
 
 const SECRET_KEY = /(authorization|cookie|password|passwd|secret|token|api[-_]?key|credential|sessionid)/i;
@@ -236,7 +258,7 @@ export function redactBrowserValue(value: unknown, key = '', depth = 0): unknown
   return out;
 }
 
-export function normalizeBrowserAddress(raw: string | null | undefined): string | null {
+export function normalizeBrowserAddress(raw: string | null | undefined, searchTemplate?: string | null): string | null {
   const value = (raw ?? '').trim();
   if (!value) return null;
   if (value.toLowerCase() === 'about:blank') return BROWSER_BLANK_URL;
@@ -254,7 +276,33 @@ export function normalizeBrowserAddress(raw: string | null | undefined): string 
   if (!/\s/.test(value) && /\./.test(value) && /^[\w.\-~:/?#[\]@!$&'()*+,;=%]+$/.test(value)) {
     try { return new URL(`https://${value}`).href; } catch { /* search below */ }
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
+  return browserSearchUrl(value, searchTemplate);
+}
+
+export const DEFAULT_BROWSER_SEARCH_TEMPLATE = 'https://www.google.com/search?q=%s';
+
+/**
+ * ADR-055 P9 — a search template is an http(s) URL containing the `%s` query
+ * placeholder. Anything else (a bad scheme, embedded credentials, a missing
+ * placeholder, an unparseable value) falls back to the default rather than
+ * sending the user's typing somewhere unexpected.
+ */
+export function resolveBrowserSearchTemplate(raw: string | null | undefined): string {
+  const value = String(raw ?? '').trim();
+  if (!value || !value.includes('%s')) return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+  try {
+    const url = new URL(value.replace('%s', 'placeholder'));
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+    if (url.username || url.password) return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+    return value;
+  } catch {
+    return DEFAULT_BROWSER_SEARCH_TEMPLATE;
+  }
+}
+
+/** Build the search URL for typed omnibox text using the configured engine. */
+export function browserSearchUrl(query: string, template?: string | null): string {
+  return resolveBrowserSearchTemplate(template).replace('%s', encodeURIComponent(query));
 }
 
 export function clampBrowserSurface(

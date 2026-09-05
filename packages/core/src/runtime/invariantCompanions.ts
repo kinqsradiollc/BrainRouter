@@ -11,6 +11,32 @@
 
 import { registerInvariantCompanion } from './invariants.js';
 import { checkLocalToolExecutorInvariants } from '../tool/registry/executors.js';
+import { requiredCoreCapabilityCatalog } from '../extension/builtin/capabilities.js';
+import { REQUIRED_CORE_TOOL_CATALOG } from '../extension/builtin/toolCatalog.js';
+
+/**
+ * ADR-046 D1/D3 — every required-core tool is activated by exactly one
+ * capability, and capabilities name only real catalog tools. A drift either way
+ * makes the built-in surface unactivatable; here it is a first-class runtime
+ * invariant (also byte-gated by the capability-catalog drift test).
+ */
+function capabilityCoverageViolation(): string | null {
+  const capabilities = requiredCoreCapabilityCatalog();
+  const catalogNames = new Set(REQUIRED_CORE_TOOL_CATALOG.map((t) => t.name));
+  const owners = new Map<string, string[]>();
+  const problems: string[] = [];
+  for (const [capability, tools] of Object.entries(capabilities)) {
+    for (const tool of tools) {
+      if (!catalogNames.has(tool)) problems.push(`capability "${capability}" names unknown tool "${tool}"`);
+      owners.set(tool, [...(owners.get(tool) ?? []), capability]);
+    }
+  }
+  for (const tool of catalogNames) {
+    const list = owners.get(tool) ?? [];
+    if (list.length !== 1) problems.push(`tool "${tool}" is activated by ${list.length} capabilities (expected 1)`);
+  }
+  return problems.length ? problems.join('; ') : null;
+}
 
 let registered = false;
 
@@ -52,5 +78,29 @@ export function registerBuiltinInvariantCompanions(): void {
     emptyReason:
       'The "model-visible ⟺ logged" invariant (ADR-041 D4) is a control-flow property, ' +
       'not an inspectable runtime value; it is enforced by the phase-hook unit tests.',
+  });
+
+  // ADR-046 D1/D3 — the built-in tool/capability mapping is a runtime invariant.
+  registerInvariantCompanion({
+    area: 'tool-capabilities',
+    invariants: [
+      { name: 'every-tool-has-exactly-one-capability', check: capabilityCoverageViolation },
+    ],
+  });
+
+  // ADR-046 D2 — the session history→model-request derivation ("model-visible ⟺
+  // recorded"). Like extension-events, it is a control-flow property enforced by
+  // the shared-derivation test (deriveModelRequest), not an inspectable value;
+  // when the sanitizer must repair recorded state, the tool-call pairing TRIPWIRE
+  // (runtime/invariantReports) records it and the composition snapshot surfaces
+  // the count — a push channel, deliberately outside the pull-model verify gate.
+  registerInvariantCompanion({
+    area: 'session-history',
+    invariants: [],
+    emptyReason:
+      'The "model-visible ⟺ recorded" invariant (ADR-046 D2) is enforced by the shared ' +
+      'deriveModelRequest derivation (live and resume share one projection). Repairs to ' +
+      'recorded state are reported through the tool-call pairing tripwire (runtime/' +
+      'invariantReports), surfaced in the composition snapshot, not as a verify-gate violation.',
   });
 }

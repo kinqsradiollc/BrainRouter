@@ -427,6 +427,7 @@ export function createDevState() {
     agents: { hosted: [{ name: 'claude-code', command: 'claude', args: ['--print'], protocol: 'line-json' }] },
     llmProfiles: { fast: { model: 'claude-haiku-4-5-20251001', reasoningEffort: 'low', fast: true }, deep: { model: 'claude-opus-4-8', reasoningEffort: 'high' } },
     activeLlmProfile: 'deep',
+    contextWindows: { 'gpt-5': 200000, 'my-local-model': 32000 },
     skillsKeywordTriggers: true, skillsStackMax: 5, skillsHideBundled: false, skills: { orgRepoDiscovery: false },
     plugins: { orgScope: false, autoUpdateCheck: false, altManifestNames: [], publishRepo: '' },
     safeMode: false, attribution: { sessionUrl: true },

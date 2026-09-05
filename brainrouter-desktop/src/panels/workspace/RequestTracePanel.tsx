@@ -8,6 +8,7 @@
  */
 import React from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { usePanelPolling } from '../../lib/panels/usePanelPolling.js';
 
 interface RequestTraceRecord {
   at: string;
@@ -22,7 +23,7 @@ interface RequestTraceRecord {
 
 interface RequestTraceResult { records: RequestTraceRecord[] }
 
-export function RequestTracePanel(): React.ReactElement {
+export function RequestTracePanel({ active = true }: { active?: boolean }): React.ReactElement {
   const [records, setRecords] = React.useState<RequestTraceRecord[]>([]);
   const [error, setError] = React.useState('');
   const [loaded, setLoaded] = React.useState(false);
@@ -30,22 +31,20 @@ export function RequestTracePanel(): React.ReactElement {
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const refresh = React.useCallback(() => {
-    void bridgeQuery<RequestTraceResult>('request-trace:read', { limit: 30 }, 10_000)
-      .then((res) => {
-        if (!mounted.current) return;
-        setRecords(Array.isArray(res.records) ? res.records : []);
-        setError('');
-      })
-      .catch((e) => { if (mounted.current) setError(e instanceof Error ? e.message : 'Request trace lookup failed.'); })
-      .finally(() => { if (mounted.current) setLoaded(true); });
+  const refresh = React.useCallback(async (): Promise<void> => {
+    try {
+      const res = await bridgeQuery<RequestTraceResult>('request-trace:read', { limit: 30 }, 10_000);
+      if (!mounted.current) return;
+      setRecords(Array.isArray(res.records) ? res.records : []);
+      setError('');
+    } catch (e) {
+      if (mounted.current) setError(e instanceof Error ? e.message : 'Request trace lookup failed.');
+    } finally {
+      if (mounted.current) setLoaded(true);
+    }
   }, []);
 
-  React.useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  usePanelPolling({ active, intervalMs: 3_000, refresh });
 
   if (error) return <div className="scroll"><div className="empty">{error}</div></div>;
   if (loaded && records.length === 0) {

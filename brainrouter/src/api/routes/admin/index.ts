@@ -1,6 +1,7 @@
 export { providersRouter } from "./providers.js";
 export { agentModelsRouter } from "./agentModels.js";
 export { recallSettingsRouter } from "./recallSettings.js";
+export { contextSettingsRouter } from "./contextSettings.js";
 export { egressSettingsRouter } from "./egressSettings.js";
 export { integrationsRouter } from "./integrations.js";
 export { reviewsRouter } from "./reviews.js";
@@ -9,3 +10,5 @@ export { adminEmailRouter } from "./email.js";
 export { adminOrgsRouter } from "./orgs.js";
 export { adminModelsRouter } from "./models.js";
 export { runtimeCompositionRouter } from "./runtimeComposition.js";
+export { pricingSettingsRouter } from "./pricingSettings.js";
+export { usageAutomationRouter } from "./usageAutomation.js";

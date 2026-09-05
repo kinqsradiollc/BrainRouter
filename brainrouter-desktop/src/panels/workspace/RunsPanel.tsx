@@ -13,6 +13,7 @@
  */
 import React from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { usePanelPolling } from '../../lib/panels/usePanelPolling.js';
 // ADR-040 A40-10 — the row/detail/preview shapes are Core's `runsView` types, not
 // a second copy. A type-only import (erased at build, so it never pulls Core's
 // node-side runStore into the renderer bundle) makes the "one projection, two
@@ -79,7 +80,7 @@ export function previewChildrenSummary(preview: RunsPreview): string {
 
 const POLL_INTERVAL_MS = 3_000;
 
-export function RunsPanel(): React.ReactElement {
+export function RunsPanel({ active = true }: { active?: boolean }): React.ReactElement {
   const [rows, setRows] = React.useState<RunsRow[]>([]);
   const [connection, setConnection] = React.useState<RunsConnection>('live');
   const [selected, setSelected] = React.useState<RunsDetail | null>(null);
@@ -112,18 +113,16 @@ export function RunsPanel(): React.ReactElement {
   }, []);
 
   // A40-10 live/reconnect — poll the list, and the open run while it is still in
-  // flight, instead of a one-shot mount fetch. A terminal run stops being re-read.
-  React.useEffect(() => {
-    let cancelled = false;
-    void refreshList();
-    const timer = setInterval(() => {
-      if (cancelled) return;
-      void refreshList();
-      const openId = selected && !isRunTerminal(selected.status) ? selected.runId : null;
-      if (openId) void openDetail(openId);
-    }, POLL_INTERVAL_MS);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [refreshList, openDetail, selected]);
+  // flight. A terminal run stops being re-read; a hidden stateful panel stops
+  // polling until its tab is active again.
+  const refreshLiveState = React.useCallback(async (): Promise<void> => {
+    const openId = selected && !isRunTerminal(selected.status) ? selected.runId : null;
+    await Promise.all([
+      refreshList(),
+      ...(openId ? [openDetail(openId)] : []),
+    ]);
+  }, [openDetail, refreshList, selected]);
+  usePanelPolling({ active, intervalMs: POLL_INTERVAL_MS, refresh: refreshLiveState });
 
   const notice = connectionNotice(connection);
 

@@ -58,6 +58,7 @@ import {
 import { resolveReviewPolicy, type ReviewPolicy } from './githubWebhook.js';
 import { fetchPullRequestStack, pullRequestIsStacked } from './githubStack.js';
 import { describeStack, evaluateStackMerge } from '@kinqs/brainrouter-core/review';
+import { collectStaticDesignEvidence, staticDesignSummaryLine, staticDesignSummaryNote, type StaticDesignEvidence } from '../reviews/staticDesignEvidence.js';
 
 export interface PrReviewInput {
   orgId?: string;
@@ -243,6 +244,12 @@ export interface PrReviewFindingDetail {
   cwe?: string;
   preExisting?: boolean;
   suggestable?: boolean;
+  /** ADR-056 D-B8 — who produced it; absent = the model lens. `design-static` = the deterministic detector. */
+  producer?: string;
+  /** Advisory cards never count toward the check-run conclusion. */
+  advisory?: boolean;
+  /** Detector rule id for producer-backed cards. */
+  rule?: string;
 }
 
 export interface PrReviewCandidateDetail extends PrReviewFindingDetail {
@@ -291,6 +298,8 @@ export interface PrReviewResult {
   error?: string;
   /** Compact, non-sensitive finding projection for the PR console. */
   findingsDetail?: PrReviewFindingDetail[];
+  /** ADR-056 D-B8 — static design evidence over the diff's UI files at head (advisory). */
+  designEvidence?: { files: number; findings: number; suppressed: number; skipped: number };
   /** Exact reviewed head and bounded forge contributor evidence. */
   headSha?: string;
   prAuthor?: string;
@@ -882,6 +891,23 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   const changedLocations = changedSourceLocations(diff);
   const knownUnavailablePaths = [...new Set(forgeUnavailablePaths)];
   const changedFiles = preparedSource.totalFiles + knownUnavailablePaths.length;
+
+  // ADR-056 D-B8 — static design evidence: the diff's UI files, design.md
+  // tokens, and suppressions are read at the EXACT head sha and run through
+  // the deterministic detector. Advisory, never gating, zero model cost; a
+  // failure here is a progress line, never a failed review.
+  let designEvidence: StaticDesignEvidence | null = null;
+  if (forge === 'github') {
+    try {
+      designEvidence = await collectStaticDesignEvidence({
+        fetchImpl: deps.fetchImpl, apiBase, repo, headSha, headers: ghHeaders(token),
+        changedPaths: changedLocations.map((location) => location.path),
+      });
+      if (designEvidence) progress('design-evidence-ready', staticDesignSummaryLine(designEvidence), { files: designEvidence.files, findings: designEvidence.findings.length, suppressed: designEvidence.suppressed.length });
+    } catch (error) {
+      progress('design-evidence-unavailable', `Static design evidence unavailable: ${error instanceof Error ? error.message : 'unknown failure'}`);
+    }
+  }
   progress("diff-fetched", "PR diff fetched", {
     bytes: diff.length,
     files: changedFiles,
@@ -1380,7 +1406,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     '**Review coverage incomplete.** Missing or excluded units were not treated as clean evidence.',
     `Reviewed ${coverage.reviewedParts}/${coverage.totalParts} unit(s); ${coverage.failedParts} failed and ${coverage.unreviewedParts} remained unreviewed.`,
   ].join('\n');
-  const body = `${formatReviewSummaryComment(lens, { findings, headSha, repositoryContext: grounded })}${coverageNote}${gateSummary(assuranceGate)}${stackNote}`;
+  const body = `${formatReviewSummaryComment(lens, { findings, headSha, repositoryContext: grounded })}${designEvidence ? staticDesignSummaryNote(designEvidence) : ''}${coverageNote}${gateSummary(assuranceGate)}${stackNote}`;
   const posted = forge === 'gitlab'
     ? await upsertGitlabReviewNote(deps.fetchImpl, apiBase, gitlabProject, prNumber, body, token, lens.summaryMarker)
     : await upsertReviewComment(deps.fetchImpl, apiBase, repo, prNumber, body, token, lens.summaryMarker);
@@ -1406,7 +1432,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   //    is off, the check is advisory (never 'failure'). No-op (false) without `checks: write`.
   const checkPosted = forge === 'gitlab'
     ? await postGitlabCommitStatus(deps.fetchImpl, apiBase, gitlabProject, headSha, lens, findings, publicationBlocking, policy.blockOnFindings, token, assuranceGate, coverage.complete)
-    : await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, publicationBlocking, policy.blockOnFindings, token, assuranceGate, coverage.complete);
+    : await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, publicationBlocking, policy.blockOnFindings, token, assuranceGate, coverage.complete, designEvidence ? staticDesignSummaryLine(designEvidence) : undefined);
   const fallbackConclusion = !coverage.complete
     ? "neutral"
     : blocking > 0 && policy.blockOnFindings && !lens.advisory
@@ -1422,6 +1448,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] } : {}),
     ...(finding.preExisting ? { preExisting: true } : {}), ...(finding.replacement ? { suggestable: true } : {}),
   }));
+  const designCards: PrReviewFindingDetail[] = designEvidence ? designEvidence.findings.map((f) => ({ file: f.file, ...(f.line ? { line: f.line } : {}), severity: f.severity, title: f.title, producer: f.producer, advisory: true, rule: f.rule })) : [];
   progress("done", "Review completed");
 
   return {
@@ -1433,8 +1460,9 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     reviewPosted,
     checkPosted,
     approved,
-    findingsDetail,
+    findingsDetail: [...findingsDetail, ...designCards],
     coverage,
+    ...(designEvidence ? { designEvidence: { files: designEvidence.files, findings: designEvidence.findings.length, suppressed: designEvidence.suppressed.length, skipped: designEvidence.skipped.length } } : {}),
     ...(assuranceGate ? { assuranceGate } : {}),
     ...contributorMetadata(),
   };
@@ -1537,6 +1565,7 @@ async function postGitlabCommitStatus(
   token: string,
   assuranceGate?: PrReviewPublicationGate,
   coverageComplete = true,
+  designLine?: string,
 ): Promise<boolean> {
   if (!headSha) return false;
   const fails = blocking > 0 && blockOnFindings && !lens.advisory;
@@ -1654,6 +1683,7 @@ async function postCheckRun(
   token: string,
   assuranceGate?: PrReviewPublicationGate,
   coverageComplete = true,
+  designLine?: string,
 ): Promise<boolean> {
   if (!headSha) return false;
   // Advisory lenses (code review) never fail — findings are suggestions. Security gates,
@@ -1681,13 +1711,15 @@ async function postCheckRun(
           : 'No issues found';
   const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});
   const tally = Object.entries(bySev).map(([s, n]) => `${n} ${s}`).join(' · ') || '0';
-  const summary = publication
+  // ADR-056 D-B8 — the design line is appended AFTER the conclusion is decided: advisory evidence never moves it.
+  const withDesign = (text: string): string => (designLine ? `${text}\n\n${designLine}` : text);
+  const summary = withDesign(publication
     ? `${publication.reason}\n\n**${blocking} evidence-supported blocking finding(s)** · ${tally}`
     : !coverageComplete
       ? 'One or more review units were unavailable or excluded. This result is not clean evidence.'
     : findings.length === 0
       ? lens.noFindingsLine
-      : `**${blocking} blocking** · ${tally}\n\nSee the pinned **${lens.name}** summary comment and the inline suggestions on this PR.`;
+      : `**${blocking} blocking** · ${tally}\n\nSee the pinned **${lens.name}** summary comment and the inline suggestions on this PR.`);
   try {
     const r = await fetchImpl(`${apiBase}/repos/${repo}/check-runs`, {
       method: 'POST',

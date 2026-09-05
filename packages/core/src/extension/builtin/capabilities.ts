@@ -12,13 +12,21 @@ export interface BuiltinToolRuntimePort {
 }
 
 const CAPABILITY_TOOLS = {
-  filesystem: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'notebook_edit', 'worktree_list', 'worktree_enter', 'worktree_create', 'worktree_done'],
+  filesystem: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'notebook_edit', 'worktree_list', 'worktree_enter', 'worktree_create', 'worktree_done',
+    // ADR-048 S6 — the codebase map is workspace understanding, the same surface
+    // area as reading/searching the tree it summarizes.
+    'atlas_context',
+    // ADR-056 D-A5 — diagrams are workspace artifacts authored from (and verified
+    // against) the tree, the same surface area as the map that seeds them.
+    'diagram_validate', 'diagram_draft', 'diagram_render',
+    // ADR-056 D-B1 — deterministic design checks over the tree's UI files.
+    'design_detect', 'design_fidelity', 'design_variants'],
   shell: ['run_command', 'run_code', 'task_output', 'wait_until', 'computer_use', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write'],
   'web-research': ['fetch_url', 'web_search', 'research_note', 'research_brief'],
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],
   // ADR-028 D6 — the planner joins planning-state: it is the same capability
   // (what the user has decided to do), not a new surface area.
-  'planning-state': ['reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model', 'planner_today', 'planner_find', 'planner_add', 'planner_schedule', 'planner_complete',
+  'planning-state': ['reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'notify_when_idle', 'switch_model', 'planner_today', 'planner_find', 'planner_add', 'planner_schedule', 'planner_complete',
     // ADR-029 C3 — the workspace verbs join the same capability for the same
     // reason the planner did: they are about what the user has decided and
     // written down, across surfaces, not a new area of authority.

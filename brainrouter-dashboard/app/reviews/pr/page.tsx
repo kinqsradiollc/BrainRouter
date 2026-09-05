@@ -8,9 +8,10 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { EmptyState } from "../../../components/EmptyState";
 import { PageHeader } from "../../../components/PageHeader";
 import { PremiumCard } from "../../../components/PremiumCard";
+import { PremiumButton } from "../../../components/PremiumButton";
 import { StatusBadge } from "../../../components/Analytics";
 import { AgentTraceGraph } from "../../../components/AgentTraceGraph";
-import { adminApi, type ReviewJob, type ReviewPullRequestDetail } from "../../../lib/adminApi";
+import { adminApi, type ReviewJob, type ReviewPullRequestDetail, type ReviewPrDiagram } from "../../../lib/adminApi";
 import { invalidateDashboardQueries, queryDashboard } from "../../../lib/dashboardQuery";
 import { InlineLoading } from "../../../components/LoadingSpinner";
 import {
@@ -19,6 +20,8 @@ import {
 } from "../reviewPresentation";
 import { ReviewRunCard } from "./ReviewRunCard";
 import { ReviewCodeFrame } from "../../../components/ReviewCodeFrame";
+import { FilterSelect } from "../../../components/FilterSelect";
+import { FINDING_PRODUCER_OPTIONS, countFindingsByProducer, filterFindingsByProducer, findingProducer, type FindingProducerFilter } from "../../../lib/review/reviewFindings";
 
 function lensName(lens: ReviewJob["lens"]): string {
   if (lens === "security") return "Security review";
@@ -40,8 +43,70 @@ function formatTimestamp(value: string): string {
     : value;
 }
 
+// ADR-056 A7 — the diagrams a pull request carries at its head: a read-only,
+// sandboxed viewer (no scripts run; the artifact is self-contained) and a
+// 1200×630 share image built from the same artifact.
+function ReviewDiagramsCard({ repo, number, orgId }: { repo: string; number: number; orgId?: string }) {
+  const [diagrams, setDiagrams] = useState<ReviewPrDiagram[] | null>(null);
+  const [selected, setSelected] = useState<string>("");
+  const [error, setError] = useState("");
+  const [sharing, setSharing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setDiagrams(null); setError("");
+    adminApi.getReviewPrDiagrams(repo, number, orgId).then((result) => {
+      if (cancelled) return;
+      setDiagrams(result.diagrams); setSelected(result.diagrams[0]?.slug ?? "");
+    }).catch((caught) => { if (!cancelled) { setDiagrams([]); setError(caught instanceof Error ? caught.message : "Failed to load diagrams"); } });
+    return () => { cancelled = true; };
+  }, [repo, number, orgId]);
+  const current = diagrams?.find((d) => d.slug === selected) ?? null;
+  const share = async () => {
+    if (!current) return;
+    setSharing(true);
+    try {
+      const file = await adminApi.getReviewPrDiagramShare(repo, number, current.slug, orgId);
+      const url = URL.createObjectURL(new Blob([file.svg], { type: file.contentType }));
+      const a = document.createElement("a"); a.href = url; a.download = file.filename; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Failed to build the share image"); }
+    finally { setSharing(false); }
+  };
+  if (diagrams && diagrams.length === 0 && !error) return null;
+  return (
+    <PremiumCard level={2} className="review-detail__diagrams-card">
+      <div className="settings-cardhead">
+        <div><h3>Diagrams</h3><div className="settings-hint">Maps this pull request carries at its head, each with a receipt</div></div>
+        {current && <PremiumButton size="small" onClick={() => void share()} disabled={sharing}>{sharing ? "Building…" : "Share image (1200×630)"}</PremiumButton>}
+      </div>
+      {error && <div className="settings-empty-inline">{error}</div>}
+      {diagrams === null && !error && <InlineLoading label="Loading diagrams" />}
+      {diagrams && diagrams.length > 1 && (
+        <div className="review-detail__diagram-tabs" role="tablist" aria-label="Diagrams">
+          {diagrams.map((d) => <button key={d.slug} type="button" role="tab" aria-selected={d.slug === selected} className={`review-detail__diagram-tab${d.slug === selected ? " is-active" : ""}`} onClick={() => setSelected(d.slug)}>{d.title}<span>{d.kind}</span></button>)}
+        </div>
+      )}
+      {current && (
+        <>
+          <div className="review-detail__diagram-meta">
+            <strong>{current.title}</strong><span>{current.kind}</span>
+            {current.receipt ? <StatusBadge tone={current.receipt.ok ? "ok" : "warn"}>{current.receipt.ok ? "receipt ok" : "receipt failed"} · {current.receipt.artifactSha256.slice(0, 12)}</StatusBadge> : <StatusBadge tone="neutral">no receipt</StatusBadge>}
+          </div>
+          <iframe className="review-detail__diagram-frame" title={`Diagram: ${current.title}`} sandbox="" srcDoc={current.html} loading="lazy" />
+        </>
+      )}
+    </PremiumCard>
+  );
+}
+
 function ReviewFindingsCard({ review }: { review: ReviewJob }) {
   const running = review.status === "pending" || review.status === "queued" || review.status === "running";
+  // ADR-056 D-B8 — advisory static-design cards sit beside the model's; the
+  // control only appears when both kinds exist, so a plain review stays plain.
+  const [producerFilter, setProducerFilter] = useState<FindingProducerFilter>("all");
+  const all = review.findingsDetail ?? [];
+  const counts = countFindingsByProducer(all);
+  const shown = filterFindingsByProducer(all, producerFilter);
   return (
     <PremiumCard level={2} className="review-detail__findings-card">
       <div className="settings-cardhead">
@@ -51,14 +116,25 @@ function ReviewFindingsCard({ review }: { review: ReviewJob }) {
       <div className="review-detail__finding-summary">
         <span><strong>{review.findings ?? 0}</strong> findings</span>
         <span><strong>{review.blocking ?? 0}</strong> blocking</span>
+        {counts.design > 0 && <span><strong>{counts.design}</strong> design (advisory)</span>}
+        {counts.design > 0 && counts.model > 0 && (
+          <FilterSelect
+            value={producerFilter}
+            onChange={(value) => setProducerFilter(value === "model" || value === "design" ? value : "all")}
+            options={FINDING_PRODUCER_OPTIONS}
+            allLabel="All producers"
+            ariaLabel="Filter findings by producer"
+          />
+        )}
       </div>
-      {review.findingsDetail?.length ? (
+      {shown.length ? (
         <div className="review-detail__findings">
-          {review.findingsDetail.map((finding, index) => (
+          {shown.map((finding, index) => (
             <article key={`${finding.file}:${finding.line ?? 0}:${index}`}>
               <div className="review-detail__finding-head">
                 <StatusBadge tone={finding.severity === "critical" || finding.severity === "high" ? "danger" : finding.severity === "medium" ? "warn" : "neutral"}>{finding.severity}</StatusBadge>
                 <strong>{finding.title ?? finding.summary ?? "Finding"}</strong>
+                {findingProducer(finding) === "design" && <StatusBadge tone="neutral">design · advisory</StatusBadge>}
               </div>
               <div className="settings-row__sub">{finding.file}{finding.line ? `:${finding.line}` : ""}{finding.cwe ? ` · ${finding.cwe}` : ""}{finding.preExisting ? " · Pre-existing" : ""}</div>
               {finding.summary && finding.summary !== finding.title && <p>{finding.summary}</p>}
@@ -67,7 +143,7 @@ function ReviewFindingsCard({ review }: { review: ReviewJob }) {
           ))}
         </div>
       ) : (
-        <div className="settings-empty-inline">{running ? "Findings will appear as the review progresses." : "No stored finding details."}</div>
+        <div className="settings-empty-inline">{running ? "Findings will appear as the review progresses." : all.length ? "No findings from this producer." : "No stored finding details."}</div>
       )}
     </PremiumCard>
   );
@@ -222,6 +298,8 @@ function Detail() {
                 return check.html_url ? <a className="review-detail__check" key={check.id ?? index} href={check.html_url} target="_blank" rel="noreferrer">{content}</a> : <div className="review-detail__check" key={check.id ?? index}>{content}</div>;
               }) : <div className="settings-empty-inline">No check runs yet.</div>}
             </PremiumCard>
+
+            <ReviewDiagramsCard repo={repo} number={number} orgId={orgId} />
 
             <PremiumCard level={2} className="review-detail__timeline-card">
               <div className="settings-cardhead"><div><h3>Timeline</h3><div className="settings-hint">Latest review work first</div></div>{timeline.length > 0 && <span className="settings-badge settings-badge--muted">{timeline.length}</span>}</div>

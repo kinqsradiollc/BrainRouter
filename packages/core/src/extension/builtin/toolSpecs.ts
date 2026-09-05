@@ -212,13 +212,14 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'read_file',
-    description: 'Read the contents of a file from the workspace. Optional line ranges can be provided.',
+    description: 'Read the contents of a file from the workspace. Optional line ranges can be provided. A Jupyter notebook (.ipynb) is rendered as a cell-indexed digest — each cell shown as `[cell N] code|markdown` with its source and outputs (text kept, images named not inlined); those indices are the ones `notebook_edit` takes. Pass raw=true to read the notebook as its underlying JSON instead.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Path to the file, relative to workspace root.' },
         startLine: { type: 'integer', description: 'Optional 1-based start line number to read from.' },
-        endLine: { type: 'integer', description: 'Optional 1-based end line number to read to.' }
+        endLine: { type: 'integer', description: 'Optional 1-based end line number to read to.' },
+        raw: { type: 'boolean', description: 'For a .ipynb notebook, read the raw JSON instead of the cell-indexed digest.' }
       },
       required: ['path']
     }
@@ -419,7 +420,7 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'notebook_edit',
-    description: 'Edit a Jupyter notebook (.ipynb) cell by index. edit_mode="replace" (default) overwrites the cell source; "insert" adds a new cell AT cell_index (shifting the rest down); "delete" removes the cell. cell_type ("code"|"markdown") is required for insert and optional for replace. `source` is the new cell text (ignored for delete). Read the notebook first to get cell indices.',
+    description: 'Edit a Jupyter notebook (.ipynb) cell by index. edit_mode="replace" (default) overwrites the cell source and CLEARS its now-stale outputs and execution_count; "insert" adds a new cell AT cell_index (shifting the rest down); "delete" removes the cell. cell_type ("code"|"markdown") is required for insert and optional for replace. `source` is the new cell text (ignored for delete). Read the notebook first to get cell indices.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -526,6 +527,107 @@ export const BUILTIN_TOOL_SPECS = [
         question: { type: 'string', description: 'Optional — set or refine the research question shown in the brief header.' }
       }
     }
+  },
+  {
+    name: 'atlas_context',
+    description: 'Query the workspace codebase map (the Atlas graph built by /atlas): with no query, returns the orientation — project, layers with sizes, and the guided tour heads; with a query, returns the files/symbols whose names, paths, tags, or summaries match it, so you can locate a subsystem without grepping. Read-only; returns a clear notice when no map has been built for this workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional terms to look up (e.g. a subsystem, file, or concept). Omit for the whole-repo orientation.' }
+      }
+    }
+  },
+  {
+    name: 'diagram_validate',
+    description: 'Validate a typed diagram document (ADR-056): kinds architecture | workflow | sequence | dataflow | lifecycle, each `{ schemaVersion: 1, kind, meta: { title, … }, …element arrays }` with unknown fields rejected at every level. Returns path-prefixed diagnostics (unresolved reference, duplicate id, broken main path, more than 12 primary elements under the default showcase profile, …) with the fixes to choose from. Read-only; call it until the document is clean, then diagram_render.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        document: { type: 'object', description: 'The diagram document (JSON object). Architecture: components[{id,label,type∈frontend|backend|database|cloud|security|messagebus|external,variant?,sources?}], boundaries?[{id,label,wraps[]}], connections[{id,label?,from,to,style?∈sync|async|data}], mainPath?[]. Workflow: lanes?, nodes[{id,label,lane?,shape?}], edges[], mainPath?. Sequence: participants[], messages[{id,label,from,to,kind?}], activations?. Dataflow: stages?, nodes[{id,label,stage?,type?}], flows[]. Lifecycle: states[{id,label,type?∈initial|active|waiting|terminal|failure}], transitions[]. Elements may carry sources[{path,lines?}] naming the repo files they reflect.' },
+        quality: { type: 'string', enum: ['showcase', 'standard'], description: 'showcase (default): ≤12 primary elements and warnings fail; standard: dense maps allowed.' },
+        verify: { type: 'boolean', description: 'Also verify every element\'s `sources` against the repository at HEAD (or meta.repository.revision) and report verified / unverified counts with the failing paths.' },
+      },
+      required: ['document'],
+    },
+  },
+  {
+    name: 'diagram_draft',
+    description: 'Seed an ARCHITECTURE diagram document from the workspace codebase map (the Atlas graph built by /atlas): each enriched layer becomes a typed component with its facade files as `sources`, layer relationships become labelled connections (counted imports when no enrichment ran), capped at 12 by size with omissions named. Everything is authored, not verified — curate it (one main path, drop low-value connections, name relationships), then diagram_validate and diagram_render. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        layers: { type: 'array', items: { type: 'string' }, description: 'Restrict to these layer ids or names.' },
+        pathPrefix: { type: 'string', description: 'Restrict to layers owning files under this workspace-relative prefix (e.g. "packages/core/src/review").' },
+        title: { type: 'string', description: 'Diagram title. Default: "<project> — architecture".' },
+        maxComponents: { type: 'number', description: 'Primary-element cap. Default 12.' },
+        mermaid: { type: 'string', description: 'ADR-056: Mermaid flowchart/graph source to import INSTEAD of the codebase map — nodes, shapes, links, link text and subgraphs become a fresh workflow or architecture document; styling, classes and clicks are never transcribed.' },
+        kind: { type: 'string', enum: ['workflow', 'architecture'], description: 'With mermaid: which document to author (default: inferred from the shapes).' },
+      },
+    },
+  },
+  {
+    name: 'diagram_render',
+    description: 'Validate, deterministically render, and DELIVER a typed diagram document as one self-contained HTML (inline SVG, dark/light themes, pan/zoom/search/focus, no network) under `.brainrouter/diagrams/<slug>.html`, beside its specification (`<slug>.json`) and a receipt (`<slug>.html.receipt.json`: nine artifact checks, SHA-256 + bytes of spec and artifact, evidence summary). Delivery happens ONLY when every check passes; otherwise nothing is written and any previous artifact is kept. Same document → byte-identical artifact. Returns the receipt summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        document: { type: 'object', description: 'The diagram document (see diagram_validate for the shape). Validate first.' },
+        slug: { type: 'string', description: 'File name under .brainrouter/diagrams/ — lowercase letters, digits, dashes (≤ 64). Default: derived from meta.title. Re-render with the same slug to replace.' },
+        theme: { type: 'string', enum: ['auto', 'dark', 'light'], description: 'Initial theme of the artifact (the viewer can switch). Default: cli.diagram.theme.' },
+        verify: { type: 'boolean', description: 'Verify `sources` against the repository first and stamp the revision (default true). A failed source stays authored/unverified and never blocks delivery.' },
+      },
+      required: ['document'],
+    },
+  },
+  {
+    name: 'design_detect',
+    description: 'Run the deterministic design detector (ADR-056) over workspace UI files — html, css/scss, jsx/tsx, svelte, vue, astro — or over a supplied markup string. No model: a versioned rule catalogue (slop tells such as side-stripe borders, gradient text, the default violet/cyan palette, nested cards, glow halos, eyebrow labels, buzzword copy; quality defects such as low contrast, gray-on-colour, tiny text, skipped headings, missing alt, unlabelled controls, removed focus outlines, motion without a reduced-motion path; and design-system drift from the workspace design.md tokens). Suppressions in .brainrouter/design-detector.json are honoured and reported. Returns findings with file:line, rule id, message, and the guideline. Read-only. Use it after editing UI, and verify each finding in context — it is evidence, not judgment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paths: { type: 'array', items: { type: 'string' }, description: 'Workspace-relative files or directories to scan (default: the workspace). Bounded to 200 files.' },
+        html: { type: 'string', description: 'Markup to check instead of files (e.g. a page you just generated).' },
+        name: { type: 'string', description: 'A name for the inline markup, used as its file in findings.' },
+        rules: { type: 'array', items: { type: 'string' }, description: 'Only these rule ids (see the design rule catalog).' },
+        designSystem: { type: 'boolean', description: 'Read design.md tokens for the design-system rules (default true).' },
+        browser: { type: 'boolean', description: 'Also run the browser engine — the same rule ids over computed styles in the in-app browser (contrast against the composited background, clipped/covered text, horizontal overflow, hidden-at-rest content, tiny text, small targets). Desktop only; elsewhere the result says so and stays static.' },
+        tabId: { type: 'string', description: 'Browser tab to audit (default: the active tab).' },
+      },
+    },
+  },
+  {
+    name: 'design_fidelity',
+    description: 'Measure how faithfully a build matches an approved comp (ADR-056): compares two workspace PNGs — the comp (a prototype capture or supplied image) and a screenshot of the build — per region: structure (SSIM over blurred grayscale with a small translation search), colour (palette match), detail (high-frequency energy), and section bands. Each region gets match | drift | missing | contradicted; the whole gets a 0–100 score. Writes a side-by-side PNG, a heatmap PNG, and the numbers under .brainrouter/design/fidelity/<slug>/. A measurement you read, never a gate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        comp: { type: 'string', description: 'Workspace-relative path to the approved comp PNG (≤ 8 MB, 8-bit, non-interlaced).' },
+        build: { type: 'string', description: 'Workspace-relative path to the build screenshot PNG (resampled into the comp frame).' },
+        rows: { type: 'number', description: 'Region grid rows (1–12, default 6).' },
+        cols: { type: 'number', description: 'Region grid columns (1–12, default 4).' },
+        slug: { type: 'string', description: 'Artifact folder name (lowercase letters, digits, dashes). Default: derived from the two file names.' },
+      },
+      required: ['comp', 'build'],
+    },
+  },
+  {
+    name: 'design_variants',
+    description: 'Live variants (ADR-056): write N alternatives of ONE element into its source file inside a display:contents wrapper carrying data-brainrouter-variants (the dev server\'s HMR swaps them in; the original is variant 0 and shows first, the others are hidden until cycled). accept keeps one variant and strips the wrapper and the losers so the winner is real code in the diff; discard restores the file byte-identical. Sessions live under .brainrouter/design/variants/. Never edit the wrapper by hand.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['wrap', 'accept', 'discard', 'list'], description: 'wrap (file, start, end, variants, action) · accept (id, index) · discard (id) · list.' },
+        file: { type: 'string', description: 'wrap: workspace-relative source file (.html/.vue/.svelte/.astro get the HTML wrapper; .jsx/.tsx the JSX wrapper).' },
+        start: { type: 'number', description: 'wrap: character offset where the element starts.' },
+        end: { type: 'number', description: 'wrap: character offset just after the element ends.' },
+        variants: { type: 'array', items: { type: 'string' }, description: 'wrap: 1–6 complete replacements for the element (same tag structure the file expects).' },
+        action: { type: 'string', description: 'wrap: the verb that produced them (bolder, quieter, …) — recorded on the wrapper.' },
+        id: { type: 'string', description: 'accept/discard: the session id from wrap.' },
+        index: { type: 'number', description: 'accept: which variant to keep (0 = the original).' },
+      },
+      required: ['op'],
+    },
   },
   {
     name: 'session_list',
@@ -741,6 +843,17 @@ export const BUILTIN_TOOL_SPECS = [
         summary: { type: 'string', description: 'Optional one-line summary of what the chapter covers.' }
       },
       required: ['title']
+    }
+  },
+  {
+    name: 'notify_when_idle',
+    description: 'Ask another local session (by its session key) to send you ONE message the next time it finishes a turn (goes idle), instead of polling it. One-shot: it fires once and clears itself. Use it when you are waiting on a peer session and want to be pinged the moment it is free.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target_session: { type: 'string', description: 'The session key of the session to watch. It must be a live local session.' }
+      },
+      required: ['target_session']
     }
   },
   {

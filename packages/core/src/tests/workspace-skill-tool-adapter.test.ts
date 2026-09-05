@@ -105,7 +105,7 @@ test('selected profile skills lead the managed catalog and replace global collis
       text: JSON.stringify([
         { name: 'ordinary-skill', category: 'agent', scope: 'global' },
         { name: 'retrieval-practice-skill', description: 'legacy copy', category: 'legacy', scope: 'global' },
-        { name: 'taste-skill', category: 'design', scope: 'global' },
+        { name: 'a11y-skill', category: 'design', scope: 'global' },
       ]),
       tool: 'list_skills',
     });
@@ -136,7 +136,7 @@ test('frontend package skills appear only for the active task capability', () =>
       createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
     );
     const remote = JSON.stringify([
-      { name: 'taste-skill', category: 'design', scope: 'global' },
+      { name: 'a11y-skill', category: 'design', scope: 'global' },
       { name: 'ordinary-skill', category: 'agent', scope: 'global' },
     ]);
     const inactive = adaptWorkspaceSkillCatalogText({
@@ -154,7 +154,6 @@ test('frontend package skills appear only for the active task capability', () =>
     assert.deepEqual(names(active), [
       'a11y-skill',
       'browser-testing-skill',
-      'taste-skill',
       'ordinary-skill',
     ]);
   } finally {

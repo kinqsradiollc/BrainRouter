@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentImage, ComputerUseAction, ComputerUseActionResult, ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import { loadConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
-import { LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache } from '@kinqs/brainrouter-core/provider';
+import { LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache, extractAdvertisedContext, setManagedModelContext } from '@kinqs/brainrouter-core/provider';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
 import { readWorkspaceEntry } from '../fsRead.js';
@@ -268,6 +268,9 @@ export async function fetchEndpointModels(endpoint: string | undefined, apiKey: 
       ids.push(id);
       registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
     }
+    // ADR-045 M4 — record any gateway-advertised `context_window` so the model
+    // ring / budget clamp to the org cap (inert for a plain endpoint).
+    setManagedModelContext(extractAdvertisedContext(body.data ?? []));
     // LM Studio's thin OpenAI-compat /v1/models omits reasoning vocab; its
     // native /api/v1/models advertises it. Populate the cache (self-guards for
     // non-LM-Studio endpoints) so binary on/off models are detected and never

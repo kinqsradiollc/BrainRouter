@@ -4,9 +4,23 @@
 // sourceSafety extraction). The block is self-contained — it references only JS builtins and
 // its own names — so it moves with zero new imports. No behaviour change.
 
+import { assessReadiness } from '../browser/pageCapture.js';
+
 /** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
  *  WebContentsView). Typed loosely so the runtime pulls in no desktop imports. */
 export interface BrowserFetchPort { request(command: unknown, options?: { signal?: AbortSignal }): Promise<{ ok?: boolean; tabId?: string; data?: unknown }> }
+
+/**
+ * ADR-044 M2 — a heuristic for "the rendered content is a cookie/consent
+ * interstitial, not the article". A genuine article is not this short, so a
+ * long page is never flagged; a short page carrying consent vocabulary is. Fed
+ * to `assessReadiness`, which refuses to keep re-reading a consent wall (waiting
+ * does not dismiss it).
+ */
+export function looksLikeConsentWall(text: string): boolean {
+  if (text.length > 600) return false;
+  return /\b(accept (all )?cookies|cookie (preferences|settings|policy)|we use cookies|consent|gdpr|privacy (choices|settings)|manage (your )?preferences)\b/i.test(text);
+}
 
 /** True when a URL clearly points at STRUCTURED data (a JSON/XML/CSV/feed or an
  *  API endpoint) rather than a rendered web page. Those must NOT go through the
@@ -40,6 +54,9 @@ export interface InAppBrowseOptions {
   /** Mutable holder for the reused research tab id, shared across an agent's
    *  web_search / fetch_url calls so the user watches ONE tab, not many. */
   tabRef?: { id?: string };
+  /** ADR-044 M2 — delay (ms) between rendered-DOM readiness re-reads. Default 500;
+   *  set 0 in tests. */
+  readinessPollMs?: number;
 }
 
 /**
@@ -87,14 +104,39 @@ export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, 
     if (!tabId) return null;
     // Wait for load, but ignore its timeout — we still read whatever rendered.
     await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
-    // page.text returns the page's clean rendered innerText (article text, not the
-    // structural agent snapshot). Fall back to the semantic snapshot's node text
-    // if page.text is somehow empty, and to the crawler (return null) if both are.
-    const textRes = await port.request({ kind: 'page.text', tabId, maxChars: 100_000 }, { signal }).catch(() => null);
-    const td = (textRes?.ok ? textRes.data : null) as { url?: string; title?: string; text?: string } | null;
-    let title = String(td?.title ?? '');
-    let finalUrl = String(td?.url ?? url);
-    let text = String(td?.text ?? '').replace(/\n{3,}/g, '\n\n').slice(0, 60_000).trim();
+
+    // ADR-044 M2 — rendered-DOM readiness. page.text returns the page's clean
+    // rendered innerText. A JS-heavy page can fire 'load' before its article
+    // renders, and a consent interstitial covers the content: `assessReadiness`
+    // decides whether to RE-READ (the DOM is still filling in) or stop (a consent
+    // wall is not dismissed by waiting). We keep the longest text seen so a page
+    // that only ever renders a little is never made worse.
+    const startedAt = Date.now();
+    let title = '';
+    let finalUrl = url;
+    let text = '';
+    const pollMs = Math.max(0, opts.readinessPollMs ?? 500);
+    for (let attempt = 0; attempt < 3 && !signal.aborted; attempt++) {
+      const textRes = await port.request({ kind: 'page.text', tabId, maxChars: 100_000 }, { signal }).catch(() => null);
+      const td = (textRes?.ok ? textRes.data : null) as { url?: string; title?: string; text?: string } | null;
+      const attemptText = String(td?.text ?? '').replace(/\n{3,}/g, '\n\n').slice(0, 60_000).trim();
+      if (attemptText.length > text.length) { text = attemptText; title = String(td?.title ?? title); finalUrl = String(td?.url ?? finalUrl); }
+      const verdict = assessReadiness(
+        {
+          documentComplete: true,
+          visibleTextLength: attemptText.length,
+          pendingRequests: 0,
+          consentWallPresent: looksLikeConsentWall(attemptText),
+          elapsedMs: Date.now() - startedAt,
+        },
+        { minTextLength: 1, timeoutMs },
+      );
+      // Ready (has content), or unready-but-not-retryable (a consent wall / timeout)
+      // → stop. Only an empty, still-rendering page is worth a re-read.
+      if (verdict.ready || !verdict.retry) break;
+      if (Date.now() - startedAt > timeoutMs - pollMs - 100) break;
+      if (pollMs > 0) await new Promise((r) => setTimeout(r, pollMs));
+    }
     if (!text) {
       const snap = await port.request({ kind: 'page.snapshot', tabId, maxChars: 50_000 }, { signal }).catch(() => null);
       const sd = (snap?.ok ? snap.data : null) as { url?: string; title?: string; nodes?: Array<{ name?: unknown; value?: unknown }> } | null;

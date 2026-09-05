@@ -1,5 +1,6 @@
 ---
 name: taste-skill
+routed-by: hallmark
 description: Senior UI/UX Engineer. Architect digital interfaces overriding default LLM biases. Enforces metric-based rules, strict component architecture, CSS hardware acceleration, and balanced design engineering.
 hints:
   - "Apply all directives based on configurable DESIGN_VARIANCE, MOTION_INTENSITY, and VISUAL_DENSITY knobs before writing code."

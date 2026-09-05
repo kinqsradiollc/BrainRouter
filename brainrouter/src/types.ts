@@ -45,6 +45,12 @@ export interface SkillManifest {
   scope: SkillScope;
   /** Optional project name for project-specific skills */
   project?: string;
+  /**
+   * ADR-056 D-B4 — set from frontmatter `routed-by: <skill>`: this entry is a
+   * WORLD one skill loads by name (its worlds table names it), not a skill a
+   * person or model picks. Resolvable with get_skill; absent from every listing.
+   */
+  routedBy?: string;
 }
 
 export interface DocManifest {

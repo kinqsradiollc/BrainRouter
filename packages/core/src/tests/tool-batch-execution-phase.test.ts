@@ -90,9 +90,26 @@ test('publishToolBatch publishes tool results before deferred system messages', 
       published.push(`${message.tool_call_id}:${fullResultText}`);
     },
     publishSystemMessage: (message) => published.push(String(message)),
+    publishImageMessage: (message) => published.push(String(message)),
   });
 
   assert.deepEqual(published, ['a:full_a', 'b:full_b', 'system_a', 'system_b']);
+});
+
+test('publishToolBatch flushes image messages LAST — after tool results and system messages', () => {
+  const published: string[] = [];
+  publishToolBatch({
+    results: [
+      { ...result('a', 'system_a'), imageMsg: 'image_a' },
+      result('b'),
+    ],
+    publishToolResult: (message) => published.push(`tool:${message.tool_call_id}`),
+    publishSystemMessage: (message) => published.push(`sys:${String(message)}`),
+    publishImageMessage: (message) => published.push(`img:${String(message)}`),
+  });
+  // Every tool result precedes any system message, and the image rides last so
+  // the assistant tool_calls are immediately followed only by tool results.
+  assert.deepEqual(published, ['tool:a', 'tool:b', 'sys:system_a', 'img:image_a']);
 });
 
 test('repairOrphanToolResults publishes a paired error for every missing id', () => {

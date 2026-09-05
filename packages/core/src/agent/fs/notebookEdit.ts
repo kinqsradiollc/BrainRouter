@@ -55,12 +55,18 @@ export function applyNotebookEdit(content: string, opts: NotebookEditOptions): {
     } else {
       const cell = cells[i];
       cell.source = toLines(source);
-      if (opts.cellType) {
-        cell.cell_type = opts.cellType;
-        if (opts.cellType === 'code' && !Array.isArray(cell.outputs)) {
-          cell.outputs = [];
-          cell.execution_count = null;
-        }
+      if (opts.cellType) cell.cell_type = opts.cellType;
+      // ADR-051 D2 — a code cell's outputs and execution_count describe its OLD
+      // source; a replace makes them STALE, so clear them (the nbformat
+      // convention that an unexecuted source has no output). A cell turned into
+      // markdown sheds these fields entirely (markdown cells have neither).
+      const resultingType = opts.cellType ?? cell.cell_type;
+      if (resultingType === 'code') {
+        cell.outputs = [];
+        cell.execution_count = null;
+      } else {
+        delete cell.outputs;
+        delete cell.execution_count;
       }
     }
   }

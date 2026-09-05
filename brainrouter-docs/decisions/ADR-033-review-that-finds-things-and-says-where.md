@@ -9,9 +9,12 @@ live on a path a user reaches: the bot through the scheduler executors, the CLI 
 and the desktop host. Verified deterministically — `review-orchestration` 8/8, `review-bundles`
 18/18, `review-position-and-reflection` 19/19. D6 is a stance and lives in the prompt.
 
-**The one gap, stated precisely: D7's harness ships and has never produced a number.** It exists, it
-runs, and no evaluation has been recorded against it. That is why this ADR is PARTIAL and not
-COMPLETE, and it is a measurement that has not been taken rather than code that was not written.
+**The one gap, stated precisely: D7's harness runs against real providers but no *qualifying* number
+has been recorded.** It exists, it runs, and as of 2026-08-26 it has been exercised against five
+hosted models (see below) — every free one fails the strict findings-envelope on the real prompt, and
+the one frontier model reached was blocked by an empty provider balance. That is why this ADR is
+PARTIAL and not COMPLETE, and it is a measurement gated on **funded frontier access** rather than code
+that was not written.
 
 This is deliberately not called "the live-model half is unproven" any more, which was the earlier
 wording and was vaguer than the facts deserve: the deterministic engineering is done and reached,
@@ -47,6 +50,53 @@ is specific rather than a shrug:
 Zero recall on a case with planted defects is not a formatting problem, so a third local model is
 not the answer; the wall is reviewing capability. D7's number therefore needs a frontier-class
 provider, which is the owner's key to supply.
+
+**The harness has since been run EXHAUSTIVELY against eight models on the real corpus (2026-08-26),
+and the wall is now precisely located.** The paired runner was pointed — via a provider-config naming
+an `apiKeyEnv`, so no key ever touched the config or a log — at hosted models through the owner's
+OpenRouter and OrcaRouter accounts. The model-independent input-cost diagnostic reproduced §6's cost
+half exactly (bundled **516,672** vs legacy **545,529** characters, **−28,857 / −5.29%**), so the
+harness itself is proven end to end. Every accessible free/local model **fails a different part of the
+strict review contract on the real 280 K-char prompt** — a fail-closed rejection the parser refuses
+to launder into a clean zero-finding report. The `bench:review` runs, in order of how far each got:
+
+| Model (free / local) | Where it failed on the real corpus |
+|---|---|
+| `qwen2.5-coder:7b` (local) | could not produce the fenced findings envelope at all |
+| `qwen2.5-coder:14b` (local) | envelope OK, then **zero recall** on planted defects, then invalid findings |
+| `stealth/ox-alpha` (reasoning) | did not *end* with the fenced envelope (trailed off after reasoning) |
+| `deepseek/deepseek-v4-pro-0813` | returned **no** envelope |
+| `nvidia/nemotron-3-ultra-550b` (1 M ctx) | returned **no** envelope — so it is NOT context size |
+| `minimax/minimax-m3` (1 M ctx) | envelope OK, but findings **missing required `file`/`summary`** (`reviewFindings.ts:81`) |
+| `nvidia/nemotron-3-super-120b` | **malformed JSON** in the envelope |
+| `nvidia/nemotron-3-nano-…-reasoning` | too slow to complete a case; no valid envelope |
+
+Two more were reached but never produced a corpus artifact from the free pool: **`z-ai/glm-5.2:free`**
+— a genuinely frontier free coding model — is **`429` upstream-pool-saturated** on every attempt; and
+a **GPT-5.1 codex-class** model probed on the OpenRouter balance was blocked by **`402 Payment
+Required`**. Each free model passes a *simplified* review-shaped probe (finds a planted bug, emits a
+clean envelope) yet fails the *real* multi-constraint contract on the review itself.
+
+**Then the real blocker turned out NOT to be access at all — it was a harness bug (fixed 2026-08-26).**
+A funded frontier path exists after all: the owner's **OrcaRouter** balance runs `anthropic/claude-sonnet-5`,
+and it is the FIRST model to clear the review contract — valid envelope, valid findings, a full scored
+paired case (`pr-743`). It then failed, every run, on the reflection pass: *"Reflection response did not
+contain exactly one valid verdict per finding."* A two-part diagnostic located the cause precisely — the
+same model, given the reflection prompt ALONE, returns four perfect verdicts; given the prompt the
+benchmark actually sent, it returns a prose "Review Assessment" the parser rejects. The benchmark's
+reflection call (`reviewBenchmarkHarness.ts`) had prepended the code-review **lens** system prompt ("you
+are reviewing a pull request") onto the reflection's own contract ("judge these findings, report
+verdicts"), handing the model two conflicting jobs. Production never does this (`reviewReflection.ts`
+sends the reflection prompt alone). The fix sends `request.system` alone — so the reflection is measured
+as the reviewer actually runs it (§6), and it does NOT touch the acceptance bar.
+
+So the wall was a **prompt-contamination bug that made every model, frontier included, answer the
+reflection in prose** — not context size, not the harness's strictness, not access. With it fixed, the
+qualifying number is one run away. The one remaining input is small: the exhaustive diagnosis (8+ model
+runs plus a retry loop, before the bug was isolated) **drained the OrcaRouter balance to `$0`** ("needs
+$0.03"), so the fixed `bench:review` needs a **~$1–2 top-up** on OrcaRouter (or OpenRouter) to run
+`claude-sonnet-5` across the frozen corpus and record precision/recall. The corpus, runner, safety
+discipline, cost half, a funded frontier model, and now a correct reflection are all in place.
 
 **Both failures are evidence FOR the design, and worth keeping.** A malformed envelope and an
 invalid finding each aborted the run and wrote an explicitly FAILED artifact. Neither degraded into

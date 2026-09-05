@@ -5,7 +5,7 @@
  * the composer (passed in as a node so its 25-prop wiring stays in App).
  * Extracted verbatim from App.tsx; the App owns all state, refs, and handlers.
  */
-import type { WorkspaceMode } from '../layout/ActivityBar.js';
+import type { WorkspaceMode } from '../../lib/workspace/modes.js';
 import React, { useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../../icons.js';
 import remarkGfm from 'remark-gfm';

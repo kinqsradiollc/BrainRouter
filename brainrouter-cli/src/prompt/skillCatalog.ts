@@ -144,6 +144,7 @@ export function listFilesystemSkills(
     for (const filePath of findSkillFiles(root)) {
       const parsed = parseSkillFile(filePath);
       if (!parsed) continue;
+      if (parsed.routedBy) continue; // a world another skill routes to, not a catalog entry
       const rel = path.relative(root, filePath);
       const category = rel.split(path.sep)[0] || 'uncategorized';
       if (!winners.has(parsed.name)) {
@@ -341,7 +342,7 @@ function findSkillFiles(root: string): string[] {
   return results;
 }
 
-function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[]; disableModelInvocation?: boolean } | undefined {
+function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[]; disableModelInvocation?: boolean; routedBy?: string } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf8'); } catch { return undefined; }
 
@@ -356,11 +357,16 @@ function parseSkillFile(filePath: string): { name: string; description?: string;
   // YAML-truthy spelling; this regex reader must agree or the same file would be
   // human-only on one surface and model-invocable on the other.
   const humanOnly = isYamlTrue(readYamlScalar(block, 'disable-model-invocation'));
+  // ADR-056 D-B4 — `routed-by: <skill>` marks a WORLD: a ruleset one skill loads
+  // by name (its worlds table names it), not a skill a person or model picks.
+  // Worlds stay resolvable by name and stay out of every catalog.
+  const routedBy = readYamlScalar(block, 'routed-by')?.trim();
   return {
     name,
     description,
     triggers: parseSkillTriggersFrontmatter(raw),
     ...(humanOnly ? { disableModelInvocation: true } : {}),
+    ...(routedBy ? { routedBy } : {}),
   };
 }
 

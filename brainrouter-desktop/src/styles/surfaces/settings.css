@@ -17,7 +17,7 @@ html[data-visual-system="v2"] .settings-modal {
   color: var(--shell-text);
   background: var(--shell-panel);
   border-color: var(--shell-divider-strong);
-  border-radius: 12px;
+  border-radius: var(--r-lg);
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -30,7 +30,7 @@ html[data-visual-system="v2"] .settings-modal.zoomed {
 
 html[data-visual-system="v2"] .settings-nav {
   width: 220px;
-  padding: 12px 8px;
+  padding: 14px 10px;
   background: var(--shell-chrome);
   border-color: var(--shell-divider);
 }
@@ -49,7 +49,7 @@ html[data-visual-system="v2"] .settings-brand-mark {
   color: var(--shell-text-secondary);
   background: transparent;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--shell-control-radius);
 }
 
 html[data-visual-system="v2"] .settings-brand strong {
@@ -93,8 +93,8 @@ html[data-visual-system="v2"] .settings-modal .nav-item.settings-category:hover 
 
 html[data-visual-system="v2"] .settings-modal .nav-item.settings-category.active {
   color: var(--shell-text);
-  background: var(--shell-interaction-selected);
-  box-shadow: inset 2px 0 0 var(--shell-focus);
+  background: var(--shell-elevated);
+  box-shadow: inset 3px 0 0 var(--shell-focus);
 }
 
 html[data-visual-system="v2"] .settings-modal .nav-item.settings-category .nav-icon,
@@ -163,7 +163,7 @@ html[data-visual-system="v2"] .settings-modal .set-group {
   background: transparent;
   border: 0;
   border-top: 1px solid var(--shell-divider);
-  border-radius: 0;
+  border-radius: var(--shell-control-radius);
 }
 
 html[data-visual-system="v2"] .settings-modal .set-group > .set-h2 {

@@ -10,6 +10,7 @@ import { isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSup
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../../provider/providers/definition.js';
 import type { ProviderDefinition } from '../../provider/providers/definition.js';
+import { callExternalAgentEngine } from './externalAgentEngine.js';
 import { effortToWireLevel, type EffortLevel } from '../../session/preferences/preferencesStore.js';
 import type { PromptLayers } from '../../prompt/systemPrompt.js';
 import { computePrefixFingerprint } from '../../context/contextRegions.js';
@@ -107,7 +108,9 @@ export function supportsReasoningEffortField(config: LLMConfig): boolean {
  * endpoint) — treated as the OpenAI-compatible default downstream.
  */
 export function activeProviderDef(config: LLMConfig): ProviderDefinition | undefined {
-  return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase());
+  // ADR-041 A41-9 — config.sessionKey resolves a session-scoped BYOK provider
+  // first; undefined for an ordinary config, so this is the global path unchanged.
+  return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase(), config.sessionKey);
 }
 
 function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderDefinition['binaryEffortValueMap'] | undefined {
@@ -115,7 +118,7 @@ function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderD
   return undefined;
 }
 
-export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'external-agent';
 
 function modelSupportsResponsesFormat(model: string | undefined): boolean {
   const id = normalizeModelName(model ?? '');
@@ -134,8 +137,12 @@ export function resolveRequestFormat(config: LLMConfig, effectiveEndpoint?: stri
   // (see `resolveCliKnobs → normalizeProviderRequestFormat`); an unknown
   // provider key is a no-op, so adding overrides for new providers never
   // throws and an obsolete provider id is silently ignored.
-  const override = getCliKnobs().providerRequestFormat[providerId];
   const builtIn = def?.requestFormat ?? 'chat-completions';
+  // ADR-047 D2 — an engine (external-agent) provider has no HTTP endpoint and its
+  // format is INTRINSIC: a wire-format override cannot turn a subprocess engine
+  // into an HTTP call. Resolve it by provider id, before the override + any gating.
+  if (builtIn === 'external-agent') return 'external-agent';
+  const override = getCliKnobs().providerRequestFormat[providerId];
   const allowedFormat = override ?? builtIn;
   // NATIVE (non-OpenAI-compatible) formats are an explicit opt-in — honor them
   // directly. They carry their own URL/headers/payload (see nativeProviders.ts)
@@ -316,9 +323,13 @@ export function effortForTurnSelection(
   mode: { effort: EffortLevel; executionMode?: string },
   _model: string | undefined,
   override: EffortLevel | undefined,
+  perModelEffort?: EffortLevel,
 ): EffortLevel {
+  // A per-run override (a spawned child's fixed effort) always wins. Otherwise a
+  // per-model default (ADR-052 D2) wins over the session effort, so switching
+  // models keeps each model's tuned level.
   if (override) return override;
-  return mode.effort;
+  return perModelEffort ?? mode.effort;
 }
 
 export interface BuildPayloadOptions {
@@ -1050,6 +1061,13 @@ export async function callOpenAI(
   // Reject malformed or effectively unbounded opt-in limits before contacting
   // a provider. Callers that need the legacy unrestricted behavior omit it.
   assertValidResponseByteLimit(options.maxResponseBytes);
+  // ADR-047 D2 — engine mode: an installed coding-agent CLI drives this turn.
+  // Resolved purely by provider id (no endpoint, no API key), so short-circuit
+  // BEFORE the endpoint normalization + key guard below. Everything past this
+  // point is byte-identical to before for every HTTP provider.
+  if (resolveRequestFormat(config) === 'external-agent') {
+    return callExternalAgentEngine(config, messages, { signal: options.signal });
+  }
   // Normalize the endpoint to a base URL (everything UP TO `/chat/completions`
   // exclusive). Earlier callers stored the full chat-completions URL in
   // `config.endpoint` (e.g. "https://api.openai.com/v1/chat/completions")
@@ -1285,6 +1303,12 @@ export async function callOpenAIStream(
     onReasoningDelta?: (text: string) => void;
   } = {},
 ) {
+  // ADR-047 D2 — engine mode (see callOpenAI). An engine turn is not an SSE
+  // stream; run it and emit the whole answer as ONE text delta so the streaming
+  // consumer paints it, then return the same terminal shape.
+  if (resolveRequestFormat(config) === 'external-agent') {
+    return callExternalAgentEngine(config, messages, { signal: options.signal, onTextDelta: handlers.onTextDelta });
+  }
   const initialDef = activeProviderDef(config);
   const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
   const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');

@@ -6,6 +6,8 @@
  * existing config barrel for compatibility.
  */
 
+import type { AgentSessionTransport } from '../agent/session/types.js';
+
 export type RuntimeBackendKind = 'process' | 'worktree' | 'container' | 'hosted';
 
 export type HostedAgentProtocol = 'line-json' | 'stdio';
@@ -15,6 +17,23 @@ export interface HostedAgentConfig {
   command?: string;
   args?: string[];
   protocol?: HostedAgentProtocol;
+  /**
+   * ADR-050 D5 — per-instance environment. The same agent CLI may appear under N
+   * hosted entries (the entry `name` is the instance id / routing key), each with
+   * an ISOLATED home so accounts never share auth state: `CLAUDE_CONFIG_DIR` /
+   * `CODEX_HOME` / `GEMINI_*`, etc. Merged over `process.env` at spawn time.
+   */
+  env?: Record<string, string>;
+  /**
+   * ADR-050 D2/P4 — a user-declared LIVE session transport for a bring-your-own
+   * agent, so live sessions are not limited to the built-in catalog. `acp-stdio`
+   * is the open standard and works for ANY ACP-speaking CLI; the vendor
+   * transports fit CLIs compatible with them. Absent (or with `liveSessions`
+   * off) ⇒ the one-shot transport, exactly as before.
+   */
+  transport?: AgentSessionTransport;
+  /** Args that launch the CLI in its session mode (e.g. `['--experimental-acp']`); ignored without `transport`. */
+  transportArgs?: string[];
 }
 
 export interface ResolvedHostedAgentConfig {
@@ -22,6 +41,12 @@ export interface ResolvedHostedAgentConfig {
   command: string;
   args: string[];
   protocol: HostedAgentProtocol;
+  /** ADR-050 D5 — resolved per-instance env (isolated home); absent ⇒ inherit process.env only. */
+  env?: Record<string, string>;
+  /** ADR-050 D2/P4 — resolved live session transport for a bring-your-own agent; absent ⇒ one-shot. */
+  transport?: AgentSessionTransport;
+  /** ADR-050 D2/P4 — args that launch the CLI in `transport` mode. */
+  transportArgs?: string[];
 }
 
 export interface ContainerRuntimeLimits {

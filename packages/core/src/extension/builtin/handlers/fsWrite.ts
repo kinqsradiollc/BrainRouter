@@ -10,6 +10,7 @@ import { ownershipWriteViolation } from '../../../orchestration/ownership/owners
 import { runPostEditCheck } from '../../../util/agentloop/postEditCheck.js';
 import { getCliKnobs } from '../../../config/config.js';
 import { applyNotebookEdit } from '../../../agent/fs/notebookEdit.js';
+import { buildNotebookEditApprovalPreview } from '../../../agent/fs/notebookRead.js';
 import fs from 'node:fs';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../../agent/fs/applyPatch.js';
 import type { BuiltinToolHandler } from './registry.js';
@@ -103,15 +104,20 @@ export const fsWriteHandlers: Record<string, BuiltinToolHandler> = {
         const editMode = args.edit_mode === 'insert' || args.edit_mode === 'delete' ? args.edit_mode : 'replace';
         const cellIndex = args.cell_index === undefined || args.cell_index === null ? undefined : Number(args.cell_index);
         const cellType = args.cell_type === 'markdown' ? 'markdown' : args.cell_type === 'code' ? 'code' : undefined;
+        const source = String(args.source ?? '');
+        // ADR-051 D4 — the approver SEES the target cell's current content beside
+        // the change (and a clear notice when it cannot be read), so a wrong-index
+        // edit can be declined on sight instead of approving a bare index.
+        const current = await fsPort.readFile(resolved);
         const parentDenial = await host.confirmSilentChildToolApproval({
           tool: 'notebook_edit', path: String(args.path ?? ''),
-          summary: `${editMode} cell ${cellIndex ?? '(append)'}`,
+          summary: buildNotebookEditApprovalPreview(current, { editMode, cellIndex, cellType, source }),
           reason: 'silent child agent requested a notebook edit',
         });
         if (parentDenial) return parentDenial;
         host.assertInheritedExecutionAuthorityCurrent();
         host.captureFileSnapshot(resolved); // undo log for /rewind --files
-        const result = applyNotebookEdit(await fsPort.readFile(resolved), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
+        const result = applyNotebookEdit(current, { editMode, cellIndex, cellType, source });
         await fsPort.writeFile(resolved, result.content);
         host.filesReadThisSession.add(resolved);
         return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });

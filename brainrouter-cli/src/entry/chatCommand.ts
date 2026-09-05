@@ -5,10 +5,10 @@
  */
 import type { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, migrateLegacyContextWindowsFile, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
-import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { applyActiveLlmProfile, registerDeclarativeProviders } from '@kinqs/brainrouter-core/provider';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
@@ -17,6 +17,7 @@ import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { cliInteractionPort } from '../cli/prompt/cliInteractionPort.js';
 import { runChat } from '../cli/ink/runChat.js';
+import { installUsageTelemetryPush } from '../runtime/usage/installUsageTelemetry.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
@@ -112,6 +113,12 @@ export function registerChatCommand(program: Command): void {
         process.exit(1);
       }
 
+      // ADR-045 M5 — retire the legacy contextWindows.json file by folding it
+      // into cli.contextWindows once, before config is loaded below.
+      const ctxMigration = migrateLegacyContextWindowsFile();
+      if (ctxMigration.migrated > 0) {
+        console.error(`[BrainRouter] Migrated ${ctxMigration.migrated} entr${ctxMigration.migrated === 1 ? 'y' : 'ies'} from the retired contextWindows.json into cli.contextWindows.`);
+      }
       // CONFIG-HYDRATE — self-fill config.json with any missing safe cli.* knobs so
       // every setting is visible + editable (and new knobs appear on the next launch).
       // Runs only at this deliberate interactive boot, not on every config read.
@@ -205,6 +212,18 @@ export function registerChatCommand(program: Command): void {
       // cli.llmProfiles) onto the base llm config. Inert when unset; an
       // explicit --model and per-session runtime overrides still win.
       const bootKnobs = resolveCliKnobs(config);
+
+      // ADR-047 D1 — register declarative providers (packaged starter set +
+      // cli.customProviders) into the live registry so an OpenAI-compatible
+      // vendor added as DATA routes a turn with no code module. Loud but not
+      // fatal: a malformed entry prints its reason and boot continues on the
+      // built-ins rather than refusing to start.
+      try {
+        registerDeclarativeProviders(bootKnobs.customProviders);
+      } catch (err) {
+        console.error(chalk.yellow(`⚠ ${err instanceof Error ? err.message : String(err)}`));
+      }
+
       const llm: LLMConfig = applyActiveLlmProfile(bootKnobs, { ...(config.llm ?? DEFAULT_LLM) });
 
       if (options.model) {
@@ -243,6 +262,7 @@ export function registerChatCommand(program: Command): void {
       // hooks) before the first turn. Workspace-tier extensions only load in a
       // trusted workspace; best-effort, never blocks boot.
       await loadExtensions(workspace.workspaceRoot, { version: VERSION }).catch(() => undefined);
+      installUsageTelemetryPush(); // ADR-054 D2 — best-effort per-automation usage push (opt-in via cli.usageTelemetry)
       const learnedIdentity = await resolveCliLearnedTenant({ mcpClient, servers: targetServers });
       if (learnedIdentity.warning) console.error(chalk.yellow(`[BrainRouter] ${learnedIdentity.warning}`));
       const agent = new Agent(mcpClient, llm, {

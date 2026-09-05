@@ -153,7 +153,7 @@ test('normalizePublishRepo: accepts owner/repo + a github url', () => {
 // update — version bump + enabled-state preservation
 // ---------------------------------------------------------------------------
 
-test('update: bumps a pinned local plugin\'s version + preserves enabled state', () => {
+test('update: bumps a pinned local plugin\'s version + preserves enabled state', async () => {
   const home = mkTmp('br-home-');
   const src = mkTmp('br-src-');
   const ws = mkTmp('br-ws-');
@@ -174,7 +174,7 @@ test('update: bumps a pinned local plugin\'s version + preserves enabled state',
       path.join(srcRoot, '.brainrouter-plugin', 'plugin.json'),
       JSON.stringify({ name: 'upd-pinned', version: '2.0.0', category: 'development' }),
     );
-    const upd = updatePlugin('upd-pinned', { scope: 'user', workspaceRoot: ws });
+    const upd = await updatePlugin('upd-pinned', { scope: 'user', workspaceRoot: ws });
     assert.ok(upd.ok);
     assert.equal(upd.updated, true);
     assert.equal(upd.fromVersion, '1.0.0');
@@ -193,7 +193,7 @@ test('update: bumps a pinned local plugin\'s version + preserves enabled state',
   }
 });
 
-test('update: same-version source reports "not updated"', () => {
+test('update: same-version source reports "not updated"', async () => {
   const home = mkTmp('br-home-');
   const src = mkTmp('br-src-');
   const ws = mkTmp('br-ws-');
@@ -204,7 +204,7 @@ test('update: same-version source reports "not updated"', () => {
     writePlugin(srcRoot, 'still-same', '1.0.0');
     assert.ok(installPlugin(srcRoot, { scope: 'user', workspaceRoot: ws }).ok);
 
-    const upd = updatePlugin('still-same', { scope: 'user', workspaceRoot: ws });
+    const upd = await updatePlugin('still-same', { scope: 'user', workspaceRoot: ws });
     assert.ok(upd.ok);
     assert.equal(upd.updated, false);
   } finally {
@@ -212,13 +212,13 @@ test('update: same-version source reports "not updated"', () => {
   }
 });
 
-test('update: an uninstalled name errors', () => {
+test('update: an uninstalled name errors', async () => {
   const home = mkTmp('br-home-');
   const ws = mkTmp('br-ws-');
   const prevHome = process.env.BRAINROUTER_HOME;
   process.env.BRAINROUTER_HOME = home;
   try {
-    const results = updatePlugins({ name: 'nope', workspaceRoot: ws });
+    const results = await updatePlugins({ name: 'nope', workspaceRoot: ws });
     assert.equal(results.length, 1);
     assert.equal(results[0].ok, false);
   } finally {

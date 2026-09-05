@@ -3,6 +3,7 @@ import {
   Menu,
   session,
   shell,
+  clipboard,
   WebContentsView,
   type BrowserWindow,
   type ContextMenuParams,
@@ -31,6 +32,8 @@ import {
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import { BrowserManagerError } from './browserManagerError.js';
 import { BrowserPromptManager } from './browserPromptManager.js';
+import { agentDownloadDir, browserPrintDir, workspaceRelativeDownloadPath, safeName } from '../browserSafety.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import {
   availableDownloadPath,
   BrowserDownloadManager,
@@ -44,6 +47,13 @@ import {
 import {
   BrowserWorkspacePersistenceQueue,
   BrowserWorkspaceStore,
+  addBrowserBookmark,
+  removeBrowserBookmark,
+  recordBrowserVisit,
+  omniboxSuggest,
+  MAX_BROADCAST_BOOKMARKS,
+  type BrowserBookmark,
+  type BrowserHistoryEntry,
   persistableBrowserUrl,
   type PersistedBrowserWorkspace,
 } from './browserWorkspaceStore.js';
@@ -158,10 +168,46 @@ function targetScript(tabId: string, revision: number, ref?: string, target?: st
   })()`;
 }
 
-function semanticSnapshotScript(tabId: string, revision: number): string {
+function designAuditScript(rules: string[], max: number): string {
   return `(() => {
+    const RULES = new Set(${JSON.stringify(rules)}); const MAX = ${max};
+    const want = (id) => RULES.size === 0 || RULES.has(id);
+    const out = [];
+    const text = (el) => String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    const sel = (el) => { const parts = []; let n = el; let depth = 0; while (n && n.nodeType === 1 && depth < 4) { let s = n.tagName.toLowerCase(); if (n.id) { parts.unshift(s + '#' + n.id); break; } const cls = typeof n.className === 'string' ? n.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.') : ''; if (cls) s += '.' + cls; parts.unshift(s); n = n.parentElement; depth++; } return parts.join(' > '); };
+    const push = (rule, el, message) => { if (out.length >= MAX) return; const r = el.getBoundingClientRect(); out.push({ rule, message, selector: sel(el), snippet: text(el).slice(0, 60), box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }); };
+    const parse = (c) => { const m = /rgba?\\(([^)]+)\\)/.exec(c || ''); if (!m) return null; const p = m[1].split(',').map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+    const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    const bgOf = (el) => { const layers = []; let n = el; while (n && n.nodeType === 1) { const s = getComputedStyle(n); if (s.backgroundImage && s.backgroundImage !== 'none') return null; const c = parse(s.backgroundColor); if (c && c.a > 0) layers.push(c); if (c && c.a >= 1) break; n = n.parentElement; } let r = 255, g = 255, b = 255; for (let i = layers.length - 1; i >= 0; i--) { const c = layers[i]; r = c.r * c.a + r * (1 - c.a); g = c.g * c.a + g * (1 - c.a); b = c.b * c.a + b * (1 - c.a); } return { r, g, b }; };
+    const ratio = (a, b) => { const la = lum(a), lb = lum(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
+    const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+    const hasOwnText = (el) => Array.from(el.childNodes).some((n) => n.nodeType === 3 && String(n.textContent).trim().length > 0);
+    const root = document.documentElement; const vw = innerWidth;
+    if (want('horizontal-overflow') && root.scrollWidth > vw + 1) push('horizontal-overflow', root, 'The page scrolls horizontally in the first viewport: content is ' + (root.scrollWidth - vw) + 'px wider than the ' + vw + 'px viewport.');
+    const els = Array.from(document.body ? document.body.querySelectorAll('*') : []).slice(0, 4000);
+    for (const el of els) {
+      if (out.length >= MAX) break;
+      if (!(el instanceof HTMLElement)) continue;
+      const s = getComputedStyle(el);
+      if (want('small-touch-target') && visible(el) && el.matches('a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link]')) { const r = el.getBoundingClientRect(); if (r.width < 24 || r.height < 24) push('small-touch-target', el, 'Interactive target ' + Math.round(r.width) + '×' + Math.round(r.height) + 'px is under 24px.'); }
+      if (!hasOwnText(el)) continue;
+      const fs = parseFloat(s.fontSize) || 0; const t = text(el);
+      if (want('hidden-at-rest')) { const op = parseFloat(s.opacity); const tp = String(s.transitionProperty || ''); if ((op === 0 || s.visibility === 'hidden') && /opacity|visibility|all/.test(tp) && t.length >= 3) push('hidden-at-rest', el, 'Content is invisible at rest and only appears through a transition (hover/focus reveal).'); }
+      if (!visible(el)) continue;
+      if (want('tiny-text') && fs > 0 && fs < 12 && t.length >= 20) push('tiny-text', el, 'Computed font-size ' + fs + 'px on body copy.');
+      if (want('low-contrast')) { const fg = parse(s.color); const bg = bgOf(el); if (fg && bg && fg.a > 0.99) { const r = ratio(fg, bg); const large = fs >= 24 || (fs >= 18.66 && parseInt(s.fontWeight, 10) >= 700); const min = large ? 3 : 4.5; if (r < min) push('low-contrast', el, 'Contrast ' + r.toFixed(2) + ':1 against the composited background (needs ' + min + ':1).'); } }
+      if (want('text-overflow')) { const clipped = el.scrollWidth > el.clientWidth + 2 && /hidden|clip/.test(s.overflowX + ' ' + s.overflow); const r = el.getBoundingClientRect(); let occluded = false; if (!clipped && r.width > 0 && r.top >= 0 && r.top < innerHeight) { const cx = Math.min(innerWidth - 1, r.left + r.width / 2), cy = Math.min(innerHeight - 1, r.top + Math.min(r.height, 24) / 2); const top = document.elementFromPoint(cx, cy); occluded = !!top && top !== el && !el.contains(top) && !top.contains(el); } if (clipped || occluded) push('text-overflow', el, clipped ? 'Text is clipped: ' + el.scrollWidth + 'px of content in a ' + el.clientWidth + 'px box with overflow hidden.' : 'Text is covered by another element at its centre.'); }
+    }
+    return { url: location.href, viewport: { width: innerWidth, height: innerHeight }, scanned: els.length, findings: out, truncated: out.length >= MAX };
+  })()`;
+}
+
+function semanticSnapshotScript(tabId: string, revision: number, scope: 'viewport' | 'page' = 'viewport'): string {
+  return `(() => {
+    const SCOPE = ${JSON.stringify(scope)};
     const roleFor = (el) => el.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:(el.type==='checkbox'?'checkbox':el.type==='radio'?'radio':'textbox'),TEXTAREA:'textbox',SELECT:'combobox',NAV:'navigation',MAIN:'main',HEADER:'banner',FOOTER:'contentinfo',H1:'heading',H2:'heading',H3:'heading',IMG:'img'})[el.tagName] || '';
-    const visible = (el) => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && r.bottom>0 && r.right>0 && r.top<innerHeight && r.left<innerWidth && s.visibility!=='hidden' && s.display!=='none' && Number(s.opacity||1)>0; };
+    const styleVisible = (el) => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none' && Number(s.opacity||1)>0; };
+    const inViewport = (el) => { const r=el.getBoundingClientRect(); return r.bottom>0 && r.right>0 && r.top<innerHeight && r.left<innerWidth; };
     const nameFor = (el) => String(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title') || el.getAttribute('placeholder') || el.textContent || '').replace(/\\s+/g,' ').trim().slice(0,200);
     const valueIsSensitive = (el,type) => {
       if (['password','hidden','file'].includes(type)) return true;
@@ -170,27 +216,77 @@ function semanticSnapshotScript(tabId: string, revision: number): string {
       const identity=String([el.id,el.getAttribute('name'),el.getAttribute('data-testid'),el.getAttribute('aria-label')].filter(Boolean).join(' ')).toLowerCase();
       return /(?:^|[^a-z])(password|passwd|secret|token|csrf|xsrf|session|authorization|api.?key|card.?number|credit.?card|cvv|cvc|csc|otp)(?:[^a-z]|$)/.test(identity);
     };
+    const SELECTOR='a,button,input,textarea,select,option,summary,nav,main,header,footer,[role],[data-testid],h1,h2,h3,img';
+    // ADR-055 P3 — walk open shadow roots too, so a control inside a web
+    // component is observable. Bounded + guarded: a failing subtree degrades to
+    // the light DOM rather than breaking the whole snapshot.
+    const collectDeep = (root, depth, acc) => {
+      if (depth>6 || acc.length>=3000) return acc;
+      try { for (const el of root.querySelectorAll(SELECTOR)) { acc.push(el); if (acc.length>=3000) return acc; } } catch (e) {}
+      try { for (const host of root.querySelectorAll('*')) { if (host.shadowRoot) { collectDeep(host.shadowRoot, depth+1, acc); if (acc.length>=3000) return acc; } } } catch (e) {}
+      return acc;
+    };
+    const all=collectDeep(document, 0, []).slice(0,2500);
     const nodes = new Map(); const rows=[];
-    const all=Array.from(document.querySelectorAll('a,button,input,textarea,select,option,summary,nav,main,header,footer,[role],[data-testid],h1,h2,h3,img')).slice(0,2500);
     let index=0;
     for (const el of all) {
-      const isVisible=visible(el), role=roleFor(el), testid=el.getAttribute('data-testid')||'';
+      const vis=styleVisible(el), role=roleFor(el), testid=(el.getAttribute&&el.getAttribute('data-testid'))||'';
       if (!role && !testid) continue;
-      // The model controls the exact visible page, so hidden DOM content is not
-      // an observation surface. This also prevents hidden data-testid, ARIA,
-      // title, placeholder, and text nodes from disclosing application secrets.
-      if (!isVisible) continue;
+      // Hidden DOM content is never an observation surface (it also stops hidden
+      // data-testid/ARIA/placeholder/text nodes from leaking application secrets).
+      if (!vis) continue;
+      const within=inViewport(el);
+      // ADR-055 P3 — scope 'page' keeps scrolled-out (but visible) nodes so the
+      // model need not scroll-and-re-snapshot; 'viewport' (default) is the old
+      // behaviour. Off-DOM/hidden nodes stay excluded in BOTH scopes.
+      if (SCOPE!=='page' && !within) continue;
       const ref='br:${tabId}:${revision}:node_'+(++index); nodes.set(ref,el);
-      const r=el.getBoundingClientRect(), type=String(el.getAttribute('type')||'').slice(0,40);
-      const valueBearing=isVisible&&(el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement||(el instanceof HTMLInputElement&&['','text','search','email','url','tel','number','range','date','time','month','week','datetime-local','color'].includes(type)));
+      const r=el.getBoundingClientRect(), type=String((el.getAttribute&&el.getAttribute('type'))||'').slice(0,40);
+      const valueBearing=(el instanceof HTMLTextAreaElement||el instanceof HTMLSelectElement||(el instanceof HTMLInputElement&&['','text','search','email','url','tel','number','range','date','time','month','week','datetime-local','color'].includes(type)));
       rows.push({ref,role,name:nameFor(el),tag:(el.tagName||'').toLowerCase(),testid:testid||undefined,type:type||undefined,
         value:!valueBearing||valueIsSensitive(el,type)?undefined:String(el.value||'').slice(0,200),
         checked:typeof el.checked==='boolean'?el.checked:undefined,selected:typeof el.selected==='boolean'?el.selected:undefined,
-        disabled:typeof el.disabled==='boolean'?el.disabled:undefined,visible:isVisible,rect:{x:r.x,y:r.y,width:r.width,height:r.height}});
+        disabled:typeof el.disabled==='boolean'?el.disabled:undefined,visible:vis,inViewport:within,rect:{x:r.x,y:r.y,width:r.width,height:r.height}});
       if(rows.length>=${MAX_BROWSER_ROWS}) break;
     }
     window.__brainrouterAgentRefs={revision:${revision},nodes};
-    return {url:location.href,title:document.title,nodes:rows};
+    return {url:location.href,title:document.title,scope:SCOPE,nodes:rows};
+  })()`;
+}
+
+function pointHitScript(x: number, y: number): string {
+  // ADR-055 P2 — resolve the element under a screenshot-frame point (viewport
+  // CSS pixels), report its role/name for the receipt, and flag a credential
+  // field so the caller refuses a coordinate action on it. Mirrors the
+  // snapshot's valueIsSensitive rule (form controls only) so a coordinate click
+  // is no less safe, without over-refusing ordinary buttons/links.
+  return `(() => {
+    const roleFor = (el) => (el.getAttribute && el.getAttribute('role')) || ({A:'link',BUTTON:'button',INPUT:(el.type==='checkbox'?'checkbox':el.type==='radio'?'radio':'textbox'),TEXTAREA:'textbox',SELECT:'combobox'}[el.tagName]||'');
+    const nameFor = (el) => String((el.getAttribute&&(el.getAttribute('aria-label')||el.getAttribute('alt')||el.getAttribute('title')||el.getAttribute('placeholder')))||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,200);
+    // A credential field is a value-bearing FORM CONTROL only. The identity
+    // regex must never gate an ordinary button/link/div whose id or aria-label
+    // merely contains a word like "session"/"token" — that would refuse
+    // clicking a "Log out" (id="session-end") button. This mirrors the
+    // snapshot's valueIsSensitive, which only ever applies to form inputs.
+    const isFormControl = (el) => !!el && ['INPUT','TEXTAREA','SELECT'].includes((el.tagName||'').toUpperCase());
+    const isSensitive = (el) => {
+      if (!isFormControl(el) || !el.getAttribute) return false;
+      const type=String(el.getAttribute('type')||'').toLowerCase();
+      if (['password','hidden'].includes(type)) return true;
+      const ac=String(el.getAttribute('autocomplete')||'').toLowerCase();
+      if (/(?:current|new)-password|cc-(?:number|csc|exp)|one-time-code/.test(ac)) return true;
+      const id=String([el.id,el.getAttribute('name'),el.getAttribute('aria-label')].filter(Boolean).join(' ')).toLowerCase();
+      return /(?:^|[^a-z])(password|passwd|secret|token|csrf|xsrf|session|authorization|api.?key|card.?number|credit.?card|cvv|cvc|csc|otp)(?:[^a-z]|$)/.test(id);
+    };
+    const el=document.elementFromPoint(${x}, ${y});
+    if(!el) return {ok:false};
+    // Only a form control under the point can be a credential field; a plain
+    // element (button/link/div) is never refused.
+    const control=(el.closest && el.closest('input,textarea,select'))||(isFormControl(el)?el:null);
+    const r=el.getBoundingClientRect();
+    return {ok:true, sensitive: isSensitive(control),
+      element:{role:roleFor(el)||'', name:nameFor(el), tag:(el.tagName||'').toLowerCase(), type:String((el.getAttribute&&el.getAttribute('type'))||'')||undefined},
+      rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
   })()`;
 }
 
@@ -233,6 +329,16 @@ export class BrowserViewManager {
   private readonly agentNavigationPolicies = new Map<BrowserTabId, AgentNavigationPolicy>();
   private readonly agentControlledTabs = new Set<BrowserTabId>();
   private readonly humanChallengeTabs = new Set<BrowserTabId>();
+  // ADR-055 P9 — the workspace's saved places and visit history.
+  private bookmarks: BrowserBookmark[] = [];
+  private history: BrowserHistoryEntry[] = [];
+  /** Last url recorded per tab, so one page load counts as one visit. */
+  private readonly lastHistoryUrl = new Map<BrowserTabId, string>();
+  /** ADR-055 P10 — the tab currently in HTML5 fullscreen (a video), if any. */
+  private htmlFullscreenTabId: BrowserTabId | null = null;
+  /** ADR-055 P7 — tabs the person handed to the current chat's agent. */
+  private readonly sharedTabs = new Set<BrowserTabId>();
+  private tabShareHandler: ((info: { workspaceRoot: string; sessionKey: string; tabId: BrowserTabId; share: boolean }) => void) | null = null;
   private readonly trustedUserPrivateOrigins = new Set<string>();
   private readonly userOriginChecks = new Map<string, Promise<void>>();
   private readonly syntheticInputUntil = new Map<BrowserTabId, number>();
@@ -266,6 +372,9 @@ export class BrowserViewManager {
           // throttling an active tab stalls JS-heavy sites and login flows.
           backgroundThrottling: false,
           spellcheck: true,
+          // ADR-055 P10 — Chromium's built-in PDF viewer, so a PDF opens IN the
+          // tab like every other browser instead of becoming a download.
+          plugins: true,
         },
       }),
       attachView: (view) => { this.win.contentView.addChildView(view); },
@@ -296,8 +405,11 @@ export class BrowserViewManager {
         browserSession.on('will-download', handler);
         return () => { browserSession.off('will-download', handler); };
       },
-      prepareSavePath: (filename) => {
-        const directory = app.getPath('downloads');
+      prepareSavePath: (filename, agentControlled) => {
+        // ADR-055 P8 — an agent-initiated download lands in the workspace inbox
+        // so the agent's workspace-jailed file tools can read it; a human
+        // download keeps the ordinary OS Downloads folder.
+        const directory = agentControlled ? agentDownloadDir(workspaceRoot) : app.getPath('downloads');
         fs.mkdirSync(directory, { recursive: true });
         return availableDownloadPath(directory, filename);
       },
@@ -318,12 +430,20 @@ export class BrowserViewManager {
     return {
       version: BROWSER_PROTOCOL_VERSION,
       activeTabId: this.tabState.activeTabId,
-      tabs: this.tabState.snapshot(),
+      tabs: this.humanChallengeTabs.size === 0 && this.sharedTabs.size === 0
+        ? this.tabState.snapshot()
+        : this.tabState.snapshot().map((t) => ({
+          ...t,
+          ...(this.humanChallengeTabs.has(t.id) ? { humanNeeded: true } : {}),
+          ...(this.sharedTabs.has(t.id) ? { sharedWithAgent: true } : {}),
+        })),
       closedTabCount: this.tabState.closedCount,
       surface: { ...this.surface },
       downloads: this.downloadManager.list(),
       permissionPrompt: this.promptManager.getPermissionPrompt(),
       dialogPrompt: this.promptManager.getDialogPrompt(),
+      bookmarks: this.bookmarks.slice(0, MAX_BROADCAST_BOOKMARKS),
+      fullscreenTabId: this.htmlFullscreenTabId,
       capabilities: {
         nativeTabs: true,
         sameVisibleTabAutomation: true,
@@ -481,7 +601,7 @@ export class BrowserViewManager {
           this.selectTab(tab.id);
           throw new BrowserManagerError(
             'NOT_READY',
-            'This site requires human verification. Complete it in the visible Browser tab, then ask the agent to continue.',
+            'This site requires human verification. It is shown in the visible Browser tab for the person to complete. Call browser_wait with human:true to wait for them to finish, then continue.',
           );
         }
         if (signal && tab) {
@@ -577,6 +697,12 @@ export class BrowserViewManager {
    * Browser tabs, sign-ins, cookies, and completed challenges intentionally
    * remain continuous across chats in the same workspace. */
   setSession(sessionKey: string | null): void {
+    // ADR-055 P7 — a share is per-chat: switching chats revokes every grant the
+    // previous chat held, so a new chat never inherits a shared human tab.
+    if (this.sessionKey !== sessionKey && this.sharedTabs.size > 0) {
+      for (const tabId of [...this.sharedTabs]) this.notifyShare(tabId, false);
+      this.sharedTabs.clear();
+    }
     this.sessionKey = sessionKey;
   }
 
@@ -686,7 +812,10 @@ export class BrowserViewManager {
       tab.zoomFactor = contents.getZoomFactor();
       tab.crashed = false;
       this.updateHumanChallenge(tab);
-      if (!this.agentControlledTabs.has(tab.id)) void this.recordUserPrivateOrigin(tab.url);
+      if (!this.agentControlledTabs.has(tab.id)) {
+        void this.recordUserPrivateOrigin(tab.url);
+        this.noteVisit(tab);
+      }
       tab.revision += 1;
       this.workspacePersistence.schedule();
       this.emitState();
@@ -711,6 +840,7 @@ export class BrowserViewManager {
       updateTitle: (title) => {
         tab.title = boundBrowserText(title || 'New tab', 256);
         this.updateHumanChallenge(tab);
+        if (!this.agentControlledTabs.has(tab.id)) this.refreshVisitTitle(tab);
         this.workspacePersistence.schedule();
         this.emitState();
       },
@@ -718,6 +848,16 @@ export class BrowserViewManager {
         tab.faviconUrl = favicons.find(
           (value) => /^https?:|^data:image\//i.test(value),
         ) ?? null;
+        this.emitState();
+      },
+      enterHtmlFullScreen: () => {
+        this.htmlFullscreenTabId = tab.id;
+        this.attachActiveView();
+        this.emitState();
+      },
+      leaveHtmlFullScreen: () => {
+        if (this.htmlFullscreenTabId === tab.id) this.htmlFullscreenTabId = null;
+        this.attachActiveView();
         this.emitState();
       },
       mediaStarted: () => {
@@ -1022,7 +1162,9 @@ export class BrowserViewManager {
       case 'set-muted': {
         const current = this.requireTab(tab); this.requireContents(current.id).setAudioMuted(command.muted); current.muted = command.muted; this.emitState(); return { muted: command.muted };
       }
-      case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode);
+      case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode, command.scope);
+      case 'find-nodes': return this.findNodes(this.requireTab(tab), command.query, command.by, command.limit, command.scope);
+      case 'design-audit': return this.designAudit(this.requireTab(tab), command.rules, command.maxFindings);
       case 'text': return this.pageText(this.requireTab(tab), command.maxChars);
       case 'html': return this.pageHtml(this.requireTab(tab), command.maxChars);
       case 'screenshot': return this.screenshot(this.requireTab(tab), command.maxDimension, command.fullPage);
@@ -1059,6 +1201,26 @@ export class BrowserViewManager {
       case 'respond-permission': return this.promptManager.respondPermission(command.promptId, command.allow);
       case 'respond-dialog': return this.promptManager.respondDialog(command);
       case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadManager.execute(command.op, command.downloadId);
+      case 'add-bookmark': {
+        const target = command.url ? command.url : this.requireTab(tab).url;
+        const title = command.title ?? (command.url ? '' : this.requireTab(tab).title);
+        this.bookmarks = addBrowserBookmark(this.bookmarks, { url: target, title, at: Date.now() });
+        this.workspacePersistence.schedule();
+        this.emitState();
+        return { ok: true, bookmarks: this.bookmarks.length };
+      }
+      case 'remove-bookmark': {
+        this.bookmarks = removeBrowserBookmark(this.bookmarks, command.url);
+        this.workspacePersistence.schedule();
+        this.emitState();
+        return { ok: true, bookmarks: this.bookmarks.length };
+      }
+      case 'history': return this.historyView(command.query, command.limit);
+      case 'omnibox-suggest':
+        return omniboxSuggest(command.query, { bookmarks: this.bookmarks, history: this.history, limit: command.limit });
+      case 'share-tab': return this.shareTab(command.tabId, true);
+      case 'unshare-tab': return this.shareTab(command.tabId, false);
+      case 'print': return this.printToPdf(this.requireTab(tab), command.landscape);
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
       case 'clear-session-data': {
@@ -1110,13 +1272,40 @@ export class BrowserViewManager {
     return tabs;
   }
 
-  private async snapshot(tab: BrowserTab, mode: 'semantic' | 'testids' | 'accessibility' = 'semantic'): Promise<unknown> {
+  private async snapshot(tab: BrowserTab, mode: 'semantic' | 'testids' | 'accessibility' = 'semantic', scope: 'viewport' | 'page' = 'viewport'): Promise<unknown> {
     tab.revision += 1;
-    const snapshot = await this.isolated<{ url: string; title: string; nodes: BrowserSemanticNode[] }>(tab.id, semanticSnapshotScript(tab.id, tab.revision));
+    const snapshot = await this.isolated<{ url: string; title: string; scope?: string; nodes: BrowserSemanticNode[] }>(tab.id, semanticSnapshotScript(tab.id, tab.revision, scope));
     this.emitState();
     if (mode === 'testids') return { ...snapshot, nodes: snapshot.nodes.filter((node) => node.testid) };
     if (mode === 'accessibility') return { ...snapshot, nodes: snapshot.nodes.filter((node) => node.role) };
     return snapshot;
+  }
+
+  /** ADR-055 P4 — locate live-page nodes by role, visible text, label, or
+   *  test-id and return their fresh revision-bound refs. A snapshot under the
+   *  hood (scope 'page' by default) so a match scrolled out of view is still
+   *  found; ambiguity surfaces as multiple candidates, never a silent guess. */
+  private async findNodes(
+    tab: BrowserTab,
+    query: string,
+    by: 'role' | 'text' | 'label' | 'testid' = 'text',
+    limit = 20,
+    scope: 'viewport' | 'page' = 'page',
+  ): Promise<unknown> {
+    tab.revision += 1;
+    const snap = await this.isolated<{ url: string; title: string; nodes: BrowserSemanticNode[] }>(tab.id, semanticSnapshotScript(tab.id, tab.revision, scope));
+    this.emitState();
+    const q = String(query || '').trim().toLowerCase();
+    const nodes = (snap.nodes ?? []).filter((node) => {
+      const name = String(node.name || '').toLowerCase();
+      const testid = String(node.testid || '').toLowerCase();
+      const role = String(node.role || '').toLowerCase();
+      if (by === 'testid') return testid === q || testid.includes(q);
+      if (by === 'role') return role === q || (role.length > 0 && name.includes(q));
+      // 'text' | 'label' — accessible name / label / test-id substring.
+      return name.includes(q) || testid.includes(q);
+    }).slice(0, Math.max(1, Math.min(Math.floor(limit) || 20, 100)));
+    return { url: snap.url, title: snap.title, query, by, count: nodes.length, nodes };
   }
 
   /** Clean, readable page text (rendered innerText) — the primitive `fetch_url`
@@ -1178,6 +1367,26 @@ export class BrowserViewManager {
     assertCurrent: BrowserOperationGuard,
   ): Promise<unknown> {
     this.validateRef(tab, command.ref);
+    // ADR-055 P2 — a coordinate action: the model clicks where the screenshot
+    // shows. Resolve the element under the point, refuse a credential field, and
+    // report the hit element (a receipt) instead of a bare ok.
+    if (command.x !== undefined && command.y !== undefined && !command.ref && !command.target
+        && (command.op === 'click' || command.op === 'double-click' || command.op === 'hover')) {
+      const x = Math.round(command.x), y = Math.round(command.y);
+      const hit = await this.isolated<{ ok: boolean; sensitive?: boolean; element?: { role: string; name: string; tag: string; type?: string }; rect?: { x: number; y: number; width: number; height: number } }>(tab.id, pointHitScript(x, y));
+      assertCurrent();
+      if (!hit.ok) throw new BrowserManagerError('REF_NOT_FOUND', `No element was found at (${x}, ${y}).`);
+      if (hit.sensitive) throw new BrowserManagerError('DENIED', 'Refused a coordinate action on a credential field. Use the field label instead.');
+      this.showAgentPointer(tab.id, x, y, command.op !== 'hover');
+      this.sendAgentInput(tab.id, { type: 'mouseMove', x, y });
+      if (command.op === 'hover') return { ok: true, x, y, element: hit.element };
+      const count = command.op === 'double-click' ? 2 : 1;
+      const button = command.button ?? 'left';
+      const modifiers = (command.modifiers ?? []).map((value) => value.toLowerCase() as 'alt' | 'control' | 'meta' | 'shift');
+      this.sendAgentInput(tab.id, { type: 'mouseDown', x, y, button, clickCount: count, modifiers });
+      this.sendAgentInput(tab.id, { type: 'mouseUp', x, y, button, clickCount: count, modifiers });
+      tab.revision += 1; this.emitState(); return { ok: true, x, y, element: hit.element };
+    }
     if (command.op === 'highlight' && !command.ref && !command.target && !command.label) {
       assertCurrent();
       return this.isolated(tab.id, `(() => { const id='__brainrouter_testid_highlights__';document.getElementById(id)?.remove();const style=document.createElement('style');style.id=id;style.textContent='[data-testid]{outline:2px solid #7c5cff !important;outline-offset:1px !important}';document.documentElement.appendChild(style);return {ok:true,count:document.querySelectorAll('[data-testid]').length};})()`);
@@ -1241,6 +1450,18 @@ export class BrowserViewManager {
     assertCurrent: BrowserOperationGuard,
   ): Promise<{ ok: true }> {
     this.validateRef(tab, command.fromRef); this.validateRef(tab, command.toRef);
+    // ADR-055 P2 — drag between two screenshot-frame points.
+    if (command.fromX !== undefined && command.fromY !== undefined && command.toX !== undefined && command.toY !== undefined
+        && !command.fromRef && !command.toRef) {
+      const sx = Math.round(command.fromX), sy = Math.round(command.fromY);
+      const tx = Math.round(command.toX), ty = Math.round(command.toY);
+      assertCurrent();
+      this.showAgentPointer(tab.id, sx, sy, true);
+      this.sendAgentInput(tab.id, { type: 'mouseMove', x: sx, y: sy }); this.sendAgentInput(tab.id, { type: 'mouseDown', x: sx, y: sy, button: 'left', clickCount: 1 });
+      this.showAgentPointer(tab.id, tx, ty, false);
+      this.sendAgentInput(tab.id, { type: 'mouseMove', x: tx, y: ty, movementX: tx - sx, movementY: ty - sy }); this.sendAgentInput(tab.id, { type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 });
+      tab.revision += 1; this.emitState(); return { ok: true };
+    }
     const from = await this.isolated<{ ok: boolean; rect?: { x: number; y: number; width: number; height: number } }>(tab.id, targetScript(tab.id, tab.revision, command.fromRef));
     const to = await this.isolated<{ ok: boolean; rect?: { x: number; y: number; width: number; height: number } }>(tab.id, targetScript(tab.id, tab.revision, command.toRef));
     assertCurrent();
@@ -1427,6 +1648,14 @@ export class BrowserViewManager {
     if (types.includes('cookies')) storages.push('cookies');
     if (types.includes('storage')) storages.push('localstorage', 'indexdb', 'serviceworkers', 'cachestorage');
     if (storages.length) await ses.clearStorageData({ storages });
+    // ADR-055 P9 — 'history' clears the workspace visit log too (bookmarks are
+    // deliberate saves and survive; Reset browser only clears browsing traces).
+    if (types.includes('history')) {
+      this.history = [];
+      this.lastHistoryUrl.clear();
+      this.workspacePersistence.schedule();
+      this.emitState();
+    }
     return { ok: true };
   }
 
@@ -1452,7 +1681,18 @@ export class BrowserViewManager {
   private showContextMenu(tab: BrowserTab, params: ContextMenuParams): void {
     const contents = this.requireContents(tab.id);
     const template: Electron.MenuItemConstructorOptions[] = [];
-    if (params.linkURL && this.isSafeUrl(params.linkURL)) template.push({ label: 'Open link in new tab', click: () => this.createTab(params.linkURL, true) }, { type: 'separator' });
+    if (params.linkURL && this.isSafeUrl(params.linkURL)) {
+      template.push(
+        { label: 'Open link in new tab', click: () => this.createTab(params.linkURL, true) },
+        // ADR-055 P10 — ordinary context-menu parity.
+        { label: 'Copy link address', click: () => clipboard.writeText(params.linkURL) },
+        { label: 'Open link in default browser', click: () => { void shell.openExternal(params.linkURL); } },
+        { type: 'separator' },
+      );
+    }
+    if (params.srcURL && this.isSafeUrl(params.srcURL)) {
+      template.push({ label: 'Copy image address', click: () => clipboard.writeText(params.srcURL) }, { type: 'separator' });
+    }
     if (params.isEditable) template.push({ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' });
     else if (params.selectionText) template.push({ role: 'copy' });
     if (template.length) template.push({ type: 'separator' });
@@ -1475,6 +1715,16 @@ export class BrowserViewManager {
     if (mod && key === 'l') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-location', tabId: this.tabState.activeTabId }); return; }
     if (mod && key === 'f') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-find', tabId: this.tabState.activeTabId }); return; }
     if (mod && key === 'r') { event.preventDefault(); this.requireContents(this.tabState.activeTabId).reload(); return; }
+    // ADR-055 P9b — bookmark this page (the page has focus, so main owns ⌘D).
+    if (mod && key === 'd') {
+      event.preventDefault();
+      const current = this.activeTab();
+      this.bookmarks = addBrowserBookmark(this.bookmarks, { url: current.url, title: current.title, at: Date.now() });
+      this.workspacePersistence.schedule();
+      this.setStatus(current, 'Bookmarked.');
+      this.emitState();
+      return;
+    }
     if (mod && /^[1-9]$/.test(key)) {
       event.preventDefault();
       const tabs = this.tabState.all();
@@ -1490,11 +1740,22 @@ export class BrowserViewManager {
   }
 
   private attachActiveView(): void {
-    this.nativeViews.attach(this.tabState.activeTabId, this.surface);
+    // ADR-055 P10 — a tab in HTML5 fullscreen fills the window, ignoring the
+    // panel surface the renderer would otherwise dictate.
+    const activeId = this.tabState.activeTabId;
+    if (this.htmlFullscreenTabId === activeId && !this.win.isDestroyed()) {
+      const bounds = this.win.getContentBounds();
+      this.nativeViews.attach(activeId, { x: 0, y: 0, width: bounds.width, height: bounds.height, visible: true });
+      return;
+    }
+    this.nativeViews.attach(activeId, this.surface);
   }
 
   private safeUrl(raw: string): string {
-    const normalized = raw === BROWSER_BLANK_URL ? raw : normalizeBrowserAddress(raw);
+    // ADR-055 P9 — typed text becomes a search on the CONFIGURED engine.
+    let searchEngine = '';
+    try { searchEngine = getCliKnobs().browser.searchEngine; } catch { searchEngine = ''; }
+    const normalized = raw === BROWSER_BLANK_URL ? raw : normalizeBrowserAddress(raw, searchEngine);
     if (!normalized || !this.isSafeUrl(normalized)) throw new BrowserManagerError('UNSAFE_URL', 'The browser refused an unsafe or invalid URL.');
     return normalized;
   }
@@ -1546,6 +1807,18 @@ export class BrowserViewManager {
     if (!ref.startsWith(prefix)) throw new BrowserManagerError('STALE_PAGE', 'Element reference belongs to a different tab or page revision. Take a new snapshot.');
   }
 
+  /**
+   * ADR-056 D-B1 — the browser design engine: the detector's rule ids over
+   * COMPUTED styles in the live page (contrast against the composited
+   * background, clipped or covered text, first-viewport horizontal overflow,
+   * content hidden at rest, tiny text, small targets). Bounded, read-only,
+   * runs in the isolated world like the snapshot; the core side folds the
+   * answer into detector findings and honours the workspace suppressions.
+   */
+  private async designAudit(tab: BrowserTab, rules?: string[], maxFindings = 80): Promise<unknown> {
+    return this.isolated(tab.id, designAuditScript(rules ?? [], Math.max(1, Math.min(200, maxFindings))));
+  }
+
   private isolated<T = unknown>(tabId: string, code: string): Promise<T> {
     return this.requireContents(tabId).executeJavaScriptInIsolatedWorld(ISOLATED_WORLD_ID, [{ code }], true) as Promise<T>;
   }
@@ -1555,6 +1828,84 @@ export class BrowserViewManager {
     contents.debugger.attach('1.3');
     void contents.debugger.sendCommand('Page.enable').catch(() => undefined);
     return true;
+  }
+
+  /**
+   * ADR-055 P9 — record one visit per page load. Agent-controlled tabs are
+   * excluded so research browsing never floods the person's history.
+   */
+  private noteVisit(tab: BrowserTab): void {
+    const url = tab.url;
+    if (!url || this.lastHistoryUrl.get(tab.id) === url) return;
+    this.lastHistoryUrl.set(tab.id, url);
+    this.history = recordBrowserVisit(this.history, { url, title: tab.title, at: Date.now() });
+    this.workspacePersistence.schedule();
+  }
+
+  /** A title usually arrives after the navigation; refresh it without re-counting the visit. */
+  private refreshVisitTitle(tab: BrowserTab): void {
+    if (this.lastHistoryUrl.get(tab.id) !== tab.url) return;
+    const persisted = persistableBrowserUrl(tab.url);
+    let changed = false;
+    this.history = this.history.map((entry) => {
+      if (entry.url !== persisted || !tab.title || entry.title === tab.title) return entry;
+      changed = true;
+      return { ...entry, title: tab.title.slice(0, 300) };
+    });
+    if (changed) this.workspacePersistence.schedule();
+  }
+
+  /** ADR-055 P9 — the omnibox/history view, newest-first and bounded. */
+  private historyView(query?: string, limit?: number): BrowserHistoryEntry[] {
+    const cap = Math.max(1, Math.min(Math.floor(limit ?? 200), 1_000));
+    const needle = String(query ?? '').trim().toLowerCase();
+    const rows = needle
+      ? this.history.filter((entry) => entry.url.toLowerCase().includes(needle) || entry.title.toLowerCase().includes(needle))
+      : this.history;
+    return rows.slice(0, cap);
+  }
+
+  /**
+   * ADR-055 P10 — Save as PDF. Writes into the workspace print folder and
+   * returns the workspace-relative path, so the result is reachable by the
+   * workspace file tools rather than a hidden temp file.
+   */
+  private async printToPdf(tab: BrowserTab, landscape?: boolean): Promise<{ ok: true; path: string }> {
+    const data = await this.requireContents(tab.id).printToPDF({ landscape: landscape === true, printBackground: true });
+    const directory = browserPrintDir(this.workspaceRoot);
+    fs.mkdirSync(directory, { recursive: true });
+    const absolute = availableDownloadPath(directory, `${safeName(tab.title || 'page', 'page')}.pdf`);
+    fs.writeFileSync(absolute, data, { mode: 0o600 });
+    const relative = workspaceRelativeDownloadPath(absolute, this.workspaceRoot);
+    if (!relative) throw new BrowserManagerError('DENIED', 'The print destination escaped the workspace.');
+    return { ok: true, path: relative };
+  }
+
+  /**
+   * ADR-055 P7 — main wires this so a share/unshare reaches the agent-control
+   * manager, which owns per-chat tab authority.
+   */
+  setTabShareHandler(handler: ((info: { workspaceRoot: string; sessionKey: string; tabId: BrowserTabId; share: boolean }) => void) | null): void {
+    this.tabShareHandler = handler;
+  }
+
+  private notifyShare(tabId: BrowserTabId, share: boolean): void {
+    this.tabShareHandler?.({
+      workspaceRoot: this.workspaceRoot,
+      sessionKey: this.sessionKey ?? '',
+      tabId,
+      share,
+    });
+  }
+
+  private shareTab(tabId: BrowserTabId, share: boolean): { ok: true; shared: boolean } {
+    const tab = this.resolveTab(tabId);
+    if (!tab) throw new BrowserManagerError('TAB_NOT_FOUND', `Browser tab ${tabId} was not found.`);
+    if (share) this.sharedTabs.add(tab.id);
+    else this.sharedTabs.delete(tab.id);
+    this.notifyShare(tab.id, share);
+    this.emitState();
+    return { ok: true, shared: share };
   }
 
   private updateHumanChallenge(tab: BrowserTab): void {
@@ -1668,6 +2019,8 @@ export class BrowserViewManager {
       ? persisted.permissions.slice(0, 200)
       : [];
     this.promptManager.restorePermissions(decisions);
+    this.bookmarks = persisted?.version === 1 && Array.isArray(persisted.bookmarks) ? persisted.bookmarks : [];
+    this.history = persisted?.version === 1 && Array.isArray(persisted.history) ? persisted.history : [];
     const tabs = this.tabState.all();
     if (tabs.length > 0) {
       this.selectTab(
@@ -1699,6 +2052,8 @@ export class BrowserViewManager {
         (tab) => ({ url: persistableBrowserUrl(tab.url) }),
       ),
       permissions: this.promptManager.persistedPermissions(),
+      bookmarks: this.bookmarks,
+      history: this.history,
     };
     try {
       this.workspaceStore.save(state);
@@ -1721,6 +2076,7 @@ export class BrowserViewManager {
 
   private cleanupNativeViewOwnership(id: BrowserTabId, contents: WebContents): void {
     this.humanChallengeTabs.delete(id);
+    if (this.sharedTabs.delete(id)) this.notifyShare(id, false);
     managersByWebContents.delete(contents.id);
     this.releaseAgentControl(id);
     this.cleanupStagedUpload(id);

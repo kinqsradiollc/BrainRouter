@@ -95,4 +95,19 @@ describe('registry.ts', () => {
     expect(personas.find(p => p.name === 'global-persona')).toBeDefined();
     expect(personas.find(p => p.name === 'local-persona')).toBeDefined();
   });
+  it('ADR-056 D-B4: a `routed-by` world resolves by name but never lists', () => {
+    mkdirSync(join(globalRoot, 'skills', 'design', 'world-skill'), { recursive: true });
+    writeFileSync(
+      join(globalRoot, 'skills', 'design', 'world-skill', 'SKILL.md'),
+      '---\nname: world-skill\nrouted-by: hallmark\ndescription: a look one skill routes to\n---\n'
+    );
+    const registry = new Registry({ globalRoot, localRoot });
+    registry.build();
+
+    expect(registry.listSkills().some((s) => s.name === 'world-skill')).toBe(false);
+    expect(registry.listSkills('design').length).toBe(0);
+    expect(registry.searchSkills('world').length).toBe(0);
+    expect(registry.getSkill('world-skill')?.routedBy).toBe('hallmark');
+    expect(registry.getSkill('global-skill')?.routedBy).toBeUndefined();
+  });
 });

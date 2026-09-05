@@ -59,7 +59,7 @@ export interface BrowserCapabilities {
 }
 
 interface TabTarget { tabId?: string }
-interface RefTarget extends TabTarget { ref?: string; testId?: string; pageRevision?: number }
+interface RefTarget extends TabTarget { ref?: string; testId?: string; pageRevision?: number; x?: number; y?: number }
 
 export type BrowserControlCommand =
   | { kind: 'capabilities' }
@@ -75,8 +75,11 @@ export type BrowserControlCommand =
   | ({ kind: 'page.forward' } & TabTarget)
   | ({ kind: 'page.reload'; ignoreCache?: boolean } & TabTarget)
   | ({ kind: 'page.stop' } & TabTarget)
-  | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number } & TabTarget)
-  | ({ kind: 'page.snapshot'; maxChars?: number } & TabTarget)
+  | ({ kind: 'page.wait'; loadState?: 'domcontentloaded' | 'load' | 'networkidle'; urlIncludes?: string; text?: string; ref?: string; testId?: string; pageRevision?: number; timeoutMs?: number; human?: boolean } & TabTarget)
+  | ({ kind: 'page.snapshot'; maxChars?: number; scope?: 'viewport' | 'page' } & TabTarget)
+  | ({ kind: 'page.find'; query: string; by?: 'role' | 'text' | 'label' | 'testid'; limit?: number; scope?: 'viewport' | 'page' } & TabTarget)
+  /** ADR-056 D-B1 — the browser design engine: computed-style rules over the live page (desktop only). */
+  | ({ kind: 'page.designAudit'; rules?: string[]; maxFindings?: number } & TabTarget)
   | ({ kind: 'page.text'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.html'; maxChars?: number } & TabTarget)
   | ({ kind: 'page.screenshot'; fullPage?: boolean } & TabTarget)
@@ -89,7 +92,7 @@ export type BrowserControlCommand =
   | ({ kind: 'page.type'; text: string; replace?: boolean } & RefTarget)
   | ({ kind: 'page.press'; key: string; modifiers?: string[] } & RefTarget)
   | ({ kind: 'page.scroll'; deltaX?: number; deltaY?: number } & RefTarget)
-  | ({ kind: 'page.drag'; fromRef: string; toRef: string; pageRevision?: number } & TabTarget)
+  | ({ kind: 'page.drag'; fromRef?: string; toRef?: string; fromX?: number; fromY?: number; toX?: number; toY?: number; pageRevision?: number } & TabTarget)
   | ({ kind: 'page.select'; values: string[] } & RefTarget)
   | ({ kind: 'page.check'; checked: boolean } & RefTarget)
   | ({ kind: 'page.setFiles'; files: string[] } & RefTarget)
@@ -302,12 +305,27 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
       const ref = boundedString(row.ref, 'ref', 512, false);
       const testId = boundedString(row.testId ?? row.testID, 'testId', 512, false);
       const pageRevision = revision(row);
-      const timeoutMs = integer(row.timeoutMs, 'timeoutMs', 1, 60_000);
-      return { kind, ...target(), ...(loadState ? { loadState } : {}), ...(urlIncludes ? { urlIncludes } : {}), ...(text !== undefined ? { text } : {}), ...(ref ? { ref } : {}), ...(testId ? { testId } : {}), ...(pageRevision !== undefined ? { pageRevision } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+      const human = bool(row.human, 'human');
+      // A human-verification wait may legitimately take minutes; other waits stay short.
+      const timeoutMs = integer(row.timeoutMs, 'timeoutMs', 1, human ? 600_000 : 60_000);
+      return { kind, ...target(), ...(loadState ? { loadState } : {}), ...(urlIncludes ? { urlIncludes } : {}), ...(text !== undefined ? { text } : {}), ...(ref ? { ref } : {}), ...(testId ? { testId } : {}), ...(pageRevision !== undefined ? { pageRevision } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(human ? { human } : {}) };
     }
     case 'page.snapshot': {
-      const maxChars = integer(row.maxChars, 'maxChars', 1_000, 50_000);
-      return { kind, ...target(), ...(maxChars !== undefined ? { maxChars } : {}) };
+      const maxChars = integer(row.maxChars, 'maxChars', 1_000, 200_000);
+      const scope = enumValue(row.scope, 'scope', ['viewport', 'page'] as const);
+      return { kind, ...target(), ...(maxChars !== undefined ? { maxChars } : {}), ...(scope ? { scope } : {}) };
+    }
+    case 'page.designAudit': {
+      const rules = Array.isArray(row.rules) ? row.rules.filter((r): r is string => typeof r === 'string' && /^[a-z0-9-]{1,64}$/.test(r)).slice(0, 64) : undefined;
+      const maxFindings = integer(row.maxFindings, 'maxFindings', 1, 200);
+      return { kind, ...target(), ...(rules?.length ? { rules } : {}), ...(maxFindings !== undefined ? { maxFindings } : {}) };
+    }
+    case 'page.find': {
+      const query = boundedString(row.query, 'query', 512)!;
+      const by = enumValue(row.by, 'by', ['role', 'text', 'label', 'testid'] as const);
+      const limit = integer(row.limit, 'limit', 1, 100);
+      const scope = enumValue(row.scope, 'scope', ['viewport', 'page'] as const);
+      return { kind, query, ...target(), ...(by ? { by } : {}), ...(limit !== undefined ? { limit } : {}), ...(scope ? { scope } : {}) };
     }
     case 'page.text':
     case 'page.html': {
@@ -329,10 +347,24 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
     case 'page.doubleClick': {
       const button = enumValue(row.button, 'button', ['left', 'middle', 'right'] as const);
       const modifiers = stringArray(row.modifiers, 'modifiers', 8, 32);
-      return { kind, ...refTarget(row), ...(button ? { button } : {}), ...(modifiers ? { modifiers } : {}) };
+      // ADR-055 P2 — a target is a ref/testId OR a screenshot-frame {x,y} point.
+      const x = boundedNumber(row.x, 'x', 0, 100_000);
+      const y = boundedNumber(row.y, 'y', 0, 100_000);
+      const rt = refTarget(row, false);
+      if (!rt.ref && !rt.testId && (x === undefined || y === undefined)) {
+        throw new BrowserControlTransportError('invalid_request', 'click requires ref, testId, or both x and y.');
+      }
+      return { kind, ...rt, ...(button ? { button } : {}), ...(modifiers ? { modifiers } : {}), ...(x !== undefined ? { x } : {}), ...(y !== undefined ? { y } : {}) };
     }
-    case 'page.hover':
-      return { kind, ...refTarget(row) };
+    case 'page.hover': {
+      const x = boundedNumber(row.x, 'x', 0, 100_000);
+      const y = boundedNumber(row.y, 'y', 0, 100_000);
+      const rt = refTarget(row, false);
+      if (!rt.ref && !rt.testId && (x === undefined || y === undefined)) {
+        throw new BrowserControlTransportError('invalid_request', 'hover requires ref, testId, or both x and y.');
+      }
+      return { kind, ...rt, ...(x !== undefined ? { x } : {}), ...(y !== undefined ? { y } : {}) };
+    }
     case 'page.type': {
       const text = textString(row.text, 'text', 20_000);
       const replace = bool(row.replace, 'replace');
@@ -349,8 +381,21 @@ export function parseBrowserControlCommand(value: unknown): BrowserControlComman
       if (deltaX === undefined && deltaY === undefined) throw new BrowserControlTransportError('invalid_request', 'deltaX or deltaY is required.');
       return { kind, ...refTarget(row, false), ...(deltaX !== undefined ? { deltaX } : {}), ...(deltaY !== undefined ? { deltaY } : {}) };
     }
-    case 'page.drag':
-      return { kind, fromRef: boundedString(row.fromRef, 'fromRef', 512)!, toRef: boundedString(row.toRef, 'toRef', 512)!, ...target(), ...(revision(row) !== undefined ? { pageRevision: revision(row) } : {}) };
+    case 'page.drag': {
+      // ADR-055 P2 — drag by opaque refs OR by two screenshot-frame points.
+      const fromRef = boundedString(row.fromRef, 'fromRef', 512, false);
+      const toRef = boundedString(row.toRef, 'toRef', 512, false);
+      const fromX = boundedNumber(row.fromX, 'fromX', 0, 100_000);
+      const fromY = boundedNumber(row.fromY, 'fromY', 0, 100_000);
+      const toX = boundedNumber(row.toX, 'toX', 0, 100_000);
+      const toY = boundedNumber(row.toY, 'toY', 0, 100_000);
+      const hasRefs = !!fromRef && !!toRef;
+      const hasCoords = fromX !== undefined && fromY !== undefined && toX !== undefined && toY !== undefined;
+      if (!hasRefs && !hasCoords) {
+        throw new BrowserControlTransportError('invalid_request', 'drag requires fromRef+toRef or fromX/fromY/toX/toY.');
+      }
+      return { kind, ...(fromRef ? { fromRef } : {}), ...(toRef ? { toRef } : {}), ...(hasCoords ? { fromX, fromY, toX, toY } : {}), ...target(), ...(revision(row) !== undefined ? { pageRevision: revision(row) } : {}) };
+    }
     case 'page.select': {
       const values = stringArray(row.values, 'values', 20, 1024);
       if (!values?.length) throw new BrowserControlTransportError('invalid_request', 'values requires at least one option.');

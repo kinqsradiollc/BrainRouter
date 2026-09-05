@@ -47,7 +47,9 @@ function allowedModel(slug: string, model: string, opts: BuildModelRegistryOptio
 }
 
 function providerDefFor(name: string, llm: LLMConfig): ProviderDefinition | undefined {
-  return findProviderByEndpoint(llm.endpoint) ?? PROVIDER_REGISTRY.get((llm.provider || name).toLowerCase());
+  // ADR-041 A41-9 — llm.sessionKey resolves a session-scoped BYOK provider first;
+  // undefined for an ordinary config, so this is the global path unchanged.
+  return findProviderByEndpoint(llm.endpoint) ?? PROVIDER_REGISTRY.get((llm.provider || name).toLowerCase(), llm.sessionKey);
 }
 
 /**

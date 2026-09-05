@@ -92,6 +92,12 @@ export default function RuntimeCompositionPage() {
                     {data.invariants.violations}
                   </dd>
                 </div>
+                <div>
+                  <dt>Tripwire firings</dt>
+                  <dd className={(data.invariants.runtimeReports?.reduce((n, r) => n + r.count, 0) ?? 0) > 0 ? "runtime-bad" : "runtime-ok"}>
+                    {data.invariants.runtimeReports?.reduce((n, r) => n + r.count, 0) ?? 0}
+                  </dd>
+                </div>
               </dl>
             </Section>
 
@@ -131,6 +137,23 @@ export default function RuntimeCompositionPage() {
                   </li>
                 ))}
               </ul>
+              {data.invariants.runtimeReports && data.invariants.runtimeReports.length > 0 && (
+                <div className="runtime-tripwires">
+                  <h3 className="runtime-subhead">Tripwires fired this process (ADR-046)</h3>
+                  <ul className="runtime-invariants">
+                    {data.invariants.runtimeReports.map((r) => (
+                      <li key={r.id}>
+                        <strong>{r.id}</strong>
+                        <span className="runtime-bad"> — fired {r.count}×</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="runtime-muted">
+                    A tripwire firing means recorded state had to be repaired to reach the model —
+                    it should stay at zero. Advisory only; not a verify-gate violation.
+                  </p>
+                </div>
+              )}
             </Section>
           </div>
         )}

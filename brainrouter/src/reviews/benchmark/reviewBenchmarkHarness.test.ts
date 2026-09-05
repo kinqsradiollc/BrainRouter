@@ -192,6 +192,40 @@ describe("review benchmark execution", () => {
     expect(prompts.at(-1)?.promptBreakdown.reflectionEvidenceChars).toBeGreaterThan(0);
   });
 
+  it("sends the reflection its own contract, not the review lens prompt (D7 regression, #1607)", async () => {
+    // The reflection is a distinct job — judge the findings as a set and report
+    // verdicts. Prepending the lens's "you are reviewing a pull request" role gave
+    // the model two conflicting contracts, so even a frontier model (claude-sonnet-5)
+    // answered with a prose review assessment and the verdict parser rejected it —
+    // the bug that failed EVERY qualifying run until #1607. Guard it: the reflection
+    // system prompt must be the reflection contract alone, matching production.
+    const reflectionSystems: string[] = [];
+    for (const arm of ["legacy", "bundled"] as const) {
+      await runReviewBenchmarkArm({
+        arm,
+        benchmarkCase: CASE,
+        evidence: EVIDENCE,
+        lens: CODE_REVIEW_LENS,
+        concurrency: 2,
+        complete: async (request) => {
+          if (request.phase === "reflection") {
+            reflectionSystems.push(request.systemPrompt);
+            return reflectionKeepReply(1);
+          }
+          return findingsReply();
+        },
+      });
+    }
+    expect(reflectionSystems.length).toBeGreaterThan(0);
+    for (const reflectionSystem of reflectionSystems) {
+      // It IS the reflection contract (asks for the report_review_reflection verdicts)…
+      expect(reflectionSystem).toContain("report_review_reflection");
+      // …and it is NOT contaminated with the review lens's reviewing-a-PR role, which
+      // is what made models answer the reflection in prose instead of verdict JSON.
+      expect(reflectionSystem).not.toContain(CODE_REVIEW_LENS.systemPrompt);
+    }
+  });
+
   it("reuses the full baseline context but projects bundled prompts by semantic unit", async () => {
     const secondDiff = [
       "diff --git a/src/log.ts b/src/log.ts",

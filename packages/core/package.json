@@ -1,7 +1,7 @@
 {
   "name": "@kinqs/brainrouter-core",
-  "version": "0.4.21",
-  "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
+  "version": "0.4.22",
+  "description": "BrainRouter's headless engine \u2014 config, durable stores, runtime, orchestration, telemetry, and the agent \u2014 shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,6 +10,10 @@
     "./agent": {
       "types": "./dist/agent/index.d.ts",
       "default": "./dist/agent/index.js"
+    },
+    "./agent/notebook": {
+      "types": "./dist/agent/fs/notebookRead.d.ts",
+      "default": "./dist/agent/fs/notebookRead.js"
     },
     "./annotation": {
       "types": "./dist/annotation/index.d.ts",
@@ -54,6 +58,14 @@
     "./context": {
       "types": "./dist/context/index.d.ts",
       "default": "./dist/context/index.js"
+    },
+    "./diagram": {
+      "types": "./dist/diagram/index.d.ts",
+      "default": "./dist/diagram/index.js"
+    },
+    "./design": {
+      "types": "./dist/design/index.d.ts",
+      "default": "./dist/design/index.js"
     },
     "./exec": {
       "types": "./dist/exec/index.d.ts",
@@ -310,6 +322,14 @@
     "./sdk": {
       "types": "./dist/sdk/index.d.ts",
       "default": "./dist/sdk/index.js"
+    },
+    "./study": {
+      "types": "./dist/study/index.d.ts",
+      "default": "./dist/study/index.js"
+    },
+    "./study/store": {
+      "types": "./dist/study/store.d.ts",
+      "default": "./dist/study/store.js"
     }
   },
   "files": [
@@ -335,8 +355,8 @@
   },
   "dependencies": {
     "@firecrawl/pdf-inspector-wasm": "^0.1.3",
-    "@kinqs/brainrouter-agent-protocol": "^0.4.21",
-    "@kinqs/brainrouter-types": "^0.4.21",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.22",
+    "@kinqs/brainrouter-types": "^0.4.22",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "chalk": "^5.3.0",
     "cheerio": "^1.2.0",

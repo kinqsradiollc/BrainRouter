@@ -10,6 +10,7 @@ import { ProviderIcon } from '../../components/model/ProviderIcon.js';
 import { Row, Toggle, ChoiceControl, ComboInput } from '../shared/controls.js';
 import { WireFormatSelect } from '../shared/controls.js';
 import { LlmProfilesCard } from './LlmProfilesCard.js';
+import { ContextWindowsCard } from './ContextWindowsCard.js';
 import { RoutingChainEditor, routerCatalogChoiceOptions } from './RoutingChainEditor.js';
 import { MODEL_TABS, nextModelTabIndex, type ModelTab } from './modelTabs.js';
 import {
@@ -633,6 +634,12 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
       <LlmProfilesCard
         profiles={(knobs.llmProfiles ?? {}) as Record<string, { model?: string; endpoint?: string; reasoningEffort?: string; fast?: boolean }>}
         active={String(knobs.activeLlmProfile ?? '')}
+        endpointModels={api.endpointModels}
+        routerCatalog={routerCatalog}
+        setPath={setPath}
+      />
+      <ContextWindowsCard
+        windows={(knobs.contextWindows ?? {}) as Record<string, number>}
         endpointModels={api.endpointModels}
         routerCatalog={routerCatalog}
         setPath={setPath}

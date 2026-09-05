@@ -118,6 +118,12 @@ const CONSUMED_ELSEWHERE = new Map<string, string>([
   // PROSE in `review/prRouter.ts` — a comment is not a consumer, and this sweep
   // cannot tell the difference. The reader is the desktop Track create-PR path.
   ['stackingMode', 'brainrouter-desktop/electron/host/github-track-services.ts:631 — Track create-PR'],
+  // ADR-047 D1. The only in-core mention is PROSE in declarative-starter.ts; the
+  // real reader is the CLI chat boot, which registers the declarative providers.
+  ['customProviders', 'brainrouter-cli/src/entry/chatCommand.ts — registerDeclarativeProviders at boot'],
+  // ADR-052 P4.5 — the curated model-picker overlay is presentation, read by the
+  // picker UIs: brainrouter-cli/src/cli/wizard/modelsApi.ts (applyModelPickerOverlay).
+  ['modelPicker', 'brainrouter-cli/src/cli/wizard/modelsApi.ts — applyModelPickerOverlay'],
 ]);
 
 test('E1 — every resolved cli.* knob has a consumer', () => {
@@ -186,7 +192,7 @@ function modulesWithoutImporters(): string[] {
  */
 // 28 → 27 with ADR-028's retirements, then → 26 when merging ADR-034 wired one
 // up. The ratchet working in the direction it was built for.
-const ORPHAN_MODULE_CEILING = 26;
+const ORPHAN_MODULE_CEILING = 23;
 
 /**
  * Modules that ARE orphans and are known to be, with the reason.
@@ -624,7 +630,7 @@ function deadExports(): string[] {
  * gained a production caller: `readRunDetail` reduces a run's retained event journal
  * so `/runs <id>` rebuilds the map from disk instead of reporting `unavailable`.
  */
-const DEAD_EXPORT_CEILING = 275;
+const DEAD_EXPORT_CEILING = 271;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

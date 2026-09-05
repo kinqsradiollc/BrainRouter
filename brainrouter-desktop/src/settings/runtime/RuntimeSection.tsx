@@ -54,6 +54,7 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
   const backend = String(runtime.backend ?? 'process');
   const comprehension = (knobs.comprehension ?? {}) as Dict;
   const serveOn = runtime.serve === true;
+  const designHook = String(((knobs.design ?? {}) as Dict).hook ?? 'off');
   const jitOn = runtime.jitSecrets === true;
 
   return (
@@ -62,8 +63,9 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
       <div className="set-desc" style={{ marginBottom: 8 }}>
         How agent runs execute — the backend, isolation, serving, per-task budgets and
         self-review. Everything here is <b>off / in-process by default</b>; shared with the
-        CLI (<code>cli.runtime</code> / <code>cli.budget</code> / <code>cli.critic</code>).
+        CLI (<code>cli.runtime</code> / <code>cli.budget</code> / <code>cli.critic</code> / <code>cli.design</code>).
       </div>
+
 
       <SetGroup title="Comprehension review">
         <Row
@@ -82,6 +84,11 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
         </Row>
         <Row title="Questions" desc="How many per review. Fewer than three is not worth invoking; more than seven is homework. (cli.comprehension.questions)">
           <KnobNumber value={comprehension.questions} placeholder="5" onSave={(v) => setPath('comprehension.questions', v)} />
+        </Row>
+      </SetGroup>
+      <SetGroup title="Design hook">
+        <Row title="Check UI files the agent writes" desc={<>Deterministic design checks, no model. <b>off</b> = nothing runs; <b>immediate</b> = each UI file a write tool touches is checked and up to five findings reach the next turn; <b>full</b> = immediate checks plus a turn-end pass over every UI file the turn wrote. Findings never block a write. Honours <code>design.md</code> tokens and <code>.brainrouter/design-detector.json</code>. (cli.design.hook)</>}>
+          <Select value={designHook} options={['off', 'immediate', 'full']} onChange={(v) => setPath('design.hook', v)} />
         </Row>
       </SetGroup>
 

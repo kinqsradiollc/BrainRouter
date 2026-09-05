@@ -16,6 +16,8 @@ const PATHS: Record<string, React.ReactNode> = {
   diff: <path d="M8 1.5v5m-2.5-2.5h5M5.5 11.5h5M2.5 8.5h11" />,
   tasks: <><circle cx="4.5" cy="4.5" r="2" /><circle cx="11.5" cy="4.5" r="2" /><circle cx="4.5" cy="11.5" r="2" /><path d="M9.5 11.5h4" /></>,
   plan: <path d="M3 4h1.5M3 8h1.5M3 12h1.5M7 4h6M7 8h6M7 12h6" />,
+  // ADR-049 — the Study mode: a stack of flashcards, the front one lifted.
+  study: <><rect x="2.5" y="4.5" width="9" height="7" rx="1" /><path d="M5 2.5h8a1 1 0 0 1 1 1v7M5.5 7.5h3M5.5 9.3h2" /></>,
   search: <><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3.5 3.5" /></>,
   layout: <path d="M2 2.5h12v11H2v-11Zm4 0v11" />,
   'layout-right': <path d="M2 2.5h12v11H2v-11Zm8 0v11" />,
