@@ -579,6 +579,20 @@ export const BUILTIN_TOOL_SPECS = [
     },
   },
   {
+    name: 'design_detect',
+    description: 'Run the deterministic design detector (ADR-056) over workspace UI files — html, css/scss, jsx/tsx, svelte, vue, astro — or over a supplied markup string. No model: a versioned rule catalogue (slop tells such as side-stripe borders, gradient text, the default violet/cyan palette, nested cards, glow halos, eyebrow labels, buzzword copy; quality defects such as low contrast, gray-on-colour, tiny text, skipped headings, missing alt, unlabelled controls, removed focus outlines, motion without a reduced-motion path; and design-system drift from the workspace design.md tokens). Suppressions in .brainrouter/design-detector.json are honoured and reported. Returns findings with file:line, rule id, message, and the guideline. Read-only. Use it after editing UI, and verify each finding in context — it is evidence, not judgment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paths: { type: 'array', items: { type: 'string' }, description: 'Workspace-relative files or directories to scan (default: the workspace). Bounded to 200 files.' },
+        html: { type: 'string', description: 'Markup to check instead of files (e.g. a page you just generated).' },
+        name: { type: 'string', description: 'A name for the inline markup, used as its file in findings.' },
+        rules: { type: 'array', items: { type: 'string' }, description: 'Only these rule ids (see the design rule catalog).' },
+        designSystem: { type: 'boolean', description: 'Read design.md tokens for the design-system rules (default true).' },
+      },
+    },
+  },
+  {
     name: 'session_list',
     description: 'List the other conversations in this workspace (session key, title, turn count, last-modified time, and — for a forked session — which session it branched from). Read-only; scoped to this workspace. Use it to find a sibling session to reference or continue.',
     inputSchema: {

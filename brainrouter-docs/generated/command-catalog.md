@@ -5,7 +5,7 @@
 
 # BrainRouter command catalog
 
-141 slash commands across 7 help categories.
+142 slash commands across 7 help categories.
 
 ## Session & State
 
@@ -90,6 +90,7 @@
 | /annotation add <kind> <id> <body> \| list \| show <id> \| status <id> <s> \| export | Durable feedback records (alias /annot): anchor to plans/reqs/files/diffs/findings, suggest code, export to markdown |
 | /artifact create <kind> <title> \| list \| show <id> \| update <id> --status <s> | Durable workflow artifacts (alias /art): design notes, prototypes, reports, review exports — linked to requirement/session/memory |
 | /diagram <kind> <what…> \| draft [--layers a,b] [--prefix p] \| validate <file> \| render <file> [--slug s] [--theme t] [--no-verify] \| list \| show <slug> \| open <slug> | Typed, validated system maps (architecture, workflow, sequence, dataflow, lifecycle) rendered to self-contained HTML with a receipt under .brainrouter/diagrams/ |
+| /design detect [paths…] [--rules a,b] [--json] \| rules | Deterministic design checks over UI files (no model): slop tells, quality defects, design.md token drift; suppressions in .brainrouter/design-detector.json |
 | /attach <path> \| list \| show <id> | Attach a file (PDF/image/text/code) to this session (alias /upload) — preserves the original, extracts text/metadata, captures to memory |
 | /workflows [slug] | List durable workflows with live run progress; <slug> drills into the step timeline |
 | /workflow run <template> [jsonArgs] | Explicitly authorize and launch one CLI workflow run (templates: compare, review-wide, research, build, investigate) |

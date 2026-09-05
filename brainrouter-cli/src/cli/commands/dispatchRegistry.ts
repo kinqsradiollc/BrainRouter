@@ -35,6 +35,7 @@ import { tryHandlePlannerCommand } from './planner/index.js';
 import { tryHandleRunsCommand } from './runs/index.js';
 import { tryHandleAtlasCommand } from './atlas/index.js';
 import { tryHandleDiagramCommand } from './diagram/index.js';
+import { tryHandleDesignCommand } from './design/index.js';
 import { tryHandleAttachmentCommand } from './attachment/index.js';
 import { tryHandleReviewsCommand } from './reviews/index.js';
 import { tryHandleTrajectoryCommand } from './trajectory/index.js';
@@ -65,6 +66,7 @@ export const BUILTIN_COMMAND_HANDLERS: readonly CommandHandler[] = [
   tryHandleRunsCommand,
   tryHandleAtlasCommand,
   tryHandleDiagramCommand,
+  tryHandleDesignCommand,
   tryHandleAttachmentCommand,
   tryHandleReviewsCommand,
   tryHandleTrajectoryCommand,
