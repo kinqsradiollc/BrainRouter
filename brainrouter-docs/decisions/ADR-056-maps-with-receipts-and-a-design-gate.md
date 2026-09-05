@@ -1,6 +1,6 @@
 # ADR-056 — Maps with receipts, and a design gate the agent cannot skip
 
-**Status:** PROPOSED — for owner review. Nothing below is built; every "today" claim is grounded
+**Status:** ACCEPTED — implemented on `release/0.4.22` as small stacked PRs (2026-09-05). Merged: A1–A4, B1, B3, B9. In review: A5–A8, B2, B4–B6, B8, and the deterministic half of B7; B7's desktop pick-and-cycle loop is left for an owner-attended first run, as D-B5 requires. Board rows below carry their PR and state. Every "today" claim in §1 was grounded when written and is now history.
 in the code paths cited, every "decision" is a proposal. · **Builds on:** ADR-048 (the Atlas graph
 the agent reads — this record gives it an *authored* output), ADR-031 (a design skill and the
 `frontend` capability it belongs to — this record gives it a deterministic half), ADR-036 (the
@@ -304,30 +304,32 @@ Rows are one PR each into the current release branch; a row is done when its acc
 
 **Track A — maps**
 
-- **A1 — IR + schemas + validator** (D-A1) — `packages/types` schemas, `packages/core/src/diagram/validate`; fixtures for five kinds; catalog drift gate.
-- **A2 — Deterministic renderer + receipt** (D-A2) — HTML/SVG compile, artifact checks, SHA-256 receipt; golden tests; Node-only import boundary test.
-- **A3 — Tools + `/diagram` command** (D-A5 first half) — `diagram_validate`/`diagram_render`; command in the shared catalog; parity test; CLI prints the receipt.
-- **A4 — Atlas seed + repository evidence** (D-A3) — `draftDiagramFromAtlas`, `verifyDiagramEvidence`; temp-repo tests; `diagram_draft` tool.
-- **A5 — Desktop viewer** (D-A5) — sandboxed `<webview>` artifact, Open-in-Atlas, PNG/SVG export, `/diagram pin`.
-- **A6 — Architecture delta as review evidence** (D-A4) — `compareDiagrams`, Before·Delta·After render, producer on the bot seam, desktop `ReviewPanel` + dashboard review page blocks.
-- **A7 — Dashboard viewer + share image** (D-A5) — read-only viewer on repository/review pages; 1200×630 PNG.
-- **A8 — Mermaid import** (D-A6) — optional; last.
+- **A1 — IR + schemas + validator** (D-A1) — `packages/types` schemas, `packages/core/src/diagram/validate`; fixtures for five kinds; catalog drift gate. — **✅ merged #1662**
+- **A2 — Deterministic renderer + receipt** (D-A2) — HTML/SVG compile, artifact checks, SHA-256 receipt; golden tests; Node-only import boundary test. — **✅ merged #1662**
+- **A3 — Tools + `/diagram` command** (D-A5 first half) — `diagram_validate`/`diagram_render`; command in the shared catalog; parity test; CLI prints the receipt. — **✅ merged #1663**
+- **A4 — Atlas seed + repository evidence** (D-A3) — `draftDiagramFromAtlas`, `verifyDiagramEvidence`; temp-repo tests; `diagram_draft` tool. — **✅ merged #1664**
+- **A5 — Desktop viewer** (D-A5) — sandboxed `<webview>` artifact, Open-in-Atlas, PNG/SVG export, `/diagram pin`. — **🔵 in review #1667**
+- **A6 — Architecture delta as review evidence** (D-A4) — `compareDiagrams`, Before·Delta·After render, producer on the bot seam, desktop `ReviewPanel` + dashboard review page blocks. — **🔵 in review #1666**
+- **A7 — Dashboard viewer + share image** (D-A5) — read-only viewer on repository/review pages; 1200×630 PNG. — **🔵 in review #1677 (share image is SVG — no rasteriser dependency; PNG is an owner call)**
+- **A8 — Mermaid import** (D-A6) — optional; last. — **🔵 in review #1678**
 
 **Track B — design**
 
-- **B1 — Detector core** (D-B1) — registry, static engine, `design.md`-derived design-system rules, suppressions file, `design_detect` tool, `/design audit --static`; per-rule fixtures.
-- **B2 — Browser engine** (D-B1) — computed-style rules over the in-app browser; desktop only, CLI falls back to static and says so.
-- **B3 — Built-in hook + knob + Settings row** (D-B2) — `post-tool` immediate tier, `stop` full pass, next-turn injection; budget tests.
-- **B4 — One skill, routed vocabulary** (D-B3) — Commands table, per-verb references, modes, seven worlds, `profiles.ts` ↔ pack agreement, `/design <verb>`; parity + boundary tests.
-- **B5 — `critique` two-assessment orchestration + snapshots** (D-B4) — fanout seam, degraded banner, `.brainrouter/design/critiques/`.
-- **B6 — `product.md` via the shared artifact reader** (D-B6) — reader rename, prompt block, `/design product`.
-- **B7 — Live variants in the desktop browser** (D-B5) — screenshot-driven; the owner watches the first run before merge.
-- **B8 — Fidelity measurement** (D-B7) — `design_fidelity`, side-by-side + heatmap artifacts.
-- **B9 — Bot static-design evidence + Review Console filter** (D-B8) — advisory cards, dedup, suppression honoured at head.
+- **B1 — Detector core** (D-B1) — registry, static engine, `design.md`-derived design-system rules, suppressions file, `design_detect` tool, `/design audit --static`; per-rule fixtures. — **✅ merged #1668**
+- **B2 — Browser engine** (D-B1) — computed-style rules over the in-app browser; desktop only, CLI falls back to static and says so. — **🔵 in review #1675**
+- **B3 — Built-in hook + knob + Settings row** (D-B2) — `post-tool` immediate tier, `stop` full pass, next-turn injection; budget tests. — **✅ merged #1669**
+- **B4 — One skill, routed vocabulary** (D-B3) — Commands table, per-verb references, modes, seven worlds, `profiles.ts` ↔ pack agreement, `/design <verb>`; parity + boundary tests. — **🔵 in review #1670**
+- **B5 — `critique` two-assessment orchestration + snapshots** (D-B4) — fanout seam, degraded banner, `.brainrouter/design/critiques/`. — **🔵 in review #1672**
+- **B6 — `product.md` via the shared artifact reader** (D-B6) — reader rename, prompt block, `/design product`. — **🔵 in review #1671**
+- **B7 — Live variants in the desktop browser** (D-B5) — screenshot-driven; the owner watches the first run before merge. — **◐ deterministic half (wrap / accept / discard, `design_variants`, `--variants N`) in review #1676; the desktop pick-and-cycle loop awaits the owner-attended first run**
+- **B8 — Fidelity measurement** (D-B7) — `design_fidelity`, side-by-side + heatmap artifacts. — **🔵 in review #1674**
+- **B9 — Bot static-design evidence + Review Console filter** (D-B8) — advisory cards, dedup, suppression honoured at head. — **✅ merged #1673**
 
 Rules updates ride the rows that change them: 09 §7b (vocabulary restated in frontmatter, B4),
 09 §7c (`design.md` tokens normative for the detector; `product.md` beside it, B1/B6), 05 (new
 knobs, B3), 06 (viewer and Settings row, A5/B3), a new 09 §7d for the diagram artifact (A5).
+
+**Build notes (2026-09-05).** The IR field is `schemaVersion` (the package convention), where the text above says `schema_version`. The hook's `stop` tier runs inside turn finalization rather than as a registered `hooks`-service script; the budgets and the next-turn channel are as specified. Dashboard surfaces (B9's producer filter, A7's diagrams card) were built and typechecked but not rendered in-session — the dashboard preview needs a backend session. The seven style skills carry `routed-by: hallmark` and stay out of every catalog while remaining resolvable by name.
 
 ---
 
