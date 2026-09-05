@@ -29,6 +29,7 @@ import {
   slugifyDiagramTitle,
   writeDiagramSpec,
   type DiagramReceipt,
+  importMermaidDiagram,
 } from '@kinqs/brainrouter-core/diagram';
 import { resolveCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
@@ -39,6 +40,7 @@ export type DiagramCommandAction =
   | { action: 'validate'; file: string }
   | { action: 'render'; file: string; slug?: string; theme?: 'auto' | 'dark' | 'light'; verify?: boolean }
   | { action: 'draft'; slug?: string; layers?: string[]; pathPrefix?: string; title?: string }
+  | { action: 'import'; file: string; kind?: 'workflow' | 'architecture'; slug?: string; title?: string }
   | { action: 'show'; slug: string }
   | { action: 'diff'; slug: string; base?: string; open?: boolean }
   | { action: 'open'; slug: string }
@@ -97,6 +99,19 @@ export function parseDiagramArgs(args: string[]): DiagramCommandAction {
       const [flag, inline] = rest[i].split('=', 2);
       if (flag === '--base') { const value = inline ?? rest[++i]; if (!value) return { action: 'error', message: '--base needs a revision' }; out.base = value; }
       else if (flag === '--open') out.open = true;
+      else return { action: 'error', message: `Unknown option ${flag}` };
+    }
+    return out;
+  }
+  if (sub === 'import') {
+    if (!rest[0]) return { action: 'error', message: 'Usage: /diagram import <file.mmd> [--kind workflow|architecture] [--slug <slug>] [--title <title>]' };
+    const out: Extract<DiagramCommandAction, { action: 'import' }> = { action: 'import', file: rest[0] };
+    for (let i = 1; i < rest.length; i++) {
+      const [flag, inline] = rest[i].split('=', 2);
+      const value = inline ?? rest[++i] ?? '';
+      if (flag === '--kind') { if (value !== 'workflow' && value !== 'architecture') return { action: 'error', message: 'Kind must be workflow or architecture' }; out.kind = value; }
+      else if (flag === '--slug') { if (!isDiagramSlug(value)) return { action: 'error', message: `Invalid slug "${value}": lowercase letters, digits, and dashes only.` }; out.slug = value; }
+      else if (flag === '--title') { out.title = value; }
       else return { action: 'error', message: `Unknown option ${flag}` };
     }
     return out;
@@ -236,6 +251,24 @@ export async function tryHandleDiagramCommand(ctx: CommandContext): Promise<bool
       console.log(chalk.gray(`  curate the JSON, then /diagram render ${path.relative(root, spec)} --slug ${slug}\n`));
       return true;
     }
+    case 'import': {
+      // ADR-056 D-A6 — Mermaid is an input: a fresh document is authored; styling is never transcribed.
+      const abs = path.resolve(root, parsed.file);
+      if (abs !== path.resolve(root) && !abs.startsWith(path.resolve(root) + path.sep)) { console.log(chalk.red('\nThe Mermaid file must be inside the workspace.\n')); return true; }
+      let text: string;
+      try { text = fs.readFileSync(abs, 'utf8'); } catch { console.log(chalk.red(`\nCannot read ${parsed.file}\n`)); return true; }
+      let imported;
+      try { imported = importMermaidDiagram(text, { ...(parsed.kind ? { kind: parsed.kind } : {}), ...(parsed.title ? { title: parsed.title } : {}) }); }
+      catch (err) { console.log(chalk.red(`\n${err instanceof Error ? err.message : String(err)}\n`)); return true; }
+      const slug = parsed.slug ?? slugifyDiagramTitle(imported.diagram.meta.title);
+      const spec = writeDiagramSpec(root, slug, imported.diagram);
+      const count = imported.diagram.kind === 'workflow' ? `${imported.diagram.nodes.length} nodes, ${imported.diagram.edges.length} edges` : `${imported.diagram.components.length} components, ${imported.diagram.connections.length} connections`;
+      console.log(`\n${chalk.green('✓')} imported ${imported.diagram.kind}: ${count} → ${chalk.cyan(path.relative(root, spec))} ${imported.validation.ok ? chalk.gray('(valid)') : chalk.yellow(`(${imported.validation.diagnostics?.length ?? 0} validation issue(s) — curate before rendering)`)}`);
+      for (const n of imported.notes) console.log(chalk.gray(`  · ${n}`));
+      if (imported.dropped.length) console.log(chalk.gray(`  · not transcribed: ${imported.dropped.slice(0, 6).join(' · ')}${imported.dropped.length > 6 ? ' · …' : ''}`));
+      console.log(chalk.gray(`  curate the JSON, then /diagram render ${path.relative(root, spec)} --slug ${slug}\n`));
+      return true;
+    }
     case 'show': {
       const paths = diagramPaths(root, parsed.slug);
       let receipt: DiagramReceipt;
@@ -291,6 +324,7 @@ ${chalk.bold('/diagram')} — typed, validated system maps with a receipt (${cha
 
   /diagram <kind> <what to map…>          agent authors + renders one (kinds: ${DIAGRAM_KINDS.join(', ')})
   /diagram validate <file.json>           check a document; prints path-prefixed diagnostics
+  /diagram import <file.mmd> [--kind workflow|architecture] [--slug s] [--title t]   author a fresh document from a Mermaid flowchart/graph (styling never transcribed)
   /diagram draft [--layers a,b] [--prefix path] [--title t] [--slug s]
                                           seed an architecture document from the codebase map (/atlas)
   /diagram render <file.json> [--slug s] [--theme auto|dark|light] [--no-verify]

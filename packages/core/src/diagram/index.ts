@@ -58,3 +58,4 @@ export {
   DATAFLOW_FIXTURE,
   LIFECYCLE_FIXTURE,
 } from './fixtures.js';
+export * from './mermaid.js';
