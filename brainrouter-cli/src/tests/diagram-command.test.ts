@@ -37,6 +37,8 @@ test('D-A5 parseDiagramArgs routes subcommands, kinds, flags, and errors', () =>
   assert.deepEqual(parseDiagramArgs(['render', 'a.json', '--no-verify']), { action: 'render', file: 'a.json', verify: false });
   assert.deepEqual(parseDiagramArgs(['draft', '--layers', 'API,Memory', '--prefix', 'packages/core', '--slug', 'core-map']), { action: 'draft', layers: ['API', 'Memory'], pathPrefix: 'packages/core', slug: 'core-map' });
   assert.equal(parseDiagramArgs(['draft', '--bogus', 'x']).action, 'error');
+  assert.deepEqual(parseDiagramArgs(['diff', 'my-map', '--base', 'origin/main', '--open']), { action: 'diff', slug: 'my-map', base: 'origin/main', open: true });
+  assert.equal(parseDiagramArgs(['diff']).action, 'error');
   assert.deepEqual(parseDiagramArgs(['show', 'my-map']), { action: 'show', slug: 'my-map' });
   assert.deepEqual(parseDiagramArgs(['sequence', 'checkout', 'flow']), { action: 'author', kind: 'sequence', brief: 'checkout flow' });
   assert.equal(parseDiagramArgs(['architecture']).action, 'error');

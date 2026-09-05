@@ -186,6 +186,7 @@ import {
   extractAtlasJson,
   type AtlasLlmCaller,
 } from '@kinqs/brainrouter-core/atlas';
+import { buildDiagramDeltaContext } from '@kinqs/brainrouter-core/diagram';
 import {
   ensureProject,
   getProject,
@@ -1148,6 +1149,13 @@ async function main(): Promise<void> {
     let atlasGraph = readAtlasGraph(workspaceRoot);
     try { atlasGraph = carryForwardSummaries(buildBaseGraph(workspaceRoot), atlasGraph); } catch { /* keep the stored graph as-is if a rebuild isn't possible */ }
     const changeCtx = buildAtlasChangeContext(atlasGraph, files);
+    // ADR-056 D-A4 — a pinned diagram whose specification changed in the working
+    // tree yields a deterministic Before/After fact list (added / removed /
+    // rerouted / moved / changed) beside the blast radius. Evidence, not a
+    // finding; model-free; empty when nothing is pinned or nothing changed.
+    let diagramDeltaCtx = '';
+    try { diagramDeltaCtx = buildDiagramDeltaContext(workspaceRoot); } catch { /* a delta must never block a review */ }
+    const changeCtxFull = [changeCtx, diagramDeltaCtx].filter(Boolean).join('\n\n');
     // REVIEW.md (if present) is surfaced only as fenced, non-authoritative
     // repository evidence. Checkout prose cannot override the review contract.
     const reviewInstr = buildReviewInstructionBlockForDiff(workspaceRoot, diff);
@@ -1176,7 +1184,7 @@ async function main(): Promise<void> {
       local = await runLocalReviewOrchestration({
         diff,
         reviewInstructions: reviewInstr,
-        changeContext: changeCtx,
+        changeContext: changeCtxFull,
         relatedPaths: graphEdges,
         concurrency: 4,
         maxBundleChars: 18_000,
@@ -1244,7 +1252,7 @@ async function main(): Promise<void> {
     // up a stale copy per run — so it always reflects the current changes, older
     // versions live in its history, and a provenance header records exactly what it
     // describes (date · files · diff hash). Best-effort — never blocks the review.
-    if (changeCtx || findings.length > 0 || incomplete) {
+    if (changeCtxFull || findings.length > 0 || incomplete) {
       try {
         const UNDERSTANDING_PATH = '.brainrouter/understanding/working-changes.md';
         const header = `> As of ${isoNow().slice(0, 10)} · ${files.length} changed file${files.length === 1 ? '' : 's'} · diff \`${base.diffHash.slice(0, 12)}\`. Regenerated on each review; older versions are in this artifact's history.`;
@@ -1253,7 +1261,7 @@ async function main(): Promise<void> {
           : findings.length
             ? ['## Findings', ...findings.map((finding) => `- **${finding.severity}** \`${finding.file}${finding.line ? `:${finding.line}` : ''}\` — ${finding.summary}`)].join('\n')
             : '## Findings\nNo issues found.';
-        const doc = [header, changeCtx, findingLines].filter(Boolean).join('\n\n');
+        const doc = [header, changeCtxFull, findingLines].filter(Boolean).join('\n\n');
         const title = `Understanding — working changes (${files.length} file${files.length === 1 ? '' : 's'})`;
         const existing = Object.values(readArtifactsAll(workspaceRoot)).find((a) => a.path === UNDERSTANDING_PATH);
         if (existing) updateArtifact(workspaceRoot, existing.id, { content: doc, title, status: 'draft' });

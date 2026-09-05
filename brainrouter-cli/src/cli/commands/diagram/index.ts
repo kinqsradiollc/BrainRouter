@@ -19,6 +19,10 @@ import {
   deliverDiagram,
   verifyDiagramEvidence,
   draftDiagramFromAtlas,
+  compareDiagrams,
+  renderDiagramDelta,
+  readDiagramSpecAtRevision,
+  readDiagramSpec,
   diagramPaths,
   isDiagramSlug,
   listDiagrams,
@@ -36,6 +40,7 @@ export type DiagramCommandAction =
   | { action: 'render'; file: string; slug?: string; theme?: 'auto' | 'dark' | 'light'; verify?: boolean }
   | { action: 'draft'; slug?: string; layers?: string[]; pathPrefix?: string; title?: string }
   | { action: 'show'; slug: string }
+  | { action: 'diff'; slug: string; base?: string; open?: boolean }
   | { action: 'open'; slug: string }
   | { action: 'author'; kind: DiagramKind; brief: string }
   | { action: 'error'; message: string };
@@ -80,6 +85,18 @@ export function parseDiagramArgs(args: string[]): DiagramCommandAction {
       } else if (flag === '--layers') out.layers = (value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
       else if (flag === '--prefix') out.pathPrefix = value;
       else if (flag === '--title') out.title = value;
+      else return { action: 'error', message: `Unknown option ${flag}` };
+    }
+    return out;
+  }
+  if (sub === 'diff') {
+    const slug = rest[0] ?? '';
+    if (!isDiagramSlug(slug)) return { action: 'error', message: 'Usage: /diagram diff <slug> [--base <revision>] [--open]' };
+    const out: Extract<DiagramCommandAction, { action: 'diff' }> = { action: 'diff', slug };
+    for (let i = 1; i < rest.length; i++) {
+      const [flag, inline] = rest[i].split('=', 2);
+      if (flag === '--base') { const value = inline ?? rest[++i]; if (!value) return { action: 'error', message: '--base needs a revision' }; out.base = value; }
+      else if (flag === '--open') out.open = true;
       else return { action: 'error', message: `Unknown option ${flag}` };
     }
     return out;
@@ -227,6 +244,31 @@ export async function tryHandleDiagramCommand(ctx: CommandContext): Promise<bool
       printReceipt(receipt, root, paths.html);
       return true;
     }
+    case 'diff': {
+      const headRaw = readDiagramSpec(root, parsed.slug);
+      if (!headRaw) { console.log(chalk.yellow(`\nNo pinned specification for "${parsed.slug}" — render it first.\n`)); return true; }
+      const base = parsed.base ?? 'HEAD';
+      const baseRaw = readDiagramSpecAtRevision(root, base, parsed.slug);
+      if (!baseRaw) { console.log(chalk.yellow(`\n"${parsed.slug}" is not committed at ${base}, so there is nothing to compare against.\n`)); return true; }
+      const bv = validateDiagram(baseRaw, { quality: 'standard' }), hv = validateDiagram(headRaw, { quality: 'standard' });
+      if (!bv.diagram || !hv.diagram) { console.log(chalk.red('\nOne side does not validate:')); printDiagnostics([...bv.diagnostics, ...hv.diagnostics]); console.log(''); return true; }
+      if (bv.diagram.kind !== hv.diagram.kind) { console.log(chalk.red(`\nKinds differ (${bv.diagram.kind} at ${base} vs ${hv.diagram.kind} now) — that is a different diagram, not a delta.\n`)); return true; }
+      const receipt = compareDiagrams(bv.diagram, hv.diagram);
+      const c = receipt.counts;
+      console.log(`\n${chalk.bold(receipt.title)} ${chalk.gray(`— ${base} → working tree`)}`);
+      console.log(receipt.identical ? chalk.gray('  identical') : `  ${c.added} added · ${c.removed} removed · ${c.rerouted} rerouted · ${c.moved} moved · ${c.changed} changed`);
+      for (const f of receipt.facts) {
+        const fields = f.fields?.map((d) => `${d.field}: ${d.before ?? '∅'} → ${d.after ?? '∅'}`).join('; ');
+        console.log(`  ${chalk.cyan(f.kind.padEnd(8))} ${f.subject}/${f.id}${f.label ? chalk.gray(` "${f.label}"`) : ''}${fields ? chalk.gray(`  ${fields}`) : ''}`);
+      }
+      const paths = diagramPaths(root, parsed.slug);
+      const deltaPath = paths.html.replace(/\.html$/, '.delta.html');
+      fs.mkdirSync(path.dirname(deltaPath), { recursive: true });
+      fs.writeFileSync(deltaPath, renderDiagramDelta(bv.diagram, hv.diagram, receipt, { theme: resolveCliKnobs(config).diagram.theme }), 'utf8');
+      console.log(chalk.gray(`  Before · Delta · After → ${path.relative(root, deltaPath)}\n`));
+      if (parsed.open) openInBrowser(deltaPath);
+      return true;
+    }
     case 'open': {
       const paths = diagramPaths(root, parsed.slug);
       if (!fs.existsSync(paths.html)) { console.log(chalk.yellow(`\nNo artifact for "${parsed.slug}" — render it first.\n`)); return true; }
@@ -253,6 +295,8 @@ ${chalk.bold('/diagram')} — typed, validated system maps with a receipt (${cha
                                           seed an architecture document from the codebase map (/atlas)
   /diagram render <file.json> [--slug s] [--theme auto|dark|light] [--no-verify]
                                           verify sources, render, run the nine checks, deliver HTML + receipt
+  /diagram diff <slug> [--base <rev>] [--open]
+                                          exact facts vs the committed spec + a Before · Delta · After page
   /diagram list                           stored diagrams
   /diagram show <slug>                    the receipt (checks, sha256, evidence)
   /diagram open <slug>                    open the delivered HTML in a browser
