@@ -59,6 +59,10 @@
       "types": "./dist/context/index.d.ts",
       "default": "./dist/context/index.js"
     },
+    "./diagram": {
+      "types": "./dist/diagram/index.d.ts",
+      "default": "./dist/diagram/index.js"
+    },
     "./exec": {
       "types": "./dist/exec/index.d.ts",
       "default": "./dist/exec/index.js"
