@@ -11,6 +11,7 @@ import { collectDesignFiles } from '../../../design/detect/files.js';
 import { readDesignSystemTokens } from '../../../design/detect/designSystem.js';
 import { readDesignSuppressions } from '../../../design/detect/suppressions.js';
 import { isDesignRuleId } from '../../../design/detect/rules.js';
+import { runDesignFidelity, fidelityReportMarkdown } from '../../../design/fidelity/index.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 const MAX_FINDINGS = 60;
@@ -40,5 +41,19 @@ export const designHandlers: Record<string, BuiltinToolHandler> = {
     if (result.suppressed.length) lines.push(`Suppressed ${result.suppressed.length}: ${result.suppressed.slice(0, 8).map((s) => `${s.rule}@${s.file} (${s.reason})`).join('; ')}${result.suppressed.length > 8 ? '; …' : ''}`);
     if (result.skipped.length) lines.push(`Not modelled (${result.skipped.length}): ${result.skipped.slice(0, 6).join(', ')}${result.skipped.length > 6 ? ', …' : ''}`);
     return [head, ...lines, ...notes].join('\n');
+  },
+  // ADR-056 D-B7 — fidelity is measured, not asserted. Two workspace PNGs (an
+  // approved comp, a screenshot of the build) compared per region; the numbers,
+  // a side-by-side, and a heatmap land under .brainrouter/design/fidelity/.
+  design_fidelity: async ({ args, host }) => {
+    const comp = typeof args.comp === 'string' ? args.comp.trim() : '';
+    const build = typeof args.build === 'string' ? args.build.trim() : '';
+    if (!comp || !build) throw new Error('design_fidelity: `comp` and `build` are both required (workspace-relative PNG paths).');
+    const int = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : undefined);
+    const { result, artifacts } = runDesignFidelity(host.workspaceRoot, comp, build, {
+      ...(int(args.rows) ? { rows: int(args.rows) } : {}), ...(int(args.cols) ? { cols: int(args.cols) } : {}),
+      ...(typeof args.slug === 'string' && /^[a-z0-9-]{1,64}$/.test(args.slug) ? { slug: args.slug } : {}),
+    });
+    return fidelityReportMarkdown(result, artifacts);
   },
 };
