@@ -902,6 +902,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       vision: c.browser?.vision === 'off' ? 'off' : 'auto',
       searchEngine: typeof c.browser?.searchEngine === 'string' ? c.browser.searchEngine.trim() : '',
     },
+    diagram: {
+      theme: c.diagram?.theme === 'dark' || c.diagram?.theme === 'light' ? c.diagram.theme : 'auto',
+    },
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     effortByModel: resolveEffortByModel(c.effortByModel),

@@ -539,6 +539,31 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'diagram_validate',
+    description: 'Validate a typed diagram document (ADR-056): kinds architecture | workflow | sequence | dataflow | lifecycle, each `{ schemaVersion: 1, kind, meta: { title, … }, …element arrays }` with unknown fields rejected at every level. Returns path-prefixed diagnostics (unresolved reference, duplicate id, broken main path, more than 12 primary elements under the default showcase profile, …) with the fixes to choose from. Read-only; call it until the document is clean, then diagram_render.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        document: { type: 'object', description: 'The diagram document (JSON object). Architecture: components[{id,label,type∈frontend|backend|database|cloud|security|messagebus|external,variant?,sources?}], boundaries?[{id,label,wraps[]}], connections[{id,label?,from,to,style?∈sync|async|data}], mainPath?[]. Workflow: lanes?, nodes[{id,label,lane?,shape?}], edges[], mainPath?. Sequence: participants[], messages[{id,label,from,to,kind?}], activations?. Dataflow: stages?, nodes[{id,label,stage?,type?}], flows[]. Lifecycle: states[{id,label,type?∈initial|active|waiting|terminal|failure}], transitions[]. Elements may carry sources[{path,lines?}] naming the repo files they reflect.' },
+        quality: { type: 'string', enum: ['showcase', 'standard'], description: 'showcase (default): ≤12 primary elements and warnings fail; standard: dense maps allowed.' },
+      },
+      required: ['document'],
+    },
+  },
+  {
+    name: 'diagram_render',
+    description: 'Validate, deterministically render, and DELIVER a typed diagram document as one self-contained HTML (inline SVG, dark/light themes, pan/zoom/search/focus, no network) under `.brainrouter/diagrams/<slug>.html`, beside its specification (`<slug>.json`) and a receipt (`<slug>.html.receipt.json`: nine artifact checks, SHA-256 + bytes of spec and artifact, evidence summary). Delivery happens ONLY when every check passes; otherwise nothing is written and any previous artifact is kept. Same document → byte-identical artifact. Returns the receipt summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        document: { type: 'object', description: 'The diagram document (see diagram_validate for the shape). Validate first.' },
+        slug: { type: 'string', description: 'File name under .brainrouter/diagrams/ — lowercase letters, digits, dashes (≤ 64). Default: derived from meta.title. Re-render with the same slug to replace.' },
+        theme: { type: 'string', enum: ['auto', 'dark', 'light'], description: 'Initial theme of the artifact (the viewer can switch). Default: cli.diagram.theme.' },
+      },
+      required: ['document'],
+    },
+  },
+  {
     name: 'session_list',
     description: 'List the other conversations in this workspace (session key, title, turn count, last-modified time, and — for a forked session — which session it branched from). Read-only; scoped to this workspace. Use it to find a sibling session to reference or continue.',
     inputSchema: {

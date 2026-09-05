@@ -12,6 +12,18 @@ export { renderDiagram, deliverDiagram, type RenderOptions, type RenderResult, t
 export { layoutDiagram, METRICS as DIAGRAM_METRICS, type Scene, type PlacedNode, type PlacedEdge } from './render/layout.js';
 export { sceneToSvg } from './render/svg.js';
 export {
+  diagramsDir,
+  diagramPaths,
+  isDiagramSlug,
+  slugifyDiagramTitle,
+  writeDiagramSpec,
+  readDiagramSpec,
+  listDiagrams,
+  DIAGRAM_SLUG_RE,
+  type DiagramPaths,
+  type DiagramListEntry,
+} from './store.js';
+export {
   runDiagramChecks,
   buildReceipt,
   canonicalDiagramJson,

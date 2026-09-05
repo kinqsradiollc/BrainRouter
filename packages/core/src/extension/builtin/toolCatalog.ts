@@ -65,6 +65,11 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // ADR-048 S6 — the codebase-map query: pure read over the per-workspace Atlas
   // graph file; no mutation, safe to parallelize.
   { name: 'atlas_context', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // ADR-056 D-A5 — diagram_validate is a pure function of its argument;
+  // diagram_render writes under .brainrouter/diagrams/ (write tier, serialized so
+  // two renders of one slug cannot interleave the atomic replace).
+  { name: 'diagram_validate', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'diagram_render', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
