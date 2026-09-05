@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { DESIGN_ARTIFACT_PATHS } from '../../workspace/designArtifact.js';
+import { DESIGN_ARTIFACT_PATHS } from '../../workspace/workspaceArtifacts.js';
 import { toHex } from './css.js';
 
 export interface DesignSystemTokens {

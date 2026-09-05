@@ -1,4 +1,10 @@
 /**
+ * The workspace artifacts the frontend capability hands the model as DATA:
+ * `design.md` (ADR-031 D5 — visual truth) and, beside it, `product.md`
+ * (ADR-056 D-B6 — product truth). One reader, one path precedence, one
+ * neutralised-and-fenced injection; tokens stay in `design.md`, product truth
+ * stays out of it (rules 09 §7c).
+ *
  * ADR-031 D5 — *"`study` produces a `design.md`, and we already have a place for it."*
  *
  * D5 says the design skill's portable design document "is the same artifact the
@@ -36,19 +42,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fenceMarkerPattern } from '../planner/agentContext.js';
-import type { WorkspaceDesignArtifact } from './designArtifactPrompt.js';
+import type { WorkspaceArtifact, WorkspaceDesignArtifact, WorkspaceProductArtifact } from './workspaceArtifactsPrompt.js';
 import { asUntrustedWorkspaceText } from './participants/agentContext.js';
 
 export {
   renderDesignArtifactBlock,
+  renderProductArtifactBlock,
+  renderWorkspaceArtifactsBlock,
+  type WorkspaceArtifact,
   type WorkspaceDesignArtifact,
-} from './designArtifactPrompt.js';
+  type WorkspaceProductArtifact,
+} from './workspaceArtifactsPrompt.js';
 
 /** The paths a design artifact may live at, in the order they are consulted. */
 export const DESIGN_ARTIFACT_PATHS = [
   'design.md',
   path.join('.brainrouter', 'design.md'),
   path.join('docs', 'design.md'),
+] as const;
+
+/**
+ * ADR-056 D-B6 — where `product.md` may live, the same precedence as `design.md`
+ * for the same reasons: beside it, or out of the way, or with the docs.
+ */
+export const PRODUCT_ARTIFACT_PATHS = [
+  'product.md',
+  path.join('.brainrouter', 'product.md'),
+  path.join('docs', 'product.md'),
 ] as const;
 
 /**
@@ -72,16 +92,17 @@ const MAX_DESIGN_ARTIFACT_LINE = 600;
  * everything after it back into the instruction stream.
  */
 const DESIGN_FENCE = fenceMarkerPattern('design_artifact');
+const PRODUCT_FENCE = fenceMarkerPattern('product_artifact');
 
 /**
- * The workspace's design artifact, or null when it has none.
+ * The first artifact found at `paths`, neutralised and bounded, or null.
  *
  * Never throws: a turn must not fail because a file it optionally reads is a
  * directory, is unreadable, or vanished between the check and the read.
  */
-export function readWorkspaceDesignArtifact(workspaceRoot: string): WorkspaceDesignArtifact | null {
+function readWorkspaceArtifact(workspaceRoot: string, paths: readonly string[], fence: RegExp): WorkspaceArtifact | null {
   if (!workspaceRoot) return null;
-  for (const relative of DESIGN_ARTIFACT_PATHS) {
+  for (const relative of paths) {
     const absolute = path.join(workspaceRoot, relative);
     let raw: string;
     try {
@@ -100,10 +121,20 @@ export function readWorkspaceDesignArtifact(workspaceRoot: string): WorkspaceDes
       // flattened to one paragraph is one nobody can follow.
       content: (truncated ? raw.slice(0, MAX_DESIGN_ARTIFACT_CHARS) : raw)
         .split('\n')
-        .map((line) => asUntrustedWorkspaceText(line, MAX_DESIGN_ARTIFACT_LINE).replace(DESIGN_FENCE, '[fence]'))
+        .map((line) => asUntrustedWorkspaceText(line, MAX_DESIGN_ARTIFACT_LINE).replace(fence, '[fence]'))
         .join('\n'),
       truncated,
     };
   }
   return null;
+}
+
+/** The workspace's design artifact (`design.md`), or null when it has none. */
+export function readWorkspaceDesignArtifact(workspaceRoot: string): WorkspaceDesignArtifact | null {
+  return readWorkspaceArtifact(workspaceRoot, DESIGN_ARTIFACT_PATHS, DESIGN_FENCE);
+}
+
+/** ADR-056 D-B6 — the workspace's product artifact (`product.md`), or null. */
+export function readWorkspaceProductArtifact(workspaceRoot: string): WorkspaceProductArtifact | null {
+  return readWorkspaceArtifact(workspaceRoot, PRODUCT_ARTIFACT_PATHS, PRODUCT_FENCE);
 }
