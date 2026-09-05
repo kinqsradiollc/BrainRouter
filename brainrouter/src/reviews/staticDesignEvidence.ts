@@ -16,6 +16,7 @@ import {
   type DesignFinding,
   type DesignInputFile,
 } from '@kinqs/brainrouter-core/design';
+import { readRepoTextAtRef } from './repoContents.js';
 
 export const STATIC_DESIGN_PRODUCER = 'design-static';
 const UI_FILE = /\.(html?|xhtml|svelte|vue|jsx|tsx|astro|mdx|css|scss|less)$/i;
@@ -56,15 +57,7 @@ export interface CollectStaticDesignEvidenceInput {
 }
 
 async function readAtHead(input: CollectStaticDesignEvidenceInput, path: string): Promise<string | null> {
-  const url = `${input.apiBase}/repos/${input.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(input.headSha)}`;
-  try {
-    const r = await input.fetchImpl(url, { headers: { ...input.headers, Accept: 'application/vnd.github.raw' } });
-    if (!r.ok) return null;
-    const text = await r.text();
-    return text.length > LIMITS.fileBytes ? null : text;
-  } catch {
-    return null;
-  }
+  return readRepoTextAtRef({ fetchImpl: input.fetchImpl, apiBase: input.apiBase, repo: input.repo, ref: input.headSha, headers: input.headers }, path, LIMITS.fileBytes);
 }
 
 function toFinding(f: DesignFinding): StaticDesignFinding {
