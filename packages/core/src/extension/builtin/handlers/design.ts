@@ -12,6 +12,7 @@ import { readDesignSystemTokens } from '../../../design/detect/designSystem.js';
 import { readDesignSuppressions } from '../../../design/detect/suppressions.js';
 import { isDesignRuleId } from '../../../design/detect/rules.js';
 import { runDesignFidelity, fidelityReportMarkdown } from '../../../design/fidelity/index.js';
+import { requestBrowserDesignAudit, BROWSER_ENGINE_UNAVAILABLE } from '../../../design/browser.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 const MAX_FINDINGS = 60;
@@ -32,7 +33,24 @@ export const designHandlers: Record<string, BuiltinToolHandler> = {
       for (const r of collected.refused) notes.push(`- skipped ${r.path}: ${r.reason}`);
       if (collected.truncated) notes.push('- file limit reached; narrow the paths to scan the rest');
     }
-    if (!files.length) return `No UI files to check${notes.length ? `:\n${notes.join('\n')}` : ' (html, css, jsx/tsx, svelte, vue, astro).'}`;
+    // ADR-056 D-B1 — the browser engine: the same rule ids over computed styles
+    // in the in-app browser. Desktop only; anywhere else says so and stays static.
+    const browserLines: string[] = [];
+    if (args.browser === true) {
+      const port = host.browserControlPort;
+      if (!port || host.silent) browserLines.push(BROWSER_ENGINE_UNAVAILABLE);
+      else {
+        try {
+          const audit = await requestBrowserDesignAudit(port, { ...(typeof args.tabId === 'string' ? { tabId: args.tabId } : {}), ...(rules?.length ? { rules } : {}), suppressions });
+          browserLines.push(`Browser engine (${audit.url}${audit.viewport ? `, ${audit.viewport.width}×${audit.viewport.height}` : ''}): ${audit.findings.length} finding(s) over ${audit.scanned} element(s)${audit.truncated ? ' (cut at the bound)' : ''}`);
+          for (const f of audit.findings.slice(0, MAX_FINDINGS)) browserLines.push(`- [${f.severity}] ${f.rule}${f.snippet ? ` ${f.snippet}` : ''} — ${f.message}`);
+          if (audit.suppressed.length) browserLines.push(`Suppressed ${audit.suppressed.length}: ${audit.suppressed.slice(0, 8).map((x) => `${x.rule} — ${x.reason}`).join('; ')}`);
+        } catch (err) {
+          browserLines.push(`Browser engine did not run: ${err instanceof Error ? err.message : String(err)}. Static results only.`);
+        }
+      }
+    }
+    if (!files.length) return [`No UI files to check${notes.length ? `:\n${notes.join('\n')}` : ' (html, css, jsx/tsx, svelte, vue, astro).'}`, ...browserLines].join('\n');
     const result = detectDesign(files, { tokens, suppressions, ...(rules?.length ? { rules } : {}) });
     const head = `Design detector ${result.catalogVersion}: ${result.files} file(s), ${result.findings.length} finding(s) — ${result.errors} errors, ${result.warnings} warnings${result.findings.length - result.errors - result.warnings ? `, ${result.findings.length - result.errors - result.warnings} info/advisory` : ''}${tokens ? ` · design.md tokens from ${tokens.path}` : ' · no design.md tokens (design-system rules idle)'}.`;
     const lines = result.findings.slice(0, MAX_FINDINGS).map((f) =>
@@ -40,7 +58,7 @@ export const designHandlers: Record<string, BuiltinToolHandler> = {
     if (result.findings.length > MAX_FINDINGS) lines.push(`- … ${result.findings.length - MAX_FINDINGS} more`);
     if (result.suppressed.length) lines.push(`Suppressed ${result.suppressed.length}: ${result.suppressed.slice(0, 8).map((s) => `${s.rule}@${s.file} (${s.reason})`).join('; ')}${result.suppressed.length > 8 ? '; …' : ''}`);
     if (result.skipped.length) lines.push(`Not modelled (${result.skipped.length}): ${result.skipped.slice(0, 6).join(', ')}${result.skipped.length > 6 ? ', …' : ''}`);
-    return [head, ...lines, ...notes].join('\n');
+    return [head, ...lines, ...notes, ...(browserLines.length ? ['', ...browserLines] : [])].join('\n');
   },
   // ADR-056 D-B7 — fidelity is measured, not asserted. Two workspace PNGs (an
   // approved comp, a screenshot of the build) compared per region; the numbers,

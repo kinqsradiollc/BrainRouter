@@ -11,3 +11,4 @@ export { designHookBlock, designHookAfterWrite, designHookAtTurnEnd, isDesignHoo
 export * from './vocabulary.js';
 export * from './critique.js';
 export * from './fidelity/index.js';
+export * from './browser.js';

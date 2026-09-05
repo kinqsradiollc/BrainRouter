@@ -25,6 +25,7 @@ import {
   DESIGN_VERBS,
   DESIGN_MODES,
   DESIGN_WORLD_IDS,
+  BROWSER_ENGINE_UNAVAILABLE,
   isDesignVerb,
   isDesignMode,
   designVerbPrompt,
@@ -43,7 +44,7 @@ export type DesignCommandAction =
   | { action: 'hooks'; tier?: 'off' | 'immediate' | 'full' }
   | { action: 'verbs' }
   | { action: 'verb'; verb: DesignVerbId; targets: string[]; mode?: DesignModeId; world?: string }
-  | { action: 'detect'; paths: string[]; rules?: string[]; json?: boolean }
+  | { action: 'detect'; paths: string[]; rules?: string[]; json?: boolean; browser?: boolean }
   | { action: 'error'; message: string };
 
 /** Pure argument parser, exported for tests. */
@@ -87,6 +88,7 @@ export function parseDesignArgs(args: string[]): DesignCommandAction {
     for (let i = 0; i < rest.length; i++) {
       const [flag, inline] = rest[i].split('=', 2);
       if (flag === '--json') { out.json = true; continue; }
+      if (flag === '--browser') { out.browser = true; continue; }
       if (flag === '--rules') {
         const value = inline ?? rest[++i] ?? '';
         const ids = value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -178,6 +180,8 @@ export async function tryHandleDesignCommand(ctx: CommandContext): Promise<boole
       if (result.suppressed.length) console.log(chalk.gray(`\n  suppressed ${result.suppressed.length}: ${result.suppressed.slice(0, 6).map((s) => `${s.rule}@${path.basename(s.file)} — ${s.reason}`).join('; ')}`));
       if (collected.refused.length) console.log(chalk.gray(`  skipped: ${collected.refused.map((r) => `${r.path} (${r.reason})`).join(', ')}`));
       if (collected.truncated) console.log(chalk.yellow('  file limit reached — narrow the paths to scan the rest'));
+      // ADR-056 D-B1 — the CLI has no in-app browser; it says so rather than pretend.
+      if (parsed.browser) console.log(chalk.yellow(`  ${BROWSER_ENGINE_UNAVAILABLE}`));
       console.log('');
       return true;
     }
@@ -190,7 +194,7 @@ ${chalk.bold('/design')} — design as verbs, and the deterministic checks behin
 
   /design <verb> [targets…] [--mode m] [--world id]  run one verb of the design skill: critique · audit · polish · harden · typeset · layout · … (/design verbs)
   /design verbs                                    list every verb with what it edits
-  /design detect [paths…] [--rules a,b] [--json]   run the rule catalogue over UI files (default: the workspace)
+  /design detect [paths…] [--rules a,b] [--json] [--browser]   run the rule catalogue over UI files (default: the workspace); --browser = computed-style engine (desktop only — the CLI says so)
   /design rules                                    list every rule with category and severity
   /design hooks [status|on|off|immediate|full]     the design hook: findings for files you write reach the next turn (cli.design.hook)
 `);

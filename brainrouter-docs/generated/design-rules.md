@@ -5,7 +5,7 @@
 
 # BrainRouter design rule catalog
 
-Version 1.0.0. 35 deterministic rules run by `design_detect` / `/design detect` with no model. Advisory rules are reported, never counted as failures.
+Version 1.1.0. 38 deterministic rules run by `design_detect` / `/design detect` with no model. Advisory rules are reported, never counted as failures.
 
 ## `slop` (17)
 
@@ -29,7 +29,7 @@ Version 1.0.0. 35 deterministic rules run by `design_detect` / `/design detect` 
 | `buzzword-copy` | info | Marketing buzzwords | Say what the product does in the product's own words. |
 | `em-dash-overuse` | info (advisory) | Em-dash cadence | The em-dash cadence is a generator tell; use full stops. |
 
-## `quality` (15)
+## `quality` (18)
 
 | Rule | Severity | Name | Guideline |
 |------|----------|------|-----------|
@@ -48,6 +48,9 @@ Version 1.0.0. 35 deterministic rules run by `design_detect` / `/design detect` 
 | `small-touch-target` | warning | Small touch target | Interactive targets are at least 44×44 CSS px. |
 | `fixed-width-layout` | warning | Fixed pixel width | Layouts flow; use max-width and let the container shrink. |
 | `inline-color-literal` | info (advisory) | Colour literal in markup | Colours come from tokens, not from the element. |
+| `text-overflow` | error | Text clipped or covered | Every piece of text is fully readable at rest — nothing clipped, nothing covered. |
+| `horizontal-overflow` | error | Horizontal overflow in the first viewport | No horizontal scroll at any supported viewport width. |
+| `hidden-at-rest` | warning | Content hidden at rest | Content is readable without hovering; reveal-on-hover is for enhancement, never for the message. |
 
 ## `design-system` (3)
 

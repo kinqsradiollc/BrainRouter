@@ -591,6 +591,8 @@ export const BUILTIN_TOOL_SPECS = [
         name: { type: 'string', description: 'A name for the inline markup, used as its file in findings.' },
         rules: { type: 'array', items: { type: 'string' }, description: 'Only these rule ids (see the design rule catalog).' },
         designSystem: { type: 'boolean', description: 'Read design.md tokens for the design-system rules (default true).' },
+        browser: { type: 'boolean', description: 'Also run the browser engine — the same rule ids over computed styles in the in-app browser (contrast against the composited background, clipped/covered text, horizontal overflow, hidden-at-rest content, tiny text, small targets). Desktop only; elsewhere the result says so and stays static.' },
+        tabId: { type: 'string', description: 'Browser tab to audit (default: the active tab).' },
       },
     },
   },

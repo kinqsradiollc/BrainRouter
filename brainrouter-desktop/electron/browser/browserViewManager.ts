@@ -168,6 +168,40 @@ function targetScript(tabId: string, revision: number, ref?: string, target?: st
   })()`;
 }
 
+function designAuditScript(rules: string[], max: number): string {
+  return `(() => {
+    const RULES = new Set(${JSON.stringify(rules)}); const MAX = ${max};
+    const want = (id) => RULES.size === 0 || RULES.has(id);
+    const out = [];
+    const text = (el) => String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    const sel = (el) => { const parts = []; let n = el; let depth = 0; while (n && n.nodeType === 1 && depth < 4) { let s = n.tagName.toLowerCase(); if (n.id) { parts.unshift(s + '#' + n.id); break; } const cls = typeof n.className === 'string' ? n.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.') : ''; if (cls) s += '.' + cls; parts.unshift(s); n = n.parentElement; depth++; } return parts.join(' > '); };
+    const push = (rule, el, message) => { if (out.length >= MAX) return; const r = el.getBoundingClientRect(); out.push({ rule, message, selector: sel(el), snippet: text(el).slice(0, 60), box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }); };
+    const parse = (c) => { const m = /rgba?\\(([^)]+)\\)/.exec(c || ''); if (!m) return null; const p = m[1].split(',').map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+    const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    const bgOf = (el) => { const layers = []; let n = el; while (n && n.nodeType === 1) { const s = getComputedStyle(n); if (s.backgroundImage && s.backgroundImage !== 'none') return null; const c = parse(s.backgroundColor); if (c && c.a > 0) layers.push(c); if (c && c.a >= 1) break; n = n.parentElement; } let r = 255, g = 255, b = 255; for (let i = layers.length - 1; i >= 0; i--) { const c = layers[i]; r = c.r * c.a + r * (1 - c.a); g = c.g * c.a + g * (1 - c.a); b = c.b * c.a + b * (1 - c.a); } return { r, g, b }; };
+    const ratio = (a, b) => { const la = lum(a), lb = lum(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
+    const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+    const hasOwnText = (el) => Array.from(el.childNodes).some((n) => n.nodeType === 3 && String(n.textContent).trim().length > 0);
+    const root = document.documentElement; const vw = innerWidth;
+    if (want('horizontal-overflow') && root.scrollWidth > vw + 1) push('horizontal-overflow', root, 'The page scrolls horizontally in the first viewport: content is ' + (root.scrollWidth - vw) + 'px wider than the ' + vw + 'px viewport.');
+    const els = Array.from(document.body ? document.body.querySelectorAll('*') : []).slice(0, 4000);
+    for (const el of els) {
+      if (out.length >= MAX) break;
+      if (!(el instanceof HTMLElement)) continue;
+      const s = getComputedStyle(el);
+      if (want('small-touch-target') && visible(el) && el.matches('a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link]')) { const r = el.getBoundingClientRect(); if (r.width < 24 || r.height < 24) push('small-touch-target', el, 'Interactive target ' + Math.round(r.width) + '×' + Math.round(r.height) + 'px is under 24px.'); }
+      if (!hasOwnText(el)) continue;
+      const fs = parseFloat(s.fontSize) || 0; const t = text(el);
+      if (want('hidden-at-rest')) { const op = parseFloat(s.opacity); const tp = String(s.transitionProperty || ''); if ((op === 0 || s.visibility === 'hidden') && /opacity|visibility|all/.test(tp) && t.length >= 3) push('hidden-at-rest', el, 'Content is invisible at rest and only appears through a transition (hover/focus reveal).'); }
+      if (!visible(el)) continue;
+      if (want('tiny-text') && fs > 0 && fs < 12 && t.length >= 20) push('tiny-text', el, 'Computed font-size ' + fs + 'px on body copy.');
+      if (want('low-contrast')) { const fg = parse(s.color); const bg = bgOf(el); if (fg && bg && fg.a > 0.99) { const r = ratio(fg, bg); const large = fs >= 24 || (fs >= 18.66 && parseInt(s.fontWeight, 10) >= 700); const min = large ? 3 : 4.5; if (r < min) push('low-contrast', el, 'Contrast ' + r.toFixed(2) + ':1 against the composited background (needs ' + min + ':1).'); } }
+      if (want('text-overflow')) { const clipped = el.scrollWidth > el.clientWidth + 2 && /hidden|clip/.test(s.overflowX + ' ' + s.overflow); const r = el.getBoundingClientRect(); let occluded = false; if (!clipped && r.width > 0 && r.top >= 0 && r.top < innerHeight) { const cx = Math.min(innerWidth - 1, r.left + r.width / 2), cy = Math.min(innerHeight - 1, r.top + Math.min(r.height, 24) / 2); const top = document.elementFromPoint(cx, cy); occluded = !!top && top !== el && !el.contains(top) && !top.contains(el); } if (clipped || occluded) push('text-overflow', el, clipped ? 'Text is clipped: ' + el.scrollWidth + 'px of content in a ' + el.clientWidth + 'px box with overflow hidden.' : 'Text is covered by another element at its centre.'); }
+    }
+    return { url: location.href, viewport: { width: innerWidth, height: innerHeight }, scanned: els.length, findings: out, truncated: out.length >= MAX };
+  })()`;
+}
+
 function semanticSnapshotScript(tabId: string, revision: number, scope: 'viewport' | 'page' = 'viewport'): string {
   return `(() => {
     const SCOPE = ${JSON.stringify(scope)};
@@ -1130,6 +1164,7 @@ export class BrowserViewManager {
       }
       case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode, command.scope);
       case 'find-nodes': return this.findNodes(this.requireTab(tab), command.query, command.by, command.limit, command.scope);
+      case 'design-audit': return this.designAudit(this.requireTab(tab), command.rules, command.maxFindings);
       case 'text': return this.pageText(this.requireTab(tab), command.maxChars);
       case 'html': return this.pageHtml(this.requireTab(tab), command.maxChars);
       case 'screenshot': return this.screenshot(this.requireTab(tab), command.maxDimension, command.fullPage);
@@ -1770,6 +1805,18 @@ export class BrowserViewManager {
     if (!isOpaqueBrowserRef(ref)) throw new BrowserManagerError('INVALID_REQUEST', 'Element reference is invalid.');
     const prefix = `br:${tab.id}:${tab.revision}:`;
     if (!ref.startsWith(prefix)) throw new BrowserManagerError('STALE_PAGE', 'Element reference belongs to a different tab or page revision. Take a new snapshot.');
+  }
+
+  /**
+   * ADR-056 D-B1 — the browser design engine: the detector's rule ids over
+   * COMPUTED styles in the live page (contrast against the composited
+   * background, clipped or covered text, first-viewport horizontal overflow,
+   * content hidden at rest, tiny text, small targets). Bounded, read-only,
+   * runs in the isolated world like the snapshot; the core side folds the
+   * answer into detector findings and honours the workspace suppressions.
+   */
+  private async designAudit(tab: BrowserTab, rules?: string[], maxFindings = 80): Promise<unknown> {
+    return this.isolated(tab.id, designAuditScript(rules ?? [], Math.max(1, Math.min(200, maxFindings))));
   }
 
   private isolated<T = unknown>(tabId: string, code: string): Promise<T> {
