@@ -69,7 +69,7 @@ function deriveCategory(filePath: string, skillsRoot: string): string {
 /**
  * Parse frontmatter from a SKILL.md. Returns name + description.
  */
-function parseSkillFrontmatter(filePath: string): { name: string; description: string; category?: string; disableModelInvocation?: boolean } | null {
+function parseSkillFrontmatter(filePath: string): { name: string; description: string; category?: string; disableModelInvocation?: boolean; routedBy?: string } | null {
   try {
     const raw = readFileSync(filePath, 'utf-8');
     const { data } = matter(raw);
@@ -81,11 +81,14 @@ function parseSkillFrontmatter(filePath: string): { name: string; description: s
       const humanOnly = typeof rawHumanOnly === 'string'
         ? ['true', 'yes', 'on', 'y'].includes(rawHumanOnly.trim().toLowerCase())
         : rawHumanOnly === true;
+      // ADR-056 D-B4 — `routed-by: <skill>` marks a world (see SkillManifest.routedBy).
+      const routedBy = typeof data['routed-by'] === 'string' ? data['routed-by'].trim() : '';
       return { 
         name: String(data.name), 
         description: String(data.description),
         category: data.category ? String(data.category) : undefined,
-        ...(humanOnly ? { disableModelInvocation: true } : {})
+        ...(humanOnly ? { disableModelInvocation: true } : {}),
+        ...(routedBy ? { routedBy } : {}),
       };
     }
   } catch {
@@ -175,6 +178,7 @@ export class Registry {
           description: meta.description,
           filePath,
           scope,
+          ...(meta.routedBy ? { routedBy: meta.routedBy } : {}),
         });
       }
     }
@@ -202,6 +206,7 @@ export class Registry {
           description: meta.description,
           filePath,
           scope,
+          ...(meta.routedBy ? { routedBy: meta.routedBy } : {}),
         });
       }
     }
@@ -284,7 +289,8 @@ export class Registry {
   }
 
   listSkills(category?: string, scope?: SkillScope | 'all'): SkillManifest[] {
-    let all = Array.from(this.skills.values());
+    // Worlds (ADR-056 D-B4) resolve by name only; no listing shows them.
+    let all = Array.from(this.skills.values()).filter((s) => !s.routedBy);
     
     // Filter by project
     if (this.config.localProjectName) {
@@ -298,7 +304,7 @@ export class Registry {
 
   searchSkills(query: string, scope?: SkillScope | 'all'): Array<SkillManifest & { relevance: string }> {
     const q = query.toLowerCase();
-    let all = Array.from(this.skills.values());
+    let all = Array.from(this.skills.values()).filter((s) => !s.routedBy);
 
     // Filter by project
     if (this.config.localProjectName) {

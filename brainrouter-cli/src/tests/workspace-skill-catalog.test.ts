@@ -76,7 +76,12 @@ test('engineering capability skills activate only for matching live tasks', () =
     assert.equal(backendNames.has('api-service-design-skill'), true);
     assert.equal(backendNames.has('authorization-boundary-skill'), true);
     assert.equal(backendNames.has('backend-testing-skill'), true);
-    assert.equal(frontendNames.has('taste-skill'), true);
+    // ADR-056 D-B4 — the pack delivers one visual-craft skill; the style skills are
+    // worlds it routes to (`routed-by: hallmark`) and no task's catalog lists them.
+    assert.equal(frontendNames.has('taste-skill'), false);
+    assert.equal(frontendNames.has('brutalist-skill'), false);
+    assert.equal(backendNames.has('brutalist-skill'), false);
+    assert.equal(frontendNames.has('hallmark'), true);
     assert.equal(frontendNames.has('a11y-skill'), true);
     assert.equal(frontendNames.has('browser-testing-skill'), true);
     assert.equal(frontendNames.has('api-service-design-skill'), false);

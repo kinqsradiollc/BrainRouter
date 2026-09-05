@@ -289,15 +289,16 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       recommended: [],
       enabled: [],
     },
+    // ADR-056 D-B4 — one visual-craft skill. `hallmark` rides the frontend
+    // capability (ADR-031); the former style skills are worlds it routes to, so
+    // the profile lists none of them.
     skills: {
       packs: ['design'],
       enabled: [
         'planning-skill',
         'handover-skill',
         'a11y-skill',
-        'taste-skill',
         'concept-diagrams',
-        'redesign-skill',
         'output-skill',
       ],
     },

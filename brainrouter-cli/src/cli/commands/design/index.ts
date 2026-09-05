@@ -1,12 +1,15 @@
 /**
- * DESIGN (ADR-056 D-B1) — `/design` slash command: the deterministic half.
+ * DESIGN (ADR-056 D-B1/D-B4) — `/design` slash command, both halves.
  *
  * `/design detect [paths…] [--rules a,b] [--json]` runs the design detector
  * over the workspace's UI files (or the given files/directories) with the
  * workspace's `design.md` tokens and suppressions, and prints findings grouped
- * by file. No model, no network. The routed design vocabulary (critique,
- * audit, polish, …) arrives with the skill in D-B3; this command is the part
- * that runs without one.
+ * by file. No model, no network.
+ *
+ * `/design <verb> [targets…] [--mode m] [--world id]` is the routed
+ * vocabulary: the verb becomes a bounded agent turn that runs the one design
+ * skill with the verb's playbook named, through the same skill runner every
+ * slash-mapped skill uses. `/design verbs` lists them.
  */
 import chalk from 'chalk';
 import path from 'node:path';
@@ -18,14 +21,26 @@ import {
   isDesignRuleId,
   DESIGN_RULES,
   type DesignFinding,
+  DESIGN_SKILL_ID,
+  DESIGN_VERBS,
+  DESIGN_MODES,
+  DESIGN_WORLD_IDS,
+  isDesignVerb,
+  isDesignMode,
+  designVerbPrompt,
+  type DesignVerbId,
+  type DesignModeId,
 } from '@kinqs/brainrouter-core/design';
 import { loadConfig, saveConfig, resolveCliKnobs, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
+import { runSkillByName } from '../_helpers.js';
 
 export type DesignCommandAction =
   | { action: 'help' }
   | { action: 'rules' }
   | { action: 'hooks'; tier?: 'off' | 'immediate' | 'full' }
+  | { action: 'verbs' }
+  | { action: 'verb'; verb: DesignVerbId; targets: string[]; mode?: DesignModeId; world?: string }
   | { action: 'detect'; paths: string[]; rules?: string[]; json?: boolean }
   | { action: 'error'; message: string };
 
@@ -41,7 +56,30 @@ export function parseDesignArgs(args: string[]): DesignCommandAction {
     if (t === 'off' || t === 'immediate' || t === 'full') return { action: 'hooks', tier: t };
     return { action: 'error', message: 'Usage: /design hooks status | on | off | immediate | full' };
   }
-  if (sub === 'detect' || sub === 'audit' || sub === 'check') {
+  if (sub === 'verbs') return { action: 'verbs' };
+  if (isDesignVerb(sub)) {
+    const out: Extract<DesignCommandAction, { action: 'verb' }> = { action: 'verb', verb: sub, targets: [] };
+    const rest = args.slice(1);
+    for (let i = 0; i < rest.length; i++) {
+      const [flag, inline] = rest[i].split('=', 2);
+      if (flag === '--mode') {
+        const value = (inline ?? rest[++i] ?? '').toLowerCase();
+        if (!isDesignMode(value)) return { action: 'error', message: `Unknown mode "${value}". Modes: ${DESIGN_MODES.map((m) => m.id).join(' | ')}` };
+        out.mode = value;
+        continue;
+      }
+      if (flag === '--world') {
+        const value = (inline ?? rest[++i] ?? '').toLowerCase();
+        if (!DESIGN_WORLD_IDS.includes(value)) return { action: 'error', message: `Unknown world "${value}". Worlds: ${DESIGN_WORLD_IDS.join(' | ')}` };
+        out.world = value;
+        continue;
+      }
+      if (flag.startsWith('--')) return { action: 'error', message: `Unknown option ${flag}` };
+      out.targets.push(rest[i]);
+    }
+    return out;
+  }
+  if (sub === 'detect' || sub === 'check') {
     const out: Extract<DesignCommandAction, { action: 'detect' }> = { action: 'detect', paths: [] };
     const rest = args.slice(1);
     for (let i = 0; i < rest.length; i++) {
@@ -60,7 +98,7 @@ export function parseDesignArgs(args: string[]): DesignCommandAction {
     }
     return out;
   }
-  return { action: 'error', message: `Unknown subcommand "${sub}". Try: /design detect [paths…] [--rules a,b] [--json] · /design rules` };
+  return { action: 'error', message: `Unknown subcommand "${sub}". Try: /design <verb> [targets…] (see /design verbs) · /design detect [paths…] [--rules a,b] [--json] · /design rules` };
 }
 
 const SEV = { error: chalk.red('error'), warning: chalk.yellow('warn '), info: chalk.gray('info ') } as const;
@@ -81,6 +119,17 @@ export async function tryHandleDesignCommand(ctx: CommandContext): Promise<boole
       }
       const tier = resolveCliKnobs(loadConfig()).design.hook;
       console.log(`\n${chalk.bold('Design hook')}: ${tier === 'off' ? chalk.gray('off') : chalk.green(tier)} ${chalk.gray(tier === 'off' ? '— nothing runs after edits' : tier === 'immediate' ? '— each UI file a write tool touches is checked (≤ 5 findings into the next turn)' : '— immediate checks plus a turn-end pass over every UI file the turn wrote')}\n  ${chalk.gray('cli.design.hook in config.json · /design hooks on|off|immediate|full')}\n`);
+      return true;
+    }
+    case 'verbs': {
+      console.log(`\n${chalk.bold('/design <verb>')} ${chalk.gray(`— routed to the ${DESIGN_SKILL_ID} skill; add --mode ${DESIGN_MODES.map((m) => m.id).join('|')} and --world <id>`)}\n`);
+      for (const v of DESIGN_VERBS) console.log(`  ${chalk.cyan(v.id.padEnd(10))} ${v.edits ? chalk.yellow('edits ') : chalk.gray('report')}  ${v.summary}`);
+      console.log('');
+      return true;
+    }
+    case 'verb': {
+      const prompt = designVerbPrompt({ verb: parsed.verb, targets: parsed.targets, ...(parsed.mode ? { mode: parsed.mode } : {}), ...(parsed.world ? { world: parsed.world } : {}) });
+      await runSkillByName(agent, ctx.mcpClient, DESIGN_SKILL_ID, prompt, undefined, (p) => ctx.repl.runAgentTurn(p));
       return true;
     }
     case 'rules': {
@@ -117,8 +166,10 @@ export async function tryHandleDesignCommand(ctx: CommandContext): Promise<boole
 
 function printUsage(): void {
   console.log(`
-${chalk.bold('/design')} — deterministic design checks (${chalk.gray('no model; design.md tokens + .brainrouter/design-detector.json honoured')})
+${chalk.bold('/design')} — design as verbs, and the deterministic checks behind them
 
+  /design <verb> [targets…] [--mode m] [--world id]  run one verb of the design skill: critique · audit · polish · harden · typeset · layout · … (/design verbs)
+  /design verbs                                    list every verb with what it edits
   /design detect [paths…] [--rules a,b] [--json]   run the rule catalogue over UI files (default: the workspace)
   /design rules                                    list every rule with category and severity
   /design hooks [status|on|off|immediate|full]     the design hook: findings for files you write reach the next turn (cli.design.hook)

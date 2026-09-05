@@ -88,7 +88,7 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     // and available-but-off in `design`, and it comes from the shipped skill
     // library rather than this pack's own files (profilePlugins.ts
     // `librarySkillIds`). Keep this list and that one in agreement — a test does.
-    skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'hallmark'],
+    skillIds: ['a11y-skill', 'browser-testing-skill', 'hallmark'],
     toolProfileIds: ['browser', 'artifacts', 'interactive-browser'],
   },
   {

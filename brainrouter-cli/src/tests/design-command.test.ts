@@ -25,7 +25,14 @@ test('B1 parseDesignArgs routes subcommands and validates rule ids', () => {
   assert.deepEqual(parseDesignArgs(['detect']), { action: 'detect', paths: [] });
   assert.deepEqual(parseDesignArgs(['detect', 'src', 'index.html', '--rules', 'missing-alt,marquee', '--json']), { action: 'detect', paths: ['src', 'index.html'], rules: ['missing-alt', 'marquee'], json: true });
   assert.equal(parseDesignArgs(['detect', '--rules', 'nope']).action, 'error');
-  assert.equal(parseDesignArgs(['polish']).action, 'error');
+  assert.deepEqual(parseDesignArgs(['polish']), { action: 'verb', verb: 'polish', targets: [] });
+  assert.deepEqual(parseDesignArgs(['critique', 'src/pages', '--mode', 'operate', '--world=editorial']), { action: 'verb', verb: 'critique', targets: ['src/pages'], mode: 'operate', world: 'editorial' });
+  assert.equal(parseDesignArgs(['polish', '--mode', 'loud']).action, 'error');
+  assert.equal(parseDesignArgs(['polish', '--world', 'narnia']).action, 'error');
+  assert.equal(parseDesignArgs(['polish', '--world', 'brutalist-skill']).action, 'verb');
+  assert.equal(parseDesignArgs(['sparkle']).action, 'error');
+  assert.deepEqual(parseDesignArgs(['verbs']), { action: 'verbs' });
+  assert.equal(parseDesignArgs(['audit']).action, 'verb', 'audit is the skill verb, not a detector alias');
   assert.deepEqual(parseDesignArgs(['hooks']), { action: 'hooks' });
   assert.deepEqual(parseDesignArgs(['hooks', 'on']), { action: 'hooks', tier: 'full' });
   assert.deepEqual(parseDesignArgs(['hooks', 'immediate']), { action: 'hooks', tier: 'immediate' });
@@ -47,6 +54,25 @@ test('B1 /design detect runs over a workspace file and prints grouped findings; 
     const rules = await captureLogs(async () => { await tryHandleDesignCommand(ctx(['rules'])); });
     assert.match(rules, /gradient-text/); assert.match(rules, /design-system-font/);
     assert.equal(await tryHandleDesignCommand({ ...ctx([]), command: '/other' }), false);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('B4 /design <verb> hands a bounded brief to the skill runner and the agent turn', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-cli-design-verb-'));
+  try {
+    const agent = makeAgent(ws);
+    const turns: string[] = [];
+    const mcpClient = { callTool: async () => { throw new Error('no mcp in this test'); } };
+    const ctx = { command: '/design', args: ['polish', 'src/pages', '--mode', 'operate'], agent, mcpClient, config: {}, rl: {}, repl: { runAgentTurn: (p: string) => { turns.push(p); } } } as any;
+    const out = await captureLogs(async () => { assert.equal(await tryHandleDesignCommand(ctx), true); });
+    assert.equal(turns.length, 1, `no turn ran; output was: ${out}`);
+    assert.match(turns[0], /\/design polish: run the `polish` verb of the `hallmark` design skill/);
+    assert.match(turns[0], /references\/verbs\/polish\.md/); assert.match(turns[0], /Mode: operate/); assert.match(turns[0], /src\/pages/);
+    assert.equal(agent.activeSkill, 'hallmark');
+    const verbs = await captureLogs(async () => { await tryHandleDesignCommand({ ...ctx, args: ['verbs'] }); });
+    assert.match(verbs, /critique/); assert.match(verbs, /typeset/); assert.match(verbs, /product/);
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
