@@ -593,6 +593,21 @@ export const BUILTIN_TOOL_SPECS = [
     },
   },
   {
+    name: 'design_fidelity',
+    description: 'Measure how faithfully a build matches an approved comp (ADR-056): compares two workspace PNGs — the comp (a prototype capture or supplied image) and a screenshot of the build — per region: structure (SSIM over blurred grayscale with a small translation search), colour (palette match), detail (high-frequency energy), and section bands. Each region gets match | drift | missing | contradicted; the whole gets a 0–100 score. Writes a side-by-side PNG, a heatmap PNG, and the numbers under .brainrouter/design/fidelity/<slug>/. A measurement you read, never a gate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        comp: { type: 'string', description: 'Workspace-relative path to the approved comp PNG (≤ 8 MB, 8-bit, non-interlaced).' },
+        build: { type: 'string', description: 'Workspace-relative path to the build screenshot PNG (resampled into the comp frame).' },
+        rows: { type: 'number', description: 'Region grid rows (1–12, default 6).' },
+        cols: { type: 'number', description: 'Region grid columns (1–12, default 4).' },
+        slug: { type: 'string', description: 'Artifact folder name (lowercase letters, digits, dashes). Default: derived from the two file names.' },
+      },
+      required: ['comp', 'build'],
+    },
+  },
+  {
     name: 'session_list',
     description: 'List the other conversations in this workspace (session key, title, turn count, last-modified time, and — for a forked session — which session it branched from). Read-only; scoped to this workspace. Use it to find a sibling session to reference or continue.',
     inputSchema: {

@@ -5,7 +5,7 @@
 
 # BrainRouter tool catalog
 
-93 built-in agent tools, by access tier and action kind.
+94 built-in agent tools, by access tier and action kind.
 
 | Tool | Tier | Action kind | Parallel-safe | Description |
 |------|------|-------------|---------------|-------------|
@@ -20,6 +20,7 @@
 | `connector_run` | shell | network | no | Run one connector's ingest → memory checkpoint: fetch new documents from the source, persist them, and import them into memory so future recall can cite them. |
 | `delegate_agent` | read | child_write | yes | Start one background child agent and keep working in the parent turn. |
 | `design_detect` | read | read_only | yes | Run the deterministic design detector (ADR-056) over workspace UI files — html, css/scss, jsx/tsx, svelte, vue, astro — or over a supplied markup string. |
+| `design_fidelity` | write | file_edit | no | Measure how faithfully a build matches an approved comp (ADR-056): compares two workspace PNGs — the comp (a prototype capture or supplied image) and a screenshot of the build — per region: structure (SSIM over blurred grayscale with a small translation search), colour (palette match), detail (high-frequency energy), and section bands. |
 | `diagram_draft` | read | read_only | yes | Seed an ARCHITECTURE diagram document from the workspace codebase map (the Atlas graph built by /atlas): each enriched layer becomes a typed component with its facade files as `sources`, layer relationships become labelled connections (counted imports when no enrichment ran), capped at 12 by size with omissions named. |
 | `diagram_render` | write | file_edit | no | Validate, deterministically render, and DELIVER a typed diagram document as one self-contained HTML (inline SVG, dark/light themes, pan/zoom/search/focus, no network) under `.brainrouter/diagrams/<slug>.html`, beside its specification (`<slug>.json`) and a receipt (`<slug>.html.receipt.json`: nine artifact checks, SHA-256 + bytes of spec and artifact, evidence summary). |
 | `diagram_validate` | read | read_only | yes | Validate a typed diagram document (ADR-056): kinds architecture \| workflow \| sequence \| dataflow \| lifecycle, each `{ schemaVersion: 1, kind, meta: { title, … }, …element arrays }` with unknown fields rejected at every level. |

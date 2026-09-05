@@ -57,10 +57,10 @@ test('CODEX-TOOL-REGISTRY exposure tiers match the reviewed allowed sets exactly
   for (const t of read) assert.ok(write.has(t), `read tool ${t} must remain in write`);
   for (const t of write) assert.ok(shell.has(t), `write tool ${t} must remain in shell`);
 
-  // Write adds exactly the structured file tools (plus ADR-056's diagram_render,
+  // Write adds exactly the structured file tools (plus ADR-056's diagram_render and design_fidelity,
   // which delivers an artifact under .brainrouter/diagrams/); shell adds command,
   // native terminal, and computer control plus connector_run.
-  assert.deepEqual([...write].filter((t) => !read.has(t)).sort(), ['apply_patch', 'diagram_render', 'edit_file', 'notebook_edit', 'write_file']);
+  assert.deepEqual([...write].filter((t) => !read.has(t)).sort(), ['apply_patch', 'design_fidelity', 'diagram_render', 'edit_file', 'notebook_edit', 'write_file']);
   assert.deepEqual([...shell].filter((t) => !write.has(t)).sort(), [
     'computer_use', 'connector_run', 'kill_command', 'run_code', 'run_command',
     'terminal_list', 'terminal_read', 'terminal_write',

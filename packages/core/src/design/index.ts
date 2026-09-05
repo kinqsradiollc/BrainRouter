@@ -10,3 +10,4 @@ export * from './detect/index.js';
 export { designHookBlock, designHookAfterWrite, designHookAtTurnEnd, isDesignHookTarget, DESIGN_HOOK_LIMITS, type DesignHookTier, type DesignHookAgent } from './hook.js';
 export * from './vocabulary.js';
 export * from './critique.js';
+export * from './fidelity/index.js';
