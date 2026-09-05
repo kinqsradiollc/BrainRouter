@@ -150,7 +150,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     id: 'frontend',
     kind: 'capability',
     pluginName: 'capability-frontend',
-    skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+    skillIds: ['a11y-skill', 'browser-testing-skill'],
     // ADR-031 D1: the vendored design skill attaches HERE rather than to a
     // profile. `frontend` is enabled by default in `engineering` and available
     // in `design`, so it is simply present while building software and turns on
