@@ -23,9 +23,10 @@ import { websearchHandlers } from './websearch.js';
 import { computerHandlers } from './computer.js';
 import { codeModeHandlers } from './codeMode.js';
 import { reminderHandlers } from './reminder.js';
+import { diagramHandlers } from './diagram.js';
 
 // Registration runs once, when this module is first imported (by runtime.ts).
-for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers, ...fsWriteHandlers, ...workspaceHandlers, ...connectorHandlers, ...worktreeHandlers, ...websearchHandlers, ...computerHandlers, ...codeModeHandlers, ...reminderHandlers })) {
+for (const [name, handler] of Object.entries({ ...plannerHandlers, ...readOnlyHandlers, ...mcpHandlers, ...trackHandlers, ...workerHandlers, ...sessionHandlers, ...pentestHandlers, ...artifactHandlers, ...fsReadHandlers, ...execHandlers, ...modelHandlers, ...terminalHandlers, ...interactionHandlers, ...fsWriteHandlers, ...workspaceHandlers, ...connectorHandlers, ...worktreeHandlers, ...websearchHandlers, ...computerHandlers, ...codeModeHandlers, ...reminderHandlers, ...diagramHandlers })) {
   registerBuiltinHandler(name, handler);
 }
 

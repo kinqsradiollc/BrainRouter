@@ -722,6 +722,12 @@ export interface CliKnobs {
    */
   browser?: { vision?: 'auto' | 'off'; searchEngine?: string };
   /**
+   * ADR-056 D-A5 — the initial theme of a delivered diagram artifact (`auto`
+   * follows the viewer's colour scheme; the artifact's own toggle can still
+   * switch). Default 'auto'.
+   */
+  diagram?: { theme?: 'auto' | 'dark' | 'light' };
+  /**
    * ADR-041 D14 — record a per-session trajectory ledger (`trajectory.jsonl` in
    * the session bucket): one step record per model call (model, duration, token
    * usage, and the tools it requested with their render intents). Log-only —
@@ -1414,6 +1420,7 @@ export interface ResolvedCliKnobs {
   traceRequests: boolean;
   atlas: { orient: boolean; retrieval: boolean; autoRefresh: boolean };
   browser: { vision: 'auto' | 'off'; searchEngine: string };
+  diagram: { theme: 'auto' | 'dark' | 'light' };
   confirmRunWorkflow: boolean;
   effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** ADR-052 D2 — resolved per-model effort defaults (validated); empty when unset. */
