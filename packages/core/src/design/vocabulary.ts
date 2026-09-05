@@ -78,6 +78,8 @@ export interface DesignVerbRequest {
   mode?: DesignModeId;
   world?: string;
   brief?: string;
+  /** ADR-056 D-B5 — write N variants of the chosen element through design_variants instead of one edit. */
+  variants?: number;
 }
 
 /**
@@ -100,6 +102,9 @@ export function designVerbPrompt(req: DesignVerbRequest): string {
       ? '4. This verb edits in place, additively. Name the files you will touch before touching them; no route or file deletions without confirmation. Run design_detect again when done — the count must not rise.'
       : '4. This verb edits nothing. Report only.',
   ];
+  if (req.variants && req.variants > 0 && v.edits) {
+    lines.push(`5. Variants: do not make one edit — pick ONE element and write ${req.variants} complete alternative(s) of it through the design_variants tool (op wrap, with the file, the element's character range, and the variants); never write the wrapper by hand. End by printing the session id and the two commands: /design accept <id> <n> and /design discard <id>.`);
+  }
   if (req.brief) lines.push(`Brief: ${req.brief}`);
   lines.push('Finish with a receipt: what you found or changed, what you left alone, and why.');
   return lines.join('\n');

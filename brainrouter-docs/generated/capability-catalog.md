@@ -5,11 +5,11 @@
 
 # BrainRouter capability catalog
 
-8 required-core capability extensions activating 94 built-in tools.
+8 required-core capability extensions activating 95 built-in tools.
 
 | Capability | Tools | Members |
 |------------|-------|---------|
-| `filesystem` | 18 | `apply_patch`, `atlas_context`, `design_detect`, `design_fidelity`, `diagram_draft`, `diagram_render`, `diagram_validate`, `edit_file`, `glob_files`, `grep_search`, `list_dir`, `notebook_edit`, `read_file`, `worktree_create`, `worktree_done`, `worktree_enter`, `worktree_list`, `write_file` |
+| `filesystem` | 19 | `apply_patch`, `atlas_context`, `design_detect`, `design_fidelity`, `design_variants`, `diagram_draft`, `diagram_render`, `diagram_validate`, `edit_file`, `glob_files`, `grep_search`, `list_dir`, `notebook_edit`, `read_file`, `worktree_create`, `worktree_done`, `worktree_enter`, `worktree_list`, `write_file` |
 | `mcp-lsp-connectors` | 10 | `connector_list`, `connector_run`, `list_mcp_resource_templates`, `list_mcp_resources`, `lsp`, `mcp_call`, `mcp_describe`, `mcp_refresh_catalog`, `mcp_search`, `read_mcp_resource` |
 | `orchestration` | 17 | `close_agent`, `delegate_agent`, `list_agents`, `profile_stage`, `read_agent_transcript`, `resume_agent`, `route_task`, `send_input`, `session_list`, `session_read`, `session_reference`, `session_search`, `spawn_agent`, `spawn_agents`, `task_agent`, `wait_agent`, `wait_agents` |
 | `planning-state` | 21 | `artifact_write`, `ask_user_choice`, `goal_blocked`, `goal_complete`, `mark_chapter`, `notify_when_idle`, `planner_add`, `planner_complete`, `planner_find`, `planner_schedule`, `planner_today`, `reconcile_steer`, `remind`, `switch_model`, `track_query`, `track_update`, `update_plan`, `workspace_create`, `workspace_link`, `workspace_resolve`, `workspace_update` |

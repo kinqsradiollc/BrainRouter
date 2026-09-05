@@ -30,6 +30,9 @@ import {
   isDesignMode,
   designVerbPrompt,
   runDesignCritique,
+  acceptVariant,
+  discardVariants,
+  listVariantSessions,
   type DesignVerbId,
   type DesignModeId,
 } from '@kinqs/brainrouter-core/design';
@@ -43,7 +46,10 @@ export type DesignCommandAction =
   | { action: 'rules' }
   | { action: 'hooks'; tier?: 'off' | 'immediate' | 'full' }
   | { action: 'verbs' }
-  | { action: 'verb'; verb: DesignVerbId; targets: string[]; mode?: DesignModeId; world?: string }
+  | { action: 'verb'; verb: DesignVerbId; targets: string[]; mode?: DesignModeId; world?: string; variants?: number }
+  | { action: 'accept'; id: string; index: number }
+  | { action: 'discard'; id: string }
+  | { action: 'variants' }
   | { action: 'detect'; paths: string[]; rules?: string[]; json?: boolean; browser?: boolean }
   | { action: 'error'; message: string };
 
@@ -60,6 +66,17 @@ export function parseDesignArgs(args: string[]): DesignCommandAction {
     return { action: 'error', message: 'Usage: /design hooks status | on | off | immediate | full' };
   }
   if (sub === 'verbs') return { action: 'verbs' };
+  if (sub === 'variants') return { action: 'variants' };
+  if (sub === 'accept') {
+    const id = args[1] ?? ''; const index = Number(args[2]);
+    if (!id || !Number.isInteger(index) || index < 0) return { action: 'error', message: 'Usage: /design accept <session-id> <variant-index> (0 = the original)' };
+    return { action: 'accept', id, index };
+  }
+  if (sub === 'discard') {
+    const id = args[1] ?? '';
+    if (!id) return { action: 'error', message: 'Usage: /design discard <session-id>' };
+    return { action: 'discard', id };
+  }
   if (isDesignVerb(sub)) {
     const out: Extract<DesignCommandAction, { action: 'verb' }> = { action: 'verb', verb: sub, targets: [] };
     const rest = args.slice(1);
@@ -69,6 +86,12 @@ export function parseDesignArgs(args: string[]): DesignCommandAction {
         const value = (inline ?? rest[++i] ?? '').toLowerCase();
         if (!isDesignMode(value)) return { action: 'error', message: `Unknown mode "${value}". Modes: ${DESIGN_MODES.map((m) => m.id).join(' | ')}` };
         out.mode = value;
+        continue;
+      }
+      if (flag === '--variants') {
+        const n = Number(inline ?? rest[++i]);
+        if (!Number.isInteger(n) || n < 1 || n > 6) return { action: 'error', message: '--variants takes a whole number from 1 to 6' };
+        out.variants = n;
         continue;
       }
       if (flag === '--world') {
@@ -150,8 +173,23 @@ export async function tryHandleDesignCommand(ctx: CommandContext): Promise<boole
         await runSkillByName(agent, ctx.mcpClient, DESIGN_SKILL_ID, run.synthesisPrompt, undefined, (p) => ctx.repl.runAgentTurn(p));
         return true;
       }
-      const prompt = designVerbPrompt({ verb: parsed.verb, targets: parsed.targets, ...(parsed.mode ? { mode: parsed.mode } : {}), ...(parsed.world ? { world: parsed.world } : {}) });
+      const prompt = designVerbPrompt({ verb: parsed.verb, targets: parsed.targets, ...(parsed.mode ? { mode: parsed.mode } : {}), ...(parsed.world ? { world: parsed.world } : {}), ...(parsed.variants ? { variants: parsed.variants } : {}) });
       await runSkillByName(agent, ctx.mcpClient, DESIGN_SKILL_ID, prompt, undefined, (p) => ctx.repl.runAgentTurn(p));
+      return true;
+    }
+    case 'variants': {
+      const sessions = listVariantSessions(root);
+      console.log(sessions.length ? `\n${chalk.bold('Open variant sessions')}\n${sessions.map((x) => `  ${chalk.cyan(x.id)}  ${x.file} · ${x.action} · ${x.count} variant(s) · ${x.createdAt}`).join('\n')}\n  ${chalk.gray('/design accept <id> <n> (0 = original) · /design discard <id>')}\n` : chalk.gray('\nNo open variant sessions.\n'));
+      return true;
+    }
+    case 'accept': {
+      try { const r = acceptVariant(root, parsed.id, parsed.index); console.log(chalk.green(`\nAccepted variant ${r.chosen} — ${r.file}:${r.lines[0]}–${r.lines[1]} is one clean node again.\n`)); }
+      catch (err) { console.log(chalk.red(`\n${err instanceof Error ? err.message : String(err)}\n`)); }
+      return true;
+    }
+    case 'discard': {
+      try { const r = discardVariants(root, parsed.id); console.log(chalk.green(`\nDiscarded — ${r.file} restored byte-identical (${r.restoredBytes} bytes).\n`)); }
+      catch (err) { console.log(chalk.red(`\n${err instanceof Error ? err.message : String(err)}\n`)); }
       return true;
     }
     case 'rules': {
@@ -192,7 +230,8 @@ function printUsage(): void {
   console.log(`
 ${chalk.bold('/design')} — design as verbs, and the deterministic checks behind them
 
-  /design <verb> [targets…] [--mode m] [--world id]  run one verb of the design skill: critique · audit · polish · harden · typeset · layout · … (/design verbs)
+  /design <verb> [targets…] [--mode m] [--world id] [--variants N]  run one verb of the design skill: critique · audit · polish · harden · typeset · layout · … (/design verbs); --variants N writes N alternatives into the source for you to accept
+  /design variants | accept <id> <n> | discard <id>     open variant sessions; keep one (0 = original) or restore the file byte-identical
   /design verbs                                    list every verb with what it edits
   /design detect [paths…] [--rules a,b] [--json] [--browser]   run the rule catalogue over UI files (default: the workspace); --browser = computed-style engine (desktop only — the CLI says so)
   /design rules                                    list every rule with category and severity

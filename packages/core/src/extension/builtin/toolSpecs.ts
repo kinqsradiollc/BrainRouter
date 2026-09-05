@@ -612,6 +612,24 @@ export const BUILTIN_TOOL_SPECS = [
     },
   },
   {
+    name: 'design_variants',
+    description: 'Live variants (ADR-056): write N alternatives of ONE element into its source file inside a display:contents wrapper carrying data-brainrouter-variants (the dev server\'s HMR swaps them in; the original is variant 0 and shows first, the others are hidden until cycled). accept keeps one variant and strips the wrapper and the losers so the winner is real code in the diff; discard restores the file byte-identical. Sessions live under .brainrouter/design/variants/. Never edit the wrapper by hand.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['wrap', 'accept', 'discard', 'list'], description: 'wrap (file, start, end, variants, action) · accept (id, index) · discard (id) · list.' },
+        file: { type: 'string', description: 'wrap: workspace-relative source file (.html/.vue/.svelte/.astro get the HTML wrapper; .jsx/.tsx the JSX wrapper).' },
+        start: { type: 'number', description: 'wrap: character offset where the element starts.' },
+        end: { type: 'number', description: 'wrap: character offset just after the element ends.' },
+        variants: { type: 'array', items: { type: 'string' }, description: 'wrap: 1–6 complete replacements for the element (same tag structure the file expects).' },
+        action: { type: 'string', description: 'wrap: the verb that produced them (bolder, quieter, …) — recorded on the wrapper.' },
+        id: { type: 'string', description: 'accept/discard: the session id from wrap.' },
+        index: { type: 'number', description: 'accept: which variant to keep (0 = the original).' },
+      },
+      required: ['op'],
+    },
+  },
+  {
     name: 'session_list',
     description: 'List the other conversations in this workspace (session key, title, turn count, last-modified time, and — for a forked session — which session it branched from). Read-only; scoped to this workspace. Use it to find a sibling session to reference or continue.',
     inputSchema: {

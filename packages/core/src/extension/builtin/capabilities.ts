@@ -20,7 +20,7 @@ const CAPABILITY_TOOLS = {
     // against) the tree, the same surface area as the map that seeds them.
     'diagram_validate', 'diagram_draft', 'diagram_render',
     // ADR-056 D-B1 — deterministic design checks over the tree's UI files.
-    'design_detect', 'design_fidelity'],
+    'design_detect', 'design_fidelity', 'design_variants'],
   shell: ['run_command', 'run_code', 'task_output', 'wait_until', 'computer_use', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write'],
   'web-research': ['fetch_url', 'web_search', 'research_note', 'research_brief'],
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],

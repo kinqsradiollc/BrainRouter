@@ -13,6 +13,7 @@ import { readDesignSuppressions } from '../../../design/detect/suppressions.js';
 import { isDesignRuleId } from '../../../design/detect/rules.js';
 import { runDesignFidelity, fidelityReportMarkdown } from '../../../design/fidelity/index.js';
 import { requestBrowserDesignAudit, BROWSER_ENGINE_UNAVAILABLE } from '../../../design/browser.js';
+import { wrapVariants, acceptVariant, discardVariants, listVariantSessions } from '../../../design/variants.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 const MAX_FINDINGS = 60;
@@ -73,5 +74,30 @@ export const designHandlers: Record<string, BuiltinToolHandler> = {
       ...(typeof args.slug === 'string' && /^[a-z0-9-]{1,64}$/.test(args.slug) ? { slug: args.slug } : {}),
     });
     return fidelityReportMarkdown(result, artifacts);
+  },
+  // ADR-056 D-B5 — live variants, the deterministic half: wrap N variants into
+  // the source inside a display:contents wrapper (HMR swaps them in), accept
+  // strips the losers so the winner is real code, discard restores the file
+  // byte-identical. Sessions live under .brainrouter/design/variants/.
+  design_variants: async ({ args, host }) => {
+    const op = typeof args.op === 'string' ? args.op : 'list';
+    if (op === 'list') {
+      const sessions = listVariantSessions(host.workspaceRoot);
+      return sessions.length ? ['Open variant sessions:', ...sessions.map((s) => `- ${s.id} · ${s.file} · ${s.action} · ${s.count} variant(s) · ${s.createdAt} — accept with design_variants {op:"accept", id, index} (0 = original) or discard`)].join('\n') : 'No open variant sessions.';
+    }
+    if (op === 'wrap') {
+      const variants = Array.isArray(args.variants) ? args.variants.map((v: unknown) => String(v)) : [];
+      const { session, receipt } = wrapVariants(host.workspaceRoot, { file: String(args.file ?? ''), start: Number(args.start), end: Number(args.end), variants, action: String(args.action ?? 'variant') });
+      return `Wrote ${receipt.count} variant(s) of ${receipt.file}:${receipt.lines[0]}–${receipt.lines[1]} into a display:contents wrapper (session ${session.id}, ${receipt.flavor}). Variant 0 is the original and is showing; the others are hidden until cycled. Accept one with design_variants {op:"accept", id:"${session.id}", index:n} (or /design accept ${session.id} n); discard all with {op:"discard"} (or /design discard ${session.id}). The file is not clean until one of those runs.`;
+    }
+    if (op === 'accept') {
+      const r = acceptVariant(host.workspaceRoot, String(args.id ?? ''), Number(args.index));
+      return `Accepted variant ${r.chosen} in ${r.file}:${r.lines[0]}–${r.lines[1]}; the wrapper and the other variants are gone. The node now reads:\n${r.text.slice(0, 600)}`;
+    }
+    if (op === 'discard') {
+      const r = discardVariants(host.workspaceRoot, String(args.id ?? ''));
+      return `Discarded: ${r.file} restored byte-identical (${r.restoredBytes} bytes).`;
+    }
+    throw new Error(`design_variants: unknown op "${op}" (wrap | accept | discard | list)`);
   },
 };
