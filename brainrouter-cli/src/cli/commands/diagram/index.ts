@@ -13,9 +13,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DIAGRAM_KINDS, isDiagramKind, type DiagramKind } from '@kinqs/brainrouter-types';
+import { readAtlasGraph } from '@kinqs/brainrouter-core/atlas';
 import {
   validateDiagram,
   deliverDiagram,
+  verifyDiagramEvidence,
+  draftDiagramFromAtlas,
   diagramPaths,
   isDiagramSlug,
   listDiagrams,
@@ -30,7 +33,8 @@ export type DiagramCommandAction =
   | { action: 'help' }
   | { action: 'list' }
   | { action: 'validate'; file: string }
-  | { action: 'render'; file: string; slug?: string; theme?: 'auto' | 'dark' | 'light' }
+  | { action: 'render'; file: string; slug?: string; theme?: 'auto' | 'dark' | 'light'; verify?: boolean }
+  | { action: 'draft'; slug?: string; layers?: string[]; pathPrefix?: string; title?: string }
   | { action: 'show'; slug: string }
   | { action: 'open'; slug: string }
   | { action: 'author'; kind: DiagramKind; brief: string }
@@ -57,9 +61,26 @@ export function parseDiagramArgs(args: string[]): DiagramCommandAction {
       } else if (flag === '--theme') {
         if (value !== 'auto' && value !== 'dark' && value !== 'light') return { action: 'error', message: 'Theme must be auto, dark, or light.' };
         out.theme = value;
+      } else if (flag === '--no-verify') {
+        out.verify = false; i--;
       } else {
         return { action: 'error', message: `Unknown option ${flag}` };
       }
+    }
+    return out;
+  }
+  if (sub === 'draft') {
+    const out: Extract<DiagramCommandAction, { action: 'draft' }> = { action: 'draft' };
+    for (let i = 0; i < rest.length; i++) {
+      const [flag, inline] = rest[i].split('=', 2);
+      const value = inline ?? rest[++i];
+      if (flag === '--slug') {
+        if (!isDiagramSlug(value)) return { action: 'error', message: `Invalid slug "${value}": lowercase letters, digits, and dashes only.` };
+        out.slug = value;
+      } else if (flag === '--layers') out.layers = (value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+      else if (flag === '--prefix') out.pathPrefix = value;
+      else if (flag === '--title') out.title = value;
+      else return { action: 'error', message: `Unknown option ${flag}` };
     }
     return out;
   }
@@ -168,7 +189,14 @@ export async function tryHandleDiagramCommand(ctx: CommandContext): Promise<bool
       const slug = parsed.slug ?? slugifyDiagramTitle(v.diagram.meta.title);
       const paths = diagramPaths(root, slug);
       const theme = parsed.theme ?? resolveCliKnobs(config).diagram.theme;
-      const result = deliverDiagram(v.diagram, paths.html, { theme });
+      let toRender = v.diagram;
+      if (parsed.verify !== false) {
+        const e = verifyDiagramEvidence(v.diagram, root);
+        toRender = e.diagram;
+        console.log(chalk.gray(`\n  evidence${e.revision ? ` at ${e.revision.slice(0, 12)}` : ''}: ${e.counts.verified} verified · ${e.counts.unverified} unverified · ${e.counts.unsourced} without sources`));
+        printDiagnostics(e.diagnostics);
+      }
+      const result = deliverDiagram(toRender, paths.html, { theme });
       if (!result.ok) {
         console.log(`\n${chalk.red('✗')} not delivered${result.previousKept ? ' — previous artifact kept' : ''}`);
         printDiagnostics(result.diagnostics);
@@ -176,8 +204,19 @@ export async function tryHandleDiagramCommand(ctx: CommandContext): Promise<bool
         console.log('');
         return true;
       }
-      writeDiagramSpec(root, slug, v.diagram);
+      writeDiagramSpec(root, slug, toRender);
       printReceipt(result.receipt!, root, paths.html);
+      return true;
+    }
+    case 'draft': {
+      const graph = readAtlasGraph(root);
+      if (!graph || !graph.layers.length) { console.log(chalk.yellow('\nNo enriched codebase map — run /atlas then /atlas enrich first.\n')); return true; }
+      const d = draftDiagramFromAtlas(graph, { ...(parsed.layers ? { layers: parsed.layers } : {}), ...(parsed.pathPrefix ? { pathPrefix: parsed.pathPrefix } : {}), ...(parsed.title ? { title: parsed.title } : {}) });
+      const slug = parsed.slug ?? slugifyDiagramTitle(d.diagram.meta.title);
+      const spec = writeDiagramSpec(root, slug, d.diagram);
+      console.log(`\n${chalk.green('✓')} drafted ${d.diagram.components.length} components, ${d.diagram.connections.length} connections → ${chalk.cyan(path.relative(root, spec))}`);
+      for (const n of d.notes) console.log(chalk.gray(`  · ${n}`));
+      console.log(chalk.gray(`  curate the JSON, then /diagram render ${path.relative(root, spec)} --slug ${slug}\n`));
       return true;
     }
     case 'show': {
@@ -210,8 +249,10 @@ ${chalk.bold('/diagram')} — typed, validated system maps with a receipt (${cha
 
   /diagram <kind> <what to map…>          agent authors + renders one (kinds: ${DIAGRAM_KINDS.join(', ')})
   /diagram validate <file.json>           check a document; prints path-prefixed diagnostics
-  /diagram render <file.json> [--slug s] [--theme auto|dark|light]
-                                          validate, render, run the nine checks, deliver HTML + receipt
+  /diagram draft [--layers a,b] [--prefix path] [--title t] [--slug s]
+                                          seed an architecture document from the codebase map (/atlas)
+  /diagram render <file.json> [--slug s] [--theme auto|dark|light] [--no-verify]
+                                          verify sources, render, run the nine checks, deliver HTML + receipt
   /diagram list                           stored diagrams
   /diagram show <slug>                    the receipt (checks, sha256, evidence)
   /diagram open <slug>                    open the delivered HTML in a browser

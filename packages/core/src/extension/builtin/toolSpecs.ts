@@ -546,8 +546,22 @@ export const BUILTIN_TOOL_SPECS = [
       properties: {
         document: { type: 'object', description: 'The diagram document (JSON object). Architecture: components[{id,label,type∈frontend|backend|database|cloud|security|messagebus|external,variant?,sources?}], boundaries?[{id,label,wraps[]}], connections[{id,label?,from,to,style?∈sync|async|data}], mainPath?[]. Workflow: lanes?, nodes[{id,label,lane?,shape?}], edges[], mainPath?. Sequence: participants[], messages[{id,label,from,to,kind?}], activations?. Dataflow: stages?, nodes[{id,label,stage?,type?}], flows[]. Lifecycle: states[{id,label,type?∈initial|active|waiting|terminal|failure}], transitions[]. Elements may carry sources[{path,lines?}] naming the repo files they reflect.' },
         quality: { type: 'string', enum: ['showcase', 'standard'], description: 'showcase (default): ≤12 primary elements and warnings fail; standard: dense maps allowed.' },
+        verify: { type: 'boolean', description: 'Also verify every element\'s `sources` against the repository at HEAD (or meta.repository.revision) and report verified / unverified counts with the failing paths.' },
       },
       required: ['document'],
+    },
+  },
+  {
+    name: 'diagram_draft',
+    description: 'Seed an ARCHITECTURE diagram document from the workspace codebase map (the Atlas graph built by /atlas): each enriched layer becomes a typed component with its facade files as `sources`, layer relationships become labelled connections (counted imports when no enrichment ran), capped at 12 by size with omissions named. Everything is authored, not verified — curate it (one main path, drop low-value connections, name relationships), then diagram_validate and diagram_render. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        layers: { type: 'array', items: { type: 'string' }, description: 'Restrict to these layer ids or names.' },
+        pathPrefix: { type: 'string', description: 'Restrict to layers owning files under this workspace-relative prefix (e.g. "packages/core/src/review").' },
+        title: { type: 'string', description: 'Diagram title. Default: "<project> — architecture".' },
+        maxComponents: { type: 'number', description: 'Primary-element cap. Default 12.' },
+      },
     },
   },
   {
@@ -559,6 +573,7 @@ export const BUILTIN_TOOL_SPECS = [
         document: { type: 'object', description: 'The diagram document (see diagram_validate for the shape). Validate first.' },
         slug: { type: 'string', description: 'File name under .brainrouter/diagrams/ — lowercase letters, digits, dashes (≤ 64). Default: derived from meta.title. Re-render with the same slug to replace.' },
         theme: { type: 'string', enum: ['auto', 'dark', 'light'], description: 'Initial theme of the artifact (the viewer can switch). Default: cli.diagram.theme.' },
+        verify: { type: 'boolean', description: 'Verify `sources` against the repository first and stamp the revision (default true). A failed source stays authored/unverified and never blocks delivery.' },
       },
       required: ['document'],
     },

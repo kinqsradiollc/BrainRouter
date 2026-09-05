@@ -5,7 +5,7 @@
 
 # BrainRouter tool catalog
 
-91 built-in agent tools, by access tier and action kind.
+92 built-in agent tools, by access tier and action kind.
 
 | Tool | Tier | Action kind | Parallel-safe | Description |
 |------|------|-------------|---------------|-------------|
@@ -19,6 +19,7 @@
 | `connector_list` | read | read_only | yes | List the connectors configured for this workspace (GitHub, filesystem, web, Slack, Jira, Confluence, Notion, Linear, GitLab, Google Drive, Gmail, MCP). |
 | `connector_run` | shell | network | no | Run one connector's ingest → memory checkpoint: fetch new documents from the source, persist them, and import them into memory so future recall can cite them. |
 | `delegate_agent` | read | child_write | yes | Start one background child agent and keep working in the parent turn. |
+| `diagram_draft` | read | read_only | yes | Seed an ARCHITECTURE diagram document from the workspace codebase map (the Atlas graph built by /atlas): each enriched layer becomes a typed component with its facade files as `sources`, layer relationships become labelled connections (counted imports when no enrichment ran), capped at 12 by size with omissions named. |
 | `diagram_render` | write | file_edit | no | Validate, deterministically render, and DELIVER a typed diagram document as one self-contained HTML (inline SVG, dark/light themes, pan/zoom/search/focus, no network) under `.brainrouter/diagrams/<slug>.html`, beside its specification (`<slug>.json`) and a receipt (`<slug>.html.receipt.json`: nine artifact checks, SHA-256 + bytes of spec and artifact, evidence summary). |
 | `diagram_validate` | read | read_only | yes | Validate a typed diagram document (ADR-056): kinds architecture \| workflow \| sequence \| dataflow \| lifecycle, each `{ schemaVersion: 1, kind, meta: { title, … }, …element arrays }` with unknown fields rejected at every level. |
 | `edit_file` | write | file_edit | no | Edit an existing file in the workspace by replacing a target substring with a replacement string. |

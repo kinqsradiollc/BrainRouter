@@ -69,6 +69,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // diagram_render writes under .brainrouter/diagrams/ (write tier, serialized so
   // two renders of one slug cannot interleave the atomic replace).
   { name: 'diagram_validate', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'diagram_draft', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'diagram_render', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },

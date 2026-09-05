@@ -11,6 +11,8 @@ export { diagramJsonSchema, diagramJsonSchemas, type DiagramJsonSchema } from '.
 export { renderDiagram, deliverDiagram, type RenderOptions, type RenderResult, type DeliverOptions, type DeliverResult } from './render/render.js';
 export { layoutDiagram, METRICS as DIAGRAM_METRICS, type Scene, type PlacedNode, type PlacedEdge } from './render/layout.js';
 export { sceneToSvg } from './render/svg.js';
+export { verifyDiagramEvidence, type EvidenceVerification, type EvidenceCounts } from './evidence.js';
+export { draftDiagramFromAtlas, inferComponentType, type DraftOptions, type DiagramDraft } from './draft.js';
 export {
   diagramsDir,
   diagramPaths,
