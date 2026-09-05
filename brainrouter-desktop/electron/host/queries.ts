@@ -95,6 +95,7 @@ import {
   type StudySourceKind,
 } from '@kinqs/brainrouter-core/study';
 import { atlasOrientation } from '@kinqs/brainrouter-core/atlas';
+import { listDiagrams, readDiagramSpec, readDiagramHtml, readDiagramReceipt, readDiagramSpecAtRevision, validateDiagram, compareDiagrams, renderDiagramDelta, isDiagramSlug } from '@kinqs/brainrouter-core/diagram';
 import {
   listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
   readStudyProgress, saveStudyProgress,
@@ -2427,6 +2428,36 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // REMOTE-BRAIN Phase 3d — with a remote brain configured (cli.brainUrl),
       // the brain is the source of truth: pull the stored graph (caching it
       // locally) and fall back to the local artifact when absent/unreachable.
+      // ADR-056 D-A5 — the workspace's diagrams: the list with receipt summaries,
+      // one artifact with its cited sources, and the delta against a committed spec.
+      'diagram-list': () => listDiagrams(workspaceRoot).map((e) => {
+        const r = readDiagramReceipt(workspaceRoot, e.slug);
+        return r ? { ...e, checksPassed: r.checks.filter((c) => c.ok).length, checksTotal: r.checks.length, evidence: r.evidence } : e;
+      }),
+      'diagram-read': (a) => {
+        const slug = typeof a.slug === 'string' ? a.slug : '';
+        if (!isDiagramSlug(slug)) return null;
+        const spec = readDiagramSpec(workspaceRoot, slug);
+        const doc = spec ? validateDiagram(spec, { quality: 'standard' }).diagram : undefined;
+        const elements = doc ? (Object.values(doc) as unknown[]).flatMap((val) => (Array.isArray(val) ? val : [])) as Array<{ id?: unknown; label?: unknown; sources?: unknown; evidence?: unknown }> : [];
+        const sources = elements
+          .filter((el) => el && typeof el === 'object' && Array.isArray(el.sources) && el.sources.length)
+          .map((el) => ({ id: String(el.id), label: String(el.label ?? el.id), sources: el.sources as Array<{ path: string; lines?: [number, number]; revision?: string }>, ...(typeof el.evidence === 'string' ? { evidence: el.evidence } : {}) }));
+        return { slug, html: readDiagramHtml(workspaceRoot, slug), receipt: readDiagramReceipt(workspaceRoot, slug), ...(doc ? { kind: doc.kind, title: doc.meta.title } : {}), sources };
+      },
+      'diagram-delta': (a) => {
+        const slug = typeof a.slug === 'string' ? a.slug : '';
+        const base = typeof a.base === 'string' && a.base.trim() ? a.base.trim() : 'HEAD';
+        const none = { added: 0, removed: 0, changed: 0, moved: 0, rerouted: 0 };
+        if (!isDiagramSlug(slug)) return { slug, base, identical: true, counts: none, facts: [], html: null, error: 'Invalid slug.' };
+        const headRaw = readDiagramSpec(workspaceRoot, slug);
+        const baseRaw = readDiagramSpecAtRevision(workspaceRoot, base, slug);
+        if (!headRaw || !baseRaw) return { slug, base, identical: true, counts: none, facts: [], html: null, error: !headRaw ? 'No pinned specification.' : `Not committed at ${base} — nothing to compare against.` };
+        const bv = validateDiagram(baseRaw, { quality: 'standard' }), hv = validateDiagram(headRaw, { quality: 'standard' });
+        if (!bv.diagram || !hv.diagram || bv.diagram.kind !== hv.diagram.kind) return { slug, base, identical: true, counts: none, facts: [], html: null, error: 'One side does not validate, or the kinds differ.' };
+        const receipt = compareDiagrams(bv.diagram, hv.diagram);
+        return { slug, base, identical: receipt.identical, counts: receipt.counts, facts: receipt.facts, html: receipt.identical ? null : renderDiagramDelta(bv.diagram, hv.diagram, receipt, { theme: getCliKnobs().diagram.theme }) };
+      },
       'atlas-graph': async () => {
         if (getCliKnobs().brainUrl) {
           const remote = await callBrainAtlas('atlas_get', { workspaceTag: atlasWorkspaceTag(workspaceRoot) });

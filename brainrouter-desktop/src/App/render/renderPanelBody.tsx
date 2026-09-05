@@ -23,6 +23,7 @@ import type { useEditor } from '../../lib/editor/useEditor.js';
 import type { useCi } from '../../lib/ci/useCi.js';
 import { type DashTab, type DashTask, type WorkspaceDash } from '../../lib/workspace/dashboard.js';
 import type { AtlasChangeAssessment } from '../../lib/atlas/atlasView.js';
+import type { DiagramListRow, DiagramReadResult, DiagramDeltaResult } from '../../lib/diagrams/types.js';
 import { buildTrackOps } from '../track/trackOps.js';
 // UI-TEST fusion — the Atlas Screens map + user-journey stories the Atlas panel
 // renders, and the Browser panel that replays them live.
@@ -39,6 +40,7 @@ const BrowserPanel = lazy(() => import('../../panels/BrowserPanel.js').then((m) 
 // Graph panels pull layout engines and the canvas runtime. Keep them outside the
 // chat shell and load each only when the user opens that view.
 const AtlasPanel = lazy(() => import('../../panels/atlas/AtlasPanel.js').then((m) => ({ default: m.AtlasPanel })));
+const DiagramsPanel = lazy(() => import('../../panels/diagrams/DiagramsPanel.js').then((m) => ({ default: m.DiagramsPanel })));
 const WorkflowsPanel = lazy(() => import('../../panels/planning/WorkflowsPanel.js').then((m) => ({ default: m.WorkflowsPanel })));
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
@@ -127,6 +129,11 @@ export interface RenderPanelBodyCtx {
   atlasEnriching: boolean;
   atlasAssessments: Record<string, AtlasChangeAssessment>;
   atlasAssessing: string | null;
+  diagrams: DiagramListRow[];
+  diagramView: DiagramReadResult | null;
+  diagramDelta: DiagramDeltaResult | null;
+  atlasFocusPath: string | null;
+  setAtlasFocusPath: (p: string | null) => void;
   setAtlasBuilding: (v: boolean) => void;
   setAtlasEnriching: (v: boolean) => void;
   setAtlasAssessing: (v: string | null) => void;
@@ -148,7 +155,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
-    reviewMyUnderstanding, review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
+    reviewMyUnderstanding, review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching, diagrams, diagramView, diagramDelta, atlasFocusPath, setAtlasFocusPath,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles,
   } = ctx;
@@ -288,6 +295,15 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
       case 'workflows': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading workflows…</div>}><WorkflowsPanel /></Suspense>;
       case 'memory': return <MemoryPanel />;
       case 'knowledge': return <KnowledgePanel workspaceKey={activeRoot} />;
+      // ADR-056 D-A5 — the workspace's diagrams: receipts, the sealed artifact,
+      // exports, the delta against HEAD, and cited sources (open file / focus in Atlas).
+      case 'diagrams':
+        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading diagrams…</div>}><DiagramsPanel diagrams={diagrams} view={diagramView} delta={diagramDelta}
+          onLoad={() => q('q-diagrams', 'diagram-list')}
+          onOpen={(slug) => q('q-diagram-read', 'diagram-read', { slug })}
+          onDelta={(slug) => q('q-diagram-delta', 'diagram-delta', { slug })}
+          onOpenFile={openFile}
+          onShowInAtlas={(p) => { setAtlasFocusPath(p); ensurePanel('atlas'); }} /></Suspense>;
       case 'prototype': return <PrototypePanel onSendToChat={(text) => { setDraft(text); setToast('Prototype prompt sent to the composer — press Enter to generate.'); }} />;
       case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
         onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
@@ -299,7 +315,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         onOpen={(path) => openWorktree(path)}
         onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
       case 'atlas':
-        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading Atlas…</div>}><AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
+        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading Atlas…</div>}><AtlasPanel graph={atlasGraph} focusFilePath={atlasFocusPath} building={atlasBuilding} enriching={atlasEnriching}
           onLoad={() => q('q-atlas', 'atlas-graph')}
           onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }}
           onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }}
