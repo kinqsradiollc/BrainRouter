@@ -23,6 +23,7 @@ import { scheduleLearningCheckpoint } from './learningPhase.js';
 import { getCliKnobs } from '../../config/config.js';
 import { readAtlasGraphCached } from '../../atlas/store/atlasStore.js';
 import { buildAtlasChangeContext } from '../../atlas/changeContext.js';
+import { designHookAtTurnEnd } from '../../design/hook.js';
 import path from 'node:path';
 
 interface TurnSpan {
@@ -259,6 +260,10 @@ export async function finalizeTurnPhase(
           }
         }
       } catch { /* the map enriches a turn; it must never break one */ }
+      // ADR-056 D-B2 — the design hook's full tier: every UI file this turn wrote,
+      // checked once, findings into the next turn via the same channel. Knobbed
+      // off by default; never throws; never denies.
+      designHookAtTurnEnd(agent, written);
     }
   }
 

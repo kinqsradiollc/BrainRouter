@@ -19,11 +19,13 @@ import {
   DESIGN_RULES,
   type DesignFinding,
 } from '@kinqs/brainrouter-core/design';
+import { loadConfig, saveConfig, resolveCliKnobs, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
 
 export type DesignCommandAction =
   | { action: 'help' }
   | { action: 'rules' }
+  | { action: 'hooks'; tier?: 'off' | 'immediate' | 'full' }
   | { action: 'detect'; paths: string[]; rules?: string[]; json?: boolean }
   | { action: 'error'; message: string };
 
@@ -32,6 +34,13 @@ export function parseDesignArgs(args: string[]): DesignCommandAction {
   const sub = (args[0] ?? '').toLowerCase();
   if (!sub || sub === 'help') return { action: 'help' };
   if (sub === 'rules') return { action: 'rules' };
+  if (sub === 'hooks' || sub === 'hook') {
+    const t = (args[1] ?? 'status').toLowerCase();
+    if (t === 'status') return { action: 'hooks' };
+    if (t === 'on') return { action: 'hooks', tier: 'full' };
+    if (t === 'off' || t === 'immediate' || t === 'full') return { action: 'hooks', tier: t };
+    return { action: 'error', message: 'Usage: /design hooks status | on | off | immediate | full' };
+  }
   if (sub === 'detect' || sub === 'audit' || sub === 'check') {
     const out: Extract<DesignCommandAction, { action: 'detect' }> = { action: 'detect', paths: [] };
     const rest = args.slice(1);
@@ -64,6 +73,16 @@ export async function tryHandleDesignCommand(ctx: CommandContext): Promise<boole
   switch (parsed.action) {
     case 'help': printUsage(); return true;
     case 'error': console.log(chalk.red(`\n${parsed.message}\n`)); return true;
+    case 'hooks': {
+      if (parsed.tier) {
+        const fresh = loadConfig() as { cli?: { design?: { hook?: string } } };
+        fresh.cli = fresh.cli ?? {}; fresh.cli.design = { ...(fresh.cli.design ?? {}), hook: parsed.tier };
+        saveConfig(fresh as never); _resetCliKnobsCache();
+      }
+      const tier = resolveCliKnobs(loadConfig()).design.hook;
+      console.log(`\n${chalk.bold('Design hook')}: ${tier === 'off' ? chalk.gray('off') : chalk.green(tier)} ${chalk.gray(tier === 'off' ? '— nothing runs after edits' : tier === 'immediate' ? '— each UI file a write tool touches is checked (≤ 5 findings into the next turn)' : '— immediate checks plus a turn-end pass over every UI file the turn wrote')}\n  ${chalk.gray('cli.design.hook in config.json · /design hooks on|off|immediate|full')}\n`);
+      return true;
+    }
     case 'rules': {
       console.log('');
       for (const r of DESIGN_RULES) console.log(`  ${chalk.cyan(r.id.padEnd(26))} ${chalk.gray(r.category.padEnd(14))} ${r.severity.padEnd(8)}${r.advisory ? chalk.gray('advisory ') : '         '} ${r.name}`);
@@ -102,5 +121,6 @@ ${chalk.bold('/design')} — deterministic design checks (${chalk.gray('no model
 
   /design detect [paths…] [--rules a,b] [--json]   run the rule catalogue over UI files (default: the workspace)
   /design rules                                    list every rule with category and severity
+  /design hooks [status|on|off|immediate|full]     the design hook: findings for files you write reach the next turn (cli.design.hook)
 `);
 }

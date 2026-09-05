@@ -7,3 +7,4 @@
  * `@kinqs/brainrouter-core/design`; the file layout stays internal.
  */
 export * from './detect/index.js';
+export { designHookBlock, designHookAfterWrite, designHookAtTurnEnd, isDesignHookTarget, DESIGN_HOOK_LIMITS, type DesignHookTier, type DesignHookAgent } from './hook.js';
