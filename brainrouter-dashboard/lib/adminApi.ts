@@ -290,6 +290,8 @@ export interface ReviewJob {
   findingsDetail?: {
     file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
     codeExcerpt?: string; replacement?: string; diffHunk?: string;
+    /** ADR-056 D-B8 — absent = the model lens; "design-static" = the deterministic design detector (advisory). */
+    producer?: string; advisory?: boolean; rule?: string;
     preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
     firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
   }[];

@@ -19,6 +19,8 @@ import {
 } from "../reviewPresentation";
 import { ReviewRunCard } from "./ReviewRunCard";
 import { ReviewCodeFrame } from "../../../components/ReviewCodeFrame";
+import { FilterSelect } from "../../../components/FilterSelect";
+import { FINDING_PRODUCER_OPTIONS, countFindingsByProducer, filterFindingsByProducer, findingProducer, type FindingProducerFilter } from "../../../lib/review/reviewFindings";
 
 function lensName(lens: ReviewJob["lens"]): string {
   if (lens === "security") return "Security review";
@@ -42,6 +44,12 @@ function formatTimestamp(value: string): string {
 
 function ReviewFindingsCard({ review }: { review: ReviewJob }) {
   const running = review.status === "pending" || review.status === "queued" || review.status === "running";
+  // ADR-056 D-B8 — advisory static-design cards sit beside the model's; the
+  // control only appears when both kinds exist, so a plain review stays plain.
+  const [producerFilter, setProducerFilter] = useState<FindingProducerFilter>("all");
+  const all = review.findingsDetail ?? [];
+  const counts = countFindingsByProducer(all);
+  const shown = filterFindingsByProducer(all, producerFilter);
   return (
     <PremiumCard level={2} className="review-detail__findings-card">
       <div className="settings-cardhead">
@@ -51,14 +59,25 @@ function ReviewFindingsCard({ review }: { review: ReviewJob }) {
       <div className="review-detail__finding-summary">
         <span><strong>{review.findings ?? 0}</strong> findings</span>
         <span><strong>{review.blocking ?? 0}</strong> blocking</span>
+        {counts.design > 0 && <span><strong>{counts.design}</strong> design (advisory)</span>}
+        {counts.design > 0 && counts.model > 0 && (
+          <FilterSelect
+            value={producerFilter}
+            onChange={(value) => setProducerFilter(value === "model" || value === "design" ? value : "all")}
+            options={FINDING_PRODUCER_OPTIONS}
+            allLabel="All producers"
+            ariaLabel="Filter findings by producer"
+          />
+        )}
       </div>
-      {review.findingsDetail?.length ? (
+      {shown.length ? (
         <div className="review-detail__findings">
-          {review.findingsDetail.map((finding, index) => (
+          {shown.map((finding, index) => (
             <article key={`${finding.file}:${finding.line ?? 0}:${index}`}>
               <div className="review-detail__finding-head">
                 <StatusBadge tone={finding.severity === "critical" || finding.severity === "high" ? "danger" : finding.severity === "medium" ? "warn" : "neutral"}>{finding.severity}</StatusBadge>
                 <strong>{finding.title ?? finding.summary ?? "Finding"}</strong>
+                {findingProducer(finding) === "design" && <StatusBadge tone="neutral">design · advisory</StatusBadge>}
               </div>
               <div className="settings-row__sub">{finding.file}{finding.line ? `:${finding.line}` : ""}{finding.cwe ? ` · ${finding.cwe}` : ""}{finding.preExisting ? " · Pre-existing" : ""}</div>
               {finding.summary && finding.summary !== finding.title && <p>{finding.summary}</p>}
@@ -67,7 +86,7 @@ function ReviewFindingsCard({ review }: { review: ReviewJob }) {
           ))}
         </div>
       ) : (
-        <div className="settings-empty-inline">{running ? "Findings will appear as the review progresses." : "No stored finding details."}</div>
+        <div className="settings-empty-inline">{running ? "Findings will appear as the review progresses." : all.length ? "No findings from this producer." : "No stored finding details."}</div>
       )}
     </PremiumCard>
   );

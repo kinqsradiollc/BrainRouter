@@ -50,6 +50,8 @@ const REVIEW_INLINE =
 
 interface Routes {
   calls: string[];
+  /** ADR-056 D-B8 — file bodies at the head sha, by repository path (contents API). */
+  contents?: Record<string, string>;
   comments?: unknown[];
   inlineComments?: unknown[];
   diff?: string;
@@ -83,6 +85,11 @@ function mockFetch(routes: Routes) {
         status: 200,
         json: async () => routes.filePages?.[page - 1] ?? (page === 1 ? (routes.files ?? []) : []),
       };
+    }
+    if (/\/contents\//.test(url) && method === "GET") {
+      const rel = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] ?? "");
+      const text = routes.contents?.[rel];
+      return text === undefined ? { ok: false, status: 404, text: async () => "", json: async () => ({}) } : { ok: true, status: 200, text: async () => text, json: async () => ({}) };
     }
     if (/\/pulls\/\d+\/commits/.test(url) && method === "GET") {
       return { ok: true, status: 200, json: async () => routes.commits ?? [] };
@@ -1581,5 +1588,49 @@ describe("ADR-033 review orchestration", () => {
     expect(check.conclusion).toBe("neutral");
     expect(check.output?.title).toBe("Review unavailable");
     expect(check.output?.summary).toContain("review job store unavailable");
+  });
+});
+
+describe("ADR-056 D-B8 — static design evidence on changed UI files", () => {
+  const PAGE_DIFF = [
+    "diff --git a/src/page.html b/src/page.html", "new file mode 100644", "--- /dev/null", "+++ b/src/page.html",
+    "@@ -0,0 +1,3 @@", "+<!doctype html>", "+<html><head><style>.card{border-left:4px solid #e11d48}</style></head>", "+<body><div class=\"card\">x</div><marquee>hi</marquee></body></html>", "",
+  ].join("\n");
+  const PAGE = '<!doctype html><html><head><style>.card{border-left:4px solid #e11d48}</style></head><body><div class="card">x</div><marquee>hi</marquee></body></html>';
+
+  it("two anti-patterns at head become two advisory cards, the summary names them, and the check-run stays green", async () => {
+    const routes: Routes = { calls: [], diff: PAGE_DIFF, contents: { "src/page.html": PAGE } };
+    const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" }, makeDeps(routes, { llmRunner: llm("```json\n[]\n```") }));
+    expect(r.ok).toBe(true);
+    expect(r.findings).toBe(0);
+    const design = (r.findingsDetail ?? []).filter((f) => f.producer === "design-static");
+    expect(design.map((f) => f.rule).sort()).toEqual(["marquee", "side-stripe-border"]);
+    expect(design.every((f) => f.advisory === true && (f.severity === "low" || f.severity === "info"))).toBe(true);
+    expect(r.designEvidence).toMatchObject({ files: 1, findings: 2, suppressed: 0 });
+    expect(routes.calls.some((c) => c.startsWith("GET /repos/o/r/contents/src/page.html"))).toBe(true);
+    const check = JSON.parse(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "{}") as { conclusion?: string; output?: { summary?: string } };
+    expect(check.conclusion).toBe("success");
+    expect(check.output?.summary).toContain("Design (static, advisory): 2 finding(s)");
+    expect(routes.bodies?.["POST /repos/o/r/issues/7/comments"] ?? "").toContain("Static design evidence");
+  });
+
+  it("a suppression at head yields no card and the summary names the suppression", async () => {
+    // Both suppression shapes the file supports: a bare rule id, and a value entry that carries its reason.
+    const suppressions = JSON.stringify({ ignoreRules: ["marquee"], ignoreValues: [{ rule: "side-stripe-border", value: "*", reason: "brand stripe" }] });
+    const routes: Routes = { calls: [], diff: PAGE_DIFF, contents: { "src/page.html": PAGE, ".brainrouter/design-detector.json": suppressions } };
+    const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" }, makeDeps(routes, { llmRunner: llm("```json\n[]\n```") }));
+    expect((r.findingsDetail ?? []).filter((f) => f.producer === "design-static")).toHaveLength(0);
+    expect(r.designEvidence).toMatchObject({ findings: 0, suppressed: 2 });
+    const check = JSON.parse(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "{}") as { conclusion?: string; output?: { summary?: string } };
+    expect(check.conclusion).toBe("success");
+    expect(check.output?.summary).toContain("2 suppressed");
+    expect(check.output?.summary).toContain("brand stripe");
+  });
+
+  it("a diff without UI files adds nothing", async () => {
+    const routes: Routes = { calls: [] };
+    const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" }, makeDeps(routes));
+    expect(r.designEvidence).toBeUndefined();
+    expect(routes.calls.some((c) => c.includes("/contents/"))).toBe(false);
   });
 });
