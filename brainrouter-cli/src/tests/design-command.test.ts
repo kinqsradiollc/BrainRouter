@@ -32,6 +32,12 @@ test('B1 parseDesignArgs routes subcommands and validates rule ids', () => {
   assert.equal(parseDesignArgs(['polish', '--world', 'brutalist-skill']).action, 'verb');
   assert.equal(parseDesignArgs(['sparkle']).action, 'error');
   assert.deepEqual(parseDesignArgs(['verbs']), { action: 'verbs' });
+  assert.deepEqual(parseDesignArgs(['bolder', 'src/hero.tsx', '--variants', '3']), { action: 'verb', verb: 'bolder', targets: ['src/hero.tsx'], variants: 3 });
+  assert.equal(parseDesignArgs(['bolder', '--variants', '9']).action, 'error');
+  assert.deepEqual(parseDesignArgs(['accept', 'hero-1', '2']), { action: 'accept', id: 'hero-1', index: 2 });
+  assert.equal(parseDesignArgs(['accept', 'hero-1']).action, 'error');
+  assert.deepEqual(parseDesignArgs(['discard', 'hero-1']), { action: 'discard', id: 'hero-1' });
+  assert.deepEqual(parseDesignArgs(['variants']), { action: 'variants' });
   assert.equal(parseDesignArgs(['audit']).action, 'verb', 'audit is the skill verb, not a detector alias');
   assert.deepEqual(parseDesignArgs(['detect', '--browser']), { action: 'detect', paths: [], browser: true });
   assert.deepEqual(parseDesignArgs(['hooks']), { action: 'hooks' });
@@ -100,6 +106,31 @@ test('B5 /design critique runs the review in an isolated side agent, then the de
     assert.equal(turns[0].startsWith('Degraded'), false);
     assert.equal(agent.activeSkill, 'hallmark');
     assert.ok(fs.existsSync(path.join(ws, '.brainrouter', 'design', 'critiques', 'src-page-html')), 'no snapshot dir');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('B7 /design variants | accept | discard drive the deterministic variants layer without a model', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-cli-design-variants-'));
+  try {
+    fs.mkdirSync(path.join(ws, 'src'));
+    const page = '<html><body><h1 class="hero">Ship faster</h1></body></html>';
+    fs.writeFileSync(path.join(ws, 'src', 'page.html'), page);
+    const { wrapVariants } = await import('@kinqs/brainrouter-core/design');
+    const { session } = wrapVariants(ws, { file: 'src/page.html', start: page.indexOf('<h1'), end: page.indexOf('</h1>') + 5, variants: ['<h1 class="hero hero--bold">SHIP FASTER</h1>'], action: 'bolder' });
+    const agent = makeAgent(ws);
+    const ctx = (args: string[]) => ({ command: '/design', args, agent, mcpClient: {}, config: {}, rl: {}, repl: {} }) as any;
+    const list = await captureLogs(async () => { await tryHandleDesignCommand(ctx(['variants'])); });
+    assert.match(list, new RegExp(session.id)); assert.match(list, /bolder/);
+    const accepted = await captureLogs(async () => { await tryHandleDesignCommand(ctx(['accept', session.id, '1'])); });
+    assert.match(accepted, /Accepted variant 1/);
+    assert.equal(fs.readFileSync(path.join(ws, 'src', 'page.html'), 'utf8'), page.replace('<h1 class="hero">Ship faster</h1>', '<h1 class="hero hero--bold">SHIP FASTER</h1>'));
+    const gone = await captureLogs(async () => { await tryHandleDesignCommand(ctx(['discard', session.id])); });
+    assert.match(gone, /no variant session/);
+    const turns: string[] = [];
+    const hint = await captureLogs(async () => { await tryHandleDesignCommand({ ...ctx(['bolder', 'src/page.html', '--variants', '2']), mcpClient: { callTool: async () => { throw new Error('no mcp'); } }, repl: { runAgentTurn: (p: string) => { turns.push(p); } } }); });
+    assert.equal(turns.length, 1, hint); assert.match(turns[0], /write 2 complete alternative\(s\) of it through the design_variants tool/);
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }

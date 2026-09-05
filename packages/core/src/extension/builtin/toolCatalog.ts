@@ -75,6 +75,8 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'design_detect', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   // ADR-056 D-B7 — design_fidelity reads two PNGs and writes artifacts under .brainrouter/design/fidelity/ (write tier, serialized).
   { name: 'design_fidelity', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
+  // ADR-056 D-B5 — design_variants edits ONE source file (wrap/accept/discard) and a session record; write tier, serialized.
+  { name: 'design_variants', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'session_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_read', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'session_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
