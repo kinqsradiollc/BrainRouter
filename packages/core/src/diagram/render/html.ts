@@ -20,7 +20,8 @@ export interface HtmlOptions {
   rendererVersion: string;
 }
 
-const CSS = `
+/** The token + base-style block shared by every diagram page (the delta page reuses it). */
+export const DIAGRAM_TOKEN_CSS = `
 :root{--dg-bg:#0b1020;--dg-panel:#111a2e;--dg-ink:#eef2ff;--dg-muted:#94a3b8;--dg-dim:#475569;--dg-border:#243049;--dg-mask:#0b1020;
 --dg-frontend:#22d3ee;--dg-backend:#34d399;--dg-database:#a78bfa;--dg-cloud:#fbbf24;--dg-security:#fb7185;--dg-messagebus:#fb923c;--dg-external:#94a3b8;
 --dg-step:#7dd3fc;--dg-state:#7dd3fc;--dg-initial:#34d399;--dg-terminal:#a78bfa;--dg-failure:#fb7185;--dg-waiting:#fbbf24;
@@ -130,7 +131,7 @@ export function wrapHtml(doc: Diagram, scene: Scene, svg: string, opts: HtmlOpti
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
 <title>${escapeXml(doc.meta.title)}</title>
-<style>${CSS}</style>
+<style>${DIAGRAM_TOKEN_CSS}</style>
 </head>
 <body>
 <div class="dg-app">

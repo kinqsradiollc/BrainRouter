@@ -14,6 +14,18 @@ export { sceneToSvg } from './render/svg.js';
 export { verifyDiagramEvidence, type EvidenceVerification, type EvidenceCounts } from './evidence.js';
 export { draftDiagramFromAtlas, inferComponentType, type DraftOptions, type DiagramDraft } from './draft.js';
 export {
+  compareDiagrams,
+  diagramDeltaMarkdown,
+  renderDiagramDelta,
+  readDiagramSpecAtRevision,
+  diagramReviewDeltas,
+  buildDiagramDeltaContext,
+  type DeltaFact,
+  type DeltaFactKind,
+  type DiagramDeltaReceipt,
+  type DiagramReviewDelta,
+} from './delta.js';
+export {
   diagramsDir,
   diagramPaths,
   isDiagramSlug,
