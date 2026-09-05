@@ -14,7 +14,7 @@ const MINI_HTML = (title: string, theme: 'dark' | 'light'): string => `<!doctype
 [data-theme="light"]{--dg-bg:#f8fafc;--dg-panel:#ffffff;--dg-ink:#0f172a;--dg-muted:#475569;--dg-edge:#64748b}
 html,body{margin:0;background:var(--dg-bg);color:var(--dg-ink);font:13px system-ui,sans-serif}.dg-shape{fill:var(--dg-panel);stroke:var(--dg-edge);stroke-width:1.5}.dg-label{fill:var(--dg-ink);font-weight:600}.dg-path{fill:none;stroke:var(--dg-edge);stroke-width:1.5}
 .dg-type-frontend .dg-shape{stroke:var(--dg-frontend)}.dg-type-backend .dg-shape{stroke:var(--dg-backend)}.dg-type-database .dg-shape{stroke:var(--dg-database)}</style></head>
-<body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" width="720" height="200" class="dg-svg" role="img" aria-label="diagram">
+<body style="display:grid;place-items:center;min-height:100vh"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" style="width:min(100%,720px);height:auto" class="dg-svg" role="img" aria-label="diagram">
 <g data-id="c1" data-from="web" data-to="api" class="dg-edge"><path d="M188 100 L292 100" class="dg-path"/></g>
 <g data-id="c3" data-from="api" data-to="orders-db" class="dg-edge"><path d="M452 100 L556 100" class="dg-path"/></g>
 <g data-id="web" data-type="frontend" class="dg-node dg-type-frontend"><rect x="48" y="72" width="140" height="56" rx="8" class="dg-shape"/><text x="118" y="100" class="dg-label" text-anchor="middle" dominant-baseline="middle">Web app</text></g>
