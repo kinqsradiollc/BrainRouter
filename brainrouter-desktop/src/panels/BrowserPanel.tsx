@@ -28,8 +28,7 @@ import {
   browserZoomLabel,
   BROWSER_BLANK_URL,
   nextBrowserOpenGeneration,
-  normalizeBrowserInput,
-} from '../lib/browser/browserPanelModel.js';
+  normalizeBrowserInput, cycledTabIndex, shortcutTargetIsEditable } from '../lib/browser/browserPanelModel.js';
 import { rowSource, symbolKindIcon } from '../lib/browser/rowSource.js';
 
 type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'downloads' | 'flows' | 'bookmarks' | 'history' | null;
@@ -448,7 +447,16 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
       if (event.key === 'Escape' && findOpen) { event.preventDefault(); closeFind(); return; }
       const shortcut = browserShortcut(event);
       if (!shortcut) return;
+      // ADR-055 P10b — Esc belongs to an editable target (the omnibox, a form field) before it means "stop the page".
+      if (shortcut.command === 'stop' && shortcutTargetIsEditable(event.target)) return;
       event.preventDefault();
+      if (shortcut.command === 'cycle-tab') {
+        const list = browserState?.tabs ?? [];
+        const next = cycledTabIndex(list.findIndex((tab) => tab.id === browserState?.activeTabId), list.length, shortcut.delta);
+        if (next >= 0) selectTabAt(next, false);
+        return;
+      }
+      if (shortcut.command === 'downloads') { setDrawer((current) => (current === 'downloads' ? null : 'downloads')); return; }
       if (shortcut.command === 'focus-omnibox') { omniboxRef.current?.focus(); omniboxRef.current?.select(); }
       else if (shortcut.command === 'find') { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()); }
       else if (shortcut.command === 'new-tab') void mutateBrowser({ op: 'create-tab', active: true }).then(() => requestAnimationFrame(() => omniboxRef.current?.focus())).catch((error) => setStatus(String(error)));
@@ -463,7 +471,7 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [changeZoom, closeFind, findOpen, mutateBrowser, selectShortcutTab]);
+  }, [browserState?.tabs, browserState?.activeTabId, changeZoom, closeFind, findOpen, mutateBrowser, selectShortcutTab, selectTabAt]);
 
   useEffect(() => {
     if (!findOpen || !findText) return;

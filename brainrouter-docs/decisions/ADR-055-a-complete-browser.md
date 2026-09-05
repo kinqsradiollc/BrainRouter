@@ -56,7 +56,8 @@ the policy modules.
 | Browsing history (⌘Y, "recently closed" beyond a count) | ❌ | only `closedTabCount` + reopen stack |
 | New-tab page | ⚪ blank `data:` page | `BROWSER_BLANK_URL` |
 | Back/forward/reload/stop; ⌘T/W/⇧T/L/F/R/1-9/±/0; Alt←→ | ✅ | `:1468-1490` |
-| ⌘⇧[ ] tab cycling, Esc = stop, ⌘⇧J downloads, ⌘⇧A tab search, pinned tabs | ❌ | not handled |
+| ⌘⇧[ ] tab cycling, Esc = stop, ⌘⇧J downloads | ✅ | `browserPanelModel.ts` shortcuts + `BrowserPanel` dispatch; Esc yields to an editable target |
+| ⌘⇧A tab search, pinned tabs, new-tab page, pop-out (P13) | ❌ | UI the owner watches first; not handled yet |
 | Find in page (prev/next/close) | ✅ | `find`/`stop-find` ops |
 | Zoom (per tab, ±/0) | ✅ | `set-zoom`; native-view bounds fixed in #894 |
 | Downloads: drawer, pause/resume/cancel/open/reveal; save to the OS Downloads folder | ✅ | `browserDownloadManager.ts`; `prepareSavePath` → `app.getPath('downloads')` (`:299-300`) |
