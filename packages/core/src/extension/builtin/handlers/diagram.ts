@@ -20,6 +20,7 @@ import { deliverDiagram } from '../../../diagram/render/render.js';
 import { diagramPaths, isDiagramSlug, slugifyDiagramTitle, writeDiagramSpec } from '../../../diagram/store.js';
 import { getCliKnobs } from '../../../config/config.js';
 import type { BuiltinToolHandler } from './registry.js';
+import { importMermaidDiagram } from '../../../diagram/mermaid.js';
 
 const MAX_DIAGNOSTICS = 20;
 
@@ -58,6 +59,20 @@ export const diagramHandlers: Record<string, BuiltinToolHandler> = {
   },
 
   diagram_draft: async ({ args, host }) => {
+    // ADR-056 D-A6 — Mermaid is an input: a flowchart/graph seeds a fresh
+    // workflow or architecture document instead of the codebase map.
+    if (typeof args.mermaid === 'string' && args.mermaid.trim()) {
+      const kind = args.kind === 'workflow' || args.kind === 'architecture' ? args.kind : undefined;
+      const imported = importMermaidDiagram(args.mermaid, { ...(kind ? { kind } : {}), ...(typeof args.title === 'string' && args.title.trim() ? { title: args.title.trim() } : {}) });
+      const count = imported.diagram.kind === 'workflow' ? `${imported.diagram.nodes.length} nodes, ${imported.diagram.edges.length} edges` : `${imported.diagram.components.length} components, ${imported.diagram.connections.length} connections`;
+      return [
+        `Draft ${imported.diagram.kind} diagram from Mermaid (${count}; validation ${imported.validation.ok ? 'ok' : `${imported.validation.diagnostics?.length ?? 0} issue(s)`}). Styling was not transcribed.`,
+        ...imported.notes.map((n) => `- ${n}`),
+        ...(imported.dropped.length ? [`Not transcribed: ${imported.dropped.slice(0, 8).join(' · ')}${imported.dropped.length > 8 ? ' · …' : ''}`] : []),
+        'Document (curate it, then diagram_validate / diagram_render):',
+        JSON.stringify(imported.diagram, null, 2),
+      ].join('\n');
+    }
     const graph = readAtlasGraph(host.workspaceRoot);
     if (!graph) return 'No codebase map for this workspace — build one with /atlas (and /atlas enrich for named layer relationships), then draft again.';
     if (!graph.layers.length) return 'The codebase map has no layers yet — run /atlas enrich so the draft has components to work from.';

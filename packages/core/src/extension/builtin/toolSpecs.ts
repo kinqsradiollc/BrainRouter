@@ -561,6 +561,8 @@ export const BUILTIN_TOOL_SPECS = [
         pathPrefix: { type: 'string', description: 'Restrict to layers owning files under this workspace-relative prefix (e.g. "packages/core/src/review").' },
         title: { type: 'string', description: 'Diagram title. Default: "<project> — architecture".' },
         maxComponents: { type: 'number', description: 'Primary-element cap. Default 12.' },
+        mermaid: { type: 'string', description: 'ADR-056: Mermaid flowchart/graph source to import INSTEAD of the codebase map — nodes, shapes, links, link text and subgraphs become a fresh workflow or architecture document; styling, classes and clicks are never transcribed.' },
+        kind: { type: 'string', enum: ['workflow', 'architecture'], description: 'With mermaid: which document to author (default: inferred from the shapes).' },
       },
     },
   },
