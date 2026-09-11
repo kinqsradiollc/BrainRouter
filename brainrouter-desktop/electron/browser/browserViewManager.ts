@@ -168,6 +168,84 @@ function targetScript(tabId: string, revision: number, ref?: string, target?: st
   })()`;
 }
 
+// ADR-056 D-B5 — live variants, the in-page half. Three read-lean scripts.
+
+/** List the `design_variants` wrappers currently on the page. */
+function variantsScanScript(): string {
+  return `(() => {
+    const out = [];
+    for (const w of document.querySelectorAll('[data-brainrouter-variants]')) {
+      const id = w.getAttribute('data-brainrouter-variants') || '';
+      const action = w.getAttribute('data-brainrouter-action') || 'variant';
+      const kids = Array.from(w.children).filter((c) => c.hasAttribute && c.hasAttribute('data-brainrouter-variant'));
+      if (!id || !kids.length) continue;
+      let active = kids.findIndex((c) => !c.hasAttribute('hidden'));
+      if (active < 0) active = 0;
+      out.push({ id: id, action: action, count: kids.length, active: active });
+    }
+    return { wrappers: out };
+  })()`;
+}
+
+/** Show child \`index\` of wrapper \`id\`, hide the rest; record it on the wrapper. */
+function variantsShowScript(id: string, index: number): string {
+  return `(() => {
+    const w = document.querySelector('[data-brainrouter-variants="' + ${JSON.stringify(id)} + '"]');
+    if (!w) return { ok: false, error: 'That variants wrapper is no longer on the page — rescan.' };
+    const kids = Array.from(w.children).filter((c) => c.hasAttribute && c.hasAttribute('data-brainrouter-variant'));
+    if (!kids.length) return { ok: false, error: 'The wrapper has no variants.' };
+    const target = Math.max(0, Math.min(kids.length - 1, ${JSON.stringify(index)}));
+    kids.forEach((c, i) => { if (i === target) c.removeAttribute('hidden'); else c.setAttribute('hidden', ''); });
+    w.setAttribute('data-brainrouter-active', String(target));
+    return { ok: true, id: ${JSON.stringify(id)}, count: kids.length, active: target };
+  })()`;
+}
+
+/** Resolve a picked element (by snapshot ref) to a bounded descriptor + a source hint where the framework provides one. */
+function variantsDescribeScript(ref: string): string {
+  return `(() => {
+    const store = window.__brainrouterAgentRefs;
+    const el = store && store.nodes && store.nodes.get(${JSON.stringify(ref)});
+    if (!el || !el.isConnected) return { ok: false, error: 'That element is no longer on the page — reopen the element list and pick again.' };
+    const cssPath = (node) => {
+      const parts = []; let n = node; let depth = 0;
+      while (n && n.nodeType === 1 && depth < 5) {
+        let seg = n.tagName.toLowerCase();
+        if (n.id) { parts.unshift(seg + '#' + n.id); break; }
+        const cls = (typeof n.className === 'string' ? n.className.trim().split(/\\s+/) : []).filter(Boolean).slice(0, 2);
+        if (cls.length) seg += '.' + cls.join('.');
+        const parent = n.parentElement;
+        if (parent) { const sibs = Array.from(parent.children).filter((c) => c.tagName === n.tagName); if (sibs.length > 1) seg += ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')'; }
+        parts.unshift(seg); n = parent; depth++;
+      }
+      return parts.join(' > ');
+    };
+    const relPath = (p) => { const m = /(?:^|\\/)((?:src|app|pages|components|lib|routes|ui)\\/.*)$/.exec(String(p)); return m ? m[1] : String(p); };
+    const hintOf = (node) => {
+      const va = node.getAttribute && node.getAttribute('data-v-inspector');
+      if (va) { const m = /(.+):(\\d+):(\\d+)$/.exec(va) || /(.+):(\\d+)$/.exec(va); return m ? { file: relPath(m[1]), line: Number(m[2]), framework: 'vue' } : { file: relPath(va), framework: 'vue' }; }
+      if (node.getAttribute && node.getAttribute('data-inspector-relative-path')) {
+        const line = Number(node.getAttribute('data-inspector-line')); return { file: relPath(node.getAttribute('data-inspector-relative-path')), framework: 'react', ...(line ? { line: line } : {}) };
+      }
+      for (const k in node) {
+        if (k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0) {
+          try { let f = node[k]; let hops = 0; while (f && hops < 30) { const src = f._debugSource; if (src && src.fileName) return { file: relPath(src.fileName), line: src.lineNumber, framework: 'react' }; f = f._debugOwner; hops++; } } catch (e) { /* fiber shape varies */ }
+          break;
+        }
+      }
+      return null;
+    };
+    const classes = typeof el.className === 'string' ? el.className.trim().split(/\\s+/).filter(Boolean) : (el.classList ? Array.from(el.classList) : []);
+    const hint = hintOf(el);
+    return { ok: true, target: {
+      selector: cssPath(el), tag: el.tagName.toLowerCase(),
+      text: String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 200),
+      classes: classes, elementId: el.id || undefined, outerHtml: String(el.outerHTML || '').slice(0, 1400),
+      hint: hint || undefined,
+    } };
+  })()`;
+}
+
 function designAuditScript(rules: string[], max: number): string {
   return `(() => {
     const RULES = new Set(${JSON.stringify(rules)}); const MAX = ${max};
@@ -1165,6 +1243,7 @@ export class BrowserViewManager {
       case 'snapshot': return this.snapshot(this.requireTab(tab), command.mode, command.scope);
       case 'find-nodes': return this.findNodes(this.requireTab(tab), command.query, command.by, command.limit, command.scope);
       case 'design-audit': return this.designAudit(this.requireTab(tab), command.rules, command.maxFindings);
+      case 'variants': return this.variantsOp(this.requireTab(tab), command);
       case 'text': return this.pageText(this.requireTab(tab), command.maxChars);
       case 'html': return this.pageHtml(this.requireTab(tab), command.maxChars);
       case 'screenshot': return this.screenshot(this.requireTab(tab), command.maxDimension, command.fullPage);
@@ -1817,6 +1896,27 @@ export class BrowserViewManager {
    */
   private async designAudit(tab: BrowserTab, rules?: string[], maxFindings = 80): Promise<unknown> {
     return this.isolated(tab.id, designAuditScript(rules ?? [], Math.max(1, Math.min(200, maxFindings))));
+  }
+
+  /**
+   * ADR-056 D-B5 — the live-variants op the panel drives. `scan` lists the
+   * display:contents wrappers `design_variants wrap` wrote; `show` toggles which
+   * child of one is visible (keyed off the stable data attribute, so page
+   * revisions do not matter); `describe` resolves a picked element to a bounded
+   * descriptor the agent uses to find the source. All read-only to the DOM's
+   * structure (show only flips a `hidden` attribute on siblings the tool made).
+   */
+  private async variantsOp(tab: BrowserTab, command: Extract<BrowserCommand, { op: 'variants' }>): Promise<unknown> {
+    if (command.mode === 'scan') return this.isolated(tab.id, variantsScanScript());
+    if (command.mode === 'show') {
+      const id = String(command.id ?? '');
+      if (!/^[a-z0-9-]{1,80}$/.test(id)) throw new BrowserManagerError('INVALID_REQUEST', 'A variants show needs a wrapper id.');
+      const index = Math.max(0, Math.min(50, Math.trunc(Number(command.index) || 0)));
+      return this.isolated(tab.id, variantsShowScript(id, index));
+    }
+    const ref = String(command.ref ?? '');
+    if (!isOpaqueBrowserRef(ref)) throw new BrowserManagerError('INVALID_REQUEST', 'A variants describe needs an element reference from the snapshot.');
+    return this.isolated(tab.id, variantsDescribeScript(ref));
   }
 
   private isolated<T = unknown>(tabId: string, code: string): Promise<T> {

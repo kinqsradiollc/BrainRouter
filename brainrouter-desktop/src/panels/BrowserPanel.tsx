@@ -30,8 +30,12 @@ import {
   nextBrowserOpenGeneration,
   normalizeBrowserInput, cycledTabIndex, shortcutTargetIsEditable } from '../lib/browser/browserPanelModel.js';
 import { rowSource, symbolKindIcon } from '../lib/browser/rowSource.js';
+import { LiveVariantsDrawer } from './browser/LiveVariantsDrawer.js';
+import { activeWrapper, stepVariantIndex, type LiveVariantMode, type LiveVariantScanEntry, type VariantPickRow } from '../lib/browser/liveVariants.js';
+import { normalizeLiveTarget, parseLiveScan, liveVariantPrompt, type LiveVariantTarget } from '@kinqs/brainrouter-core/design/live';
+import { hostQuery } from '../lib/hostQuery.js';
 
-type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'downloads' | 'flows' | 'bookmarks' | 'history' | null;
+type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'downloads' | 'flows' | 'bookmarks' | 'history' | 'variants' | null;
 
 type OmniboxSuggestion = { url: string; title: string; source: 'bookmark' | 'history' };
 
@@ -129,6 +133,16 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
   const [cursorOn, setCursorOn] = useState(() => localStorage.getItem(CURSOR_KEY) !== '0');
   const [pickMode, setPickMode] = useState(false);
   const [picked, setPicked] = useState('');
+  // ADR-056 D-B5 — live variants: pick an element, generate alternatives, cycle, keep or discard.
+  const [variantMode, setVariantMode] = useState<LiveVariantMode>('pick');
+  const [variantTarget, setVariantTarget] = useState<LiveVariantTarget | null>(null);
+  const [variantAction, setVariantAction] = useState('');
+  const [variantCount, setVariantCount] = useState(3);
+  const [variantScan, setVariantScan] = useState<LiveVariantScanEntry[]>([]);
+  const [variantSessionId, setVariantSessionId] = useState<string | null>(null);
+  const [variantBusy, setVariantBusy] = useState(false);
+  const [variantLoading, setVariantLoading] = useState(false);
+  const [variantStatus, setVariantStatus] = useState('');
   const [typeVal, setTypeVal] = useState('test');
   const [status, setStatus] = useState('');
   const [recording, setRecording] = useState(false);
@@ -511,6 +525,25 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
     return () => window.removeEventListener('br-browser-log', onLog);
   }, []);
 
+  // ADR-056 D-B5 — while cycling, poll the page for the live variant wrapper so a
+  // just-written one appears without a manual rescan and the cycler stays in sync.
+  useEffect(() => {
+    if (!(drawer === 'variants' && variantMode === 'cycle')) return;
+    let stopped = false;
+    const scan = async (): Promise<void> => {
+      if (stopped || !ready) return;
+      try {
+        const res = await runBrowser<{ wrappers?: unknown }>({ op: 'variants', mode: 'scan' });
+        const list = parseLiveScan(res);
+        setVariantScan(list);
+        if (list.length) { setVariantBusy(false); setVariantSessionId((current) => current ?? list[list.length - 1].id); }
+      } catch { /* the page may still be reloading */ }
+    };
+    void scan();
+    const timer = window.setInterval(() => void scan(), 1500);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [drawer, variantMode, ready, runBrowser]);
+
   const withPage = async (action: () => Promise<void>): Promise<void> => {
     if (!activeTab || activeTab.loading || activeTab.crashed) { setStatus(activeTab?.crashed ? 'This tab crashed. Reload it to continue.' : 'Page is not ready yet.'); return; }
     try { await action(); } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
@@ -526,6 +559,84 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
   const startInspect = (): void => {
     setPickMode(true);
     void doExtract().then(() => setStatus('Choose an element in the snapshot to inspect it.'));
+  };
+
+  // ADR-056 D-B5 — the live-variants pick-and-cycle loop over the running app.
+  const loadVariantElements = (): Promise<void> => withPage(async () => {
+    setVariantLoading(true);
+    try {
+      const value = await runBrowser({ op: 'snapshot', mode: 'testids' });
+      setElements(asLiveElements(rowsFromValue<BrowserSemanticNode>(value, ['nodes', 'elements'])));
+    } finally { setVariantLoading(false); }
+  });
+
+  const openVariants = (): void => {
+    setDrawer('variants'); setVariantMode('pick'); setVariantStatus(''); setVariantTarget(null);
+    void loadVariantElements();
+  };
+
+  const pickVariantTarget = (row: VariantPickRow): Promise<void> => withPage(async () => {
+    setVariantBusy(true); setVariantStatus('');
+    try {
+      const res = await runBrowser<{ ok?: boolean; target?: unknown; error?: string }>({ op: 'variants', mode: 'describe', ref: row.ref });
+      if (!res?.ok || !res.target) { setVariantStatus(res?.error || 'Could not read that element — pick another.'); return; }
+      const target = normalizeLiveTarget(res.target);
+      if (!target) { setVariantStatus('That element has no usable markup — pick another.'); return; }
+      setVariantTarget(target); setVariantMode('form');
+    } finally { setVariantBusy(false); }
+  });
+
+  const generateVariants = (): void => {
+    if (!variantTarget) return;
+    const prompt = liveVariantPrompt({ target: variantTarget, action: variantAction, count: variantCount });
+    window.dispatchEvent(new CustomEvent('br-browser-ask-agent', { detail: { prompt } }));
+    setVariantBusy(true); setVariantSessionId(null); setVariantScan([]); setVariantMode('cycle');
+    setVariantStatus('Asked the agent to write the variants — they will appear on the page shortly.');
+  };
+
+  const rescanVariants = (): Promise<void> => withPage(async () => {
+    const res = await runBrowser<{ wrappers?: unknown }>({ op: 'variants', mode: 'scan' });
+    const list = parseLiveScan(res);
+    setVariantScan(list);
+    if (list.length) { setVariantBusy(false); setVariantSessionId((current) => current ?? list[list.length - 1].id); }
+  });
+
+  const stepVariant = (delta: -1 | 1): void => {
+    const cycler = activeWrapper(variantScan, variantSessionId);
+    if (!cycler) return;
+    const index = stepVariantIndex(cycler.active, cycler.count, delta);
+    void runBrowser({ op: 'variants', mode: 'show', id: cycler.id, index })
+      .then(() => setVariantScan((list) => list.map((entry) => (entry.id === cycler.id ? { ...entry, active: index } : entry))))
+      .catch((error) => setVariantStatus(error instanceof Error ? error.message : String(error)));
+  };
+
+  const finishVariants = (message: string): void => {
+    setVariantStatus(message); setVariantSessionId(null); setVariantScan([]); setVariantTarget(null); setVariantMode('pick');
+    void runBrowser({ op: 'reload', bypassCache: false }).then(() => loadVariantElements()).catch(() => undefined);
+  };
+
+  const acceptChosenVariant = (): void => {
+    const cycler = activeWrapper(variantScan, variantSessionId);
+    if (!cycler) return;
+    setVariantBusy(true);
+    void hostQuery<{ ok?: boolean; message?: string; file?: string }>('design-variants-accept', { id: cycler.id, index: cycler.active })
+      .then((res) => {
+        if (res?.ok) finishVariants(`Kept ${cycler.active === 0 ? 'the original' : 'a variant'}${res.file ? ` in ${res.file}` : ''}.`);
+        else setVariantStatus(res?.message || 'Could not keep it — the wrapper may have moved; rescan.');
+      })
+      .finally(() => setVariantBusy(false));
+  };
+
+  const discardAllVariants = (): void => {
+    const cycler = activeWrapper(variantScan, variantSessionId);
+    if (!cycler) return;
+    setVariantBusy(true);
+    void hostQuery<{ ok?: boolean; message?: string; file?: string }>('design-variants-discard', { id: cycler.id })
+      .then((res) => {
+        if (res?.ok) finishVariants(`Discarded — ${res.file ? `${res.file} ` : 'the file '}is back as it was.`);
+        else setVariantStatus(res?.message || 'Could not discard — the wrapper may have moved; rescan.');
+      })
+      .finally(() => setVariantBusy(false));
   };
 
   const toggleHighlight = (): Promise<void> => withPage(async () => {
@@ -914,6 +1025,7 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
           {railBtn('monitor', 'Agent uses this visible tab', false, () => setStatus('Agent browser tools are connected to this visible tab.'), !browser)}
           {railBtn('bolt', 'Extract test-id elements', drawer === 'elements', () => void doExtract(), !ready)}
           {railBtn('eye', pickMode ? 'Choosing an element…' : 'Inspect element snapshot', pickMode, startInspect, !ready)}
+          {railBtn('palette', 'Live variants — try alternatives of an element on the page', drawer === 'variants', openVariants, !ready)}
           {railBtn('search', highlightOn ? 'Clear element highlights' : 'Highlight test-id elements', highlightOn, () => void toggleHighlight(), !ready)}
           {railBtn('cursor', cursorOn ? 'Hide agent cursor' : 'Show agent cursor', cursorOn, () => setCursorOn((value) => !value), !activeTab)}
           <div className="br-rail-sep" />
@@ -977,7 +1089,7 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
                 title="Drag to resize the panel height"
               />
               <div className="browser-drawer-head">
-                <b>{drawer === 'bookmarks' ? `Bookmarks (${bookmarks.length})` : drawer === 'history' ? `History (${historyRows.length})` : drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : drawer === 'downloads' ? `Downloads (${downloads.length})` : 'Flows'}</b>
+                <b>{drawer === 'variants' ? 'Live variants' : drawer === 'bookmarks' ? `Bookmarks (${bookmarks.length})` : drawer === 'history' ? `History (${historyRows.length})` : drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : drawer === 'downloads' ? `Downloads (${downloads.length})` : 'Flows'}</b>
                 <span className="br-drawer-actions">
                   {drawer === 'console' && <button className="chip" onClick={() => void doConsole()}>refresh</button>}
                   {drawer === 'network' && <button className="chip" onClick={() => void doNetwork()}>refresh</button>}
@@ -995,6 +1107,32 @@ export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }
                     <button className="br-el-run" onClick={(event) => { event.stopPropagation(); void runElement(element); }}>{element.action}</button>
                   </div>
                 )) : <div className="br-empty">No matching elements are visible on this page.</div>)}
+
+                {drawer === 'variants' && (
+                  <LiveVariantsDrawer
+                    mode={variantMode}
+                    ready={ready}
+                    busy={variantBusy}
+                    status={variantStatus}
+                    elements={elements.map((element) => ({ ref: element.ref, label: element.label, tag: element.tag, role: element.role }))}
+                    loadingElements={variantLoading}
+                    onRescanElements={() => void loadVariantElements()}
+                    onPick={(row) => void pickVariantTarget(row)}
+                    target={variantTarget}
+                    action={variantAction}
+                    count={variantCount}
+                    onSetAction={setVariantAction}
+                    onSetCount={setVariantCount}
+                    onGenerate={generateVariants}
+                    onRepick={() => { setVariantMode('pick'); setVariantTarget(null); void loadVariantElements(); }}
+                    cycler={activeWrapper(variantScan, variantSessionId)}
+                    onPrev={() => stepVariant(-1)}
+                    onNext={() => stepVariant(1)}
+                    onAccept={acceptChosenVariant}
+                    onDiscard={discardAllVariants}
+                    onRescan={() => void rescanVariants()}
+                  />
+                )}
 
                 {drawer === 'console' && (consoleMsgs.length ? consoleMsgs.slice().reverse().map((message, index) => (
                   <div key={`${message.at}-${index}`} className={`br-log lvl-${message.level.toLowerCase()}`}>{message.text}<span className="br-log-source">{message.source ? ` ${message.source}:${message.line}` : ''}</span></div>

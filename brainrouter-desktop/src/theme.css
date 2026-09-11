@@ -6123,3 +6123,53 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .study-reminder select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev); color: var(--text); }
 .study-nudge { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--bg-elev); font-size: 13px; }
 .study-nudge__actions { display: inline-flex; gap: 8px; }
+
+/* ADR-056 D-B5 — Live Variants drawer: pick → generate → cycle → keep/discard. */
+.br-lv { display: flex; flex-direction: column; gap: 10px; padding: 8px 10px 12px; font-size: 12px; }
+.br-lv-lead { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-dim); }
+.br-lv-list { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow: auto; }
+.br-lv-el { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; text-align: left; width: 100%; }
+.br-lv-el:hover { background: var(--bg-elev, rgba(127,127,127,0.08)); border-color: var(--border); }
+.br-lv-el:disabled { opacity: 0.5; cursor: default; }
+.br-lv-el-tag { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; text-transform: lowercase; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 1px 6px; }
+.br-lv-el-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.br-lv-el-go { flex: none; opacity: 0; color: var(--accent); transition: opacity .12s ease; }
+.br-lv-el:hover .br-lv-el-go { opacity: 1; }
+
+.br-lv-target { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--raised); }
+.br-lv-target-icon { flex: none; margin-top: 1px; color: var(--accent); }
+.br-lv-target-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.br-lv-target-text b { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.br-lv-target-quote { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.br-lv-hint { font-size: 10.5px; color: var(--text-dim); font-family: var(--mono, ui-monospace, monospace); }
+.br-lv-hint.muted { opacity: 0.7; font-style: italic; font-family: inherit; }
+.br-lv-field { display: flex; align-items: center; gap: 10px; }
+.br-lv-field > span { flex: none; width: 66px; color: var(--text-dim); }
+.br-lv-field .br-type { flex: 1; }
+.br-lv-counts { display: inline-flex; gap: 4px; }
+.br-lv-count { width: 28px; height: 26px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-variant-numeric: tabular-nums; }
+.br-lv-count:hover { border-color: var(--accent); }
+.br-lv-count.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.br-lv-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.br-lv-primary { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }
+.br-lv-primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.br-lv-primary:disabled { opacity: 0.6; cursor: default; transform: none; filter: none; }
+
+.br-lv-cycler { display: flex; align-items: center; gap: 10px; padding: 6px 4px; }
+.br-lv-step { flex: none; width: 34px; height: 34px; border-radius: 999px; border: 1px solid var(--border); background: var(--raised); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.br-lv-step:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.br-lv-step:disabled { opacity: 0.4; cursor: default; }
+.br-lv-cycler-mid { flex: 1; text-align: center; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.br-lv-cycler-mid b { font-size: 12.5px; }
+.br-lv-dots { display: inline-flex; gap: 5px; }
+.br-lv-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--border-strong); transition: transform .12s ease, background .12s ease; }
+.br-lv-dot.on { background: var(--accent); transform: scale(1.35); }
+.br-lv-verdict { display: flex; align-items: center; gap: 8px; }
+.br-lv-accept { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 12px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }
+.br-lv-accept:hover:not(:disabled) { filter: brightness(1.06); }
+.br-lv-accept:disabled { opacity: 0.6; cursor: default; }
+.chip.danger { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); color: var(--danger); }
+.chip.danger:hover { border-color: var(--danger); }
+.chip.ghost { background: transparent; color: var(--text-dim); }
+.br-lv-note { font-size: 10.5px; color: var(--text-dim); line-height: 1.4; }
+.br-lv-status { font-size: 11.5px; color: var(--text-dim); padding: 2px 1px; }
