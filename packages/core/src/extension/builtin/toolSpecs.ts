@@ -1130,6 +1130,20 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'suggest_task',
+    description: 'Flag an out-of-scope follow-up — a fix or improvement you noticed that would bloat the current change — as a one-click starter for the user. It appears in the desktop\'s Tasks → Suggestions; the user can start it in a new session (optionally a worktree) or dismiss it, and it never changes the current work. Use for a real, separable piece of work — not trivia you can do inline, not a vague smell, not the task at hand. The prompt must stand alone: include file paths and enough context to act without this conversation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short imperative action, e.g. "Fix stale README badge" or "Add coverage for the retry path".' },
+        prompt: { type: 'string', description: 'Self-contained instruction for a fresh session: what to do, which files, and enough context to act without this chat.' },
+        reason: { type: 'string', description: 'One line — why you are raising it now, i.e. what you noticed in this session.' },
+        worktree: { type: 'boolean', description: 'True when the work wants its own branch/worktree (a separable change); the starter then defaults to a worktree.' },
+      },
+      required: ['title', 'prompt'],
+    },
+  },
+  {
     name: 'track_update',
     description: 'Create or change project-board work (Track mode). action: "create", "transition", "comment", "link", "sprint-create", "assign-sprint", "batch-transition", "sprint-start", or "sprint-complete". Writes workspace state (track.json) — no approval needed. Link items to the branches/commits/PRs you produce so the board stays connected to the code.',
     inputSchema: {

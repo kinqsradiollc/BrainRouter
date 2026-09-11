@@ -5,7 +5,7 @@
 
 # BrainRouter tool catalog
 
-95 built-in agent tools, by access tier and action kind.
+96 built-in agent tools, by access tier and action kind.
 
 | Tool | Tier | Action kind | Parallel-safe | Description |
 |------|------|-------------|---------------|-------------|
@@ -79,6 +79,7 @@
 | `spawn_agent` | read | child_write | no | Spawn a child agent and a bounded prompt. |
 | `spawn_agents` | read | child_write | no | Spawn several child agents in parallel with ONE tool call, and the primary way to work at high effort on a broad task. |
 | `spawn_worker_thread` | read | child_write | no | Start a persistent background worker thread for a self-contained task. |
+| `suggest_task` | read | read_only | no | Flag an out-of-scope follow-up — a fix or improvement you noticed that would bloat the current change — as a one-click starter for the user. |
 | `switch_model` | read | read_only | no | Switch THIS session to a named LLM profile (a saved model preset) for all subsequent model calls — e.g. |
 | `task_agent` | read | child_write | yes | Launch a new agent to handle complex, multi-step tasks autonomously. |
 | `task_output` | read | read_only | no | Read incremental output of a background run_command: returns { status, exitCode, chunk, nextOffset, complete }. |
