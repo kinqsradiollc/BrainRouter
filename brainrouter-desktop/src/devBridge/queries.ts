@@ -913,6 +913,12 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       { id: 'btask_v7', kind: 'verification', status: 'completed', title: 'Verify — npm run typecheck', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 5 * 60_000).toISOString(), startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), completedAt: new Date(Date.now() - 4 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 4 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v7', parentSessionKey: 'internal:verify:btask_v7' } },
       { id: 'btask_v8', kind: 'verification', status: 'failed', title: 'Verify — npm test', error: '2 tests failed', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 9 * 60_000).toISOString(), startedAt: new Date(Date.now() - 9 * 60_000).toISOString(), completedAt: new Date(Date.now() - 8 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 8 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v8', parentSessionKey: 'internal:verify:btask_v8' } },
     ],
+    // ADR-057 — agent suggestions: browser-dev fixtures so the Tasks panel section is demoable.
+    'agent-suggestions': () => ({ suggestions: [
+      { id: 'sug-1', title: 'Fix stale README CI badge', suggestedPrompt: 'The CI badge in README.md points at an old workflow and 404s. Update it to the release/0.4.22 Build & Test workflow badge URL.', reason: 'noticed the badge 404s while reading the README', worktree: false, createdAt: Date.now() - 90_000, status: 'pending' },
+      { id: 'sug-2', title: 'Add coverage for the 5xx retry path', suggestedPrompt: 'llm.ts retries on 5xx but has no test. Add a unit test that stubs two 502s then a 200 and asserts the call is retried and resolves.', reason: 'saw the retry branch is untested', worktree: true, createdAt: Date.now() - 240_000, status: 'pending' },
+    ] }),
+    'agent-suggestion-status': () => ({ ok: true }),
     'suggested-tasks': () => ({
       repo: 'kinqsradiollc/BrainRouter',
       warnings: [],

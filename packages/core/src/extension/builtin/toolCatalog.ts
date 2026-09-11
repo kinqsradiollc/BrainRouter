@@ -103,6 +103,8 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // can manage the board in any mode (the code-aware differentiator).
   { name: 'track_query', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'track_update', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, afterInvoke: 'track-automation' },
+  // ADR-057 — records an agent-authored follow-up in the workspace suggestion store (no approval, serialized read-modify-write).
+  { name: 'suggest_task', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // Connectors — listing configured connectors is a read of workspace state
   // (connectors.json); running one is shell-tier (network I/O + memory writes),
   // registered further below with the command-execution surface.

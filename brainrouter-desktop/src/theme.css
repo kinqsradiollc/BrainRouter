@@ -6173,3 +6173,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .chip.ghost { background: transparent; color: var(--text-dim); }
 .br-lv-note { font-size: 10.5px; color: var(--text-dim); line-height: 1.4; }
 .br-lv-status { font-size: 11.5px; color: var(--text-dim); padding: 2px 1px; }
+/* ADR-057 — agent-authored task suggestions in the Tasks panel. */
+.agent-suggestion-row { align-items: flex-start; }
+.agent-suggestion-kind { color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 1px 6px; flex: none; }
+.agent-suggestion-reason { color: var(--text-dim); font-weight: 400; }
+.agent-suggestion-hint { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; align-self: center; }
+.agent-suggestion-dismiss { color: var(--text-dim); }
+.agent-suggestion-dismiss:hover { color: var(--danger); }

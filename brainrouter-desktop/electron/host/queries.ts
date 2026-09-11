@@ -291,7 +291,7 @@ import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/command
 import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
 import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
-import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled } from '@kinqs/brainrouter-core/triggers';
+import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled, pendingAgentSuggestions, setAgentSuggestionStatus } from '@kinqs/brainrouter-core/triggers';
 import { startTriggerServe, stopTriggerServe, triggerServeStatus } from './triggerServe.js';
 import { startRouterServe, stopRouterServe, routerServeStatus } from './routerServe.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
@@ -1589,6 +1589,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // Desktop starter surface for the same suggested-task scanner the CLI
       // uses. Read-only GitHub REST scan; a human starts work by picking one of
       // the ready-to-run prompts in the Tasks panel.
+      // ADR-057 — agent-authored follow-up suggestions (the suggest_task store).
+      'agent-suggestions': () => ({ suggestions: pendingAgentSuggestions(workspaceRoot) }),
+      'agent-suggestion-status': (a) => {
+        const status = a.status === 'started' || a.status === 'dismissed' ? a.status : 'dismissed';
+        const updated = setAgentSuggestionStatus(workspaceRoot, typeof a.id === 'string' ? a.id : '', status, typeof a.sessionKey === 'string' ? a.sessionKey : undefined);
+        return { ok: !!updated };
+      },
       'suggested-tasks': async (a) => scanSuggestedTasks(workspaceRoot, {
         repo: typeof a.repo === 'string' ? a.repo : undefined,
         mentionHandle: getCliKnobs().triggers.mentionHandle,
