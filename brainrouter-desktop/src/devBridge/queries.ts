@@ -645,6 +645,11 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'diagram-list': () => devDiagramList(),
     'diagram-read': (a) => devDiagramRead(String(a.slug ?? '')),
     'diagram-delta': (a) => devDiagramDelta(String(a.slug ?? '')),
+    // ADR-056 D-B5 — live variants: the browser dev bridge simulates the host's
+    // deterministic accept/discard/list so the Live Variants drawer is exercisable.
+    'design-variants-list': () => [],
+    'design-variants-accept': (a) => ({ ok: true, file: 'src/pages/Landing.tsx', lines: [42, 42], chosen: Number(a.index) || 0, text: '<h1 class="hero">Ship faster</h1>' }),
+    'design-variants-discard': () => ({ ok: true, file: 'src/pages/Landing.tsx', restoredBytes: 1024 }),
     'atlas-graph': () => devAtlasEnriched(),
     'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 20, functions: 1, classes: 1, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
     'atlas-enrich': () => {

@@ -67,6 +67,10 @@
       "types": "./dist/design/index.d.ts",
       "default": "./dist/design/index.js"
     },
+    "./design/live": {
+      "types": "./dist/design/live.d.ts",
+      "default": "./dist/design/live.js"
+    },
     "./exec": {
       "types": "./dist/exec/index.d.ts",
       "default": "./dist/exec/index.js"

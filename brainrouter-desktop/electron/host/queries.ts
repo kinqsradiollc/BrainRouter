@@ -96,6 +96,7 @@ import {
 } from '@kinqs/brainrouter-core/study';
 import { atlasOrientation } from '@kinqs/brainrouter-core/atlas';
 import { listDiagrams, readDiagramSpec, readDiagramHtml, readDiagramReceipt, readDiagramSpecAtRevision, validateDiagram, compareDiagrams, renderDiagramDelta, isDiagramSlug } from '@kinqs/brainrouter-core/diagram';
+import { acceptVariant, discardVariants, listVariantSessions } from '@kinqs/brainrouter-core/design';
 import {
   listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
   readStudyProgress, saveStudyProgress,
@@ -2444,6 +2445,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           .filter((el) => el && typeof el === 'object' && Array.isArray(el.sources) && el.sources.length)
           .map((el) => ({ id: String(el.id), label: String(el.label ?? el.id), sources: el.sources as Array<{ path: string; lines?: [number, number]; revision?: string }>, ...(typeof el.evidence === 'string' ? { evidence: el.evidence } : {}) }));
         return { slug, html: readDiagramHtml(workspaceRoot, slug), receipt: readDiagramReceipt(workspaceRoot, slug), ...(doc ? { kind: doc.kind, title: doc.meta.title } : {}), sources };
+      },
+      // ADR-056 D-B5 — live variants: the panel lists open sessions and accepts
+      // or discards one; all deterministic workspace-file work, no model.
+      'design-variants-list': () => listVariantSessions(workspaceRoot),
+      'design-variants-accept': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        const index = Math.trunc(Number(a.index));
+        try { return { ok: true, ...acceptVariant(workspaceRoot, id, index) }; }
+        catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
+      },
+      'design-variants-discard': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        try { return { ok: true, ...discardVariants(workspaceRoot, id) }; }
+        catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
       },
       'diagram-delta': (a) => {
         const slug = typeof a.slug === 'string' ? a.slug : '';

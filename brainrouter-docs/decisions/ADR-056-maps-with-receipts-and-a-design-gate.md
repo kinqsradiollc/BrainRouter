@@ -321,7 +321,7 @@ Rows are one PR each into the current release branch; a row is done when its acc
 - **B4 — One skill, routed vocabulary** (D-B3) — Commands table, per-verb references, modes, seven worlds, `profiles.ts` ↔ pack agreement, `/design <verb>`; parity + boundary tests. — **✅ merged #1670**
 - **B5 — `critique` two-assessment orchestration + snapshots** (D-B4) — fanout seam, degraded banner, `.brainrouter/design/critiques/`. — **✅ merged #1672**
 - **B6 — `product.md` via the shared artifact reader** (D-B6) — reader rename, prompt block, `/design product`. — **✅ merged #1671**
-- **B7 — Live variants in the desktop browser** (D-B5) — screenshot-driven; the owner watches the first run before merge. — **◐ deterministic half (wrap / accept / discard, `design_variants`, `--variants N`) merged #1676; the desktop pick-and-cycle loop awaits the owner-attended first run**
+- **B7 — Live variants in the desktop browser** (D-B5) — screenshot-driven; the owner watches the first run before merge. — **✅ complete: the deterministic half (wrap / accept / discard, `design_variants`, `--variants N`) merged #1676, and the desktop pick-and-cycle loop — the `variants` browser op (scan / show / describe with framework source hints), the Live Variants drawer (pick → generate → cycle → keep/discard), the agent-turn seam, and `design-variants` host actions — in review as this row's PR. The owner still watches the first live run on a real dev server before merge.**
 - **B8 — Fidelity measurement** (D-B7) — `design_fidelity`, side-by-side + heatmap artifacts. — **✅ merged #1674**
 - **B9 — Bot static-design evidence + Review Console filter** (D-B8) — advisory cards, dedup, suppression honoured at head. — **✅ merged #1673**
 

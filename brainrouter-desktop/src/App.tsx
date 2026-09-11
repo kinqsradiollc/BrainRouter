@@ -657,11 +657,19 @@ export function App(): React.ReactElement {
     // The Browser panel wants the UI map but has none yet -> load the manifest;
     // its result lands in atlasUiMap and is mirrored back via localStorage.
     const onLoadUiMap = (): void => { q('q-browser-manifest', 'browser:manifest'); };
+    // ADR-056 D-B5 — the Browser panel's Live Variants asks the agent to write
+    // the variants; run it as a normal turn (the prompt never leads with '/').
+    const onAskAgent = (e: Event): void => {
+      const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      if (typeof prompt === 'string' && prompt.trim() && !prompt.trimStart().startsWith('/')) submit(prompt);
+    };
+    window.addEventListener('br-browser-ask-agent', onAskAgent);
     window.addEventListener('br-browser-savescreenshot', onSaveShot);
     window.addEventListener('br-browser-runresult', onRunResult);
     window.addEventListener('br-browser-openfile', onOpenFile);
     window.addEventListener('br-browser-loaduimap', onLoadUiMap);
     return () => {
+      window.removeEventListener('br-browser-ask-agent', onAskAgent);
       window.removeEventListener('br-browser-savescreenshot', onSaveShot);
       window.removeEventListener('br-browser-runresult', onRunResult);
       window.removeEventListener('br-browser-openfile', onOpenFile);
