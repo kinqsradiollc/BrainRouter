@@ -63,6 +63,10 @@ export interface MainContentProps {
   setMode: (m: WorkspaceMode) => void;
   modeTransition: ModeTransition | null;
   workrowRef: React.RefObject<HTMLDivElement>;
+  // ADR-057 D2 — split chat view: a second session pane node, its state, and the toggle.
+  splitPane?: React.ReactNode;
+  splitOn?: boolean;
+  onToggleSplit?: () => void;
   // Track view
   track: { project: TV['project']; items: TV['items']; sprints: TV['sprints']; modules: TV['modules']; views: TV['views']; automations: TV['automations']; members: TV['members']; sync: TV['sync']; git: TV['git']; pr: TV['pr'] };
   trackOps: TV['ops'];
@@ -297,7 +301,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
       {meetingsVisible ? null : mode === 'notes' ? (
         // ADR-029 — Notes is user-scoped and cross-project (D1), so like the
         // planner it renders WITHOUT the workspace-bound side panel rail.
-        <div className="workrow" ref={workrowRef}>
+        <div className={`workrow${p.splitOn ? ' workrow--split' : ''}`} ref={workrowRef}>
           {/* The fallback says nothing rather than "Loading…": the chunk
               resolves in a frame off local disk, and a spinner that flashes
               once per mode switch reads as the app stuttering. */}
@@ -391,6 +395,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
               inputRef={composerInputRef} />
             </>
           } />
+        {p.splitPane}
 
         {/* Chat mode is a FOCUSED conversation — the code workbench (Environment
             column, side panels, terminal) appears only in Code mode. */}
@@ -439,7 +444,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
           region re-covers the buttons and swallows every click — the
           browser preview ignores app-region, which is why it only broke
           in the real Electron shell. */}
-      <TopbarRight mode={mode} homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
+      <TopbarRight splitOn={p.splitOn} onToggleSplit={p.onToggleSplit} mode={mode} homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
         termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen} sideWidth={sideWidth}
         setSidePanelOpen={setSidePanelOpen} sideFullScreen={sideFullScreen} setSideFullScreen={setSideFullScreen}
         sideTabs={sideTabs} activeSideTab={activeSideTab} ensurePanel={ensurePanel} openBottomDock={openBottomDock}

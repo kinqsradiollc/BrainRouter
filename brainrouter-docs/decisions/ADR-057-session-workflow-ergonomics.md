@@ -1,6 +1,6 @@
 # ADR-057 — Session-workflow ergonomics: agent task suggestions and a split chat view
 
-**Status:** ACCEPTED — implemented on `release/0.4.22` as two small PRs. A1 (agent task suggestions) ships with this ADR; A2 (split chat view) follows.
+**Status:** ACCEPTED — implemented on `release/0.4.22` as two small PRs: A1 (agent task suggestions, #1686) and A2 (split chat view, #1687).
 
 ## Context
 
@@ -36,4 +36,4 @@ A renderer layout that mounts two chat panes in the work row, each bound to its 
 ## Board
 
 - **A1 — agent task suggestions** (D1) — `suggest_task` tool + `suggestionStore` + Tasks-panel section + host queries. **✅ ships with this ADR.**
-- **A2 — split chat view** (D2) — per-pane renderer state, event routing by `sessionKey`, targeted `start-turn`, layout + toggle. **In progress.**
+- **A2 — split chat view** (D2, #1687) — a second live-viewer pane beside the main chat: session picker, transcript + streamed assistant text off the shared event bus, "Open in main" to promote. View-only by design — `acquireRuntime` repurposes the single runtime in single-agent mode, so two independently running sessions await multi-agent spawn. **✅ shipped.**

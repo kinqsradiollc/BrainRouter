@@ -6180,3 +6180,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .agent-suggestion-hint { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; align-self: center; }
 .agent-suggestion-dismiss { color: var(--text-dim); }
 .agent-suggestion-dismiss:hover { color: var(--danger); }
+/* ADR-057 D2 — split chat view: a second live-viewer pane beside the main chat. */
+.split-pane { flex: 0 0 clamp(340px, 40%, 620px); min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg); --content-w: min(100%, 720px); }
+.split-pane-head { flex: none; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.split-pane-picker { flex: 1 1 auto; min-width: 0; background: var(--raised); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; font: inherit; font-size: 12px; -webkit-appearance: none; appearance: none; }
+.split-pane-picker:hover { border-color: var(--accent); }
+.split-pane-running { flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; }
+.split-pane-actions { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.split-pane-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 14px; }
+.split-pane-empty { color: var(--text-dim); padding: 18px 4px; display: flex; gap: 8px; align-items: center; font-size: 12.5px; }
+.split-pane-live { opacity: 0.92; }
+.split-pane-note { flex: none; padding: 6px 12px; font-size: 10.5px; line-height: 1.4; color: var(--text-dim); border-top: 1px solid var(--border); background: var(--raised); }
