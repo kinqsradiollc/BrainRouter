@@ -62,6 +62,8 @@ import {
 import { buildTrackOps } from './App/track/index.js';
 import { buildRenderPanelBody, buildRenderSessionNode, buildRenderRow } from './App/render/index.js';
 import { AppDialogs, MainContent } from './App/layout/index.js';
+import { SplitSessionPane } from './components/chat/SplitSessionPane.js';
+import { defaultSplitSession } from './lib/chat/splitSession.js';
 
 installDevBridge();
 bootstrapAppearanceDocument();
@@ -572,6 +574,26 @@ export function App(): React.ReactElement {
     [rows, inlineDiffs, running],
   );
 
+  // ADR-057 D2 — split chat view: a second, live-viewer pane beside the main chat.
+  const [splitSession, setSplitSession] = useState<string | null>(null);
+  const openSplit = useCallback(() => {
+    setSplitSession((cur) => cur ?? defaultSplitSession(sessions, sessionKeyRef.current));
+  }, [sessions, sessionKeyRef]);
+  const splitPane = splitSession
+    ? (
+      <SplitSessionPane
+        sessionKey={splitSession}
+        sessions={sessions}
+        q={q}
+        openFile={openFile}
+        ensurePanel={ensurePanel}
+        onPick={setSplitSession}
+        onPromote={(key) => { setSplitSession(null); resumeSession(key); }}
+        onClose={() => setSplitSession(null)}
+      />
+    )
+    : null;
+
   const statuses = useMemo(() => new Map(changedFiles.map((f) => [f.path, f.status])), [changedFiles]);
   // T4 — composer/header derived state (sessionTitle, hasConversation, homeMode,
   // slash matches, mode/effort/model labels) lives in a pure hook now.
@@ -758,6 +780,7 @@ export function App(): React.ReactElement {
         <ToolingNotice />
         <MainContent
         mode={mode} setMode={requestMode} modeTransition={modeTransition} workrowRef={workrowRef} track={track} trackOps={trackOps}
+        splitPane={splitPane} splitOn={!!splitSession} onToggleSplit={() => (splitSession ? setSplitSession(null) : openSplit())}
         railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
         sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}
