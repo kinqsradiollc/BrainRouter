@@ -1,6 +1,9 @@
 import {
   applyModelEffortWireMap,
+  findProviderByEndpoint,
+  shapeChatCompletionToLimits,
   type ModelEffortWireMap,
+  type ShapeableChatBody,
 } from '@kinqs/brainrouter-core/provider';
 
 import type { GatewayResolvedModel } from './modelPolicy.js';
@@ -203,12 +206,21 @@ export function buildUpstreamChatPayload(
   delete payload.reasoning;
   payload.model = resolved.model.upstreamModelId;
 
-  if (resolved.selectedEffort === null) return payload;
-  return applyModelEffortWireMap(
-    payload,
-    resolved.selectedEffort,
-    endpointEffortWireMap(resolved, 'chat'),
-  );
+  // ADR-058 D12 — the gateway fronts the provider exactly as the desktop/CLI
+  // transport does, so it honours the same provider definition (resolved by
+  // endpoint, the way the transport does): an endpoint that rejects the effort
+  // field never receives one, and one that declares request limits gets a body
+  // shaped to them — messages capped, tools fitted to the byte budget by task
+  // relevance. Without this the gateway forwarded the client's full agent turn
+  // (~120 KB) verbatim and a 64 KiB-limited endpoint answered 403, which the
+  // upstream-error mapping then reported as a 502 "authentication" failure.
+  const def = findProviderByEndpoint(resolved.provider.endpoint);
+  const shaped: Record<string, unknown> =
+    resolved.selectedEffort === null || def?.reasoningEffort === 'unsupported'
+      ? payload
+      : applyModelEffortWireMap(payload, resolved.selectedEffort, endpointEffortWireMap(resolved, 'chat'));
+  if (def?.limits) shapeChatCompletionToLimits(shaped as unknown as ShapeableChatBody, def.limits);
+  return shaped;
 }
 
 function abortReason(signal: AbortSignal): Error {
