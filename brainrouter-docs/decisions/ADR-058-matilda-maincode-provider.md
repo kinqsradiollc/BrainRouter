@@ -256,6 +256,29 @@ hand-typed Matilda model routes immediately before a live `/models` catalog is
 populated. This is a config recommendation, not code; the router stays always-on and
 explicit-pick `withFallbacks:false` semantics are unaffected.
 
+**D12 · Providers declare request limits; the transport shapes the request to fit.**
+The first live agent turn against Matilda surfaced hard per-request limits its
+endpoint enforces (§6, measured to the byte): a **64 KiB request body** (65 536 bytes
+→ 200, 65 537 → `403 {"error":"forbidden"}`, checked at the edge *before* validation
+— so an oversized turn only ever looked like an auth failure), **16 000 characters of
+`content` per message** for every role (16 001 → 400), and **strict body validation**
+that rejects `reasoning_effort` / `reasoning` (400). A BrainRouter agent turn is
+~120 KB — a ~22k-char system prompt plus ~104 tool definitions — so a chat model
+cannot receive it as-is. Rather than special-case one vendor in the transport, the
+`ProviderDefinition` gains an optional **`limits: { maxBodyBytes, maxMessageChars }`**
+and `buildChatCompletionPayload` honours it for any provider that declares it:
+each message's content is cut from the *tail* (instructions are front-loaded) to
+`maxMessageChars` with a visible marker, and the tool list — the only elastic part
+once messages are capped — is fitted to `maxBodyBytes` by **task relevance** (the same
+`rankAndCapTools` ranking the MCP tool budget uses), binary-searching the largest
+relevance-ranked subset that fits, measured in **UTF-8 wire bytes** (the agent
+prompt's em-dashes and ellipses are 3 bytes each; a character count sits "under" the
+budget while the request is over it). Matilda declares `{ maxBodyBytes: 65_536,
+maxMessageChars: 16_000 }` and `reasoningEffort: 'unsupported'`. Providers that
+declare no limits are byte-for-byte unaffected. *Acceptance: a real agent turn
+(~120 KB, ~104 tools) shapes to ≤ 65 536 bytes with the task-relevant tools kept,
+Matilda returns 200, and an end-to-end CLI turn completes.*
+
 ---
 
 ## 3. What this is not
@@ -375,6 +398,22 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
    `response.output_text.delta` events belong to the *native* surface (A), not this
    one.)
 
+**Measured on first keyed use — hard request limits (these drove D12):**
+
+- **64 KiB request body.** With a real key, 65 536 bytes → 200 and 65 537 → `403
+  {"error":"forbidden"}`; the check is at the edge, *before* any validation, so an
+  oversized request never reaches the per-field validator. This — not auth, routing,
+  or tool count — was the 403 a full BrainRouter agent turn (~120 KB) produced. It is
+  a limit on **UTF-8 wire bytes**: a body of 65 469 JS characters was 65 752 bytes and
+  was refused.
+- **16 000 characters of `content` per message**, every role (a 16 001-char user
+  message → 400 "must be shorter than or equal to 16000"); characters, not bytes
+  (16 000 em-dashes, 48 KB, passed).
+- **Strict body validation** — any unexpected property is a 400 ("property
+  reasoning_effort should not exist", likewise `reasoning`).
+- **Tool calling on the compat surface works** — a 35-tool request returns 200, and
+  `tool_choice`, streaming, sampling params and `max_tokens` are all accepted.
+
 **Vendor-gated / unpublished — confirmed on first keyed use, non-blocking:**
 
 7. **A valid `mc_live_` key on the compat surface.** The route clearly does Bearer
@@ -382,9 +421,9 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
    moment a real key is pasted — the same first-use check every provider gets. No code
    depends on the answer.
 8. **Tool/function-calling on the compat surface** is undocumented (the Client SDK
-   routes client-side tools to the separate Agent SDK on surface A). The MVP is chat +
-   streaming + structured output; tool-calling is a capability to verify with a key,
-   not a prerequisite.
+   routes client-side tools to the separate Agent SDK on surface A) but **confirmed
+   accepted** with a key — see the measured limits above; the constraint is the 64 KiB
+   body, which D12's relevance-fitted tool list stays within.
 9. **Rate limits** (RPM/TPM, concurrency) are not published and are absent from
    response headers; the API-platform page states limits are **"lifted per account
    while the API is in early access,"** so there is no fixed ceiling to encode now.
