@@ -23,6 +23,13 @@ export const matilda: ProviderDefinition = {
   envKey: 'MATILDA_API_KEY',
   local: false,
   pickerVisible: true,
+  // ADR-058 D13 — the DEFAULT wire is Matilda's NATIVE chat surface
+  // (`…/api/chat`, SSE): it is the only surface on which the model calls tools
+  // (as DSML blocks in the text — see ./dsml.ts and ./nativeChat.ts), it accepts
+  // longer messages, and it chats just as well. The OpenAI-compatible surface
+  // stays one override away (`cli.providerRequestFormat.matilda =
+  // 'chat-completions'`) — it ignores `tools` entirely, so it is chat-only.
+  requestFormat: 'matilda-chat',
   // Matilda's OpenAI-compatible endpoint validates the request body STRICTLY and
   // rejects any unexpected property with a 400 ("property <x> should not exist") —
   // verified against the live endpoint for both `reasoning_effort` and the nested

@@ -29,7 +29,7 @@ export interface SessionRuntime {
    *  shape (e.g. native anthropic-messages) without touching the global catalog;
    *  the provider is registered scoped to this session only. Default
    *  chat-completions when omitted. */
-  byokRequestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+  byokRequestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat';
 }
 
 /** Fully-resolved runtime for a session (no optional provider/model). */

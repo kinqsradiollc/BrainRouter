@@ -457,11 +457,14 @@ export function normalizeGeminiOutput(data: any, endpoint: string, model: string
 // already resolved (compat base); native paths derive their URL from it.
 // ---------------------------------------------------------------------------
 
-export type NativeRequestFormat = 'anthropic-messages' | 'gemini-generate';
+export type NativeRequestFormat = 'anthropic-messages' | 'gemini-generate' | 'matilda-chat';
 
 export function isNativeRequestFormat(format: string): format is NativeRequestFormat {
-  return format === 'anthropic-messages' || format === 'gemini-generate';
+  return format === 'anthropic-messages' || format === 'gemini-generate' || format === 'matilda-chat';
 }
+
+/** ADR-058 D13 — Matilda's native chat surface pins its API contract by date. */
+export const MATILDA_API_VERSION = '2026-06-23';
 
 /** Compute the POST URL + headers for a native call. `endpoint` is the resolved
  *  base (e.g. `https://api.anthropic.com/v1` or
@@ -475,6 +478,20 @@ export function nativeRequestSpec(
   apiKey: string,
 ): { url: string; headers: Record<string, string> } {
   const base = stripTrailingSlashes(endpoint);
+  if (format === 'matilda-chat') {
+    // ADR-058 D13 — the module's endpoint is the OpenAI-compatible base
+    // (`…/api/v1`); the native chat surface is one level up (`…/api/chat`). It
+    // only speaks SSE, and pins its contract with a dated version header.
+    return {
+      url: `${base.replace(/\/v1$/, '')}/chat`,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${apiKey}`,
+        'X-Matilda-API-Version': MATILDA_API_VERSION,
+      },
+    };
+  }
   if (format === 'anthropic-messages') {
     return {
       url: `${base}/messages`,

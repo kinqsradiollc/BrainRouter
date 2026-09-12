@@ -160,7 +160,7 @@ export async function invokeModelPhase(
               agent.llmConfig,
               seed ? buildContinuationMessages(requestMessages, seed) : requestMessages,
               allTools,
-              { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+              { effort, signal: agent.turnAbort?.signal, sessionKey: agent.sessionKey, ...requestBudget },
             ),
             isRetryable: (err) => !isInterrupt(err) && !agent.interruptRequested && isRetryableServerError(err),
             onText: (delta) => {
@@ -197,7 +197,7 @@ export async function invokeModelPhase(
         agent.llmConfig,
         requestMessages,
         allTools,
-        { effort, signal: agent.turnAbort?.signal, ...requestBudget },
+        { effort, signal: agent.turnAbort?.signal, sessionKey: agent.sessionKey, ...requestBudget },
       );
     };
     // ADR-041 D4b.2 — the provider-call waterfall. Gated on hookEnforceActive so

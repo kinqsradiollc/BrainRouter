@@ -25,6 +25,7 @@ import {
   type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
 } from './nativeProviders.js';
 import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
+import { buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
 
 export interface ChatCompletionPayload {
   model: string;
@@ -119,7 +120,7 @@ function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderD
   return undefined;
 }
 
-export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'external-agent';
+export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat' | 'external-agent';
 
 function modelSupportsResponsesFormat(model: string | undefined): boolean {
   const id = normalizeModelName(model ?? '');
@@ -148,7 +149,7 @@ export function resolveRequestFormat(config: LLMConfig, effectiveEndpoint?: stri
   // NATIVE (non-OpenAI-compatible) formats are an explicit opt-in — honor them
   // directly. They carry their own URL/headers/payload (see nativeProviders.ts)
   // and bypass the Responses/Chat gating below entirely.
-  if (allowedFormat === 'anthropic-messages' || allowedFormat === 'gemini-generate') return allowedFormat;
+  if (allowedFormat === 'anthropic-messages' || allowedFormat === 'gemini-generate' || allowedFormat === 'matilda-chat') return allowedFormat;
   if (allowedFormat !== 'responses') return 'chat-completions';
   const builtInEndpoint = def?.endpoint;
   const endpoint = effectiveEndpoint || config.endpoint || builtInEndpoint || 'https://api.openai.com/v1';
@@ -336,6 +337,12 @@ export function effortForTurnSelection(
 export interface BuildPayloadOptions {
   /** Reasoning-depth preference, when provider supports it. `medium` is a no-op. */
   effort?: EffortLevel;
+  /**
+   * ADR-058 D13 — the calling session, so a native surface that wants a
+   * per-conversation id (Matilda's `conversation_id`) can key it per session.
+   * Optional; auxiliary calls (context prep, learning) leave it unset.
+   */
+  sessionKey?: string;
   /** DESK-6 — abort the in-flight request the instant the user presses Stop. */
   signal?: AbortSignal;
   /**
@@ -910,6 +917,11 @@ async function callNativeProvider(
   tools: any[],
   options: BuildPayloadOptions,
 ): Promise<NativeOutput> {
+  // ADR-058 D13 — Matilda's native chat endpoint only speaks SSE, so the
+  // non-streaming path consumes the same stream with no delta handlers.
+  if (format === 'matilda-chat') {
+    return callNativeProviderStream(format, config, endpoint, apiKey, messages, tools, options, {});
+  }
   const buildInput = buildNativeInput(format, config, messages, tools, options);
   const body = format === 'anthropic-messages'
     ? buildAnthropicMessagesPayload(buildInput)
@@ -1001,6 +1013,13 @@ async function callNativeProviderStream(
   if (format === 'anthropic-messages') {
     body = buildAnthropicMessagesPayload(buildInput);
     body.stream = true;
+  } else if (format === 'matilda-chat') {
+    // ADR-058 D13 — SSE-only surface; the conversation id is a per-session
+    // grouping key (the server never restores context from it — the full
+    // user+assistant history travels every turn, like the OpenAI path).
+    body = buildMatildaChatPayload(buildInput, {
+      conversationId: matildaConversationIdFor(options.sessionKey, buildInput.messages),
+    });
   } else {
     body = buildGeminiGeneratePayload(buildInput);
     // Gemini streams from a distinct method + SSE framing, not a body flag.
@@ -1047,7 +1066,11 @@ async function callNativeProviderStream(
     throw apiErr;
   }
 
-  const parse = format === 'anthropic-messages' ? parseAnthropicMessageStream : parseGeminiStream;
+  const parse = format === 'anthropic-messages'
+    ? parseAnthropicMessageStream
+    : format === 'matilda-chat'
+      ? parseMatildaChatStream
+      : parseGeminiStream;
   try {
     return await parse(readResponseTextChunks(res), handlers, endpoint, config.model);
   } catch (err: any) {
@@ -1110,7 +1133,7 @@ export async function callOpenAI(
 
   const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
   // NATIVE formats carry their own URL/headers/payload — hand off and return.
-  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate' || requestFormat === 'matilda-chat') {
     return callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
   }
   const body = requestFormat === 'responses'
@@ -1351,7 +1374,7 @@ export async function callOpenAIStream(
   // surfaces instead — re-running non-streaming would double-paint. A user Stop is
   // an InterruptError (mapped in callNativeProviderStream) and always propagates,
   // never a fallback that would fire a second call on a cancelled turn.
-  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate' || requestFormat === 'matilda-chat') {
     let paintedAny = false;
     const streamHandlers: NativeStreamHandlers = {
       onTextDelta: (t) => { paintedAny = true; handlers.onTextDelta?.(t); },

@@ -59,7 +59,7 @@ export interface ProviderDefinition {
    * Omitted ⇒ 'chat-completions'. The native formats are normally reached via
    * `cli.providerRequestFormat` opt-in rather than declared as a built-in.
    */
-  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'external-agent';
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat' | 'external-agent';
 
   /**
    * How this provider handles reasoning depth over `/v1/chat/completions`:

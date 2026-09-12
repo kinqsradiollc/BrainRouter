@@ -4,7 +4,7 @@
 import type { CommandContext } from '../_context.js';
 import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/provider';
 
-export const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses', 'anthropic-messages', 'gemini-generate'] as const;
+export const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses', 'anthropic-messages', 'gemini-generate', 'matilda-chat'] as const;
 export type WireFormatOption = (typeof WIRE_FORMAT_OPTIONS)[number];
 export type WireFormatOverride = Exclude<WireFormatOption, 'default'>;
 

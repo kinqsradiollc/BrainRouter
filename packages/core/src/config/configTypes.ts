@@ -137,7 +137,7 @@ export interface DeclarativeProviderEntry {
   /** Seed models for a provider whose endpoint has no live `GET /models`. A live list still wins. */
   defaultModels?: string[];
   /** Primary generation wire format. Default `'chat-completions'`. */
-  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat';
   /** How this endpoint handles reasoning-effort. Default `'param'` (the OpenAI-compatible default). */
   reasoningEffort?: 'param' | 'ignored' | 'unsupported';
 }
@@ -432,7 +432,7 @@ export interface SkillsCliKnobs {
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
  *  (non-OpenAI-compatible) Anthropic Messages and Gemini generateContent APIs.
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
-export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat';
 
 export interface BudgetCliKnobs {
   /** Per-agent-task USD cap. 0 or absent means uncapped. */

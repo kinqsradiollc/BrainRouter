@@ -1,0 +1,121 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  MATILDA_CLIENT_TOOLS_HINT,
+  MATILDA_NATIVE_LIMITS,
+  buildMatildaChatPayload,
+  matildaConversationIdFor,
+  parseMatildaChatStream,
+} from '../provider/providers/matilda/nativeChat.js';
+import { DSML_TOOL_CALL_CLOSE, DSML_TOOL_CALL_OPEN } from '../provider/providers/matilda/dsml.js';
+import type { NativeBuildInput } from '../agent/transport/nativeProviders.js';
+
+// ADR-058 D13 — the native Matilda chat adapter, built on what the live endpoint
+// measured: instructions as their OWN prior user message + the client-tools hint,
+// full user+assistant history every turn, tool results as user messages, ≤64
+// clientTools fitted to a 64 KiB body, DSML lifted out of the token stream.
+
+const BAR = '｜';
+const param = (name: string, value: string) => `<${BAR}DSML${BAR}parameter name="${name}" string="true">${value}</${BAR}DSML${BAR}parameter>`;
+const utf8 = (s: string): number => Buffer.byteLength(s, 'utf8');
+
+function input(partial: Partial<NativeBuildInput> = {}): NativeBuildInput {
+  return { model: 'matilda', system: '', messages: [], tools: [], ...partial };
+}
+const tool = (name: string, description: string) => ({ name, description, inputSchema: { type: 'object', properties: { path: { type: 'string' } } } });
+
+test('payload: the system prompt + hint are messages[0], the task stays its own clean message', () => {
+  const p = buildMatildaChatPayload(input({ system: 'Be concise.', messages: [{ role: 'user', content: 'read x' }], tools: [tool('read_file', 'Read a file')] }), { conversationId: 'c1' });
+  assert.equal(p.messages.length, 2);
+  assert.equal(p.messages[0].role, 'user');
+  assert.ok(p.messages[0].content.startsWith('Be concise.'));
+  assert.ok(p.messages[0].content.endsWith(MATILDA_CLIENT_TOOLS_HINT), 'hint is the tail of messages[0]');
+  assert.deepEqual(p.messages[1], { role: 'user', content: 'read x' });
+  assert.equal(p.responseMode, 'auto');
+  assert.equal(p.conversation_id, 'c1');
+  assert.equal((p as unknown as Record<string, unknown>).model, undefined, 'the native surface takes no model field');
+});
+
+test('payload: no tools ⇒ no hint and no clientTools; no system and no tools ⇒ no instructions message', () => {
+  const a = buildMatildaChatPayload(input({ system: 'S', messages: [{ role: 'user', content: 'hi' }] }), { conversationId: 'c' });
+  assert.equal(a.messages[0].content, 'S');
+  assert.equal(a.clientTools, undefined);
+  const b = buildMatildaChatPayload(input({ messages: [{ role: 'user', content: 'hi' }] }), { conversationId: 'c' });
+  assert.deepEqual(b.messages, [{ role: 'user', content: 'hi' }]);
+});
+
+test('payload: a 22k system prompt is tail-capped under the native limit with the hint intact', () => {
+  const p = buildMatildaChatPayload(input({ system: 'HEAD ' + 'x'.repeat(22_000), messages: [{ role: 'user', content: 't' }], tools: [tool('f', 'd')] }), { conversationId: 'c' });
+  const first = p.messages[0].content;
+  assert.ok(first.length <= MATILDA_NATIVE_LIMITS.maxMessageChars, `≤ ${MATILDA_NATIVE_LIMITS.maxMessageChars}, got ${first.length}`);
+  assert.ok(first.startsWith('HEAD'));
+  assert.ok(first.endsWith(MATILDA_CLIENT_TOOLS_HINT));
+});
+
+test('payload: history maps user/assistant through, tool results become user messages, assistant tool calls are noted', () => {
+  const p = buildMatildaChatPayload(input({
+    messages: [
+      { role: 'user', content: 'read notes' },
+      { role: 'assistant', content: 'On it.', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"n.txt"}' } }] } as never,
+      { role: 'tool', tool_call_id: 'c1', name: 'read_file', content: 'ship by Friday' } as never,
+    ],
+  }), { conversationId: 'c' });
+  assert.deepEqual(p.messages.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.equal(p.messages[1].content, 'On it.\n[Called client tool: read_file({"path":"n.txt"})]');
+  assert.equal(p.messages[2].content, '[Client tool result: read_file]\nship by Friday');
+});
+
+test('payload: clientTools are capped at 64 by task relevance and the body fitted to 64 KiB UTF-8', () => {
+  const heavy = Array.from({ length: 200 }, (_, i) => tool(`tool_${i}`, `Tool ${i} — ${'—'.repeat(300)}`));
+  const p = buildMatildaChatPayload(input({ system: 'S', messages: [{ role: 'user', content: 'please read the file' }], tools: [...heavy, tool('read_file', 'Read a file')] }), { conversationId: 'c' });
+  assert.ok(p.clientTools!.length <= MATILDA_NATIVE_LIMITS.maxClientTools);
+  assert.ok(utf8(JSON.stringify(p)) <= MATILDA_NATIVE_LIMITS.maxBodyBytes, `body ≤ 64 KiB, got ${utf8(JSON.stringify(p))}`);
+  assert.ok(p.clientTools!.some((t) => t.name === 'read_file'), 'the task-relevant tool survives');
+  assert.deepEqual(Object.keys(p.clientTools![0]).sort(), ['description', 'name', 'parameters']);
+});
+
+test('payload: a tool description over 2000 chars is tail-cut (the validator rejects the whole request otherwise)', () => {
+  const long = tool('task_agent', 'Spawn a sub-agent. ' + 'x'.repeat(4_000));
+  const p = buildMatildaChatPayload(input({ messages: [{ role: 'user', content: 'spawn a task agent' }], tools: [long] }), { conversationId: 'c' });
+  const d = p.clientTools![0].description;
+  assert.ok(d.length <= MATILDA_NATIVE_LIMITS.maxToolDescriptionChars, `≤ 2000, got ${d.length}`);
+  assert.ok(d.startsWith('Spawn a sub-agent.') && d.endsWith('…'));
+});
+
+test('conversation id: stable per session key, distinct across sessions, stable per first message without a key', () => {
+  const msgs = [{ role: 'user' as const, content: 'hello' }];
+  assert.equal(matildaConversationIdFor('s1', msgs), matildaConversationIdFor('s1', msgs));
+  assert.notEqual(matildaConversationIdFor('s1', msgs), matildaConversationIdFor('s2', msgs));
+  assert.equal(matildaConversationIdFor(undefined, msgs), matildaConversationIdFor(undefined, [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'x' }]));
+});
+
+async function* sse(events: Array<[string, unknown]>, chunk = 7): AsyncIterable<string> {
+  const raw = events.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+  for (let i = 0; i < raw.length; i += chunk) yield raw.slice(i, i + chunk);
+}
+
+test('stream: DSML in token deltas becomes toolCalls (never visible text); usage + done handled', async () => {
+  const block = `${DSML_TOOL_CALL_OPEN}\n${param('name', 'read_local_file')}\n${param('arguments', '{"path": "/n.txt"}')}\n${DSML_TOOL_CALL_CLOSE}`;
+  const tokens = ["I'll read that file for you.\n\n", ...block.match(/.{1,5}/gs)!, '\nDone.'];
+  const events: Array<[string, unknown]> = [['stream_init', { stream_id: 's', resumable: true }], ['generation_status', { phase: 'generating' }], ...tokens.map((t): [string, unknown] => ['token', { content: t }]), ['usage', { output_tokens: 42, context_pct: 3 }], ['done', {}]];
+  const deltas: string[] = [];
+  const out = await parseMatildaChatStream(sse(events), { onTextDelta: (t) => deltas.push(t) }, 'https://matilda.maincode.com/api/v1', 'matilda');
+  assert.equal(out.content, "I'll read that file for you.\n\n\nDone.");
+  assert.equal(deltas.join(''), out.content, 'streamed deltas equal the final visible text');
+  assert.deepEqual(out.toolCalls, [{ id: 'call_matilda_1', type: 'function', function: { name: 'read_local_file', arguments: '{"path": "/n.txt"}' } }]);
+  assert.equal(out.finishReason, 'tool_calls');
+  assert.equal(out.usage?.completion_tokens, 42);
+});
+
+test('stream: a server-parsed client_tool_call event is honoured and de-duplicated against the DSML block', async () => {
+  const block = `${DSML_TOOL_CALL_OPEN}{"name":"f","arguments":{"a":1}}${DSML_TOOL_CALL_CLOSE}`;
+  const out = await parseMatildaChatStream(sse([['client_tool_call', { name: 'f', args: { a: 1 }, id: 'srv-1' }], ['token', { content: block }], ['done', {}]]), {}, 'e', 'm');
+  assert.deepEqual(out.toolCalls, [{ id: 'srv-1', type: 'function', function: { name: 'f', arguments: '{"a":1}' } }]);
+});
+
+test('stream: `replace` discards the text so far; `error` throws', async () => {
+  const out = await parseMatildaChatStream(sse([['token', { content: 'draft…' }], ['replace', {}], ['token', { content: 'final' }], ['done', {}]]), {}, 'e', 'm');
+  assert.equal(out.content, 'final');
+  assert.equal(out.finishReason, 'stop');
+  await assert.rejects(() => parseMatildaChatStream(sse([['error', { code: 'rate_limited', message: 'slow down' }]]), {}, 'e', 'm'), /rate_limited slow down/);
+});

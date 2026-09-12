@@ -528,7 +528,7 @@ function unitInterval(value: unknown, fallback: number): number {
  *  - non-object input → empty map (fail-safe)
  *  - values other than the accepted `ProviderWireFormat` literals → dropped
  *  - keys are preserved lowercased so lookups under `provider` ids are stable. */
-const PROVIDER_WIRE_FORMATS: readonly ProviderWireFormat[] = ['responses', 'chat-completions', 'anthropic-messages', 'gemini-generate'];
+const PROVIDER_WIRE_FORMATS: readonly ProviderWireFormat[] = ['responses', 'chat-completions', 'anthropic-messages', 'gemini-generate', 'matilda-chat'];
 function normalizeProviderRequestFormat(input: unknown): Record<string, ProviderWireFormat> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
   const out: Record<string, ProviderWireFormat> = {};
