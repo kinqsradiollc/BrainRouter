@@ -62,6 +62,14 @@ test('backfillApiKeyFromEnv: Groq endpoint → GROQ_API_KEY (0.4.17 module)', ()
   assert.equal(out, 'gsk-aaaaaaaaaaaaaaaa');
 });
 
+test('backfillApiKeyFromEnv: Matilda endpoint → MATILDA_API_KEY (ADR-058 module)', () => {
+  const out = withEnv({
+    MATILDA_API_KEY: 'mc_live_aaaaaaaaaaaaaaaa',
+    OPENAI_API_KEY:  'sk-bbbbbbbbbbbbbbbb',
+  }, () => backfillApiKeyFromEnv('https://matilda.maincode.com/api/v1'));
+  assert.equal(out, 'mc_live_aaaaaaaaaaaaaaaa');
+});
+
 test('backfillApiKeyFromEnv: opencode endpoint → OPENCODE_API_KEY (now derived from the provider module)', () => {
   // The endpoint→env map is derived from BUILTIN_PROVIDERS, so opencode (added
   // as a code module) is covered without a hand-maintained table entry.
