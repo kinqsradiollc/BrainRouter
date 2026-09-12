@@ -23,4 +23,11 @@ export const matilda: ProviderDefinition = {
   envKey: 'MATILDA_API_KEY',
   local: false,
   pickerVisible: true,
+  // Matilda's OpenAI-compatible endpoint validates the request body STRICTLY and
+  // rejects any unexpected property with a 400 ("property <x> should not exist") —
+  // verified against the live endpoint for both `reasoning_effort` and the nested
+  // `reasoning` object. So we never send an effort field to it; BrainRouter's own
+  // system-prompt effort overlay still conveys depth. (Without this, every turn
+  // that carries a non-default `/effort` would 400 at Matilda.)
+  reasoningEffort: 'unsupported',
 };
