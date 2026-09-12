@@ -6,8 +6,10 @@ catalog + core prefix parity) are shipped. Every surface derives the tile from
 `BUILTIN_PROVIDERS` — CLI wizard, desktop Models gallery, dashboard `/catalog`, and
 the server catalog route — verified in the desktop renderer (the tile, the branded
 chip, and the Connect dialog with a prefilled endpoint + Fetch-models + catch-all
-toggle all render). The one remaining §5 step is a live turn against a real `mc_live_`
-account, which needs an account key. · **Builds on:** ADR-012 (providers are DB-only
+toggle all render). Live turns with a real key are verified on both the compat and the
+native surface; **D13** adds the native `matilda-chat` adapter (tool calling via DSML),
+mechanically complete and tested but — measured — preempted by Matilda's own
+server-side search on most realistic agent prompts (§6). · **Builds on:** ADR-012 (providers are DB-only
 records on the server), ADR-047 D1 (providers as data — the declarative entry and the
 live `ProviderRegistry`), the opt-in native wire adapters (0.4.16 — Anthropic-Messages
 and Gemini-generate over the default OpenAI shim), and ADR-041's product-wide
@@ -285,6 +287,45 @@ turn (~120 KB, ~104 tools) shapes to ≤ 65 536 bytes with the task-relevant too
 and Matilda returns 200 on **both** the direct and the gateway path; an end-to-end
 CLI turn completes.*
 
+**D13 · The native `matilda-chat` adapter — because tool calling lives only there.**
+The first keyed agent turn showed that Matilda's OpenAI-compatible surface **ignores
+`tools` entirely** (it accepts the field and never emits `tool_calls`; a forced
+`tool_choice` is ignored and the model answers from its own knowledge; the legacy
+`functions` form is a 400). Tool calling exists only on the **native** surface
+(`POST …/api/chat`, SSE), where the server templates `clientTools` for the model and
+the model answers with a **DSML block in the text stream** — so D1's "compat only"
+scope is amended: the module's default wire becomes `'matilda-chat'` (the compat
+surface stays one override away, `cli.providerRequestFormat.matilda =
+'chat-completions'`). Everything in the adapter is what the live endpoint measured,
+not what the docs implied: the body is `{ messages, clientTools?, conversation_id,
+responseMode:'auto' }` (`input` is an SDK convenience → 400; `role:'system'` → 400;
+`role:'assistant'` history **is** accepted); the server **never** restores context
+from `conversation_id` (with or without `persist`), so the full user+assistant history
+travels every turn exactly like the OpenAI path and BrainRouter stays stateless
+(`conversation_id` is a per-session grouping key, `sessionKey` threaded through
+`BuildPayloadOptions`); instructions **prefixed onto the task message suppress**
+client-tool calls (0/3 at every length, neutral or real text) while the same
+instructions as their **own prior user message ending with an explicit client-tools
+hint** restore them (3/3 with BrainRouter's real prompt) — so the system prompt is
+sent as `messages[0]` + the hint and the task stays its own clean message;
+`responseMode:'auto'` is required (omitted/`deep`/`instant` → 0/3) and the SDK's
+"code specialist" routing text is deliberately not sent (it suppresses client tools);
+two DSML dialects are parsed (the SDK's JSON `{name, arguments, id}` and the
+parameter form the live model actually emits), lifted out of the visible text with a
+token-boundary-safe interceptor, de-duplicated against the server's
+`client_tool_call` event; tool results go back as `[Client tool result: <name>]`
+user messages (the SDK's roundtrip shape); native limits are honoured — 64 KiB body
+(403), ≤ 64 `clientTools` (400), ≤ 2 000 chars per tool description (400), ~20k
+chars per message (422) — with tools fitted by task relevance. Implemented in
+`provider/providers/matilda/{dsml,nativeChat}.ts` and wired through the existing
+native-adapter seams (`NativeRequestFormat`, `nativeRequestSpec`, the transport's
+stream/non-stream dispatch — the non-stream path consumes the same SSE).
+*Acceptance (mechanical, met): the adapter builds a valid native body from a real
+agent turn, the stream parser lifts DSML into `toolCalls`, a tool-result roundtrip
+completes, and a live `brainrouter run` completes against the native surface.*
+*Acceptance (behavioural, NOT met today — see §6): the model reliably calls the
+advertised client tool on realistic agent prompts.*
+
 ---
 
 ## 3. What this is not
@@ -341,10 +382,13 @@ P0 is **done** (see §6) — it is kept here as the record of what was verified.
   seals the `mc_live_` key (needs `BRAINROUTER_SECRET_KEY`) over the generic
   chat-completions path. A `MATILDA_*` env seed in `resolveFromEnv`/`seed.ts` stays an
   optional deployment-bootstrap follow-up.
-- **P4 — DEFERRED (future ADR): native surface A + OAuth.** Only if server-side
-  conversation state, native validated-object output, or user-token auth becomes a
-  hard requirement — the adapter files and the OAuth reuse seams are enumerated in
-  §5 of the research so the future ADR starts from a map, not a blank page.
+- **P4 — Native surface A (DONE as D13); OAuth still deferred.** ✅ The
+  `matilda-chat` adapter (`provider/providers/matilda/{dsml,nativeChat}.ts`, wired
+  through `NativeRequestFormat` / `nativeRequestSpec` / the transport's native
+  dispatch, `sessionKey` on `BuildPayloadOptions`, the format literal in every
+  union/allowlist and the CLI wire-format golden) — built because tool calling exists
+  only there; mechanically verified live, behaviourally preempted by the platform
+  (§6). User-token OAuth remains out of scope until required.
 
 ---
 
@@ -417,8 +461,11 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   (16 000 em-dashes, 48 KB, passed).
 - **Strict body validation** — any unexpected property is a 400 ("property
   reasoning_effort should not exist", likewise `reasoning`).
-- **Tool calling on the compat surface works** — a 35-tool request returns 200, and
-  `tool_choice`, streaming, sampling params and `max_tokens` are all accepted.
+- **Tool calling on the compat surface does not exist** — `tools`/`tool_choice` are
+  accepted on the wire (200) but **ignored**: no `tool_calls` are ever emitted, a forced
+  `tool_choice` is ignored (the model answers from its own knowledge), and the legacy
+  `functions` form is a 400. Streaming, sampling params and `max_tokens` are honoured.
+  Tool calling lives only on the native surface (D13).
 
 **Vendor-gated / unpublished — confirmed on first keyed use, non-blocking:**
 
@@ -426,10 +473,9 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
    auth; that a *live-key* (vs an OAuth user token) is accepted there is confirmed the
    moment a real key is pasted — the same first-use check every provider gets. No code
    depends on the answer.
-8. **Tool/function-calling on the compat surface** is undocumented (the Client SDK
-   routes client-side tools to the separate Agent SDK on surface A) but **confirmed
-   accepted** with a key — see the measured limits above; the constraint is the 64 KiB
-   body, which D12's relevance-fitted tool list stays within.
+8. **Tool/function-calling** — resolved with a key: absent on the compat surface,
+   present on the native surface as DSML (D13), and subject to the platform behaviour
+   measured below.
 9. **Rate limits** (RPM/TPM, concurrency) are not published and are absent from
    response headers; the API-platform page states limits are **"lifted per account
    while the API is in early access,"** so there is no fixed ceiling to encode now.
@@ -439,3 +485,27 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
     `supported_reasoning_efforts` vs bare `{id}`) is read at runtime; D5's conservative
     default stands regardless, with name patterns added later only if the listing is
     thin.
+
+**Measured on the native surface (D13) — how reliably the model calls a client tool:**
+
+- The mechanics work end to end: a real agent turn builds a valid 64 KB native body
+  (38 fitted tools, `read_file` first), the stream parses, DSML calls are lifted, a
+  tool-result roundtrip completes, and `brainrouter run` returns an answer in ~22 s.
+- **Matilda's own server-side tools preempt client tools.** On a realistic task
+  ("Read the file notes.txt in this workspace… use your file-reading tool"), the
+  platform's orchestrator runs its **web `search` before the model answers** on 25 of 26
+  calls — across 38/8/1 tools, 16k/4k instructions, a stronger hint, `responseMode`
+  `auto`/`instant`/`deep`, a framing line on the task, and the explicit tool-naming
+  phrasing that had scored 3/3 in isolation — and the model then treats those results as
+  user-provided context, asks where the file is, or claims it lacks the tool. Even the
+  bare single-tool task was only ~2/3.
+- **There is no way to disable the server-side tools**: the SDK exposes no option and
+  every plausible request flag (`serverTools`, `tools`, `disableSearch`, `webSearch`,
+  `toolPolicy`, `agentMode`, …) is rejected by the strict validator as an unknown
+  property.
+- **Consequence:** the adapter is the right integration and is kept as the default
+  wire, but Matilda cannot drive BrainRouter's autonomous tool loop *today* — it is a
+  strong chat/knowledge model whose client-tool calling is preempted by its own
+  platform. That is a Maincode-side behaviour to raise with them (a per-request switch
+  to disable server tools, or honouring advertised client tools ahead of platform
+  search). Until then, route tool-heavy work to another provider.

@@ -297,6 +297,7 @@ test('nativeRequestSpec: gemini strips /openai compat suffix and targets :genera
 test('isNativeRequestFormat: only the two native literals', () => {
   assert.equal(isNativeRequestFormat('anthropic-messages'), true);
   assert.equal(isNativeRequestFormat('gemini-generate'), true);
+  assert.equal(isNativeRequestFormat('matilda-chat'), true); // ADR-058 D13
   assert.equal(isNativeRequestFormat('chat-completions'), false);
   assert.equal(isNativeRequestFormat('responses'), false);
 });
