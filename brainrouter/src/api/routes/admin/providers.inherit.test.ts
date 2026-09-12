@@ -119,4 +119,15 @@ describe("GET /api/admin/providers inheritance", () => {
       delete process.env.BRAINROUTER_SYSTEM_ORG_ID;
     }
   });
+
+  // ADR-058 — the server catalog route derives the vendor list from core's
+  // BUILTIN_PROVIDERS, so a new built-in (Matilda) is served with no server code.
+  it("serves Matilda (Maincode) from the llm provider catalog with its confirmed endpoint", async () => {
+    const res = await requestJson(new URL(`${baseUrl}/api/admin/providers/catalog?kind=llm`), adminHeaders);
+    expect(res.status).toBe(200);
+    const matilda = res.body.providers.find((p: { id: string }) => p.id === "matilda");
+    expect(matilda).toBeTruthy();
+    expect(matilda.endpoint).toBe("https://matilda.maincode.com/api/v1");
+    expect(matilda.local).toBe(false);
+  });
 });

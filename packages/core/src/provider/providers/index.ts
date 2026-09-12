@@ -14,6 +14,7 @@ import { anthropic } from './anthropic/index.js';
 import { gemini } from './gemini/index.js';
 import { openrouter } from './openrouter/index.js';
 import { zenmux } from './zenmux/index.js';
+import { matilda } from './matilda/index.js';
 import { groq } from './groq/index.js';
 import { azure } from './azure/index.js';
 import { openaiCompatible } from './openai-compatible/index.js';
@@ -34,6 +35,7 @@ export const BUILTIN_PROVIDERS: ProviderDefinition[] = [
   gemini,
   openrouter,
   zenmux,
+  matilda,
   groq,
   azure,
   // …then the generic OpenAI-compatible option + hosted gateway…
