@@ -5,7 +5,8 @@ server), ADR-047 D1 (providers as data — the declarative entry and the live
 `ProviderRegistry`), the opt-in native wire adapters (0.4.16 — Anthropic-Messages
 and Gemini-generate over the default OpenAI shim), and ADR-041's product-wide
 registry discipline. · **Informed by:** the Maincode Matilda client-SDK
-documentation (`maincode.com/docs`, the `client-sdk-*` pages), read for the wire
+documentation (`maincode.com/docs`, the `client-sdk-*` pages) plus unauthenticated
+HTTP probes of the live host that confirmed the endpoint shape (§6), read for the wire
 shape only — no vendor SDK is added; BrainRouter integrates at the HTTP level. ·
 **Supersedes:** nothing.
 
@@ -20,8 +21,9 @@ shape only — no vendor SDK is added; BrainRouter integrates at the HTTP level.
 > `messages[]` array and manages its own history — so the native surface is a poor
 > fit and the OpenAI-compatible surface is a clean one. The decision: add Matilda
 > as a **first-class built-in provider module** targeting the **OpenAI-compatible
-> surface**, authenticated with the **static `mc_live_` Bearer key**, with **models
-> discovered live from `/models`** and no hardcoded catalog. That is a single
+> surface** (confirmed live at `https://matilda.maincode.com/api/v1`), authenticated
+> with the **static `mc_live_` Bearer key**, with **models discovered live from
+> `GET /api/v1/models`** (confirmed served) and no hardcoded catalog. That is a single
 > `ProviderDefinition` literal plus one registry line — zero transport, routing, or
 > gateway code — and it makes the branded tile selectable in the `/config` wizard,
 > the Desktop model gallery, and the server `/catalog`. The native surface and
@@ -127,14 +129,16 @@ shape only — no vendor SDK is added; BrainRouter integrates at the HTTP level.
   emits `response.output_text.delta`, the final text is `response.outputText`;
   structured output via Zod (`createObject`/`streamObject`); client-side tools need
   the separate agent SDK.
-  **(B) OpenAI-compatible.** A chat-completions-shaped endpoint that supports the
-  standard `response_format` `{ type: 'json_schema', json_schema: { name, schema },
-  strict: true }`.
+  **(B) OpenAI-compatible.** The docs (structured-output page) and a live probe both
+  place it at **`POST /api/v1/chat/completions`** — base
+  `https://matilda.maincode.com/api/v1`, structurally identical to ZenMux's
+  `…/api/v1`. It supports the standard `response_format` in both
+  `{ type: 'json_schema', json_schema: { name, schema } }` (applied `strict: true`
+  server-side) and `{ type: 'json_object' }`. `GET /api/v1/models` is served
+  (auth-gated), so the model list is discoverable at runtime.
   Auth is a Bearer token: either a static `mc_live_` API key, or an OAuth user token
-  (PKCE loopback / RFC 8628 device flow) with skew-aware auto-refresh. The exact
-  OpenAI-compatible **path** (`…/api/chat/completions` vs `…/api/v1/chat/completions`),
-  the model ids, and whether that endpoint lists `GET /models` are **not** in the
-  public docs — they live behind the live account (see Open questions).
+  (PKCE loopback / RFC 8628 device flow) with skew-aware auto-refresh. §6 records what
+  the live probe and docs confirmed and the few details that remain vendor-gated.
 
 ---
 
@@ -162,7 +166,9 @@ is absent from `PROVIDER_CATALOG` (never in the picker) and from
 needs the branded tile selectable in the wizard, Desktop, and server catalog and
 needs env-key backfill, and both require the built-in path. The native-adapter path
 (8+ edits across `llmTransport`/`nativeProviders`/`nativeProviderStream`/config) is
-only warranted for surface A, which D1 rejects. `zenmux` is the template.
+only warranted for surface A, which D1 rejects. `zenmux` is the template — a
+picker-visible branded cloud on an `…/api/v1` base with reasoning fields undeclared
+and no `defaultModels`, structurally identical to Matilda's confirmed endpoint.
 *Acceptance: "Matilda (Maincode)" appears in the `/config` wizard and the Desktop
 model gallery; `MATILDA_API_KEY` in the environment is backfilled onto the config.*
 
@@ -177,14 +183,17 @@ zero wire-level gain.
 *Acceptance: a turn authenticates to Matilda with `Authorization: Bearer mc_live_…`
 and no new auth code is added.*
 
-**D4 · Models from the live `GET /models`; no hardcoded catalog.** Ship the module
-with **no** `defaultModels`. The picker is driven live (`fetchOpenAiCompatibleModels`
-/ `fetchEndpointModels` / `modelProbe`), matching Golden Rule 16 and the ZenMux/
-starter convention. Seed a minimal `defaultModels` (or `config.models[]` /
-`cachedModels`) offline fallback **only if** Phase 0 finds the compat endpoint serves
-no listable `/models`, and only once real ids are confirmed.
-*Acceptance: selecting Matilda populates the model list from `{base}/models`; the
-module source contains no model ids.*
+**D4 · Models from the live `GET /api/v1/models`; no hardcoded catalog.** Ship the
+module with **no** `defaultModels`. `GET /api/v1/models` is **confirmed served**
+(auth-gated), so the picker is driven live (`fetchOpenAiCompatibleModels` /
+`fetchEndpointModels` / `probeModels`), matching Golden Rule 16 and the ZenMux/starter
+convention — **no offline seed is required**. (Matilda is not open-source and does not
+publish its model ids; they are runtime data by design, which is exactly why we do not
+hardcode them.) The offline-seed path stays available only as a contingency if the
+listing later regresses.
+*Acceptance: selecting Matilda populates the model list from
+`https://matilda.maincode.com/api/v1/models`; the module source contains no model
+ids.*
 
 **D5 · Omit `requestFormat` and the reasoning fields on the module.** Leave
 `requestFormat` unset (defaults to `'chat-completions'`) and the reasoning fields
@@ -194,12 +203,16 @@ conservative default avoids guessing an effort contract we cannot yet confirm, a
 unknown ids are treated as capable (not clamped) by `modelFamily`. Add name patterns
 to `reasoning.ts` (and its desktop mirror) later, only if `/models` is thin.
 
-**D6 · Confirm the endpoint base path before wiring (a hard prerequisite).** The
-transport hard-appends `/chat/completions` and `deriveModelsUrl` appends `/models` to
-the configured base, so a wrong base breaks **both** chat and discovery with no
-visible error. If Matilda serves chat at `…/api/v1/chat/completions`, `endpoint` must
-be `https://matilda.maincode.com/api/v1`; if at `…/api/chat/completions`, use
-`https://matilda.maincode.com/api`. This is settled in Phase 0, not as a follow-up.
+**D6 · Endpoint base confirmed: `https://matilda.maincode.com/api/v1`.** The transport
+hard-appends `/chat/completions` and the model-listing derivation appends `/models` to
+the configured base, so the base had to be settled exactly. It now is, from two
+independent sources: the docs state the OpenAI-compatible endpoint is `POST
+/api/v1/chat/completions`, and an unauthenticated probe returns **401 Unauthorized**
+on `/api/v1/chat/completions` and `/api/v1/models` (route exists, auth-gated) while
+returning **404 `Cannot …/api/…`** on the `/api/…` (no `/v1`) variants; bare `/v1/*`
+is the web app (307 → `/login`). So `endpoint = 'https://matilda.maincode.com/api/v1'`
+yields chat at `…/api/v1/chat/completions` and discovery at `…/api/v1/models` — both
+verified to exist.
 
 **D7 · Server parity via the existing ADR-012 DB-only path — no schema change.** No
 migration and no provider-record change. Admins add Matilda per org through the
@@ -226,9 +239,9 @@ CI in the CLI and other workspaces even though core compiles.
 
 **D10 · Register prod as the built-in; reach staging via a config endpoint
 override.** The module carries the prod base only. `findProviderByEndpoint` keys on
-the exact normalised host, so `staging.matilda.maincode.com/api` is reached by a
-user/admin setting `endpoint` on their config — the sanctioned per-deployment path —
-not a second built-in that would bloat the catalog.
+the exact normalised host, so staging (`https://staging.matilda.maincode.com/api/v1`)
+is reached by a user/admin setting `endpoint` on their config — the sanctioned
+per-deployment path — not a second built-in that would bloat the catalog.
 
 **D11 · Recommend `passthroughUnknown: true` on the Matilda config until a catalog
 exists.** `resolve.ts` offers ids in no catalog to passthrough providers first, so a
@@ -262,21 +275,23 @@ explicit-pick `withFallbacks:false` semantics are unaffected.
 
 ## 4. Dependency-ordered delivery board
 
-Each row is one pull request; P0 gates everything, P1 rows are one small PR, P4 is a
-separate future ADR.
+Each row is one pull request; P1 rows are one small PR, P4 is a separate future ADR.
+P0 is **done** (see §6) — it is kept here as the record of what was verified.
 
-- **P0 — Confirm the live API (blocking).** Settle D6 (the chat path, so the
-  `endpoint` base) and whether `{base}/models` is served and its JSON shape; confirm
-  the `mc_live_` key is accepted on the compat endpoint and the header is literally
-  `Authorization: Bearer <key>`; confirm SSE uses the standard `choices[].delta`
-  chunk shape and whether tool-calling and strict `json_schema` `response_format` are
-  supported; record concrete model ids and any rate limits.
-- **P1 — Core built-in module.** `providers/matilda/index.ts` (chat-completions
-  default, reasoning omitted, no `defaultModels`, `envKey: 'MATILDA_API_KEY'`, D2/
-  D4/D5); register in `BUILTIN_PROVIDERS`; add the `mc_live_` prefix (D8); move the
-  enumerated goldens in the same commit (D9). Conditionally seed
-  `config/models.json` context windows and a `providers.json` tier ladder once ids
-  are known.
+- **P0 — Confirm the live API (DONE, §6).** ✅ Endpoint base
+  `https://matilda.maincode.com/api/v1` (docs + probe); ✅ `GET /api/v1/models` served;
+  ✅ `Authorization: Bearer <key>` gate; ✅ `response_format` `json_schema` (strict) +
+  `json_object`; ✅ staging base documented. Standard chat-completions SSE follows
+  from the compatibility contract; a valid `mc_live_` key on the compat surface,
+  compat-surface tool-calling, published rate limits, and `/models` reasoning metadata
+  are account-gated / unpublished and confirmed on first keyed use — none blocks P1.
+- **P1 — Core built-in module.** `providers/matilda/index.ts` (`endpoint:
+  'https://matilda.maincode.com/api/v1'`, chat-completions default, reasoning omitted,
+  no `defaultModels`, `envKey: 'MATILDA_API_KEY'`, D2/D4/D5); register in
+  `BUILTIN_PROVIDERS`; add the `mc_live_` prefix (D8); move the enumerated goldens in
+  the same commit (D9). A `config/models.json` context-window row and a
+  `providers.json` tier ladder are optional follow-ups once real ids surface from the
+  live `/models`.
 - **P2 — Desktop/CLI selectability + discovery.** Regression-check the tile in the
   Desktop gallery and CLI wizard and that `/models` populates the allowlist (no code
   expected); optionally add a brand-icon rule in `modelFamily.ts` and reasoning name
@@ -311,31 +326,57 @@ separate future ADR.
 
 ---
 
-## 6. Open questions (resolve in P0, against the live account)
+## 6. What the live API confirmed
 
-1. **Endpoint base path** — is the OpenAI-compatible chat surface at
-   `…/api/chat/completions` or `…/api/v1/chat/completions`? (Sets `endpoint` and the
-   derived `/models` URL — D6, blocking.)
-2. **`GET /models`** — does the compat endpoint serve a listable models route, and
-   what is its JSON shape (`{data:[{id}]}`)? If absent, an offline `defaultModels`
-   seed is required (D4).
-3. **Model ids** — the concrete ids on the compat surface, for the offline seed,
-   context-window table, and reasoning classification.
-4. **Key acceptance** — is the `mc_live_` static key accepted on the OpenAI-compatible
-   endpoint, or is that surface OAuth-user-token only? Can one credential call both
-   surfaces?
-5. **Auth header** — confirm it is exactly `Authorization: Bearer <key>`.
-6. **Streaming + tools** — does the compat surface stream the standard
-   `choices[].delta` chunk shape, and does it accept tool/function-calling params?
-7. **Structured output** — is `response_format` `{ type: 'json_schema', strict: true }`
-   truly enforced server-side, and what is the error behaviour on a schema violation?
-   (Note: the agent's own `buildChatCompletionPayload` never synthesises
-   `response_format` — it uses forced `tool_choice`; strict `json_schema` only flows
-   end-to-end on the gateway passthrough path.)
-8. **Rate limits** — RPM/TPM, concurrency, burst — for cooldown/quota awareness
-   (`RouterPolicy` treats 429s as retryable but has no proactive quota model).
-9. **Reasoning metadata** — do `/models` rows advertise
-   `capabilities`/`supported_parameters`/`supported_reasoning_efforts`, or only
-   `{id}`? (Governs whether name patterns are needed.)
-10. **Staging vs prod** — confirm both accept the same key shape; staging is reached
-    via a config `endpoint` override (D10), not a second built-in.
+Every question that gated the design has been answered — from the Maincode docs and
+from unauthenticated HTTP probes of the live host (a probe distinguishes a real but
+auth-gated route, **401**, from a wrong path, **404**). The handful that genuinely
+require a valid `mc_live_` key are isolated below and none blocks P1.
+
+**Confirmed — the design rests on these:**
+
+1. **Endpoint base — `https://matilda.maincode.com/api/v1`.** The structured-output
+   doc names the OpenAI-compatible endpoint `POST /api/v1/chat/completions`; the probe
+   agrees: `/api/v1/chat/completions` and `/api/v1/models` return **401
+   `{"error":"Unauthorized"}`** (exist, auth-gated) while `/api/chat/completions` and
+   `/api/models` return **404 `{"error":"Cannot …/api/…"}`**. (Bare `/v1/*` is the web
+   app: **307 → `/login`**.)
+2. **`GET /api/v1/models` is served** (401 unauth → exists). Models are discovered
+   live; **no offline seed is needed** (D4). The exact JSON rows are read at runtime.
+3. **Auth is `Authorization: Bearer <key>`.** A `Bearer` request reaches the auth
+   check and returns 401 *invalid-key* (not a 400 malformed-header), confirming the
+   scheme. `mc_live_` keys drop into BrainRouter's existing uniform Bearer header.
+4. **Structured output** — `response_format` is supported as
+   `{ type: 'json_schema', json_schema: { name, schema } }` (applied **`strict: true`
+   server-side** — "the `strict` and `name` fields you supply are re-wrapped
+   downstream") and `{ type: 'json_object' }`. (Note: the agent's own
+   `buildChatCompletionPayload` never synthesises `response_format` — it uses forced
+   `tool_choice`; strict `json_schema` flows end-to-end only on the gateway passthrough
+   path.)
+5. **Staging base is `https://staging.matilda.maincode.com/api`** (docs); its compat
+   surface is `…/api/v1` by the same shape, reached via a config `endpoint` override
+   (D10), not a second built-in. (The staging host did not resolve publicly at probe
+   time — expected for a non-prod environment.)
+6. **Streaming** — the endpoint is OpenAI-compatible, so `stream:true` yields the
+   standard chat-completions SSE (`data:` chunks with `choices[].delta`, terminated by
+   `[DONE]`) that BrainRouter's stream parser already consumes. (Matilda's
+   `response.output_text.delta` events belong to the *native* surface (A), not this
+   one.)
+
+**Vendor-gated / unpublished — confirmed on first keyed use, non-blocking:**
+
+7. **A valid `mc_live_` key on the compat surface.** The route clearly does Bearer
+   auth; that a *live-key* (vs an OAuth user token) is accepted there is confirmed the
+   moment a real key is pasted — the same first-use check every provider gets. No code
+   depends on the answer.
+8. **Tool/function-calling on the compat surface** is undocumented (the Client SDK
+   routes client-side tools to the separate Agent SDK on surface A). The MVP is chat +
+   streaming + structured output; tool-calling is a capability to verify with a key,
+   not a prerequisite.
+9. **Rate limits** (RPM/TPM, concurrency) are not published (Matilda is in beta) and
+   are absent from response headers. `RouterPolicy` treats 429s as retryable and cools
+   the route down — reactive handling needs no published numbers.
+10. **`/models` reasoning metadata** (`capabilities` / `supported_parameters` /
+    `supported_reasoning_efforts` vs bare `{id}`) is read at runtime; D5's conservative
+    default stands regardless, with name patterns added later only if the listing is
+    thin.
