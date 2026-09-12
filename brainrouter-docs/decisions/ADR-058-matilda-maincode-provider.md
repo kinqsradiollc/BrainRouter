@@ -373,9 +373,11 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
    routes client-side tools to the separate Agent SDK on surface A). The MVP is chat +
    streaming + structured output; tool-calling is a capability to verify with a key,
    not a prerequisite.
-9. **Rate limits** (RPM/TPM, concurrency) are not published (Matilda is in beta) and
-   are absent from response headers. `RouterPolicy` treats 429s as retryable and cools
-   the route down — reactive handling needs no published numbers.
+9. **Rate limits** (RPM/TPM, concurrency) are not published and are absent from
+   response headers; the API-platform page states limits are **"lifted per account
+   while the API is in early access,"** so there is no fixed ceiling to encode now.
+   `RouterPolicy` treats 429s as retryable and cools the route down — reactive handling
+   needs no published numbers.
 10. **`/models` reasoning metadata** (`capabilities` / `supported_parameters` /
     `supported_reasoning_efforts` vs bare `{id}`) is read at runtime; D5's conservative
     default stands regardless, with name patterns added later only if the listing is
