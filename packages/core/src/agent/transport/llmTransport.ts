@@ -10,6 +10,7 @@ import { isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSup
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../../provider/providers/definition.js';
 import type { ProviderDefinition } from '../../provider/providers/definition.js';
+import { rankAndCapTools } from '../../tool/policy/toolBudget.js';
 import { callExternalAgentEngine } from './externalAgentEngine.js';
 import { effortToWireLevel, type EffortLevel } from '../../session/preferences/preferencesStore.js';
 import type { PromptLayers } from '../../prompt/systemPrompt.js';
@@ -683,7 +684,13 @@ export function buildChatCompletionPayload(
   tools: any[],
   options: BuildPayloadOptions = {},
 ): ChatCompletionPayload {
-  const mappedMessages = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
+  // Provider-declared request limits (ProviderDefinition.limits) — shape the
+  // request to what the endpoint accepts instead of letting it reject a full
+  // agent turn outright (e.g. Matilda: ≤63 tools, ≤16k chars per message).
+  const limits = activeProviderDef(config)?.limits;
+  const mappedMessages = expandPromptLayersForChatCompletions(messages)
+    .map(mapChatCompletionMessage)
+    .map((m) => capMessageContent(m, limits?.maxMessageChars));
 
   const body: ChatCompletionPayload = {
     model: config.model,
@@ -730,7 +737,92 @@ export function buildChatCompletionPayload(
     }
   }
 
+  // Provider byte budget (`limits.maxBodyBytes`) — applied LAST so it measures
+  // the final body, and fits the TOOL list (the only elastic part once messages
+  // are capped) to whatever bytes remain.
+  if (limits?.maxBodyBytes && tools.length > 0) {
+    fitToolsToByteBudget(body, tools, messages, limits.maxBodyBytes);
+  }
+
   return body;
+}
+
+/** The latest user turn's text — the relevance signal for fitting tools to a
+ *  provider's byte budget (the same signal the MCP tool budget ranks by). */
+function latestUserTextFrom(messages: any[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== 'user') continue;
+    if (typeof m.content === 'string') return m.content;
+    if (Array.isArray(m.content)) {
+      return m.content.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join(' ');
+    }
+  }
+  return '';
+}
+
+/** UTF-8 byte length of a string — what Content-Length carries. `TextEncoder`
+ *  rather than `Buffer` so this stays portable if the transport is ever bundled
+ *  for a non-Node runtime. */
+function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** `limits.maxBodyBytes` — fit the tool list to the bytes left after the
+ *  messages. Binary-searches the largest k such that the body carrying the
+ *  top-k most task-relevant tools serializes within the budget (bytes are
+ *  monotone in k, and `rankAndCapTools` ranks the same way the MCP tool budget
+ *  does), so a constrained endpoint gets the tools that matter for THIS task —
+ *  never a blind prefix cut of an 81-local-tool list that would drop core agent
+ *  tools. Mutates `body.tools` / `body.tool_choice` in place. If even zero tools
+ *  cannot fit (the messages alone exceed the budget) the tools are dropped and
+ *  the request goes out as-is — that is a context-length problem for the
+ *  provider to report, not one a tool cut can solve. */
+function fitToolsToByteBudget(body: ChatCompletionPayload, rawTools: any[], messages: any[], maxBodyBytes: number): void {
+  // The limit is on WIRE bytes (Content-Length), not JS string length: the
+  // agent prompt is full of multi-byte characters (em-dashes, ellipses,
+  // bullets — 3 bytes each in UTF-8), so a body measured in chars can sit
+  // "under" the budget while the request itself is over it.
+  const measure = (): number => utf8Bytes(JSON.stringify(body));
+  if (measure() <= maxBodyBytes) return;
+  const taskText = latestUserTextFrom(messages);
+  const withTopK = (k: number): void => {
+    if (k <= 0) { delete body.tools; delete body.tool_choice; return; }
+    // `rankAndCapTools` returns the whole list when k >= length (and when k <= 0,
+    // hence the explicit zero branch above).
+    body.tools = buildChatToolSpecs(k >= rawTools.length ? rawTools : rankAndCapTools(rawTools, taskText, k).kept);
+    body.tool_choice = body.tool_choice ?? 'auto';
+  };
+  let lo = 0;
+  let hi = rawTools.length - 1; // rawTools.length is known not to fit
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    withTopK(mid);
+    if (measure() <= maxBodyBytes) lo = mid; else hi = mid - 1;
+  }
+  withTopK(lo);
+}
+
+const CONTENT_CAP_MARKER = "\n…[truncated to the provider's per-message limit]";
+
+/** `limits.maxMessageChars` — cut from the TAIL: BrainRouter front-loads the
+ *  task-execution instructions, so the head is the part worth keeping. The
+ *  marker is budgeted into the limit so the result never exceeds it. */
+function capText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const room = Math.max(0, max - CONTENT_CAP_MARKER.length);
+  return text.slice(0, room) + CONTENT_CAP_MARKER;
+}
+
+function capMessageContent(m: any, max: number | undefined): any {
+  if (!max || max <= 0 || !m) return m;
+  const c = m.content;
+  if (typeof c === 'string') return c.length > max ? { ...m, content: capText(c, max) } : m;
+  if (Array.isArray(c)) {
+    // Multi-part (vision) content: cap each text part; image parts pass through.
+    return { ...m, content: c.map((p: any) => (typeof p?.text === 'string' ? { ...p, text: capText(p.text, max) } : p)) };
+  }
+  return m;
 }
 
 export function buildResponsesPayload(

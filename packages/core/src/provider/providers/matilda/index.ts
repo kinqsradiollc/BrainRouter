@@ -30,4 +30,14 @@ export const matilda: ProviderDefinition = {
   // system-prompt effort overlay still conveys depth. (Without this, every turn
   // that carries a non-default `/effort` would 400 at Matilda.)
   reasoningEffort: 'unsupported',
+  // The endpoint also enforces hard per-request limits, measured live to the
+  // byte (ADR-058 §6): a 64 KiB request body — 65 536 bytes → 200, 65 537 →
+  // 403 `{"error":"forbidden"}`, checked at the edge BEFORE any validation
+  // (which is why an oversized agent turn only ever surfaced a 403, never a
+  // 413) — and at most 16 000 characters of `content` per message, for every
+  // role (16 001 → 400 "must be shorter than or equal to 16000"). A BrainRouter
+  // agent turn is ~120 KB (a ~22k-char system prompt + ~104 tools), so the
+  // transport shapes the request to fit: messages capped, tools fitted by
+  // relevance to the remaining bytes.
+  limits: { maxBodyBytes: 65_536, maxMessageChars: 16_000 },
 };
