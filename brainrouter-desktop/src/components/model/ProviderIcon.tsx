@@ -41,6 +41,7 @@ const BG: Record<string, string> = {
   gemini: 'linear-gradient(135deg, #4285F4 0%, #9168F0 100%)',
   openrouter: '#4D5BCE',
   zenmux: '#0D9488',
+  matilda: 'linear-gradient(135deg, #1F9E6A 0%, #0B6B4A 100%)',
   groq: '#F55036',
   azure: 'linear-gradient(135deg, #0078D4 0%, #33A0EE 100%)',
   'openai-compatible': '#52525B',
@@ -50,7 +51,7 @@ const BG: Record<string, string> = {
 };
 
 /** Lettered avatar text for providers without a lobehub mark. */
-const MONOGRAM: Record<string, string> = { opencode: 'oc' };
+const MONOGRAM: Record<string, string> = { opencode: 'oc', matilda: 'Ma' };
 
 /** Generic plug glyph for the OpenAI-compatible custom provider. */
 const PLUG = (
