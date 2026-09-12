@@ -1,8 +1,15 @@
 # ADR-058 — Matilda (Maincode) as a provider
 
-**Status:** PROPOSED · **Builds on:** ADR-012 (providers are DB-only records on the
-server), ADR-047 D1 (providers as data — the declarative entry and the live
-`ProviderRegistry`), the opt-in native wire adapters (0.4.16 — Anthropic-Messages
+**Status:** IMPLEMENTED (0.4.22) — P1 (the built-in module + registration + the
+moved goldens + the `mc_live_` prefix) and P2 (the desktop brand tile + dev-harness
+catalog + core prefix parity) are shipped. Every surface derives the tile from
+`BUILTIN_PROVIDERS` — CLI wizard, desktop Models gallery, dashboard `/catalog`, and
+the server catalog route — verified in the desktop renderer (the tile, the branded
+chip, and the Connect dialog with a prefilled endpoint + Fetch-models + catch-all
+toggle all render). The one remaining §5 step is a live turn against a real `mc_live_`
+account, which needs an account key. · **Builds on:** ADR-012 (providers are DB-only
+records on the server), ADR-047 D1 (providers as data — the declarative entry and the
+live `ProviderRegistry`), the opt-in native wire adapters (0.4.16 — Anthropic-Messages
 and Gemini-generate over the default OpenAI shim), and ADR-041's product-wide
 registry discipline. · **Informed by:** the Maincode Matilda client-SDK
 documentation (`maincode.com/docs`, the `client-sdk-*` pages) plus unauthenticated
@@ -285,21 +292,26 @@ P0 is **done** (see §6) — it is kept here as the record of what was verified.
   from the compatibility contract; a valid `mc_live_` key on the compat surface,
   compat-surface tool-calling, published rate limits, and `/models` reasoning metadata
   are account-gated / unpublished and confirmed on first keyed use — none blocks P1.
-- **P1 — Core built-in module.** `providers/matilda/index.ts` (`endpoint:
+- **P1 — Core built-in module (DONE).** ✅ `providers/matilda/index.ts` (`endpoint:
   'https://matilda.maincode.com/api/v1'`, chat-completions default, reasoning omitted,
-  no `defaultModels`, `envKey: 'MATILDA_API_KEY'`, D2/D4/D5); register in
-  `BUILTIN_PROVIDERS`; add the `mc_live_` prefix (D8); move the enumerated goldens in
-  the same commit (D9). A `config/models.json` context-window row and a
-  `providers.json` tier ladder are optional follow-ups once real ids surface from the
+  no `defaultModels`, `envKey: 'MATILDA_API_KEY'`, D2/D4/D5), registered in
+  `BUILTIN_PROVIDERS`, `mc_live_` prefix added (D8), and the enumerated goldens moved
+  in the same commit (D9: CLI `wizard.test.ts`, core `provider-catalog.test.ts`,
+  `env-fallback.test.ts` — all green). A `config/models.json` context-window row and a
+  `providers.json` tier ladder stay optional follow-ups once real ids surface from the
   live `/models`.
-- **P2 — Desktop/CLI selectability + discovery.** Regression-check the tile in the
-  Desktop gallery and CLI wizard and that `/models` populates the allowlist (no code
-  expected); optionally add a brand-icon rule in `modelFamily.ts` and reasoning name
-  patterns (`reasoning.ts` + the desktop mirror) only if `/models` is thin.
-- **P3 — Server per-org parity (ADR-012).** No migration; confirm the dashboard add
-  flow seals the `mc_live_` key (needs `BRAINROUTER_SECRET_KEY`); optionally add a
-  `MATILDA_*` env seed; update `chatRoutes`/`modelGateway`/`seed`/`inherit` and the
-  `provider-router(-gateway)` routing tests.
+- **P2 — Selectability + discovery across surfaces (DONE).** ✅ Verified in the desktop
+  renderer: the "Matilda (Maincode)" tile appears in the Models gallery and its Connect
+  dialog prefills the endpoint, offers Fetch-models, and the catch-all toggle (D11);
+  the CLI wizard, dashboard `/catalog`, and server catalog route all derive the same
+  tile from `BUILTIN_PROVIDERS`. Added a green brand chip (`ProviderIcon.tsx`) and the
+  dev-harness catalog fixture. `modelFamily.ts`/`reasoning.ts` name patterns stay
+  optional, only if a thin `/models` needs them.
+- **P3 — Server per-org parity (ADR-012) (no code change).** No migration; the server
+  catalog route already derives from `BUILTIN_PROVIDERS`, and the dashboard add flow
+  seals the `mc_live_` key (needs `BRAINROUTER_SECRET_KEY`) over the generic
+  chat-completions path. A `MATILDA_*` env seed in `resolveFromEnv`/`seed.ts` stays an
+  optional deployment-bootstrap follow-up.
 - **P4 — DEFERRED (future ADR): native surface A + OAuth.** Only if server-side
   conversation state, native validated-object output, or user-token auth becomes a
   hard requirement — the adapter files and the OAuth reuse seams are enumerated in
