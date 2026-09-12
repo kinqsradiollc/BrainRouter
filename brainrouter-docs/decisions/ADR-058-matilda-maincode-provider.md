@@ -266,7 +266,11 @@ that rejects `reasoning_effort` / `reasoning` (400). A BrainRouter agent turn is
 ~120 KB — a ~22k-char system prompt plus ~104 tool definitions — so a chat model
 cannot receive it as-is. Rather than special-case one vendor in the transport, the
 `ProviderDefinition` gains an optional **`limits: { maxBodyBytes, maxMessageChars }`**
-and `buildChatCompletionPayload` honours it for any provider that declares it:
+and **one shared shaper** (`provider/requestLimits.ts`) honours it on *every* path that
+fronts a provider — the desktop/CLI transport's `buildChatCompletionPayload` **and** the
+server gateway's `buildUpstreamChatPayload` (which previously forwarded the client's
+full turn verbatim, so the same 403 surfaced there as a 502 "authentication" error
+while the direct path already worked) — for any provider that declares it:
 each message's content is cut from the *tail* (instructions are front-loaded) to
 `maxMessageChars` with a visible marker, and the tool list — the only elastic part
 once messages are capped — is fitted to `maxBodyBytes` by **task relevance** (the same
@@ -275,9 +279,11 @@ relevance-ranked subset that fits, measured in **UTF-8 wire bytes** (the agent
 prompt's em-dashes and ellipses are 3 bytes each; a character count sits "under" the
 budget while the request is over it). Matilda declares `{ maxBodyBytes: 65_536,
 maxMessageChars: 16_000 }` and `reasoningEffort: 'unsupported'`. Providers that
-declare no limits are byte-for-byte unaffected. *Acceptance: a real agent turn
-(~120 KB, ~104 tools) shapes to ≤ 65 536 bytes with the task-relevant tools kept,
-Matilda returns 200, and an end-to-end CLI turn completes.*
+declare no limits are byte-for-byte unaffected, and the gateway never re-adds an
+effort field a provider's definition marks `unsupported`. *Acceptance: a real agent
+turn (~120 KB, ~104 tools) shapes to ≤ 65 536 bytes with the task-relevant tools kept
+and Matilda returns 200 on **both** the direct and the gateway path; an end-to-end
+CLI turn completes.*
 
 ---
 

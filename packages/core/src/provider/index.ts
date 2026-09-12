@@ -33,3 +33,6 @@ export {
   type AdvertisedModelContext,
 } from './managedModelContext.js';
 export * from './models/reasoning.js';
+// ADR-058 D12 — shape a request to a provider's declared limits; shared by the
+// desktop/CLI transport and the server gateway.
+export * from './requestLimits.js';

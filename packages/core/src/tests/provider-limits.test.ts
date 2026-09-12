@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildChatCompletionPayload } from '../agent/transport/llmTransport.js';
+import { shapeChatCompletionToLimits } from '../provider/requestLimits.js';
 import type { LLMConfig } from '../config/config.js';
 
 // ADR-058 — `ProviderDefinition.limits`: a provider declares the hard per-request
@@ -87,4 +88,27 @@ test('matilda never receives reasoning_effort (strict body validation rejects it
   // …while a provider that accepts the field still gets it.
   const oa = buildChatCompletionPayload(OPENAI, [{ role: 'user', content: 'hi' }], [], { effort: 'high' });
   assert.equal((oa as { reasoning_effort?: string }).reasoning_effort, 'high');
+});
+
+// The shared shaper also runs on the server gateway, which holds tool SPECS
+// (wire shape) rather than raw tools — so it is exercised on a wire body too.
+test('shapeChatCompletionToLimits: shapes a gateway-style WIRE body (tool specs), same guarantees', () => {
+  const spec = (name: string, description: string) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties: {} } } });
+  const body = {
+    model: 'matilda',
+    messages: [{ role: 'system', content: 'HEAD ' + 'x'.repeat(25_000) }, { role: 'user', content: 'please read the file' }],
+    tools: [...Array.from({ length: 200 }, (_, i) => spec(`tool_${i}`, `Tool ${i} — ${'—'.repeat(300)}`)), spec('read_file', 'Read a file')],
+    tool_choice: 'auto',
+  };
+  const out = shapeChatCompletionToLimits(body, { maxBodyBytes: BODY_LIMIT, maxMessageChars: MSG_LIMIT });
+  const json = JSON.stringify(out);
+  assert.ok(utf8(json) <= BODY_LIMIT, `wire body ≤ ${BODY_LIMIT} bytes, got ${utf8(json)}`);
+  assert.ok(out.messages[0].content.length <= MSG_LIMIT && out.messages[0].content.startsWith('HEAD'));
+  const kept = out.tools!.map((t) => t.function!.name);
+  assert.ok(kept.length > 0 && kept.length < 201 && kept.includes('read_file'), `relevant tool kept in a strict subset: ${kept.length}`);
+  // No limits ⇒ identity.
+  const same = { model: 'm', messages: [{ role: 'user', content: 'x'.repeat(30_000) }], tools: body.tools.slice(0, 3) };
+  const before = JSON.stringify(same);
+  shapeChatCompletionToLimits(same, undefined);
+  assert.equal(JSON.stringify(same), before);
 });
