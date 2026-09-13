@@ -119,3 +119,19 @@ test('stream: `replace` discards the text so far; `error` throws', async () => {
   assert.equal(out.finishReason, 'stop');
   await assert.rejects(() => parseMatildaChatStream(sse([['error', { code: 'rate_limited', message: 'slow down' }]]), {}, 'e', 'm'), /rate_limited slow down/);
 });
+
+test('payload: a runtime-mandated tool and a tool the latest user text names verbatim survive the native fit', () => {
+  const heavy = Array.from({ length: 200 }, (_, i) => tool(`tool_${i}`, `Tool ${i} — ${'—'.repeat(300)}`));
+  const tools = [...heavy, tool('profile_stage', 'Begin or complete a compiled stage'), tool('qq_zz', '')];
+  const ask = buildMatildaChatPayload(input({ system: 'S', messages: [{ role: 'user', content: 'what do you think about the current state of the economy' }], tools }), { conversationId: 'c' });
+  const kept = ask.clientTools!.map((t) => t.name);
+  assert.ok(kept.length < tools.length && kept.includes('profile_stage') && !kept.includes('qq_zz'));
+  const guarded = buildMatildaChatPayload(input({ system: 'S', messages: [
+    { role: 'user', content: 'what do you think about the current state of the economy' },
+    { role: 'assistant', content: 'Here is my view.' },
+    { role: 'user', content: 'Runtime guardrail tripped. Call qq_zz now.' },
+  ], tools }), { conversationId: 'c' });
+  const keptAfterGuard = guarded.clientTools!.map((t) => t.name);
+  assert.ok(keptAfterGuard.includes('qq_zz') && keptAfterGuard.includes('profile_stage'));
+  assert.ok(utf8(JSON.stringify(guarded)) <= MATILDA_NATIVE_LIMITS.maxBodyBytes);
+});
