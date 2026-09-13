@@ -13,7 +13,7 @@
  *
  * Browser-safe: no node:* imports (`TextEncoder` for byte length).
  */
-import { rankAndCapTools } from '../tool/policy/toolBudget.js';
+import { pinnedToolNames, rankAndCapTools } from '../tool/policy/toolBudget.js';
 
 export interface ProviderRequestLimits {
   /** Largest serialized request body, in UTF-8 wire bytes (what Content-Length carries). */
@@ -88,21 +88,26 @@ export function capMessageContent<M extends { content?: unknown }>(m: M, max: nu
  *  most task-relevant tool specs serializes within the budget (bytes are
  *  monotone in k; `rankAndCapTools` ranks the way the MCP tool budget does), so a
  *  constrained endpoint gets the tools that matter for THIS task — never a blind
- *  prefix cut of an 81-local-tool list that would drop core agent tools. If even
- *  zero tools cannot fit (the messages alone exceed the budget) the tools are
- *  dropped and the request goes out as-is — that is a context-length problem for
- *  the provider to report, not one a tool cut can solve. Mutates in place. */
+ *  prefix cut of an 81-local-tool list that would drop core agent tools. Tools a
+ *  runtime guardrail demands by name (`profile_stage`, `task_agent`, …) and tools
+ *  the latest user text names verbatim are pinned ahead of relevance: a fit that
+ *  dropped `profile_stage` on a question about the economy left the model told
+ *  to call a tool it was never given. If even zero tools cannot fit (the messages
+ *  alone exceed the budget) the tools are dropped and the request goes out as-is
+ *  — that is a context-length problem for the provider to report, not one a tool
+ *  cut can solve. Mutates in place. */
 function fitToolSpecsToByteBudget(body: ShapeableChatBody, specs: WireToolSpec[], taskText: string, maxBodyBytes: number): void {
   const measure = (): number => utf8Bytes(JSON.stringify(body));
   if (measure() <= maxBodyBytes) return;
   // Rank on the model-facing name/description the spec carries.
   const ranked = specs.map((spec) => ({ name: String(spec.function?.name ?? ''), description: spec.function?.description, spec }));
+  const pinned = pinnedToolNames(taskText, ranked.map((r) => r.name));
   const originalToolChoice = body.tool_choice;
   const withTopK = (k: number): void => {
     if (k <= 0) { delete body.tools; delete body.tool_choice; return; }
     // `rankAndCapTools` returns the whole list when k >= length (and when
     // k <= 0, hence the explicit zero branch above).
-    const kept = k >= ranked.length ? ranked : rankAndCapTools(ranked, taskText, k).kept;
+    const kept = k >= ranked.length ? ranked : rankAndCapTools(ranked, taskText, k, { pinned }).kept;
     body.tools = kept.map((r) => r.spec);
     body.tool_choice = originalToolChoice ?? 'auto';
   };

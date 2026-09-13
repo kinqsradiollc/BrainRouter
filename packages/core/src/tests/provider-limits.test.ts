@@ -112,3 +112,27 @@ test('shapeChatCompletionToLimits: shapes a gateway-style WIRE body (tool specs)
   shapeChatCompletionToLimits(same, undefined);
   assert.equal(JSON.stringify(same), before);
 });
+
+test('limits.maxBodyBytes: a runtime-mandated tool and a tool the task names verbatim survive the fit with zero relevance overlap', () => {
+  // `qq_zz` tokenizes to nothing (every token < 3 chars) so ONLY the verbatim
+  // mention can keep it; `profile_stage` shares no token with the question.
+  const tools = [...heavyTools(), tool('profile_stage', 'Begin or complete a compiled stage'), tool('qq_zz', '')];
+  const question = [
+    { role: 'system', content: 'You are an agent.' },
+    { role: 'user', content: 'what do you think about the current state of the economy' },
+  ];
+  const body = buildChatCompletionPayload(MATILDA, question, tools, {});
+  assert.ok(utf8(JSON.stringify(body)) <= BODY_LIMIT);
+  const kept = (body.tools ?? []).map((t) => t.function.name);
+  assert.ok(kept.length < tools.length, 'the fit really cut the list');
+  assert.ok(kept.includes('profile_stage'), 'the guard-demanded tool is pinned regardless of relevance');
+  assert.ok(!kept.includes('qq_zz'), 'an unmentioned, irrelevant tool at the tail is cut as before');
+  const guarded = buildChatCompletionPayload(MATILDA, [
+    ...question,
+    { role: 'assistant', content: 'Here is my view.' },
+    { role: 'user', content: 'Runtime guardrail tripped. Call qq_zz now.' },
+  ], tools, {});
+  const keptAfterGuard = (guarded.tools ?? []).map((t) => t.function.name);
+  assert.ok(keptAfterGuard.includes('qq_zz'), 'a tool the latest user text names verbatim is pinned');
+  assert.ok(keptAfterGuard.includes('profile_stage'));
+});

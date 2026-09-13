@@ -326,6 +326,25 @@ completes, and a live `brainrouter run` completes against the native surface.*
 *Acceptance (behavioural, NOT met today — see §6): the model reliably calls the
 advertised client tool on realistic agent prompts.*
 
+**D14 · Runtime-mandated tools survive the byte fit.** The first attended agent
+turns on the native adapter produced a model that said "no such tool exists" for
+`profile_stage` — and it was right: both fits (D12's chat-completions shaper and
+D13's native body) rank tools by token overlap with the latest user text, the
+16k-char system prompt plus history had left room for nine tools, and
+`profile_stage` — which the workspace strategy then demanded at turn end — shares no
+token with "what do you think about the current state of Australia's economy".
+Both shapers now pin ahead of relevance the tools a runtime guardrail names by name
+(`RUNTIME_MANDATED_TOOLS` in `tool/policy/toolBudget.ts`: `profile_stage`,
+`task_agent`, `update_plan`, `goal_complete`, `goal_blocked`) plus any tool the
+latest user message names verbatim as a whole word (a guard correction reading
+"Call task_agent with …"). The gateway inherits it through the shared shaper.
+Recorded with it: the "evidence pack about guardrails in agent SDKs" the model
+reported in the same turn is **Matilda's server-side `search`** having run on
+BrainRouter's own guard correction ("Runtime profile-stage guardrail tripped…") —
+the platform searches the latest user message, whatever it is — and is not a
+BrainRouter feature nor switchable (§6); it fired only because the guard fired,
+which D14 removes for the mandated-tool case.
+
 ---
 
 ## 3. What this is not

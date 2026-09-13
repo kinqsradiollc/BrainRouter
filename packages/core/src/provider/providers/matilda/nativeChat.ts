@@ -31,7 +31,7 @@
 import type { CleanMessage, CleanTool, NativeBuildInput, NativeOutput } from '../../../agent/transport/nativeProviders.js';
 import { sseEvents, type NativeStreamHandlers } from '../../../agent/transport/nativeProviderStream.js';
 import { capMessageContent, utf8Bytes } from '../../requestLimits.js';
-import { rankAndCapTools } from '../../../tool/policy/toolBudget.js';
+import { pinnedToolNames, rankAndCapTools } from '../../../tool/policy/toolBudget.js';
 import { createDsmlInterceptor } from './dsml.js';
 
 export const MATILDA_NATIVE_LIMITS = {
@@ -139,10 +139,15 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
 
   // 3) clientTools: at most 64, the most task-relevant first, then fitted to the
   //    byte budget (binary search on the largest relevance-ranked top-k that fits).
+  //    Runtime-mandated tools and tools the latest user text names verbatim are
+  //    pinned ahead of relevance — the first live turns cut `profile_stage` on a
+  //    question about the economy and the model, told to call it, rightly said
+  //    no such tool existed.
   const taskText = latestUserText(input.messages);
   const ranked = input.tools.map((t: CleanTool) => ({ name: t.name, description: t.description, tool: t }));
+  const pinned = pinnedToolNames(taskText, ranked.map((r) => r.name));
   const apply = (k: number): number => {
-    const kept = k >= ranked.length ? ranked : rankAndCapTools(ranked, taskText, k).kept;
+    const kept = k >= ranked.length ? ranked : rankAndCapTools(ranked, taskText, k, { pinned }).kept;
     payload.clientTools = kept.map((r) => ({
       name: r.tool.name,
       description: describe(r.tool.description),
