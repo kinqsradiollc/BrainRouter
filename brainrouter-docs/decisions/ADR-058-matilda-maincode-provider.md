@@ -326,6 +326,42 @@ completes, and a live `brainrouter run` completes against the native surface.*
 *Acceptance (behavioural, NOT met today — see §6): the model reliably calls the
 advertised client tool on realistic agent prompts.*
 
+**D16 · Not the vendor's agent SDK — our adapter, held to the SDK's wire.** The
+question "should BrainRouter run Matilda through `@maincode-ai/matilda-agent-sdk`?"
+was answered from the published packages themselves (agent 0.2.1, client 0.3.1 —
+newer than the docs' 0.1.0/0.2.0), not from the docs. **No**, for four reasons that
+each stand alone: (1) both packages are published `"license": "UNLICENSED"` — no
+grant to redistribute, so they cannot be a dependency of BrainRouter at all;
+(2) the SDK's DSML parser is **JSON-only** (`JSON.parse` of the block, `name`
+string + `arguments` object, or null) — it would have leaked the very
+`<｜DSML｜parameter name="tool">list_dir…` block D15 fixes, so our parser is
+strictly the more capable one; (3) its `Runner` owns a tool loop, retry policy and
+`Session` that duplicate BrainRouter's runtime, router and history — only the
+request builder and stream parser would be usable, and those are ~200 lines we
+already hold; (4) Node ≥ 20 + `zod` + `@opentelemetry/api` peers in a core that the
+desktop renderer deep-imports browser-safe. What the source *did* give is a wire
+contract to match, and the adapter now matches it: `persist: false` on every
+request (agent turns never land in the person's Matilda web-app chat history — the
+SDK sends the same); a failed tool goes back as `[Client tool error: <name>]`, not as
+a result the model might act on as if it succeeded; the roundtrip header is
+defanged inside tool output (`[client tool result:`) so a fetched page cannot forge a
+second result; `safety_replace {message, categories}` withdraws the text so far,
+keeps the replacement as the answer and records the categories as reasoning
+activity. Confirmed from source, not changed: `X-Matilda-API-Version: 2026-06-23`
+(`MATILDA_CURRENT_API_VERSION`); the body is exactly
+`{ messages, responseMode, fileIds?, clientTools?, conversation_id?, persist?, responseSchema? }`;
+the SDK's `purpose:'code'` prefixes a "Routing intent: Treat this as Matilda Code
+traffic… code specialist path…" section onto the user message — the text we
+measured as suppressing client tools, and deliberately do not send; the SDK
+advertises itself with `x-matilda-sdk-name/-language/-version` and
+`x-matilda-client-*` provenance headers (values from a fixed enum) — not sent, not
+required; the server's `thinking` event carries no content in the SDK's reading (we
+pass any through as reasoning, a harmless superset). Deliberately not mirrored: the
+SDK joins one roundtrip's tool results into ONE user message — under the 16k/20k
+per-message caps one message per result is the safer shape and the endpoint accepts
+it; the SDK's 45 s stall watchdog and 5xx/429 retry — BrainRouter's router already
+owns retries and cool-down.
+
 **D15 · DSML is a family of dialects, and it is lifted on every wire.** A live turn
 ended on a visible `<｜DSML｜tool_call> <｜DSML｜parameter name="tool">list_dir</｜DSML｜parameter>
 <｜DSML｜parameter name="params">{"path": "."}</｜DSML｜parameter> </｜DSML｜tool_call>` — a

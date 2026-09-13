@@ -880,6 +880,16 @@ function buildNativeInput(
   options: BuildPayloadOptions,
 ): NativeBuildInput {
   const mapped = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
+  // A native adapter may speak a result/error distinction on the wire (Matilda's
+  // `[Client tool error: …]`). The chat-completions cleaner drops the runtime's
+  // `isError` verdict — an unknown field would 400 a strict endpoint — so it is
+  // re-attached here, by tool_call_id, for the native build input only.
+  const failedToolCalls = new Set<string>(
+    messages.filter((m: any) => m?.role === 'tool' && m.isError === true && m.tool_call_id).map((m: any) => String(m.tool_call_id)),
+  );
+  if (failedToolCalls.size > 0) {
+    for (const m of mapped) if (m?.role === 'tool' && failedToolCalls.has(String(m.tool_call_id))) m.isError = true;
+  }
   let system = '';
   let rest = mapped;
   if (mapped[0]?.role === 'system') {

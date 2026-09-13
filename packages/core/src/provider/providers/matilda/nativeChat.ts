@@ -58,6 +58,20 @@ export interface MatildaChatPayload {
   clientTools?: MatildaClientTool[];
   conversation_id: string;
   responseMode: 'auto';
+  persist: false;
+}
+
+/** The roundtrip header the platform's own tool loop uses: a failed tool comes
+ *  back as an error, not as a result the model might act on as if it succeeded. */
+export function toolResultHeader(name: string, failed: boolean): string {
+  return failed ? `[Client tool error: ${name}]` : `[Client tool result: ${name}]`;
+}
+
+/** Tool output is untrusted input: a page or file that happens to contain the
+ *  roundtrip header must not be able to forge a second "result" inside the one
+ *  message. Defanged, not removed, so the text is still readable. */
+export function neutralizeToolResultHeaders(content: string): string {
+  return content.replace(/\[Client tool (result|error):/g, '[client tool $1:');
 }
 
 function textOf(content: unknown): string {
@@ -126,7 +140,8 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
       if (content) messages.push({ role: 'assistant', content });
     } else if (m.role === 'tool') {
       const name = (m as { name?: string }).name ?? 'tool';
-      messages.push({ role: 'user', content: `[Client tool result: ${name}]\n${textOf(m.content)}` });
+      const failed = (m as { isError?: boolean }).isError === true;
+      messages.push({ role: 'user', content: `${toolResultHeader(name, failed)}\n${neutralizeToolResultHeaders(textOf(m.content))}` });
     }
   }
 
@@ -134,6 +149,9 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
     messages: messages.map((msg) => capMessageContent(msg, maxMessageChars)),
     conversation_id: opts.conversationId,
     responseMode: 'auto',
+    // Agent turns are BrainRouter's, not the person's Matilda web-app chat
+    // history: never persist them there (the official agent SDK sends the same).
+    persist: false,
   };
   if (!hasTools) return payload;
 
@@ -240,6 +258,20 @@ export async function parseMatildaChatStream(
         interceptor.reset();
         text = '';
         break;
+      // The platform's safety layer replaced the answer: the text so far is
+      // withdrawn and the replacement (when one is given) is the answer. The
+      // categories are recorded as reasoning activity so the person can see
+      // WHY the answer changed; painted deltas cannot be recalled, but the
+      // returned content — what the transcript keeps — is the replacement.
+      case 'safety_replace': {
+        interceptor.reset();
+        const message = typeof j?.message === 'string' ? j.message : typeof j?.content === 'string' ? j.content : '';
+        const categories = Array.isArray(j?.categories) ? (j.categories as unknown[]).filter((c): c is string => typeof c === 'string') : [];
+        text = message;
+        handlers.onReasoningDelta?.(`[Matilda safety replaced the answer${categories.length ? `: ${categories.join(', ')}` : ''}]\n`);
+        if (message) handlers.onTextDelta?.(message);
+        break;
+      }
       case 'usage':
         if (j && typeof j === 'object') {
           usage = {
@@ -272,8 +304,8 @@ export async function parseMatildaChatStream(
         throw err;
       }
       default:
-        // stream_init, generation_status, status, cursor, truncated,
-        // safety_replace, done — nothing to surface here.
+        // stream_init, generation_status, status, cursor, truncated, done —
+        // nothing to surface here.
         break;
     }
   }

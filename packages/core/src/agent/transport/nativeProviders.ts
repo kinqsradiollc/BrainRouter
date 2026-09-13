@@ -37,6 +37,10 @@ export interface CleanMessage {
   name?: string;
   tool_call_id?: string;
   tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+  /** Tool-result messages only: the runtime's verdict that the tool FAILED, so an
+   *  adapter that speaks a result/error distinction on the wire (Matilda's
+   *  `[Client tool error: …]`) can keep it. */
+  isError?: boolean;
 }
 
 /** OpenAI tool spec as the agent holds it (name/description/inputSchema). */
