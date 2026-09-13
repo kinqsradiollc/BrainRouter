@@ -167,6 +167,28 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
   return payload;
 }
 
+const SERVER_TOOL_OUTPUT_PREVIEW_CHARS = 400;
+
+/** One reasoning-stream line for a server-side tool event, or '' when the
+ *  payload carries nothing readable. Exported for tests. */
+export function describeServerTool(event: string, j: Record<string, unknown> | null): string {
+  const tool = typeof j?.tool === 'string' && j.tool ? j.tool : 'tool';
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : v == null ? '' : JSON.stringify(v));
+  const label = `Matilda server-side ${tool}`;
+  if (event === 'tool_start') {
+    const input = str(j?.input ?? j?.inputOrArgs ?? j?.args);
+    return `[${label}] ${input || 'started'}\n`;
+  }
+  if (event === 'tool_progress') {
+    const message = str(j?.message);
+    return message ? `[${label}] ${message}\n` : '';
+  }
+  const status = typeof j?.status === 'string' ? j.status : 'done';
+  const output = str(j?.output);
+  const preview = output.length > SERVER_TOOL_OUTPUT_PREVIEW_CHARS ? `${output.slice(0, SERVER_TOOL_OUTPUT_PREVIEW_CHARS)}…` : output;
+  return `[${label} → ${status}]${preview ? ` ${preview}` : ''}\n`;
+}
+
 /**
  * Consume the native SSE stream into the transport's `NativeOutput`. Text
  * deltas pass through the DSML interceptor so tool calls never reach the
@@ -220,9 +242,29 @@ export async function parseMatildaChatStream(
         break;
       case 'usage':
         if (j && typeof j === 'object') {
-          usage = { ...(typeof j.output_tokens === 'number' ? { completion_tokens: j.output_tokens } : {}), ...j };
+          usage = {
+            ...(typeof j.input_tokens === 'number' ? { prompt_tokens: j.input_tokens } : {}),
+            ...(typeof j.output_tokens === 'number' ? { completion_tokens: j.output_tokens } : {}),
+            ...j,
+          };
         }
         break;
+      // Matilda's OWN tools (web `search`, code execution, URL reads) run on the
+      // platform before the model answers and cannot be disabled. They are not
+      // client tools, so they never become tool calls — but a person watching
+      // the turn otherwise sees nothing happen while the answer arrives
+      // pre-researched. Surface them as reasoning-stream activity, the channel
+      // for "what the model did before it spoke". Wire shapes (measured):
+      //   tool_start    {"tool":"search","input":"<query>"}
+      //   tool_progress {"tool":"search","message":"…"}
+      //   tool_result   {"tool":"search","status":"success","input":"…","output":"Found sources: …"}
+      case 'tool_start':
+      case 'tool_progress':
+      case 'tool_result': {
+        const line = describeServerTool(ev.event, j);
+        if (line) handlers.onReasoningDelta?.(line);
+        break;
+      }
       case 'error': {
         const err: Error & { status?: number } = new Error(
           `matilda-chat stream error from ${endpoint} (${model}): ${String(j?.code ?? '')} ${String(j?.message ?? ev.data)}`.trim(),
@@ -230,8 +272,8 @@ export async function parseMatildaChatStream(
         throw err;
       }
       default:
-        // stream_init, generation_status, tool_start, tool_result, tool_progress,
-        // status, cursor, truncated, safety_replace, done — nothing to surface here.
+        // stream_init, generation_status, status, cursor, truncated,
+        // safety_replace, done — nothing to surface here.
         break;
     }
   }

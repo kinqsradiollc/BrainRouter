@@ -518,6 +518,14 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   phrasing that had scored 3/3 in isolation — and the model then treats those results as
   user-provided context, asks where the file is, or claims it lacks the tool. Even the
   bare single-tool task was only ~2/3.
+- **The server-side tools are visible on the wire** — `tool_start {"tool":"search","input":"<query>"}`,
+  `tool_progress {"tool","message"}`, `tool_result {"tool":"search","status":"success","input","output":"Found sources: …"}`
+  (a plain question about the RBA cash rate triggers one). The adapter surfaces them as
+  reasoning-stream lines (`[Matilda server-side search] …` / `[… → success] Found sources: …`)
+  so a person watching a turn sees what the platform did before the model spoke; a
+  turn without any client tool call otherwise looks like nothing happened. The `usage`
+  event carries `input_tokens`/`output_tokens`/`reasoning_tokens`/`cached_tokens`;
+  `input_tokens` maps onto `prompt_tokens`.
 - **There is no way to disable the server-side tools**: the SDK exposes no option and
   every plausible request flag (`serverTools`, `tools`, `disableSearch`, `webSearch`,
   `toolPolicy`, `agentMode`, …) is rejected by the strict validator as an unknown

@@ -135,3 +135,31 @@ test('payload: a runtime-mandated tool and a tool the latest user text names ver
   assert.ok(keptAfterGuard.includes('qq_zz') && keptAfterGuard.includes('profile_stage'));
   assert.ok(utf8(JSON.stringify(guarded)) <= MATILDA_NATIVE_LIMITS.maxBodyBytes);
 });
+
+test('stream: Matilda server-side tool events surface as reasoning activity, never as visible text or tool calls', async () => {
+  const query = 'What is the current RBA cash rate?';
+  const events: Array<[string, unknown]> = [
+    ['stream_init', { stream_id: 's', resumable: true }],
+    ['tool_start', { tool: 'search', input: query }],
+    ['tool_progress', { tool: 'search', message: 'reading 3 sources' }],
+    ['tool_result', { tool: 'search', status: 'success', input: query, output: 'Found sources: Reserve Bank of Australia https://www.rba.gov.au/ | ' + 'x'.repeat(600) }],
+    ['token', { content: 'The cash rate is 4.35%.' }],
+    ['usage', { output_tokens: 12, input_tokens: 345, reasoning_tokens: 0, cached_tokens: 0 }],
+    ['done', {}],
+  ];
+  const reasoning: string[] = [];
+  const out = await parseMatildaChatStream(sse(events), { onReasoningDelta: (t) => reasoning.push(t) }, 'e', 'm');
+  assert.equal(out.content, 'The cash rate is 4.35%.');
+  assert.equal(out.toolCalls, undefined, 'a server-side tool is not a client tool call');
+  assert.equal(out.finishReason, 'stop');
+  assert.equal(reasoning.length, 3);
+  assert.match(reasoning[0], /^\[Matilda server-side search\] What is the current RBA cash rate\?\n$/);
+  assert.match(reasoning[1], /^\[Matilda server-side search\] reading 3 sources\n$/);
+  assert.match(reasoning[2], /^\[Matilda server-side search → success\] Found sources: Reserve Bank/);
+  assert.ok(reasoning[2].length < 500 && reasoning[2].includes('…'), 'long outputs are previewed, not dumped');
+  assert.equal(out.usage?.prompt_tokens, 345, 'input_tokens maps onto the OpenAI prompt_tokens field');
+  assert.equal(out.usage?.completion_tokens, 12);
+  const empty = await parseMatildaChatStream(sse([['tool_progress', { tool: 'search' }], ['done', {}]]), { onReasoningDelta: (t) => reasoning.push(t) }, 'e', 'm');
+  assert.equal(reasoning.length, 3, 'a progress event with no message emits nothing');
+  assert.equal(empty.content, '');
+});
