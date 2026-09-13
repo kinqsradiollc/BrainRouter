@@ -326,6 +326,25 @@ completes, and a live `brainrouter run` completes against the native surface.*
 *Acceptance (behavioural, NOT met today — see §6): the model reliably calls the
 advertised client tool on realistic agent prompts.*
 
+**D15 · DSML is a family of dialects, and it is lifted on every wire.** A live turn
+ended on a visible `<｜DSML｜tool_call> <｜DSML｜parameter name="tool">list_dir</｜DSML｜parameter>
+<｜DSML｜parameter name="params">{"path": "."}</｜DSML｜parameter> </｜DSML｜tool_call>` — a
+third dialect: the model's own key names (`tool`/`params`), no `string` attribute,
+one line. The parser now accepts any of `name`/`tool`/`tool_name`/`function` for the
+tool and any of `arguments`/`args`/`params`/`parameters`/`input` for the arguments,
+in both the JSON and the parameter form, and when no argument container is present
+the remaining parameter elements are themselves the arguments
+(`<parameter name="path">.</parameter>` → `{"path":"."}`). A block that still fails
+to parse stays visible rather than being swallowed. Separately,
+`ProviderDefinition.toolCallMarkup: 'dsml'` declares that this model writes tool
+calls into its text on *every* surface, and the chat-completions transport (stream
+and non-stream) lifts those blocks into `toolCalls` for such a provider exactly as
+the native adapter does — so the compat-wire override never ends a turn on leaked
+markup. Every other provider's text is never inspected. (Measured the same day: on
+`/v1` Matilda emits **no** DSML even when prompted — its compat surface ignores
+tools outright — so the lift matters for the override path, and a gateway
+re-framer would have nothing to lift.)
+
 **D14 · Runtime-mandated tools survive the byte fit.** The first attended agent
 turns on the native adapter produced a model that said "no such tool exists" for
 `profile_stage` — and it was right: both fits (D12's chat-completions shaper and

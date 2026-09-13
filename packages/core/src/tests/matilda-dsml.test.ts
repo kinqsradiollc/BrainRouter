@@ -92,3 +92,25 @@ test('interceptor: reset() drops held state (server `replace`)', () => {
   it.flush();
   assert.equal(text, 'partial fresh');
 });
+
+test('payload: the live single-line dialect with the model\'s own keys (tool/params, no string attr) parses', () => {
+  const block = `<${BAR}DSML${BAR}tool_call> <${BAR}DSML${BAR}parameter name="tool">list_dir</${BAR}DSML${BAR}parameter> <${BAR}DSML${BAR}parameter name="params">{"path": "."}</${BAR}DSML${BAR}parameter> </${BAR}DSML${BAR}tool_call>`;
+  const calls: Array<{ name: string; arguments: string }> = [];
+  let text = '';
+  const i = createDsmlInterceptor((t) => { text += t; }, (c) => calls.push(c));
+  i.push('Let me start by exploring the codebase:\n\n');
+  for (const piece of block.match(/.{1,7}/gs)!) i.push(piece);
+  i.flush();
+  assert.equal(text, 'Let me start by exploring the codebase:\n\n', 'nothing of the block leaks into visible text');
+  assert.deepEqual(calls, [{ name: 'list_dir', arguments: '{"path": "."}' }]);
+});
+
+test('payload: name/argument synonyms and bare parameter elements', () => {
+  const p = (n: string, v: string) => `<${BAR}DSML${BAR}parameter name="${n}">${v}</${BAR}DSML${BAR}parameter>`;
+  assert.deepEqual(parseDsmlToolCallPayload(`${p('function', 'read_file')}${p('input', '{"path":"a"}')}`), { name: 'read_file', arguments: '{"path":"a"}' });
+  assert.deepEqual(parseDsmlToolCallPayload(`${p('tool_name', 'grep_search')}${p('parameters', 'not json')}`), { name: 'grep_search', arguments: '{"input":"not json"}' });
+  // No argument container: the other parameters ARE the arguments (JSON-typed when they parse).
+  assert.deepEqual(parseDsmlToolCallPayload(`${p('tool', 'read_file')}${p('path', 'src/index.ts')}${p('limit', '40')}${p('id', 'c9')}`), { name: 'read_file', arguments: '{"path":"src/index.ts","limit":40}', id: 'c9' });
+  assert.deepEqual(parseDsmlToolCallPayload('{"tool":"list_dir","params":{"path":"."}}'), { name: 'list_dir', arguments: '{"path":"."}' });
+  assert.equal(parseDsmlToolCallPayload(`${p('params', '{}')}`), null, 'no name under any key → not a call');
+});

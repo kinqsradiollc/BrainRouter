@@ -47,4 +47,8 @@ export const matilda: ProviderDefinition = {
   // transport shapes the request to fit: messages capped, tools fitted by
   // relevance to the remaining bytes.
   limits: { maxBodyBytes: 65_536, maxMessageChars: 16_000 },
+  // Tool calls arrive as DSML text on EVERY surface the model speaks through
+  // (a compat-wire turn once ended on a visible
+  // `<｜DSML｜tool_call> <｜DSML｜parameter name="tool">list_dir…` block).
+  toolCallMarkup: 'dsml',
 };

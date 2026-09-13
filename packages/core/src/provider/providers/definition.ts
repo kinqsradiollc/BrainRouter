@@ -148,6 +148,17 @@ export interface ProviderDefinition {
   limits?: { maxBodyBytes?: number; maxMessageChars?: number };
 
   /**
+   * ADR-058 — the model writes tool calls INTO ITS TEXT as markup instead of
+   * (or as well as) emitting wire-level `tool_calls`. `'dsml'` is Matilda's
+   * `<｜DSML｜tool_call>…</｜DSML｜tool_call>` block. When set, every wire the
+   * provider is reached over — the native adapter and the OpenAI-compatible
+   * chat-completions path alike — lifts those blocks out of the visible text
+   * into `toolCalls`, so a call never leaks as prose and ends the turn.
+   * Undefined for every other provider: their text is never inspected.
+   */
+  toolCallMarkup?: 'dsml';
+
+  /**
    * Fallback API key injected when the user set NO key (and no env key) — for
    * providers with a public/anonymous free tier (opencode "public"). Local
    * providers leave this unset; they use the `local` blank-key path.
