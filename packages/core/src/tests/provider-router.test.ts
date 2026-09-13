@@ -276,3 +276,15 @@ test('resolveCriticLlm routes cli.critic.model through the provider router', () 
   assert.equal(llm.endpoint, groq.endpoint);
   assert.equal(llm.model, 'shared-model');
 });
+
+test('classifyRouterFailure: provider-native stream error codes — budget/deadline/outage retryable, context overflow, safety block final', () => {
+  const of = (msg: string) => classifyRouterFailure(new Error(`matilda-chat stream error from e (m): ${msg}`));
+  assert.equal(of('request_budget_exceeded The assistant ran out of steps before it could finish.').kind, 'provider_retryable');
+  assert.equal(of('deadline_exceeded took too long').kind, 'provider_retryable');
+  assert.equal(of('upstream_unavailable The AI model is not responding').kind, 'provider_retryable');
+  assert.equal(of('context_too_large the prompt is too big').kind, 'context_overflow');
+  assert.equal(of('content_blocked Safety filter blocked the content').kind, 'non_retryable');
+  // Once text has painted, nothing is retried — the guard wins over the code.
+  const painted = Object.assign(new Error('matilda-chat stream error: request_budget_exceeded'), { brainrouterStreamStarted: true });
+  assert.equal(classifyRouterFailure(painted).kind, 'non_retryable');
+});

@@ -194,3 +194,26 @@ test('stream: safety_replace withdraws the text so far, keeps the replacement as
   assert.deepEqual(reasoning, ['[Matilda safety replaced the answer: weapons]\n']);
   assert.equal(deltas.at(-1), 'I can\'t help with that.');
 });
+
+test('stream: a server error AFTER text keeps the partial answer, marks why it stopped, and ends the turn cleanly', async () => {
+  const reasoning: string[] = [];
+  const deltas: string[] = [];
+  const out = await parseMatildaChatStream(sse([
+    ['token', { content: 'The last six decisions were ' }],
+    ['error', { code: 'request_budget_exceeded', error: 'The assistant ran out of steps before it could finish.' }],
+    ['token', { content: 'NEVER DELIVERED' }],
+    ['done', {}],
+  ]), { onTextDelta: (t) => deltas.push(t), onReasoningDelta: (t) => reasoning.push(t) }, 'e', 'm');
+  assert.equal(out.content, 'The last six decisions were \n\n_(Matilda stopped early: The assistant ran out of steps before it could finish.)_');
+  assert.equal(deltas.join(''), out.content, 'the trailer is painted too');
+  assert.equal(out.finishReason, 'stop');
+  assert.deepEqual(reasoning, ['[Matilda ended the answer early: request_budget_exceeded — The assistant ran out of steps before it could finish.]\n']);
+  assert.ok(!out.content.includes('NEVER DELIVERED'), 'nothing after the error event is read');
+});
+
+test('stream: a server error BEFORE any text throws with the code on the error, reading the `error` field the wire actually uses', async () => {
+  await assert.rejects(
+    () => parseMatildaChatStream(sse([['error', { code: 'request_budget_exceeded', error: 'The assistant ran out of steps before it could finish.' }]]), {}, 'https://matilda.maincode.com/api/v1', 'matilda'),
+    (e: Error & { code?: string }) => e.code === 'request_budget_exceeded' && /request_budget_exceeded The assistant ran out of steps/.test(e.message),
+  );
+});

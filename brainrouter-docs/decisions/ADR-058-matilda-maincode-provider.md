@@ -581,6 +581,19 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   turn without any client tool call otherwise looks like nothing happened. The `usage`
   event carries `input_tokens`/`output_tokens`/`reasoning_tokens`/`cached_tokens`;
   `input_tokens` maps onto `prompt_tokens`.
+- **The platform can run out of its own steps.** A real agent turn ended with the
+  `error` event `{"code":"request_budget_exceeded","error":"The assistant ran out of
+  steps before it could finish."}` — Matilda's server-side loop (search → read → …)
+  exhausting its per-request budget on the way to an answer; a plain research prompt
+  did not reproduce it, an agent-shaped turn did. The wire puts the text under
+  `error`, not `message`. The adapter now keeps a partial answer (text or tool calls
+  already received), marks why it stopped (`[Matilda ended the answer early: …]` as
+  reasoning + a visible `_(Matilda stopped early: …)_` trailer) and ends the turn
+  cleanly — the official SDK keeps the text the same way; with nothing received it
+  throws with the code on the error, and the router classifies
+  `request_budget_exceeded` / `deadline_exceeded` / `upstream_unavailable` /
+  `internal_error` / `stalled` / `stream_aborted` / `rate_limited` as retryable,
+  `context_too_large` as context overflow, `content_blocked` as final.
 - **There is no way to disable the server-side tools**: the SDK exposes no option and
   every plausible request flag (`serverTools`, `tools`, `disableSearch`, `webSearch`,
   `toolPolicy`, `agentMode`, …) is rejected by the strict validator as an unknown
