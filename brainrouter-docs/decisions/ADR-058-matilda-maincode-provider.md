@@ -335,7 +335,7 @@ D13's native body) rank tools by token overlap with the latest user text, the
 token with "what do you think about the current state of Australia's economy".
 Both shapers now pin ahead of relevance the tools a runtime guardrail names by name
 (`RUNTIME_MANDATED_TOOLS` in `tool/policy/toolBudget.ts`: `profile_stage`,
-`task_agent`, `update_plan`, `goal_complete`, `goal_blocked`) plus any tool the
+`task_agent`, `reconcile_steer`, `update_plan`, `goal_complete`, `goal_blocked`) plus any tool the
 latest user message names verbatim as a whole word (a guard correction reading
 "Call task_agent with …"). The gateway inherits it through the shared shaper.
 Recorded with it: the "evidence pack about guardrails in agent SDKs" the model
