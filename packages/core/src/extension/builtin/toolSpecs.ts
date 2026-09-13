@@ -463,7 +463,7 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'fetch_url',
-    description: 'Fetch and extract clean text from an HTTP(S) URL using the configured in-house crawler.',
+    description: 'Fetch and extract clean text from an HTTP(S) URL. In BrainRouter Desktop the page is rendered in the built-in browser (real Chromium, the user\'s own session) and the in-house crawler is the fallback; elsewhere the crawler fetches it directly. This IS the browser tool — use it for any specific page; there is no separate "browser_fetch" tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -474,7 +474,7 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'web_search',
-    description: 'Search the public web with the configured provider and return normalized results (title, url, snippet). Useful when fetch_url needs a starting point.',
+    description: 'Search the public web and return normalized results (title, url, snippet). In BrainRouter Desktop the search runs through the built-in browser (Google, in the user\'s own session) — no API key involved; only outside the Desktop (server/CLI) does it need an explicitly configured HTTP provider under cli.webSearch. Useful when fetch_url needs a starting point.',
     inputSchema: {
       type: 'object',
       properties: {

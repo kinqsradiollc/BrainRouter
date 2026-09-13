@@ -239,6 +239,14 @@ export interface WebSearchCliKnobs {
 
 export interface ResolvedWebSearchKnobs {
   provider: WebSearchProviderName;
+  /**
+   * True when the person actually configured web search — a provider name or any
+   * provider credential/endpoint. `provider` always carries a default
+   * (`google_pse`), so this is the only way to tell "nothing set up" (the HTTP
+   * fallback is not on offer; the built-in browser is the search) from "set up
+   * but incomplete" (the missing field is a real misconfiguration to report).
+   */
+  explicitlyConfigured: boolean;
   configurationError?: string;
   maxResults: number;
   serperApiKey: string;

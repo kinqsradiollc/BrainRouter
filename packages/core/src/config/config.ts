@@ -563,6 +563,14 @@ function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWe
     : 'google_pse';
   return {
     provider: provider as WebSearchProviderName,
+    explicitlyConfigured: Boolean(
+      configuredProvider
+      || input?.google?.apiKey?.trim()
+      || input?.google?.cx?.trim()
+      || input?.serperApiKey?.trim()
+      || input?.braveApiKey?.trim()
+      || input?.searxngBaseUrl?.trim(),
+    ),
     ...(configuredProvider === 'duckduckgo'
       ? { configurationError: 'cli.webSearch.provider "duckduckgo" is no longer supported. Choose google_pse for Google search, or configure serper, brave, searxng, or custom_http explicitly.' }
       : {}),

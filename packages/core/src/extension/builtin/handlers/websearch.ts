@@ -114,7 +114,9 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
         // locale and session. A consent wall, challenge, or parser miss falls
         // through to an explicitly configured HTTP provider; there is no hidden
         // second search engine.
+        let browserTried = false;
         if (host.browserControlPort && !host.silent) {
+          browserTried = true;
           const port = host.browserControlPort;
           const sig = host.turnAbort?.signal;
           const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
@@ -126,6 +128,18 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
           };
           const results = await tryEngine(googleSearchUrl(query, maxResults, page), [parseGoogleHtml]);
           if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
+        }
+        // The HTTP provider is a fallback the person has to OPT INTO. With nothing
+        // configured, the built-in browser IS the search — so say what actually
+        // happened instead of demanding an API key nobody asked for (the old
+        // behaviour surfaced "cli.webSearch.google.apiKey is required" from the
+        // default provider, which read as a broken setup rather than as a
+        // consent wall or a headless context).
+        const providerConfigured = knobs.webSearch.explicitlyConfigured || Boolean(knobs.webSearchEndpoint?.trim());
+        if (!providerConfigured) {
+          return browserTried
+            ? 'web_search: the built-in browser ran the search but found no parseable results (a consent wall, a challenge page, or a results layout it could not read). No HTTP search provider is configured, so there is nothing to fall back to. Retry with a narrower query, or open a specific page with fetch_url — it renders through the same built-in browser.'
+            : 'web_search: no built-in browser is available in this context (server/CLI, or a background agent), and no HTTP search provider is configured. Configure one under cli.webSearch (provider + credentials; Desktop: Settings → Search), or run this from BrainRouter Desktop where search uses the built-in browser. fetch_url still works here for a specific URL.';
         }
         if (page > 1) return 'web_search pagination requires the managed Desktop browser; headless API providers currently support page 1 only.';
         try {

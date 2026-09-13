@@ -337,9 +337,14 @@ and return `{ results: [{ index, relevance_score }] }`.
 ## Web search backend
 
 In Desktop, `web_search` uses the workspace's persistent browser session and
-Google results. Headless CLI use defaults to Google Programmable Search and
-requires `cli.webSearch.google.apiKey` plus `cli.webSearch.google.cx`. You may
-instead point at a custom backend:
+Google results — no API key involved, and `fetch_url` renders pages through the
+same built-in browser. An HTTP search provider is strictly opt-in: with nothing
+configured under `cli.webSearch`, a headless context (server, CLI, background
+agent) or a browser search that found no parseable results reports exactly that
+instead of demanding a key. To enable headless search, set
+`cli.webSearch.provider` (`google_pse` needs `cli.webSearch.google.apiKey` plus
+`cli.webSearch.google.cx`; `serper`, `brave`, `searxng`, `custom_http` take
+their own credentials), or point at a custom backend:
 
 ```env
 BRAINROUTER_WEB_SEARCH_ENDPOINT=http://your-search-proxy.example.com/search
