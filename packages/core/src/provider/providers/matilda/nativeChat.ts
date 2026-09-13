@@ -225,6 +225,7 @@ export async function parseMatildaChatStream(
   const seen = new Set<string>();
   let usage: NativeOutput['usage'];
   let n = 0;
+  let endedEarly = false;
   const record = (name: string, args: string, id?: string): void => {
     const key = `${name} ${args}`;
     if (seen.has(key)) return;
@@ -298,9 +299,30 @@ export async function parseMatildaChatStream(
         break;
       }
       case 'error': {
-        const err: Error & { status?: number } = new Error(
-          `matilda-chat stream error from ${endpoint} (${model}): ${String(j?.code ?? '')} ${String(j?.message ?? ev.data)}`.trim(),
+        // Wire shape: {"code":"request_budget_exceeded","error":"The assistant
+        // ran out of steps before it could finish."} — the text is under `error`.
+        const code = typeof j?.code === 'string' && j.code ? j.code : 'unknown';
+        const detail = typeof j?.error === 'string' ? j.error : typeof j?.message === 'string' ? j.message : ev.data;
+        // A partial answer is worth more than an error. The platform's OWN step
+        // or time budget (`request_budget_exceeded`, `deadline_exceeded`) can end
+        // an answer it had already started: keep what was said, say why it
+        // stopped, and let the turn finish — the official SDK keeps the text the
+        // same way. With nothing said yet there is nothing to keep: throw, with
+        // the code on the error so the router can decide whether to retry.
+        if (text.trim() || toolCalls.length) {
+          handlers.onReasoningDelta?.(`[Matilda ended the answer early: ${code} — ${detail}]\n`);
+          if (toolCalls.length === 0) {
+            const trailer = `\n\n_(Matilda stopped early: ${detail})_`;
+            text += trailer;
+            handlers.onTextDelta?.(trailer);
+          }
+          endedEarly = true;
+          break;
+        }
+        const err: Error & { status?: number; code?: string } = new Error(
+          `matilda-chat stream error from ${endpoint} (${model}): ${code} ${detail}`.trim(),
         );
+        err.code = code;
         throw err;
       }
       default:
@@ -308,6 +330,7 @@ export async function parseMatildaChatStream(
         // nothing to surface here.
         break;
     }
+    if (endedEarly) break;
   }
   interceptor.flush();
   return {
