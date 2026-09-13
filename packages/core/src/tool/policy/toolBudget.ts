@@ -75,13 +75,15 @@ export interface BudgetResult<T> {
 
 /**
  * Tools a runtime turn-end guardrail tells the model to call BY NAME
- * (`profileStageRuntime`, `turnGuardMessages`, the goal loop). A budget fit that
- * drops one of these hands the model an instruction it cannot follow — "call
- * profile_stage" with no profile_stage advertised — so whenever one is on offer
- * at all it ranks ahead of task relevance.
+ * (`profileStageRuntime`, `turnGuardMessages`, the goal loop, the steering
+ * receipt lifecycle). A budget fit that drops one of these hands the model an
+ * instruction it cannot follow — "call profile_stage" with no profile_stage
+ * advertised — so whenever one is on offer at all it ranks ahead of task
+ * relevance. `reconcile_steer` is the mandatory control the runtime exempts from
+ * every other narrowing gate; a byte fit must not be the one gate that hides it.
  */
 export const RUNTIME_MANDATED_TOOLS: readonly string[] = [
-  'profile_stage', 'task_agent', 'update_plan', 'goal_complete', 'goal_blocked',
+  'profile_stage', 'task_agent', 'reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked',
 ];
 
 function escapeRegExp(text: string): string {

@@ -88,3 +88,10 @@ test('pinnedToolNames matches whole tool names only, and pins nothing from empty
   assert.deepEqual([...pinnedToolNames('', ['anything', 'goal_blocked'])], ['goal_blocked']);
   assert.equal(pinnedToolNames('', ['anything']).size, 0);
 });
+
+test('reconcile_steer is runtime-mandated: pinned through a cut even with zero relevance', () => {
+  const tools = [T('a', 'alpha work'), T('b', 'beta work'), T('reconcile_steer', 'classify a pending steer receipt'), T('c', 'gamma work')];
+  const { kept } = rankAndCapTools(tools, 'do alpha and beta work', 2, { pinned: pinnedToolNames('do alpha and beta work', tools.map((t) => t.name)) });
+  assert.ok(kept.some((t) => t.name === 'reconcile_steer'));
+  assert.equal(kept.length, 2);
+});
