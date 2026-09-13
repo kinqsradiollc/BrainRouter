@@ -27,7 +27,7 @@
 | `diagram_validate` | read | read_only | yes | Validate a typed diagram document (ADR-056): kinds architecture \| workflow \| sequence \| dataflow \| lifecycle, each `{ schemaVersion: 1, kind, meta: { title, … }, …element arrays }` with unknown fields rejected at every level. |
 | `edit_file` | write | file_edit | no | Edit an existing file in the workspace by replacing a target substring with a replacement string. |
 | `extract_result` | read | read_only | yes | Expand a large tool result that was handed off (you hold a `resultRef` instead of the full output). |
-| `fetch_url` | read | network | yes | Fetch and extract clean text from an HTTP(S) URL using the configured in-house crawler. |
+| `fetch_url` | read | network | yes | Fetch and extract clean text from an HTTP(S) URL. |
 | `file_vulnerability` | read | read_only | no | Record one verified pentest finding. |
 | `finish_scan` | read | read_only | no | Complete the active pentest only after every worker is terminal. |
 | `glob_files` | read | read_only | yes | Recursively find files in the workspace matching a glob/wildcard pattern (e.g., "src/**/*.ts" or "*.json"). |
@@ -94,7 +94,7 @@
 | `wait_agents` | read | read_only | no | Wait for multiple child agents in parallel. |
 | `wait_until` | read | read_only | no | Block until a workspace condition holds or the timeout elapses: a file exists, or a file contains a text marker. |
 | `wait_worker` | read | read_only | no | Block until a worker thread finishes or the wait timeout elapses, then return its status + summary. |
-| `web_search` | read | network | yes | Search the public web with the configured provider and return normalized results (title, url, snippet). |
+| `web_search` | read | network | yes | Search the public web and return normalized results (title, url, snippet). |
 | `workflow_progress` | read | read_only | no | Report progress on the active durable workflow run (PARITY-W1) so `/workflows` shows live status and progress survives a restart. |
 | `workspace_create` | read | file_edit | no | Make a new record in another surface of the workspace from something you are looking at — a checklist line becomes a work item, a conclusion becomes a note, a "remind me to…" becomes a planner item. |
 | `workspace_link` | read | file_edit | no | Record that one thing references another, by writing the reference into the referring record's own text. |
