@@ -13,6 +13,14 @@
  *        <｜DSML｜parameter name="arguments" string="true">{"path":"…"}</｜DSML｜parameter>
  *        </｜DSML｜tool_call>
  *
+ *   3. The same parameter form with the model's OWN key names (seen live 2026-09,
+ *      single-line, no `string` attribute):
+ *        <｜DSML｜tool_call> <｜DSML｜parameter name="tool">list_dir</｜DSML｜parameter> <｜DSML｜parameter name="params">{"path": "."}</｜DSML｜parameter> </｜DSML｜tool_call>
+ *      Any of name/tool/tool_name/function names the tool; any of
+ *      arguments/args/params/parameters/input carries the arguments; and when
+ *      no argument key is present, every OTHER parameter element is itself an
+ *      argument (`<parameter name="path">.</parameter>`).
+ *
  * The bars are the FULLWIDTH VERTICAL LINE (U+FF5C), not ASCII `|`. Pure and
  * browser-safe.
  */
@@ -42,24 +50,59 @@ function argumentsJson(raw: unknown): string {
   return JSON.stringify(raw);
 }
 
-/** Parse the payload found between the markers. Returns null when neither
- *  dialect yields a tool name — the caller then treats the block as plain text. */
+const NAME_KEYS = ['name', 'tool', 'tool_name', 'function'] as const;
+const ARG_KEYS = ['arguments', 'args', 'params', 'parameters', 'input'] as const;
+
+/** First non-empty string under any of `keys`. */
+function pick(obj: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+/** A parameter element's text as a JSON value: JSON when it parses, else the string. */
+function paramValue(text: string): unknown {
+  const t = text.trim();
+  if (!t) return '';
+  try { return JSON.parse(t); } catch { return text; }
+}
+
+/** Parse the payload found between the markers. Returns null when no dialect
+ *  yields a tool name — the caller then treats the block as plain text. */
 export function parseDsmlToolCallPayload(payload: string): DsmlToolCall | null {
   const text = payload.trim();
   if (text.startsWith('{')) {
     try {
       const j = JSON.parse(text) as Record<string, unknown>;
-      if (j && typeof j === 'object' && !Array.isArray(j) && typeof j.name === 'string' && j.name) {
-        return { name: j.name, arguments: argumentsJson(j.arguments ?? j.args), ...(typeof j.id === 'string' ? { id: j.id } : {}) };
+      if (j && typeof j === 'object' && !Array.isArray(j)) {
+        const name = pick(j, NAME_KEYS);
+        if (name) {
+          const argKey = ARG_KEYS.find((k) => j[k] !== undefined);
+          return { name, arguments: argumentsJson(argKey ? j[argKey] : undefined), ...(typeof j.id === 'string' ? { id: j.id } : {}) };
+        }
       }
     } catch { /* not the JSON dialect — fall through */ }
   }
   const params: Record<string, string> = {};
   for (const m of text.matchAll(PARAM_RE)) params[m[1]] = m[2].trim();
-  if (typeof params.name === 'string' && params.name) {
-    return { name: params.name, arguments: argumentsJson(params.arguments ?? params.args), ...(params.id ? { id: params.id } : {}) };
+  const name = pick(params, NAME_KEYS);
+  if (!name) return null;
+  const argKey = ARG_KEYS.find((k) => typeof params[k] === 'string');
+  let args: string;
+  if (argKey) {
+    args = argumentsJson(params[argKey]);
+  } else {
+    // No argument container: the remaining parameter elements ARE the arguments.
+    const rest: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(params)) {
+      if ((NAME_KEYS as readonly string[]).includes(k) || k === 'id') continue;
+      rest[k] = paramValue(v);
+    }
+    args = JSON.stringify(rest);
   }
-  return null;
+  return { name, arguments: args, ...(params.id ? { id: params.id } : {}) };
 }
 
 export interface DsmlInterceptor {

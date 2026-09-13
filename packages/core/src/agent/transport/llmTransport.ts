@@ -26,6 +26,7 @@ import {
 } from './nativeProviders.js';
 import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
 import { buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
+import { createDsmlInterceptor } from '../../provider/providers/matilda/dsml.js';
 
 export interface ChatCompletionPayload {
   model: string;
@@ -1238,7 +1239,7 @@ export async function callOpenAI(
         if (requestFormat === 'responses') {
           return normalizeResponsesOutput(retryData, endpoint, config.model);
         }
-        return normalizeChatCompletionOutput(retryData, endpoint, config.model);
+        return normalizeChatCompletionOutput(retryData, endpoint, config.model, activeProviderDef(config)?.toolCallMarkup);
       }
     }
     // RECONNECT — attach the structured status + any `Retry-After` so the resilient
@@ -1256,10 +1257,10 @@ export async function callOpenAI(
     return normalizeResponsesOutput(data, endpoint, config.model);
   }
 
-  return normalizeChatCompletionOutput(data, endpoint, config.model);
+  return normalizeChatCompletionOutput(data, endpoint, config.model, activeProviderDef(config)?.toolCallMarkup);
 }
 
-function normalizeChatCompletionOutput(data: any, endpoint: string, model: string) {
+function normalizeChatCompletionOutput(data: any, endpoint: string, model: string, markup?: 'dsml') {
   // Defensive response-shape parsing. Some endpoints (LM Studio with certain
   // models, OpenRouter on specific upstream errors, local vLLM under load,
   // gpt-oss reasoning models with a non-standard envelope) return a 200 OK
@@ -1298,18 +1299,41 @@ function normalizeChatCompletionOutput(data: any, endpoint: string, model: strin
     }
     throw new Error(`OpenAI-compatible endpoint returned an invalid chat completion response: ${JSON.stringify(data).slice(0, 1000)}`);
   }
+  // ADR-058 — a text-markup provider (Matilda's DSML) on the compat wire: lift
+  // any tool-call blocks out of the final content. No-op for every other provider.
+  const lifted = liftMarkupToolCalls(markup, typeof choice.message.content === 'string' ? choice.message.content : '');
   return {
     // Some reasoning models put the visible answer in `message.content` and
     // chain-of-thought in `message.reasoning_content` / `reasoning`. We use
     // content (the canonical user-visible field) but tolerate it being null
     // when there are tool_calls but no prose.
-    content: choice.message.content ?? '',
-    toolCalls: choice.message.tool_calls,
+    content: lifted ? lifted.content : (choice.message.content ?? ''),
+    toolCalls: lifted?.toolCalls.length
+      ? [...(Array.isArray(choice.message.tool_calls) ? choice.message.tool_calls : []), ...lifted.toolCalls]
+      : choice.message.tool_calls,
     usage: data.usage,
     // `length` ⇒ the provider truncated the reply at its token cap (the cut-off
     // symptom). Surfaced as a notice → "raise cli.maxOutputTokens".
-    finishReason: choice.finish_reason,
+    finishReason: lifted?.toolCalls.length ? 'tool_calls' : choice.finish_reason,
   };
+}
+
+/** Non-stream counterpart of the stream interceptor: returns null unless the
+ *  provider declares text tool-call markup, so other providers pay nothing. */
+function liftMarkupToolCalls(
+  markup: 'dsml' | undefined,
+  text: string,
+): { content: string; toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> } | null {
+  if (markup !== 'dsml') return null;
+  let content = '';
+  const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
+  const interceptor = createDsmlInterceptor(
+    (t) => { content += t; },
+    (c) => toolCalls.push({ id: c.id ?? `call_markup_${toolCalls.length + 1}`, type: 'function', function: { name: c.name, arguments: c.arguments } }),
+  );
+  interceptor.push(text);
+  interceptor.flush();
+  return { content, toolCalls };
 }
 
 /**
@@ -1495,6 +1519,16 @@ export async function callOpenAIStream(
   // `length` ⇒ the provider truncated the stream at its token cap. The last
   // non-empty finish_reason in the stream wins.
   let finishReason: string | undefined;
+  // ADR-058 — a provider whose model writes tool calls into its text as markup
+  // (Matilda's DSML) gets its content deltas lifted through the interceptor on
+  // this wire too; every other provider's text is forwarded untouched.
+  const markupCalls: Array<{ name: string; arguments: string; id?: string }> = [];
+  const markup = activeProviderDef(config)?.toolCallMarkup === 'dsml'
+    ? createDsmlInterceptor(
+        (t) => { content += t; handlers.onTextDelta?.(t); },
+        (call) => markupCalls.push(call),
+      )
+    : undefined;
 
   const reader = (res.body as any).getReader();
   const decoder = new TextDecoder();
@@ -1612,8 +1646,12 @@ export async function callOpenAIStream(
           if (typeof choice.finish_reason === 'string' && choice.finish_reason) finishReason = choice.finish_reason;
           const delta = choice.delta ?? {};
           if (typeof delta.content === 'string' && delta.content.length > 0) {
-            content += delta.content;
-            handlers.onTextDelta?.(delta.content);
+            if (markup) {
+              markup.push(delta.content);
+            } else {
+              content += delta.content;
+              handlers.onTextDelta?.(delta.content);
+            }
           }
           // Reasoning frames (xAI/OpenRouter use `reasoning`, others use `reasoning_content`)
           const r = (typeof delta.reasoning === 'string' ? delta.reasoning : undefined)
@@ -1643,10 +1681,15 @@ export async function callOpenAIStream(
     attempt.finish();
   }
 
+  markup?.flush();
   const toolCalls = [...toolCallsByIndex.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
     .filter((tc) => tc.function.name); // drop incomplete entries
+  if (markupCalls.length > 0) {
+    toolCalls.push(...markupCalls.map((c, i) => ({ id: c.id ?? `call_markup_${i + 1}`, type: 'function', function: { name: c.name, arguments: c.arguments } })));
+    finishReason = 'tool_calls';
+  }
 
   if (requestFormat === 'responses' && finalResponse && (!content || toolCalls.length === 0)) {
     const normalized = normalizeResponsesOutput(finalResponse, endpoint, config.model);
