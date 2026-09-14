@@ -185,3 +185,19 @@ numbers"). Best-effort network pushes return `{ ok, error }` and never throw.
   `.finally(cleanup)`) — never a floating promise, never awaited on the hot path.
 - **Evidence:** `brainrouter/src/memory/util/concurrency.ts`,
   `brainrouter/src/memory/engine.ts:132`, `brainrouter/src/memory/recall/pipeline.ts:174`
+
+### 14. A NUL sentinel is the `\0` escape in source — never a raw 0x00 byte
+
+Composite keys and hash joins use NUL as a collision-free separator
+(`` `${a}\0${b}` ``, `parts.join('\0')`). Write it as the escape sequence. A
+literal 0x00 byte in a `.ts` file compiles to the same string but is invisible in
+every editor and diff, makes git treat the file as binary, and reads as a missing
+space when it lands in a template string. `npm run lint:nul`
+(`scripts/check-no-raw-nul.mjs`) rejects a raw NUL in any tracked text file and
+the pre-commit hook runs it on staged files.
+
+- **Why:** eight sentinels shipped as raw bytes before the gate existed; one was
+  later misread as a corrupted space. Persisted keys (e.g. the Desktop chat-sync
+  mapping) depend on the byte staying NUL, so the fix is the escape, not a space.
+- **Evidence:** `scripts/check-no-raw-nul.mjs`, `scripts/check-no-raw-nul.test.mjs`,
+  `.githooks/pre-commit`, `brainrouter-desktop/electron/chatSyncMapping.ts`

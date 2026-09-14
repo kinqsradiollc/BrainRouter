@@ -23,13 +23,32 @@ boundary_changed=$(git diff --cached --name-only --diff-filter=ACM \
   | grep -vE '(^|/)(dist|dist-electron|node_modules)/' \
   || true)
 
+# Every staged text file (the NUL gate filters by extension itself). A raw 0x00
+# byte inside a string is invisible in editors and diffs and turns the file
+# binary for git; sentinels are written as the `\0` escape instead.
+text_files=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -vE '(^|/)(dist|dist-electron|node_modules)/' \
+  || true)
+
+# text_files is a superset of the two lists above, so it alone decides "nothing staged".
+if [ -z "$text_files" ]; then
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+
+if [ -n "$text_files" ]; then
+  # Needs only node, so it runs before the eslint-availability check below.
+  # shellcheck disable=SC2086
+  node "$root/scripts/check-no-raw-nul.mjs" --files $text_files
+fi
+
 if [ -z "$files" ] && [ -z "$boundary_changed" ]; then
   exit 0
 fi
 
 # Resolve a local eslint; if it isn't installed (fresh clone before `npm ci`),
 # skip rather than hard-block — the hook must never wedge an otherwise-valid repo.
-root=$(git rev-parse --show-toplevel)
 eslint_bin="$root/node_modules/.bin/eslint"
 if [ ! -x "$eslint_bin" ]; then
   echo "pre-commit: eslint not installed (run npm ci) — skipping lint."

@@ -240,7 +240,8 @@ stale copy without the Postgres service — edit `.github/workflows/ci.yml`.**
 
 `.githooks/pre-commit` (wired via `core.hooksPath=.githooks` by the root `prepare`
 script) runs ESLint on **only** the staged `.ts/.tsx/.js/.mjs/.cjs` files
-(excluding dist/dist-electron/node_modules). It deliberately does NOT run
+(excluding dist/dist-electron/node_modules) plus the raw-NUL-byte gate
+(`scripts/check-no-raw-nul.mjs`) on every staged text file. It deliberately does NOT run
 `prettier --write` (tree churn) or any build/test (too slow), skips gracefully if
 eslint is missing, and is bypassable with `--no-verify` or `BR_SKIP_HOOKS=1`. Don't
 add heavyweight steps — focused local checks provide iteration feedback, and
