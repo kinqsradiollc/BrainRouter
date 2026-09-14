@@ -33,6 +33,21 @@ const PARAM_RE = new RegExp(
   'g',
 );
 
+/**
+ * A tool-call id that is unique for the life of the process, not just within
+ * one parsed response. The runtime pairs tool calls with their results BY ID
+ * across the whole conversation; a per-response counter (`call_x_1` in every
+ * model call of a turn) made a second call reuse the first one's id, the
+ * pairing repair then saw the real result as already claimed and synthesized
+ * "tool call orphaned by model" for a call that had in fact run.
+ */
+let toolCallSerial = 0;
+const toolCallEpoch = Math.random().toString(36).slice(2, 8);
+export function newToolCallId(prefix: string): string {
+  toolCallSerial += 1;
+  return `${prefix}_${toolCallEpoch}_${toolCallSerial}`;
+}
+
 export interface DsmlToolCall {
   name: string;
   /** JSON text — always a valid JSON document (non-JSON argument text is wrapped as `{"input": …}`). */

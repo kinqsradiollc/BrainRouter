@@ -104,7 +104,10 @@ test('stream: DSML in token deltas becomes toolCalls (never visible text); usage
   const out = await parseMatildaChatStream(sse(events), { onTextDelta: (t) => deltas.push(t) }, 'https://matilda.maincode.com/api/v1', 'matilda');
   assert.equal(out.content, "I'll read that file for you.\n\n\nDone.");
   assert.equal(deltas.join(''), out.content, 'streamed deltas equal the final visible text');
-  assert.deepEqual(out.toolCalls, [{ id: 'call_matilda_1', type: 'function', function: { name: 'read_local_file', arguments: '{"path": "/n.txt"}' } }]);
+  assert.equal(out.toolCalls?.length, 1);
+  assert.match(String(out.toolCalls?.[0]?.id), /^call_matilda_/);
+  assert.equal(out.toolCalls?.[0]?.type, 'function');
+  assert.deepEqual(out.toolCalls?.[0]?.function, { name: 'read_local_file', arguments: '{"path": "/n.txt"}' });
   assert.equal(out.finishReason, 'tool_calls');
   assert.equal(out.usage?.completion_tokens, 42);
 });
@@ -216,4 +219,14 @@ test('stream: a server error BEFORE any text throws with the code on the error, 
     () => parseMatildaChatStream(sse([['error', { code: 'request_budget_exceeded', error: 'The assistant ran out of steps before it could finish.' }]]), {}, 'https://matilda.maincode.com/api/v1', 'matilda'),
     (e: Error & { code?: string }) => e.code === 'request_budget_exceeded' && /request_budget_exceeded The assistant ran out of steps/.test(e.message),
   );
+});
+
+test('stream: the DSML block and the server-parsed event for the SAME call (whitespace-different args) yield ONE call; ids are unique across parses', async () => {
+  const block = `${DSML_TOOL_CALL_OPEN}${param('tool', 'list_dir')}${param('params', '{"path": "."}')}${DSML_TOOL_CALL_CLOSE}`;
+  const one = await parseMatildaChatStream(sse([['token', { content: block }], ['client_tool_call', { name: 'list_dir', args: { path: '.' } }], ['done', {}]]), {}, 'e', 'm');
+  assert.equal(one.toolCalls?.length, 1, 'the same call reached twice is recorded once');
+  assert.equal(one.toolCalls?.[0]?.function.name, 'list_dir');
+  const two = await parseMatildaChatStream(sse([['token', { content: block }], ['done', {}]]), {}, 'e', 'm');
+  assert.notEqual(one.toolCalls?.[0]?.id, two.toolCalls?.[0]?.id, 'a second model call in the same turn never reuses an id (the runtime pairs results by id)');
+  assert.match(String(two.toolCalls?.[0]?.id), /^call_matilda_/);
 });

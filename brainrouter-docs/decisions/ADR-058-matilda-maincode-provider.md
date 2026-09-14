@@ -581,6 +581,15 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   turn without any client tool call otherwise looks like nothing happened. The `usage`
   event carries `input_tokens`/`output_tokens`/`reasoning_tokens`/`cached_tokens`;
   `input_tokens` maps onto `prompt_tokens`.
+- **The platform's server-side tools, seen in a real turn:** `processing`, `memory`
+  ("Checking memory"), `search` ("Searching Australian reference material"), and
+  `assistant` ("Running code" / "Code execution completed") — so Matilda also runs
+  code server-side. And the server search runs on **whatever the latest user message
+  is**, including BrainRouter's own guard corrections ("Runtime promise-then-ask
+  guardrail tripped…" → results about the OpenAI Agents SDK) and even a client
+  **tool result** (`[Client tool result: list_dir] …` → results about
+  directory-listing tools in other projects). Every round trip of the tool loop
+  therefore costs a server-side web search of the tool output — not switchable.
 - **The platform can run out of its own steps.** A real agent turn ended with the
   `error` event `{"code":"request_budget_exceeded","error":"The assistant ran out of
   steps before it could finish."}` — Matilda's server-side loop (search → read → …)
