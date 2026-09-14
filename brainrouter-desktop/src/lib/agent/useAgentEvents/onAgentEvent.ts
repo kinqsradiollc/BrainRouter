@@ -14,6 +14,7 @@ import {
 } from '../../workspace/workspaceEvents.js';
 import { sessionRowsCacheKey } from '../../session/list/sessionCache.js';
 import { fileFromSummary } from '../../format.js';
+import { toolStartLine, toolEndLine } from '../toolStepLine.js';
 import { parseArtifactWriteSummary } from '../../artifacts/artifactWriteRow.js';
 import { FOREGROUND_ONLY_KINDS } from '../../../constants.js';
 import { rid } from '../../rid.js';
@@ -141,7 +142,12 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         }
         break;
       case 'assistant-turn-end': flushAssistant(); break;
+      // The tools BrainRouter runs are steps of the turn: show each one inline in
+      // the live thinking stream (start, then its outcome), so a person can follow
+      // what actually happened in order — not only in the tool-calls panel.
+      case 'tool-start': setReasoningTail((t) => t + toolStartLine(e.tool, e.args)); break;
       case 'tool-end': {
+        setReasoningTail((t) => t + toolEndLine(e.ok, e.summary));
         if (!e.ok) turnFailsRef.current += 1;
         const editedFile = fileFromSummary(e.tool, e.summary);
         if (e.ok && editedFile) turnEditsRef.current.set(editedFile, /write|create/i.test(e.tool) ? 'A' : 'M');
