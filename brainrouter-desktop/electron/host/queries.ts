@@ -22,8 +22,10 @@ import {
   syncOnce,
   updateBlock as plannerUpdateBlock,
   writePlanner,
+  type PlannerSyncOutcome,
 } from '@kinqs/brainrouter-core/planner';
 import { createPlannerTransport } from './plannerTransport.js';
+import { accountFailureOutcome, cycleOutcome, localOnlyOutcome, organizationOutcome, signInOutcome, withSince } from './plannerSyncOutcome.js';
 // ADR-029 Part B — Notes is USER-scoped for the same reason the planner is
 // (D1), so none of these take a workspace root either.
 import {
@@ -601,6 +603,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
   // read-modify-write and network reconciliation in one queue so a sync that
   // started from snapshot A can never overwrite a mutation that produced A+B.
   const withPlannerStoreLock = createSerialWorkQueue();
+  // Notes state is one JSON document too, and `notes-sync` read → network →
+  // wrote it with no lock while every edit did the same: a sync that started
+  // from snapshot A could overwrite the edit that produced A+B. One queue.
+  const withNotesStoreLock = createSerialWorkQueue();
 
   const {
     browser,
@@ -790,7 +796,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     getConfig: loadConfig,
     getRemoteUrl: () => wsGit.remoteUrl,
   });
-  return {
+  const queries: Record<string, QueryHandler> = {
       ...workspaceKnowledgeQueries,
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -2829,6 +2835,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         ].join('-');
         const view = todayView(plannerScope, { date: today, nowMs });
         const drift = summarizeDrift(blocks);
+        const lastSync = readPlanner(plannerScope).lastSync as (PlannerSyncOutcome & { since?: string }) | undefined;
         const itemTitle = new Map(items.map((item) => [item.id, item.title.value]));
         const blockItem = new Map(blocks.map((block) => [block.id, block.itemId]));
         const ageLabel = (ageMs: number): string => {
@@ -2894,6 +2901,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           sync: {
             label: view.syncState,
             pendingCount: pending.length,
+            ...(lastSync?.blocker
+              ? { blocker: { kind: lastSync.blocker.kind, message: lastSync.blocker.message, since: lastSync.since ?? lastSync.at } }
+              : {}),
+            ...(lastSync?.ok ? { lastSyncedAt: lastSync.at } : {}),
             issues: pending.map((detail) => {
               const parentItemId = detail.entity === 'block'
                 ? blockItem.get(detail.targetId)
@@ -3018,41 +3029,57 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const config = loadConfig();
         const plannerScope = desktopPlannerScope(config);
         const brainUrl = getCliKnobs().brainUrl;
+        const at = new Date().toISOString();
+        // Every exit records WHY (ADR-038 D4): the surface reads `lastSync` back
+        // and says it. Before this, the reason lived in a return value the
+        // renderer discarded, and the person saw "waiting to sync" for a server
+        // that was not running.
+        const record = (outcome: PlannerSyncOutcome): number => {
+          const state = readPlanner(plannerScope.storeId);
+          state.lastSync = withSince(outcome, state.lastSync);
+          writePlanner(plannerScope.storeId, state);
+          return state.outbox.operations.length;
+        };
         if (!brainUrl) {
           // Local-only is a supported mode, not a failure (D9). The planner is
           // authoritative until a server is configured.
-          return { pending: readPlanner(plannerScope.storeId).outbox.operations.length, localOnly: true };
+          return { pending: record(localOnlyOutcome(at)), localOnly: true };
         }
-        const account = await resolveBrainRouterAccountContext(config).catch(() => null);
+        let account: Awaited<ReturnType<typeof resolveBrainRouterAccountContext>> | null = null;
+        try {
+          account = await resolveBrainRouterAccountContext(config);
+        } catch (err) {
+          // A server that is not answering is not a person who is not signed in.
+          const outcome = accountFailureOutcome(err, brainUrl, at);
+          return { pending: record(outcome), offline: outcome.blocker?.kind === 'unreachable', error: outcome.blocker?.message };
+        }
         if (!account || !plannerScope.orgId || account.orgId !== plannerScope.orgId) {
+          const outcome = plannerScope.signedIn ? organizationOutcome(at) : signInOutcome(at);
           return {
-            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
+            pending: record(outcome),
             authRequired: !plannerScope.signedIn,
             orgRequired: plannerScope.signedIn,
-            error: plannerScope.signedIn
-              ? 'Choose an active BrainRouter organization before syncing Planner changes.'
-              : 'Sign in before syncing Planner changes with the server.',
+            error: outcome.blocker?.message,
           };
         }
         const token = account?.apiKey
           ?? await secretBridge?.get('account:access-token').catch(() => undefined);
         if (!token) {
-          return {
-            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
-            authRequired: true,
-            error: 'Sign in before syncing Planner changes with the server.',
-          };
+          const outcome = signInOutcome(at);
+          return { pending: record(outcome), authRequired: true, error: outcome.blocker?.message };
         }
         const state = readPlanner(plannerScope.storeId);
+        const baseUrl = account?.baseUrl ?? brainUrl;
         const result = await syncOnce(
           state,
           createPlannerTransport({
-            baseUrl: account?.baseUrl ?? brainUrl,
+            baseUrl,
             token,
             ...(account?.orgId ? { orgId: account.orgId } : {}),
           }),
           Date.now(),
         );
+        state.lastSync = withSince(cycleOutcome(result, baseUrl, at), state.lastSync);
         writePlanner(plannerScope.storeId, state);
         return {
           pending: state.outbox.operations.length,
@@ -3061,6 +3088,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           offline: result.offline,
           conflicted: result.conflicted,
           ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+          ...(result.repairNotice ? { repairNotice: result.repairNotice } : {}),
         };
       }),
 
@@ -6079,4 +6107,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { ok: false, what };
       },
   };
+  for (const key of Object.keys(queries)) {
+    if (!key.startsWith('notes-')) continue;
+    const handler = queries[key]!;
+    queries[key] = ((a) => withNotesStoreLock(() => handler(a))) as QueryHandler;
+  }
+  return queries;
 }

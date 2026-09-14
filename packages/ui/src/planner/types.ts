@@ -97,10 +97,21 @@ export interface PlannerSyncIssue {
   retryRequested?: boolean;
 }
 
+export type PlannerSyncBlockerKind = 'local-only' | 'sign-in' | 'organization' | 'unreachable' | 'error';
+export interface PlannerSyncBlocker {
+  kind: PlannerSyncBlockerKind;
+  /** One sentence a person can act on ("The server at http://localhost:3747 is not answering."). */
+  message: string;
+  /** When the host first saw this (ISO). */
+  since?: string;
+}
+
 export interface PlannerSyncView {
   label: string;
   pendingCount: number;
   issues: PlannerSyncIssue[];
+  /** Why changes are not moving: what the host learned on its last attempt. */
+  blocker?: PlannerSyncBlocker;
   retrying?: boolean;
   lastSyncedAt?: string;
   onRetry?: () => void;
