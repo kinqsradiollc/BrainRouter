@@ -7,6 +7,7 @@ import {
   MATILDA_REASK_FILLER,
   MATILDA_REASK_QUESTION,
   matildaReaskNote,
+  MatildaDegenerateOutputError,
   MatildaSandboxDetourError,
   isSandboxToolStart,
   advertisedNamesLine,
@@ -380,5 +381,37 @@ test('payload: a history that alone exceeds the body limit elides the OLDEST too
   assert.match(results[0].content, /elided to fit the provider's request limit/);
   assert.equal(p.messages[p.messages.length - 1].content, 'continue');
   assert.ok(p.messages[0].content.startsWith('ssss'), 'the instructions are untouched');
+});
+
+// ADR-058 D24 — a stream that keeps sending but can never become an answer.
+test('stream: a loop of empty DSML openers is cut as degenerate (retryable), with a reasoning line saying so', async () => {
+  const reasoning: string[] = []; const activity: any[] = [];
+  const openers: Array<[string, unknown]> = Array.from({ length: 6 }, () => ['token', { content: `${DSML_TOOL_CALL_OPEN}\n` }] as [string, unknown]);
+  await assert.rejects(
+    () => parseMatildaChatStream(sse([['token', { content: 'Let me look. ' }], ...openers, ['done', {}]]), { onReasoningDelta: (t) => reasoning.push(t), onProviderActivity: (a) => activity.push(a) }, 'e', 'm'),
+    (e: MatildaDegenerateOutputError) => e instanceof MatildaDegenerateOutputError && e.code === 'degenerate_output' && e.status === 502 && /openers with no close/.test(e.message),
+  );
+  assert.ok(reasoning.some((r) => r.includes('produced nothing usable')), 'the person is told why the attempt ended');
+  assert.equal(activity.at(-1)?.label, 'Matilda stream produced no usable output');
+});
+
+test('stream: minutes of events with nothing surfaced is cut as degenerate; a stream that surfaces something is not', async () => {
+  let t = 0; const now = () => t;
+  // Each entry advances the fake clock by `dt` BEFORE its event is read — a timed stream.
+  async function* timed(entries: Array<[number, string, unknown]>): AsyncIterable<string> {
+    for (const [dt, e, d] of entries) { t += dt; yield `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`; }
+  }
+  const status: [string, unknown] = ['generation_status', { phase: 'generating' }];
+  t = 0;
+  await assert.rejects(
+    () => parseMatildaChatStream(timed([[20_000, ...status], [20_000, ...status], [20_000, ...status], [0, 'token', { content: 'late' }], [0, 'done', {}]]), {}, 'e', 'm', { quietOutputMs: 45_000, now }),
+    /events with nothing to show/,
+  );
+  t = 0;
+  const out = await parseMatildaChatStream(timed([[20_000, ...status], [0, 'token', { content: 'hi ' }], [20_000, ...status], [20_000, ...status], [0, 'token', { content: 'there' }], [0, 'done', {}]]), {}, 'e', 'm', { quietOutputMs: 45_000, now });
+  assert.equal(out.content, 'hi there', 'surfaced text resets the quiet clock');
+  t = 0;
+  const server = await parseMatildaChatStream(timed([[40_000, 'tool_start', { tool: 'search', input: 'q' }], [40_000, 'token', { content: 'ok' }], [0, 'done', {}]]), {}, 'e', 'm', { quietOutputMs: 45_000, now });
+  assert.equal(server.content, 'ok', 'a surfaced server-side step counts as progress');
 });
 

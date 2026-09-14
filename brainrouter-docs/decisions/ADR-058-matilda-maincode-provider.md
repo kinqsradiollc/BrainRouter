@@ -429,6 +429,26 @@ and lifts a single tool-named parameter as a call with `{"input": …}`; for a
 platform tool the runtime answers "unknown tool — did you mean …", which is the
 correction the model needs, and nothing leaks.
 
+**D24 · A stream that cannot become an answer is cut, not waited out.** A desktop
+turn sat on "writing…" for minutes with no output, then ended with Maincode's own
+`deadline_exceeded The response took too long`. The stall watchdog (D21) could
+not help: bytes kept arriving. What arrived could never be painted — the shape
+seen once in the D22 probes, the model emitting `<｜DSML｜tool_call>` openers in a
+loop with no close (600 s until the upstream timeout). An open block is held back
+by design (a marker can split across tokens), so every token fed the watchdog
+and none reached the screen. Two cuts now end such an attempt within seconds:
+(1) the interceptor reports a **second open marker inside a block** (that block
+can never parse), drops the held text and resumes; the parser counts those and
+after 3 declares the stream degenerate; (2) a **quiet-output clock** — the last
+moment anything was SURFACED (visible text, a reasoning line, a tool call, a
+provider step, whether or not a handler is attached) — declares the stream
+degenerate after 45 s of events with nothing to show. Both throw
+`MatildaDegenerateOutputError` (`degenerate_output`, 502), classified retryable
+like `stalled`, with a reasoning line and a turn-path step saying why the attempt
+ended — so the resilient wrapper retries in seconds instead of the turn hanging
+on the provider's deadline. A legitimately long server-side step is not affected:
+its `tool_start` is surfaced and resets the clock.
+
 *Prose before tools.* The whole enabled surface is worth more to a turn than any
 of the prose around it, so the fit runs in tiers (`MATILDA_BUDGET_TIERS`): the
 standard prose first (descriptions 320, schema notes 100, instructions 16 000,

@@ -153,6 +153,12 @@ export interface DsmlInterceptor {
 export function createDsmlInterceptor(
   onText: (text: string) => void,
   onToolCall: (call: DsmlToolCall) => void,
+  /** A block that can never close: a SECOND open marker arrived inside it. The
+   *  live model once emitted open markers in a loop for 600 s until the upstream
+   *  timeout — every token kept the stall watchdog fed while nothing could be
+   *  painted (an open block is held back by design). Called with the held text;
+   *  the interceptor then discards the block and continues outside one. */
+  onDegenerate?: (held: string) => void,
 ): DsmlInterceptor {
   let buffer = '';
   let inBlock = false;
@@ -188,6 +194,15 @@ export function createDsmlInterceptor(
         .filter((c) => c.idx !== -1)
         .sort((a, b) => a.idx - b.idx);
       const close = candidates[0];
+      // A second OPEN before any close: this block will never parse. Hand the
+      // held text over, drop it, and resume after the second opener.
+      const reopen = buffer.indexOf(DSML_TOOL_CALL_OPEN);
+      if (reopen !== -1 && (!close || reopen < close.idx)) {
+        const held = buffer.slice(0, reopen);
+        buffer = buffer.slice(reopen + DSML_TOOL_CALL_OPEN.length);
+        onDegenerate?.(held);
+        continue; // still inBlock — the new opener starts the next candidate block
+      }
       if (!close) {
         if (!flushing) return; // wait for the rest of the block
         onText(DSML_TOOL_CALL_OPEN + buffer); // unterminated at end of stream — surface verbatim

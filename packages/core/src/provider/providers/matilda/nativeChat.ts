@@ -168,7 +168,29 @@ export interface MatildaParseOptions {
    *  starts its own code sandbox before any client tool call. Set on the first
    *  attempt of a request that advertised client tools; never on the re-ask. */
   cutOnSandboxDetour?: boolean;
+  /** D24 — how many DSML open markers may arrive without a close before the
+   *  stream is declared degenerate (the model looping on empty openers). */
+  maxDegenerateOpeners?: number;
+  /** D24 — the longest the stream may run with bytes arriving but NOTHING
+   *  surfaced (no visible text, no reasoning line, no tool call, no provider
+   *  activity) before it is declared degenerate. 0 disables. */
+  quietOutputMs?: number;
+  /** Clock, for tests. */
+  now?: () => number;
 }
+
+/** D24 — the stream kept sending but could never become an answer: a loop of
+ *  empty DSML openers, or minutes of events with nothing to surface. Retryable
+ *  (the resilient wrapper and the router treat 502 + this code as transient). */
+export class MatildaDegenerateOutputError extends Error {
+  readonly code = 'degenerate_output';
+  readonly status = 502;
+  constructor(readonly reason: string) {
+    super(`Matilda stream produced no usable output: ${reason}`);
+    this.name = 'MatildaDegenerateOutputError';
+  }
+}
+export const MATILDA_DEGENERATE_DEFAULTS = { maxDegenerateOpeners: 3, quietOutputMs: 45_000 } as const;
 
 /** The platform's code-sandbox tool as it appears on the wire: `tool_start
  *  {"tool":"assistant","input":"Running code" | "Running python"}`. */
@@ -478,21 +500,45 @@ export async function parseMatildaChatStream(
     seen.add(key);
     toolCalls.push({ id: id ?? newToolCallId('call_matilda'), type: 'function', function: { name, arguments: args } });
   };
+  // D24 — "quiet output": bytes keep the stall watchdog fed, but a stream whose
+  // tokens are all held inside an unclosable DSML block (or all unsurfaceable
+  // events) paints nothing for minutes. Track the last SURFACED moment.
+  const now = parseOptions.now ?? (() => Date.now());
+  const quietMs = parseOptions.quietOutputMs ?? MATILDA_DEGENERATE_DEFAULTS.quietOutputMs;
+  const maxOpeners = parseOptions.maxDegenerateOpeners ?? MATILDA_DEGENERATE_DEFAULTS.maxDegenerateOpeners;
+  let lastSurfacedAt = now();
+  let degenerateOpeners = 0;
+  const surfaced = (): void => { lastSurfacedAt = now(); };
+  // Always defined: a surfaceable event is progress whether or not a handler is listening (the non-stream path attaches none).
+  const wrap = <T extends unknown[]>(fn?: (...a: T) => void) => (...a: T): void => { surfaced(); fn?.(...a); };
+  const paint = { onTextDelta: wrap(handlers.onTextDelta), onReasoningDelta: wrap(handlers.onReasoningDelta), onProviderActivity: wrap(handlers.onProviderActivity) };
+  const degenerate = (reason: string): never => {
+    handlers.onReasoningDelta?.(`[Matilda's stream produced nothing usable — ${reason}; ending this attempt]\n`);
+    handlers.onProviderActivity?.({ label: 'Matilda stream produced no usable output', detail: reason, ok: false });
+    throw new MatildaDegenerateOutputError(reason);
+  };
   const interceptor = createDsmlInterceptor(
-    (t) => { text += t; handlers.onTextDelta?.(t); },
-    (call) => record(call.name, call.arguments, call.id),
+    (t) => { text += t; surfaced(); paint.onTextDelta?.(t); },
+    (call) => { surfaced(); record(call.name, call.arguments, call.id); },
+    () => {
+      degenerateOpeners += 1;
+      if (degenerateOpeners >= maxOpeners) degenerate(`${degenerateOpeners} tool-call openers with no close`);
+    },
   );
 
   for await (const ev of sseEvents(chunks)) {
     let j: Record<string, unknown> | null = null;
     try { j = JSON.parse(ev.data) as Record<string, unknown>; } catch { j = null; }
+    if (quietMs > 0 && now() - lastSurfacedAt > quietMs) {
+      degenerate(`${Math.round((now() - lastSurfacedAt) / 1000)}s of events with nothing to show`);
+    }
     switch (ev.event) {
       case 'token':
         if (typeof j?.content === 'string') interceptor.push(j.content);
         break;
       case 'thinking': {
         const t = typeof j?.content === 'string' ? j.content : typeof j?.text === 'string' ? j.text : '';
-        if (t) handlers.onReasoningDelta?.(t);
+        if (t) paint.onReasoningDelta?.(t);
         break;
       }
       case 'client_tool_call':
@@ -515,9 +561,9 @@ export async function parseMatildaChatStream(
         const message = typeof j?.message === 'string' ? j.message : typeof j?.content === 'string' ? j.content : '';
         const categories = Array.isArray(j?.categories) ? (j.categories as unknown[]).filter((c): c is string => typeof c === 'string') : [];
         text = message;
-        handlers.onReasoningDelta?.(`[Matilda safety replaced the answer${categories.length ? `: ${categories.join(', ')}` : ''}]\n`);
-        handlers.onProviderActivity?.({ label: 'Matilda safety replaced the answer', ...(categories.length ? { detail: categories.join(', ') } : {}), ok: false });
-        if (message) handlers.onTextDelta?.(message);
+        paint.onReasoningDelta?.(`[Matilda safety replaced the answer${categories.length ? `: ${categories.join(', ')}` : ''}]\n`);
+        paint.onProviderActivity?.({ label: 'Matilda safety replaced the answer', ...(categories.length ? { detail: categories.join(', ') } : {}), ok: false });
+        if (message) paint.onTextDelta?.(message);
         break;
       }
       case 'usage':
@@ -548,17 +594,17 @@ export async function parseMatildaChatStream(
         // once more in the shape the platform routes to the client tools.
         if (ev.event === 'tool_start' && parseOptions.cutOnSandboxDetour && toolCalls.length === 0 && isSandboxToolStart(j)) {
           interceptor.flush();
-          handlers.onReasoningDelta?.('[Matilda routed this request to its own code sandbox, which cannot see the workspace — asking again with the client tools]\n');
-          handlers.onProviderActivity?.({ label: 'Matilda routed the request to its own sandbox', detail: 'cannot see the workspace — asking again with the client tools', ok: false });
+          paint.onReasoningDelta?.('[Matilda routed this request to its own code sandbox, which cannot see the workspace — asking again with the client tools]\n');
+          paint.onProviderActivity?.({ label: 'Matilda routed the request to its own sandbox', detail: 'cannot see the workspace — asking again with the client tools', ok: false });
           throw new MatildaSandboxDetourError(text);
         }
         const line = describeServerTool(ev.event, j);
-        if (line) handlers.onReasoningDelta?.(line);
+        if (line) paint.onReasoningDelta?.(line);
         if (line) {
           const tool = typeof j?.tool === 'string' && j.tool ? j.tool : 'tool';
           const detail = serverToolDetail(ev.event, j);
-          if (ev.event === 'tool_start') handlers.onProviderActivity?.({ label: serverToolLabel(tool), ...(detail ? { detail } : {}) });
-          else if (ev.event === 'tool_result') handlers.onProviderActivity?.({ label: `${serverToolLabel(tool)} finished`, ...(detail ? { detail } : {}), ok: j?.status !== 'error' });
+          if (ev.event === 'tool_start') paint.onProviderActivity?.({ label: serverToolLabel(tool), ...(detail ? { detail } : {}) });
+          else if (ev.event === 'tool_result') paint.onProviderActivity?.({ label: `${serverToolLabel(tool)} finished`, ...(detail ? { detail } : {}), ok: j?.status !== 'error' });
         }
         break;
       }
@@ -574,12 +620,12 @@ export async function parseMatildaChatStream(
         // same way. With nothing said yet there is nothing to keep: throw, with
         // the code on the error so the router can decide whether to retry.
         if (text.trim() || toolCalls.length) {
-          handlers.onReasoningDelta?.(`[Matilda ended the answer early: ${code} — ${detail}]\n`);
-          handlers.onProviderActivity?.({ label: 'Matilda ended the answer early', detail: `${code} — ${detail}`, ok: false });
+          paint.onReasoningDelta?.(`[Matilda ended the answer early: ${code} — ${detail}]\n`);
+          paint.onProviderActivity?.({ label: 'Matilda ended the answer early', detail: `${code} — ${detail}`, ok: false });
           if (toolCalls.length === 0) {
             const trailer = `\n\n_(Matilda stopped early: ${detail})_`;
             text += trailer;
-            handlers.onTextDelta?.(trailer);
+            paint.onTextDelta?.(trailer);
           }
           endedEarly = true;
           break;
