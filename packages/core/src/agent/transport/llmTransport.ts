@@ -25,7 +25,7 @@ import {
   type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
 } from './nativeProviders.js';
 import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
-import { buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
+import { MatildaSandboxDetourError, buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
 import { createDsmlInterceptor, newToolCallId } from '../../provider/providers/matilda/dsml.js';
 import { readWithStallWatchdog } from './streamStall.js';
 
@@ -1000,6 +1000,10 @@ async function* readResponseTextChunks(res: Response): AsyncIterable<string> {
       if (value) yield decoder.decode(value, { stream: true });
     }
   } finally {
+    // An early exit (the consumer stopped reading — e.g. the Matilda sandbox cut)
+    // must close the connection, not only release the lock: a released reader
+    // leaves the response body streaming into a buffer nobody drains.
+    try { await reader.cancel?.(); } catch { /* already closed */ }
     try { reader.releaseLock?.(); } catch { /* already released */ }
   }
 }
@@ -1053,51 +1057,87 @@ async function callNativeProviderStream(
     stream: true,
   });
 
-  const timeoutMs = getCliKnobs().llmTimeoutMs;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
-  const release = await acquireLLMSlot();
-  let res: Response;
-  try {
-    options.beforeProviderRequest?.();
-    res = await fetch(url, { method: 'POST', headers: spec.headers, body: JSON.stringify(body), signal: fetchSignal });
-  } catch (err: any) {
-    if (err?.name === 'AbortError') {
-      if (options.signal?.aborted) throw new InterruptError();
-      throw new Error(`LLM stream request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+  const post = async (payload: unknown): Promise<Response> => {
+    const timeoutMs = getCliKnobs().llmTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    const release = await acquireLLMSlot();
+    let res: Response;
+    try {
+      options.beforeProviderRequest?.();
+      res = await fetch(url, { method: 'POST', headers: spec.headers, body: JSON.stringify(payload), signal: fetchSignal });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        if (options.signal?.aborted) throw new InterruptError();
+        throw new Error(`LLM stream request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+      release();
     }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-    release();
-  }
 
-  if (!res.ok || !res.body) {
-    const errText = res.body ? await readResponseText(res, options.maxResponseBytes) : '';
-    const apiErr: any = new Error(`${format} stream API error: ${res.status} ${res.statusText} - ${errText}`);
-    apiErr.status = res.status;
-    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
-    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
-    throw apiErr;
-  }
+    if (!res.ok || !res.body) {
+      const errText = res.body ? await readResponseText(res, options.maxResponseBytes) : '';
+      const apiErr: any = new Error(`${format} stream API error: ${res.status} ${res.statusText} - ${errText}`);
+      apiErr.status = res.status;
+      const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+      if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+      throw apiErr;
+    }
+    return res;
+  };
 
   const parse = format === 'anthropic-messages'
     ? parseAnthropicMessageStream
     : format === 'matilda-chat'
       ? parseMatildaChatStream
       : parseGeminiStream;
-  try {
-    return await parse(readResponseTextChunks(res), handlers, endpoint, config.model);
-  } catch (err: any) {
+  const mapAbort = (err: any): unknown => {
     // After the 200 the timeout is cleared, so the only signal that can abort the
     // body read is the user's Stop — which rejects reader.read() with a raw
     // AbortError. Map it to InterruptError so the caller PROPAGATES the Stop
     // instead of mistaking it for a stream failure and issuing a second call.
     // (Mirrors the OpenAI-compat path's mid-stream abort guard.)
-    if (err instanceof InterruptError) throw err;
-    if (err?.name === 'AbortError' && options.signal?.aborted) throw new InterruptError();
-    throw err;
+    if (err instanceof InterruptError) return err;
+    if (err?.name === 'AbortError' && options.signal?.aborted) return new InterruptError();
+    return err;
+  };
+
+  if (format === 'matilda-chat') {
+    // ADR-058 D22 — a request that advertised client tools can be routed by the
+    // platform to its own code sandbox instead (measured: every task-shaped
+    // turn), which cannot see the workspace and burns the platform's step
+    // budget. The parser cuts that attempt at the first sandbox tool_start; the
+    // request is then asked ONCE more in the shape the platform routes to the
+    // client tools. The re-ask streams without the cut: whatever it does is the
+    // answer (a partial answer is still kept by the parser).
+    const offeredClientTools = Array.isArray((body as { clientTools?: unknown[] }).clientTools) && (body as { clientTools: unknown[] }).clientTools.length > 0;
+    let res = await post(body);
+    try {
+      return await parseMatildaChatStream(readResponseTextChunks(res), handlers, endpoint, config.model, { cutOnSandboxDetour: offeredClientTools });
+    } catch (err: any) {
+      if (!(err instanceof MatildaSandboxDetourError)) throw mapAbort(err);
+      const reask = buildMatildaChatPayload(buildInput, {
+        conversationId: matildaConversationIdFor(options.sessionKey, buildInput.messages),
+        reask: { assistantText: (err as MatildaSandboxDetourError).textSoFar },
+      });
+      traceEvent('llm_call.matilda_reask', { model: config.model, endpoint, painted: (err as MatildaSandboxDetourError).textSoFar.length });
+      res = await post(reask);
+      try {
+        return await parseMatildaChatStream(readResponseTextChunks(res), handlers, endpoint, config.model);
+      } catch (err2: any) {
+        throw mapAbort(err2);
+      }
+    }
+  }
+
+  const res = await post(body);
+  try {
+    return await parse(readResponseTextChunks(res), handlers, endpoint, config.model);
+  } catch (err: any) {
+    throw mapAbort(err);
   }
 }
 

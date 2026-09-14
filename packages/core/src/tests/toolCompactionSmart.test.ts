@@ -113,3 +113,13 @@ test('json-summary never stubs a result the per-result cap can carry, and a stub
   const attached = attachCompactedResultHandoff(new ResultCache(), big, stub.inlineText, { label: 'list_dir' });
   assert.match(attached.content, /resultRef/);
 });
+
+
+test('command-signal-lines applies to command-shaped tools only: a read_file of a URL-rich README passes through whole', () => {
+  const readme = ['# BrainRouter', ...Array.from({ length: 120 }, (_, i) => `[![badge ${i}](https://img.shields.io/badge/b${i}.svg)](https://example.com/${i})`), 'See docs/setup.md and packages/core/src/index.ts.'].join('\n');
+  const read = withKnobs({ contextCompaction: true, toolOutputCompressionEnabled: false, maxToolResultChars: 8_000 }, () => compactToolOutput({ toolName: 'read_file', args: { path: 'README.md' }, output: readme }));
+  assert.equal(read.ruleId, 'passthrough');
+  assert.equal(read.inlineText, readme);
+  const run = withKnobs({ contextCompaction: true, toolOutputCompressionEnabled: false, maxToolResultChars: 8_000 }, () => compactToolOutput({ toolName: 'run_command', args: { command: 'cat README.md' }, output: readme }));
+  assert.equal(run.ruleId, 'command-signal-lines', 'the same text as a command output is still summarised');
+});

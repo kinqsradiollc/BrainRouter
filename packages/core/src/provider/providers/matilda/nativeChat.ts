@@ -33,6 +33,7 @@ import { sseEvents, type NativeStreamHandlers } from '../../../agent/transport/n
 import { capMessageContent, utf8Bytes } from '../../requestLimits.js';
 import { pinnedToolNames, rankAndCapTools } from '../../../tool/policy/toolBudget.js';
 import { createDsmlInterceptor, newToolCallId } from './dsml.js';
+import { promisedToolsGuardMessage } from '../../../agent/runtime/turnGuardMessages.js';
 
 export const MATILDA_NATIVE_LIMITS = {
   /** Edge-enforced request-body cap: 65 536 bytes → 200, 65 537 → 403. */
@@ -125,6 +126,58 @@ export const MATILDA_CLIENT_TOOLS_HINT =
   'inspect this workspace. For anything about this workspace call the client tools (list_dir, read_file, grep_search, ' +
   'glob_files) first, in this reply, before answering.';
 
+/**
+ * ADR-058 D22 — the re-ask after a sandbox detour. Measured through the capture
+ * proxy on the real turn that ran out of steps: a task-shaped last message
+ * ("are there any improvements we can do?") is routed by the platform's
+ * orchestrator to its own code sandbox — which cannot see the workspace and
+ * does not template the client tools — 5/5, with or without the hint, and burns
+ * the per-request step budget there. What the platform routes to the client
+ * tools instead is the shape BrainRouter's own runtime produces a turn later:
+ * the model's announcement as the assistant turn, then the promise guard as the
+ * last user message — a client tool call 6/6 across the replayed and the real
+ * desktop follow-ups. Shorter notes were not reliable (a bare question 2/4, a
+ * note naming the "code sandbox" back to the sandbox 2/2, a guard-styled
+ * paraphrase once looped on empty DSML openers until the upstream timeout). So
+ * after the platform starts its sandbox the adapter cuts the stream and asks
+ * ONCE more in exactly that shape — the same correction, without the wasted call.
+ */
+export const MATILDA_REASK_QUESTION =
+  'Which client tool call (list_dir, read_file, grep_search or glob_files) do you emit first? Emit it now as a DSML tool call block.';
+export function matildaReaskNote(): string {
+  return `${promisedToolsGuardMessage()}\n\n${MATILDA_REASK_QUESTION}`;
+}
+
+/** The assistant turn the re-ask replies to when the platform took over before
+ *  the model had said anything (the wire needs a non-empty one). */
+export const MATILDA_REASK_FILLER = "I'll start by exploring the workspace to understand what we're working with.";
+
+/** Thrown by the parser when the platform started its own code sandbox on a
+ *  request that advertised client tools (and no client tool had been called):
+ *  the transport asks once more with `reask` set. Carries the text painted so far. */
+export class MatildaSandboxDetourError extends Error {
+  readonly code = 'sandbox_detour';
+  constructor(readonly textSoFar: string) {
+    super('Matilda routed the request to its platform sandbox instead of the advertised client tools');
+    this.name = 'MatildaSandboxDetourError';
+  }
+}
+
+export interface MatildaParseOptions {
+  /** Cut the stream (throw `MatildaSandboxDetourError`) the moment the platform
+   *  starts its own code sandbox before any client tool call. Set on the first
+   *  attempt of a request that advertised client tools; never on the re-ask. */
+  cutOnSandboxDetour?: boolean;
+}
+
+/** The platform's code-sandbox tool as it appears on the wire: `tool_start
+ *  {"tool":"assistant","input":"Running code" | "Running python"}`. */
+export function isSandboxToolStart(j: Record<string, unknown> | null): boolean {
+  if (j?.tool !== 'assistant') return false;
+  const input = typeof j.input === 'string' ? j.input.toLowerCase() : '';
+  return input === '' || /\b(running|executing)\b/.test(input);
+}
+
 export interface MatildaChatMessage { role: 'user' | 'assistant'; content: string }
 export interface MatildaClientTool { name: string; description: string; parameters: unknown }
 export interface MatildaChatPayload {
@@ -179,8 +232,16 @@ export function matildaConversationIdFor(sessionKey: string | undefined, message
   return id;
 }
 
+export interface MatildaBuildOptions {
+  conversationId: string;
+  /** D22 — the second attempt after a sandbox detour: what the model had said
+   *  becomes the assistant turn and the promise guard + question the last user
+   *  message (the history is otherwise unchanged). */
+  reask?: { assistantText: string };
+}
+
 /** Build the native body from the transport's normalized input. */
-export function buildMatildaChatPayload(input: NativeBuildInput, opts: { conversationId: string }): MatildaChatPayload {
+export function buildMatildaChatPayload(input: NativeBuildInput, opts: MatildaBuildOptions): MatildaChatPayload {
   const { maxBodyBytes, maxClientTools } = MATILDA_NATIVE_LIMITS;
   const hasTools = input.tools.length > 0;
   const taskText = latestUserText(input.messages);
@@ -215,7 +276,7 @@ interface RankedTool { name: string; description?: string; tool: CleanTool }
  *  wire byte count. */
 function buildAtTier(
   input: NativeBuildInput,
-  opts: { conversationId: string },
+  opts: MatildaBuildOptions,
   tier: MatildaBudgetTier,
   ranked: RankedTool[],
   pinned: Set<string>,
@@ -254,7 +315,10 @@ function buildAtTier(
     } else if (m.role === 'assistant') {
       const parts = [textOf(m.content)];
       const calls = (m as { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> }).tool_calls ?? [];
-      for (const tc of calls) parts.push(`[Called client tool: ${tc.function?.name ?? 'tool'}(${tc.function?.arguments ?? ''})]`);
+      // A sentence, not a bracketed stub: a turn whose only content was
+      // "[Called client tool: list_dir(…)]" was read back by the model as "a
+      // message containing only a tool-call block" and it dropped the task.
+      for (const tc of calls) parts.push(`I called the client tool ${tc.function?.name ?? 'tool'} with ${tc.function?.arguments || '{}'}; its result follows.`);
       const content = parts.filter(Boolean).join('\n');
       if (content) messages.push({ role: 'assistant', content });
     } else if (m.role === 'tool') {
@@ -263,6 +327,14 @@ function buildAtTier(
       const body = neutralizeToolResultHeaders(textOf(m.content));
       messages.push(capMessageContent({ role: 'user', content: `${toolResultHeader(name, failed)}\n${body}` }, toolResultChars));
     }
+  }
+
+  // 2b) D22 — the re-ask: what the model said before the platform took over,
+  //     then the runtime's promise guard + the question (the measured shape).
+  if (opts.reask) {
+    const said = opts.reask.assistantText.trim() || MATILDA_REASK_FILLER;
+    messages.push(capMessageContent({ role: 'assistant', content: said }, toolResultChars));
+    messages.push({ role: 'user', content: matildaReaskNote() });
   }
 
   const payload: MatildaChatPayload = {
@@ -296,26 +368,59 @@ function buildAtTier(
   return { payload, apply };
 }
 
-const SERVER_TOOL_OUTPUT_PREVIEW_CHARS = 400;
+const SERVER_TOOL_OUTPUT_PREVIEW_CHARS = 200;
+const SERVER_TOOL_INPUT_PREVIEW_CHARS = 120;
+
+/** The platform's own tools, named for a person: `search` is a web search,
+ *  `assistant` is the code sandbox, `processing` the orchestrator's routing
+ *  step, `memory` its memory lookup. Unknown names pass through. */
+export function serverToolLabel(tool: string): string {
+  const what = tool === 'search' ? 'web search' : tool === 'assistant' ? 'sandbox' : tool === 'processing' ? 'processing' : tool === 'memory' ? 'memory' : tool;
+  return `Matilda ${what}`;
+}
+
+/** BrainRouter's own text to the model — a runtime guard correction or a client
+ *  tool result — which the platform searches the web for on every round trip
+ *  (measured; not switchable). Naming that is clearer than quoting it back. */
+const RUNTIME_TEXT_RE = /^\s*(Runtime [a-z -]+guardrail tripped|\[[Cc]lient tool (result|error):|Task-tracking reminder:)/;
+
+function clip(text: string, max: number): string {
+  const one = text.replace(/\s+/g, ' ').trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
+/** What a server-side tool event is about, for the person: the search query (or
+ *  "BrainRouter's own message" when the platform searched our guard text / a tool
+ *  result), the sandbox's step, a progress message. '' when nothing readable. */
+export function serverToolDetail(event: string, j: Record<string, unknown> | null): string {
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : v == null ? '' : JSON.stringify(v));
+  const tool = typeof j?.tool === 'string' && j.tool ? j.tool : 'tool';
+  if (event === 'tool_start') {
+    const input = str(j?.input ?? j?.inputOrArgs ?? j?.args);
+    if (tool === 'search' && RUNTIME_TEXT_RE.test(input)) return "on BrainRouter's own message to it (a platform step, not a request)";
+    if (tool === 'search' && input) return `"${clip(input, SERVER_TOOL_INPUT_PREVIEW_CHARS)}"`;
+    return clip(input, SERVER_TOOL_INPUT_PREVIEW_CHARS);
+  }
+  if (event === 'tool_progress') return clip(str(j?.message), SERVER_TOOL_INPUT_PREVIEW_CHARS);
+  if (tool === 'search') {
+    const sources = Array.isArray(j?.sources) ? (j.sources as unknown[]).length : 0;
+    const output = str(j?.output);
+    const n = sources || (output.startsWith('Found sources:') ? output.split(' | ').length : 0);
+    return n ? `${n} source${n === 1 ? '' : 's'}` : clip(output, SERVER_TOOL_OUTPUT_PREVIEW_CHARS);
+  }
+  return clip(str(j?.output), SERVER_TOOL_OUTPUT_PREVIEW_CHARS);
+}
 
 /** One reasoning-stream line for a server-side tool event, or '' when the
  *  payload carries nothing readable. Exported for tests. */
 export function describeServerTool(event: string, j: Record<string, unknown> | null): string {
   const tool = typeof j?.tool === 'string' && j.tool ? j.tool : 'tool';
-  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : v == null ? '' : JSON.stringify(v));
-  const label = `Matilda server-side ${tool}`;
-  if (event === 'tool_start') {
-    const input = str(j?.input ?? j?.inputOrArgs ?? j?.args);
-    return `[${label}] ${input || 'started'}\n`;
-  }
-  if (event === 'tool_progress') {
-    const message = str(j?.message);
-    return message ? `[${label}] ${message}\n` : '';
-  }
+  const label = serverToolLabel(tool);
+  const detail = serverToolDetail(event, j);
+  if (event === 'tool_start') return `[${label}] ${detail || 'started'}\n`;
+  if (event === 'tool_progress') return detail ? `[${label}] ${detail}\n` : '';
   const status = typeof j?.status === 'string' ? j.status : 'done';
-  const output = str(j?.output);
-  const preview = output.length > SERVER_TOOL_OUTPUT_PREVIEW_CHARS ? `${output.slice(0, SERVER_TOOL_OUTPUT_PREVIEW_CHARS)}…` : output;
-  return `[${label} → ${status}]${preview ? ` ${preview}` : ''}\n`;
+  return `[${label} → ${status}]${detail ? ` ${detail}` : ''}\n`;
 }
 
 /**
@@ -330,6 +435,7 @@ export async function parseMatildaChatStream(
   handlers: NativeStreamHandlers,
   endpoint: string,
   model: string,
+  parseOptions: MatildaParseOptions = {},
 ): Promise<NativeOutput> {
   let text = '';
   const toolCalls: NonNullable<NativeOutput['toolCalls']> = [];
@@ -417,13 +523,24 @@ export async function parseMatildaChatStream(
       case 'tool_start':
       case 'tool_progress':
       case 'tool_result': {
+        // D22 — the platform started its code sandbox on a request that offered
+        // client tools, before any client tool was called: this attempt can only
+        // end in a sandbox that cannot see the workspace (and, measured, in
+        // `request_budget_exceeded`). Say so, cut it, and let the transport ask
+        // once more in the shape the platform routes to the client tools.
+        if (ev.event === 'tool_start' && parseOptions.cutOnSandboxDetour && toolCalls.length === 0 && isSandboxToolStart(j)) {
+          interceptor.flush();
+          handlers.onReasoningDelta?.('[Matilda routed this request to its own code sandbox, which cannot see the workspace — asking again with the client tools]\n');
+          handlers.onProviderActivity?.({ label: 'Matilda routed the request to its own sandbox', detail: 'cannot see the workspace — asking again with the client tools', ok: false });
+          throw new MatildaSandboxDetourError(text);
+        }
         const line = describeServerTool(ev.event, j);
         if (line) handlers.onReasoningDelta?.(line);
         if (line) {
           const tool = typeof j?.tool === 'string' && j.tool ? j.tool : 'tool';
-          const input = typeof j?.input === 'string' ? j.input : typeof j?.message === 'string' ? j.message : '';
-          if (ev.event === 'tool_start') handlers.onProviderActivity?.({ label: `Matilda server-side ${tool}`, ...(input ? { detail: input.slice(0, 160) } : {}) });
-          else if (ev.event === 'tool_result') handlers.onProviderActivity?.({ label: `Matilda server-side ${tool} finished`, ok: j?.status !== 'error' });
+          const detail = serverToolDetail(ev.event, j);
+          if (ev.event === 'tool_start') handlers.onProviderActivity?.({ label: serverToolLabel(tool), ...(detail ? { detail } : {}) });
+          else if (ev.event === 'tool_result') handlers.onProviderActivity?.({ label: `${serverToolLabel(tool)} finished`, ...(detail ? { detail } : {}), ok: j?.status !== 'error' });
         }
         break;
       }

@@ -4,10 +4,17 @@ import {
   MATILDA_CLIENT_TOOLS_HINT,
   MATILDA_BUDGET_TIERS,
   MATILDA_NATIVE_LIMITS,
+  MATILDA_REASK_FILLER,
+  MATILDA_REASK_QUESTION,
+  matildaReaskNote,
+  MatildaSandboxDetourError,
+  isSandboxToolStart,
   advertisedNamesLine,
   budgetToolDescription,
   buildMatildaChatPayload,
   compactParameters,
+  describeServerTool,
+  serverToolLabel,
   matildaConversationIdFor,
   neutralizeToolResultHeaders,
   parseMatildaChatStream,
@@ -68,7 +75,7 @@ test('payload: history maps user/assistant through, tool results become user mes
     ],
   }), { conversationId: 'c' });
   assert.deepEqual(p.messages.map((m) => m.role), ['user', 'assistant', 'user']);
-  assert.equal(p.messages[1].content, 'On it.\n[Called client tool: read_file({"path":"n.txt"})]');
+  assert.equal(p.messages[1].content, 'On it.\nI called the client tool read_file with {"path":"n.txt"}; its result follows.');
   assert.equal(p.messages[2].content, '[Client tool result: read_file]\nship by Friday');
 });
 
@@ -163,10 +170,9 @@ test('stream: Matilda server-side tool events surface as reasoning activity, nev
   assert.equal(out.toolCalls, undefined, 'a server-side tool is not a client tool call');
   assert.equal(out.finishReason, 'stop');
   assert.equal(reasoning.length, 3);
-  assert.match(reasoning[0], /^\[Matilda server-side search\] What is the current RBA cash rate\?\n$/);
-  assert.match(reasoning[1], /^\[Matilda server-side search\] reading 3 sources\n$/);
-  assert.match(reasoning[2], /^\[Matilda server-side search → success\] Found sources: Reserve Bank/);
-  assert.ok(reasoning[2].length < 500 && reasoning[2].includes('…'), 'long outputs are previewed, not dumped');
+  assert.match(reasoning[0], /^\[Matilda web search\] "What is the current RBA cash rate\?"\n$/);
+  assert.match(reasoning[1], /^\[Matilda web search\] reading 3 sources\n$/);
+  assert.equal(reasoning[2], '[Matilda web search → success] 2 sources\n', 'an evidence pack is counted, never dumped');
   assert.equal(out.usage?.prompt_tokens, 345, 'input_tokens maps onto the OpenAI prompt_tokens field');
   assert.equal(out.usage?.completion_tokens, 12);
   const empty = await parseMatildaChatStream(sse([['tool_progress', { tool: 'search' }], ['done', {}]]), { onReasoningDelta: (t) => reasoning.push(t) }, 'e', 'm');
@@ -302,4 +308,55 @@ test('tiers: when the standard prose cannot carry every offered tool, the tight 
   // Sanity: with no pressure, the standard tier is used untouched.
   const easy = buildMatildaChatPayload(input({ system: 'Be brief.', messages: [{ role: 'user', content: 'hi' }], tools: tools.slice(0, 3) }), { conversationId: 'c' });
   assert.ok(easy.clientTools!.some((t) => t.description.length > tight.descriptionChars), 'standard descriptions when there is room');
+});
+
+// ADR-058 D22 — the platform's code sandbox on a request that offered client tools.
+test('stream: the platform starting its code sandbox before any client tool call cuts the attempt (only when asked to), carrying the text so far', async () => {
+  const reasoning: string[] = [];
+  const events: Array<[string, unknown]> = [
+    ['token', { content: "I'll explore the workspace. " }],
+    ['tool_start', { tool: 'processing' }],
+    ['tool_start', { tool: 'assistant', input: 'Running code' }],
+    ['token', { content: 'NEVER READ' }],
+    ['done', {}],
+  ];
+  await assert.rejects(
+    () => parseMatildaChatStream(sse(events), { onReasoningDelta: (t) => reasoning.push(t) }, 'e', 'm', { cutOnSandboxDetour: true }),
+    (e: MatildaSandboxDetourError) => e instanceof MatildaSandboxDetourError && e.code === 'sandbox_detour' && e.textSoFar === "I'll explore the workspace. ",
+  );
+  assert.ok(reasoning.some((r) => r.includes('routed this request to its own code sandbox')), 'the person is told why the attempt was cut');
+  // Without the option (the re-ask, or a request with no client tools) the same stream is read to the end as before.
+  const out = await parseMatildaChatStream(sse(events), {}, 'e', 'm');
+  assert.equal(out.content, "I'll explore the workspace. NEVER READ");
+  // A client tool call already made means the model IS on the client-tool path — no cut.
+  const block = `${DSML_TOOL_CALL_OPEN}${param('name', 'list_dir')}${param('arguments', '{"path":"."}')}${DSML_TOOL_CALL_CLOSE}`;
+  const called = await parseMatildaChatStream(sse([['token', { content: block }], ['tool_start', { tool: 'assistant', input: 'Running code' }], ['done', {}]]), {}, 'e', 'm', { cutOnSandboxDetour: true });
+  assert.equal(called.toolCalls?.length, 1);
+  assert.equal(isSandboxToolStart({ tool: 'search', input: 'x' }), false);
+  assert.equal(isSandboxToolStart({ tool: 'assistant', input: 'Running python' }), true);
+});
+
+test('payload: the re-ask keeps the history, replies to what the model had said, and ends on the promise guard + question', () => {
+  const p = buildMatildaChatPayload(
+    input({ system: 'Be brief.', messages: [{ role: 'user', content: 'any improvements?' }], tools: [tool('list_dir', 'List a directory.')] }),
+    { conversationId: 'c', reask: { assistantText: "I'll explore the workspace. " } },
+  );
+  assert.deepEqual(p.messages.map((m) => m.role), ['user', 'user', 'assistant', 'user']);
+  assert.equal(p.messages[1].content, 'any improvements?');
+  assert.equal(p.messages[2].content, "I'll explore the workspace.");
+  assert.equal(p.messages[3].content, matildaReaskNote());
+  assert.match(p.messages[3].content, /^Runtime promise-then-ask guardrail tripped\./);
+  assert.ok(p.messages[3].content.endsWith(MATILDA_REASK_QUESTION));
+  assert.equal(p.clientTools?.length, 1, 'the client tools are advertised again');
+  const empty = buildMatildaChatPayload(input({ messages: [{ role: 'user', content: 'x' }], tools: [tool('f', 'd')] }), { conversationId: 'c', reask: { assistantText: '   ' } });
+  assert.equal(empty.messages[empty.messages.length - 2].content, MATILDA_REASK_FILLER, 'the wire needs a non-empty assistant turn');
+});
+
+test('narration: the platform searching the web for BrainRouter\'s own guard text or tool result is named, not quoted; the sandbox is called a sandbox', () => {
+  assert.equal(describeServerTool('tool_start', { tool: 'search', input: 'Runtime promise-then-ask guardrail tripped.\nEarlier this turn…' }), "[Matilda web search] on BrainRouter's own message to it (a platform step, not a request)\n");
+  assert.equal(describeServerTool('tool_start', { tool: 'search', input: '[Client tool result: list_dir]\n[{"name":".git"}]' }), "[Matilda web search] on BrainRouter's own message to it (a platform step, not a request)\n");
+  assert.equal(describeServerTool('tool_start', { tool: 'assistant', input: 'Running code' }), '[Matilda sandbox] Running code\n');
+  assert.equal(describeServerTool('tool_result', { tool: 'search', status: 'success', sources: [{}, {}, {}], output: 'Found sources: a | b | c' }), '[Matilda web search → success] 3 sources\n');
+  assert.equal(describeServerTool('tool_start', { tool: 'processing' }), '[Matilda processing] started\n');
+  assert.equal(serverToolLabel('memory'), 'Matilda memory');
 });

@@ -53,13 +53,13 @@ test('renderTurnPath is one readable line per step with relative time, attempt a
   const text = renderTurnPath([
     { at: t0, type: 'model', label: 'matilda/matilda', detail: 'finish: stop · 47 tokens out · 3.1 s', ok: true },
     { at: t0 + 3200, type: 'guard', label: 'guard: promised tools then asked', detail: 'steering to discovery', attempt: { n: 1, max: 2 }, ok: false },
-    { at: t0 + 3300, type: 'provider', label: 'Matilda server-side search', detail: 'Runtime promise-then-ask guardrail…' },
+    { at: t0 + 3300, type: 'provider', label: 'Matilda web search', detail: "on BrainRouter's own message to it" },
     { at: t0 + 9000, type: 'end', label: 'answered', ok: true },
   ]);
   assert.equal(text, [
     '+0.0s model: matilda/matilda — finish: stop · 47 tokens out · 3.1 s ✓',
     '+3.2s guard: guard: promised tools then asked (1/2) — steering to discovery ✗',
-    '+3.3s provider: Matilda server-side search — Runtime promise-then-ask guardrail…',
+    "+3.3s provider: Matilda web search — on BrainRouter's own message to it",
     '+9.0s end: answered ✓',
   ].join('\n'));
   assert.equal(renderTurnPath([]), '');
