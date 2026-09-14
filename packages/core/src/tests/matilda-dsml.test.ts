@@ -114,3 +114,18 @@ test('payload: name/argument synonyms and bare parameter elements', () => {
   assert.deepEqual(parseDsmlToolCallPayload('{"tool":"list_dir","params":{"path":"."}}'), { name: 'list_dir', arguments: '{"path":"."}' });
   assert.equal(parseDsmlToolCallPayload(`${p('params', '{}')}`), null, 'no name under any key → not a call');
 });
+
+test('dialect 4 (live 2026-09-14): one parameter named after the tool, block closed with </｜DSML｜invoke> — lifted as a call, nothing leaks', () => {
+  const block = `${DSML_TOOL_CALL_OPEN}\n<${BAR}DSML${BAR}parameter name="code_exec" class="inline">ls -la openSrc/ 2>/dev/null || echo "not found"</${BAR}DSML${BAR}parameter>\n</${BAR}DSML${BAR}invoke>`;
+  const call = parseDsmlToolCallPayload(block.slice(DSML_TOOL_CALL_OPEN.length, block.lastIndexOf('</')));
+  assert.equal(call?.name, 'code_exec');
+  assert.deepEqual(JSON.parse(call!.arguments), { input: 'ls -la openSrc/ 2>/dev/null || echo "not found"' });
+  const text: string[] = []; const calls: any[] = [];
+  const it = createDsmlInterceptor((t) => text.push(t), (c) => calls.push(c));
+  for (const ch of `Let me use code_exec.\n\n${block} done`) it.push(ch);
+  it.flush();
+  assert.equal(text.join(''), 'Let me use code_exec.\n\n done');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'code_exec');
+});
+

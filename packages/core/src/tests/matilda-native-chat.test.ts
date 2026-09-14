@@ -360,3 +360,25 @@ test('narration: the platform searching the web for BrainRouter\'s own guard tex
   assert.equal(describeServerTool('tool_start', { tool: 'processing' }), '[Matilda processing] started\n');
   assert.equal(serverToolLabel('memory'), 'Matilda memory');
 });
+
+// ADR-058 D23 — the history itself must fit the 64 KiB body (a real session 403'd with eight 16k tool results).
+test('payload: a history that alone exceeds the body limit elides the OLDEST tool results to a note, keeps the newest whole, and still carries the tools', () => {
+  const messages: NativeBuildInput['messages'] = [{ role: 'user', content: 'what inside this codebase?' }];
+  for (let i = 0; i < 8; i += 1) {
+    messages.push({ role: 'assistant', content: '', tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'read_file', arguments: `{"path":"f${i}.md"}` } }] } as any);
+    messages.push({ role: 'tool', name: 'read_file', tool_call_id: `c${i}`, content: `file ${i}\n${'y'.repeat(20_000)}` } as any);
+  }
+  messages.push({ role: 'user', content: 'continue' });
+  const tools = Array.from({ length: 12 }, (_, i) => tool(`t${i}`, 'A tool. '.repeat(20)));
+  const p = buildMatildaChatPayload(input({ system: 's'.repeat(8_000), messages, tools }), { conversationId: 'c' });
+  const bytes = utf8(JSON.stringify(p));
+  assert.ok(bytes <= MATILDA_NATIVE_LIMITS.maxBodyBytes, `body ${bytes} B must fit the edge limit`);
+  assert.ok((p.clientTools?.length ?? 0) >= 10, `tools still travel (${p.clientTools?.length})`);
+  const results = p.messages.filter((m) => m.content.startsWith('[Client tool result: read_file]'));
+  assert.equal(results.length, 8, 'every result keeps its header (pairing intact)');
+  assert.ok(results[results.length - 1].content.includes('file 7\nyyyy'), 'the newest result is whole');
+  assert.match(results[0].content, /elided to fit the provider's request limit/);
+  assert.equal(p.messages[p.messages.length - 1].content, 'continue');
+  assert.ok(p.messages[0].content.startsWith('ssss'), 'the instructions are untouched');
+});
+

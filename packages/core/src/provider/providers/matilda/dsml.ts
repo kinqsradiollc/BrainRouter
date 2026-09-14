@@ -28,6 +28,12 @@
 const BAR = '｜';
 export const DSML_TOOL_CALL_OPEN = `<${BAR}DSML${BAR}tool_call>`;
 export const DSML_TOOL_CALL_CLOSE = `</${BAR}DSML${BAR}tool_call>`;
+/** 4. Seen live 2026-09-14: the block closed with `</｜DSML｜invoke>` and carried
+ *  ONE parameter whose NAME is the tool and whose text is the input —
+ *  `<｜DSML｜parameter name="code_exec" class="inline">ls -la openSrc/</｜DSML｜parameter>`.
+ *  Unlifted, the whole block leaked into the visible answer and the runtime's
+ *  guards then argued with it for four rounds. */
+export const DSML_TOOL_CALL_CLOSE_ALT = `</${BAR}DSML${BAR}invoke>`;
 const PARAM_RE = new RegExp(
   `<${BAR}DSML${BAR}parameter\\s+name="([^"]+)"[^>]*>([\\s\\S]*?)</${BAR}DSML${BAR}parameter>`,
   'g',
@@ -102,8 +108,16 @@ export function parseDsmlToolCallPayload(payload: string): DsmlToolCall | null {
   }
   const params: Record<string, string> = {};
   for (const m of text.matchAll(PARAM_RE)) params[m[1]] = m[2].trim();
-  const name = pick(params, NAME_KEYS);
-  if (!name) return null;
+  let name = pick(params, NAME_KEYS);
+  if (!name) {
+    // Dialect 4: a single parameter element named after the tool itself, its
+    // text the input (`name="code_exec"` → code_exec with {"input": "…"}).
+    const keys = Object.keys(params).filter((k) => !(ARG_KEYS as readonly string[]).includes(k) && k !== 'id');
+    if (keys.length === 1 && /^[A-Za-z_][\w.-]*$/.test(keys[0])) {
+      return { name: keys[0], arguments: argumentsJson(params[keys[0]]), ...(params.id ? { id: params.id } : {}) };
+    }
+    return null;
+  }
   const argKey = ARG_KEYS.find((k) => typeof params[k] === 'string');
   let args: string;
   if (argKey) {
@@ -168,20 +182,25 @@ export function createDsmlInterceptor(
         buffer = buffer.slice(openIdx + DSML_TOOL_CALL_OPEN.length);
         inBlock = true;
       }
-      const closeIdx = buffer.indexOf(DSML_TOOL_CALL_CLOSE);
-      if (closeIdx === -1) {
+      // Either close marker ends the block (the model has used both).
+      const candidates = [DSML_TOOL_CALL_CLOSE, DSML_TOOL_CALL_CLOSE_ALT]
+        .map((tag) => ({ tag, idx: buffer.indexOf(tag) }))
+        .filter((c) => c.idx !== -1)
+        .sort((a, b) => a.idx - b.idx);
+      const close = candidates[0];
+      if (!close) {
         if (!flushing) return; // wait for the rest of the block
         onText(DSML_TOOL_CALL_OPEN + buffer); // unterminated at end of stream — surface verbatim
         buffer = '';
         inBlock = false;
         return;
       }
-      const payload = buffer.slice(0, closeIdx);
-      buffer = buffer.slice(closeIdx + DSML_TOOL_CALL_CLOSE.length);
+      const payload = buffer.slice(0, close.idx);
+      buffer = buffer.slice(close.idx + close.tag.length);
       inBlock = false;
       const call = parseDsmlToolCallPayload(payload);
       if (call) onToolCall(call);
-      else onText(DSML_TOOL_CALL_OPEN + payload + DSML_TOOL_CALL_CLOSE); // unparseable — keep it visible rather than lose it
+      else onText(DSML_TOOL_CALL_OPEN + payload + close.tag); // unparseable — keep it visible rather than lose it
     }
   };
 
