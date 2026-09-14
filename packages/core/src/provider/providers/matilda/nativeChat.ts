@@ -392,6 +392,7 @@ export async function parseMatildaChatStream(
         const categories = Array.isArray(j?.categories) ? (j.categories as unknown[]).filter((c): c is string => typeof c === 'string') : [];
         text = message;
         handlers.onReasoningDelta?.(`[Matilda safety replaced the answer${categories.length ? `: ${categories.join(', ')}` : ''}]\n`);
+        handlers.onProviderActivity?.({ label: 'Matilda safety replaced the answer', ...(categories.length ? { detail: categories.join(', ') } : {}), ok: false });
         if (message) handlers.onTextDelta?.(message);
         break;
       }
@@ -418,6 +419,12 @@ export async function parseMatildaChatStream(
       case 'tool_result': {
         const line = describeServerTool(ev.event, j);
         if (line) handlers.onReasoningDelta?.(line);
+        if (line) {
+          const tool = typeof j?.tool === 'string' && j.tool ? j.tool : 'tool';
+          const input = typeof j?.input === 'string' ? j.input : typeof j?.message === 'string' ? j.message : '';
+          if (ev.event === 'tool_start') handlers.onProviderActivity?.({ label: `Matilda server-side ${tool}`, ...(input ? { detail: input.slice(0, 160) } : {}) });
+          else if (ev.event === 'tool_result') handlers.onProviderActivity?.({ label: `Matilda server-side ${tool} finished`, ok: j?.status !== 'error' });
+        }
         break;
       }
       case 'error': {
@@ -433,6 +440,7 @@ export async function parseMatildaChatStream(
         // the code on the error so the router can decide whether to retry.
         if (text.trim() || toolCalls.length) {
           handlers.onReasoningDelta?.(`[Matilda ended the answer early: ${code} — ${detail}]\n`);
+          handlers.onProviderActivity?.({ label: 'Matilda ended the answer early', detail: `${code} — ${detail}`, ok: false });
           if (toolCalls.length === 0) {
             const trailer = `\n\n_(Matilda stopped early: ${detail})_`;
             text += trailer;

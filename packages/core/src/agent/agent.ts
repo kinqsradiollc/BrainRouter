@@ -354,6 +354,7 @@ import { emptySessionProvenance, type SessionProvenance } from './runtime/conten
 import type { LearnedTenant } from '../learning/index.js';
 import type { SteeringReceipt } from '../task/workContract.js';
 import { ReviewProviderRequestBudgetExceededError } from './runtime/modelRequestBudget.js';
+import type { TurnStep } from './runtime/turnPath.js';
 import {
   proposeSessionTitleWithModel,
   type SessionTitleModelCall,
@@ -379,6 +380,9 @@ export interface RunTurnCallbacks {
   onSessionTitle?: (event: { title: string; source: 'derived' | 'agent' }) => void;
   /** Fired once after a bounded provider recovery campaign completes. */
   onProviderRecovery?: (receipt: ProviderRecoveryReceipt) => void;
+  /** ADR-059 — one step of the turn path (model call, provider activity,
+   *  guardrail re-prompt, turn end), in order, for the host to show. */
+  onTurnStep?: (step: TurnStep) => void;
   // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
   // result with its OWN start row; parallel same-name calls no longer collide on a
   // name-keyed map. Optional → existing callers are unaffected.
@@ -3196,6 +3200,8 @@ export class Agent implements IAgent {
   /** Count of tool calls executed during the most recent runTurn. The goal */
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
+  /** ADR-059 — the current turn's path; reset by runTurn, persisted at its end. */
+  public turnPathSteps: TurnStep[] = [];
 
   /** ADR-048 S5 — paths this turn's write tools touched (reset each turn); the
    *  turn-end blast-radius tap maps them onto the Atlas graph. */

@@ -16,6 +16,10 @@ import { normalizeAnthropicOutput, normalizeGeminiOutput, type NativeOutput } fr
 export interface NativeStreamHandlers {
   onTextDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
+  /** ADR-059 — something the provider's platform did on its own during the call
+   *  (a server-side tool, a safety replacement, an early end); shown as a step of
+   *  the turn path. Providers whose platform does nothing of the kind never call it. */
+  onProviderActivity?: (activity: { label: string; detail?: string; ok?: boolean }) => void;
 }
 
 interface SseEvent { event: string; data: string }

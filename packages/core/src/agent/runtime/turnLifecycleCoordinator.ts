@@ -10,6 +10,7 @@ import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
 import { readPlan } from '../../task/taskStore.js';
 import { pendingSteeringConstraint } from '../../task/steeringReceiptStore.js';
+import { emitTurnStep, guardStepFromStatus } from './turnPath.js';
 import {
   mergePendingChildIds,
   unsynthesizedChildIds,
@@ -429,6 +430,9 @@ export class TurnLifecycleCoordinator {
     this.agent.chatHistory.push(guardMessage);
     this.agent.recordTranscript({ ...guardMessage, name: 'guard' });
     this.callbacks.onStatusUpdate(status);
+    // ADR-059 — a guard re-prompting the model is a step of the turn the person
+    // must be able to see afterwards, not just a status line that ticks past.
+    emitTurnStep(this.agent, this.callbacks, guardStepFromStatus(status));
     return true;
   }
 }

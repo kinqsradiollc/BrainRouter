@@ -1368,6 +1368,8 @@ export async function callOpenAIStream(
   handlers: {
     onTextDelta?: (text: string) => void;
     onReasoningDelta?: (text: string) => void;
+    /** ADR-059 — provider-side activity (native adapters only; the OpenAI wire has none). */
+    onProviderActivity?: (activity: { label: string; detail?: string; ok?: boolean }) => void;
   } = {},
 ) {
   // ADR-047 D2 — engine mode (see callOpenAI). An engine turn is not an SSE
@@ -1413,6 +1415,7 @@ export async function callOpenAIStream(
     const streamHandlers: NativeStreamHandlers = {
       onTextDelta: (t) => { paintedAny = true; handlers.onTextDelta?.(t); },
       onReasoningDelta: (t) => { paintedAny = true; handlers.onReasoningDelta?.(t); },
+      onProviderActivity: (a) => handlers.onProviderActivity?.(a),
     };
     try {
       return await callNativeProviderStream(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options, streamHandlers);

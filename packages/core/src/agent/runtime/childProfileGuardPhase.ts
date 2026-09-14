@@ -16,6 +16,7 @@ import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
 } from './profileStageRuntime.js';
+import { emitTurnStep, guardStepFromStatus } from './turnPath.js';
 
 export interface ChildProfileGuardInput {
   agent: Agent;
@@ -46,6 +47,8 @@ function continueWithGuard(
   agent.chatHistory.push(guardMessage);
   agent.recordTranscript({ ...guardMessage, name: 'guard' });
   callbacks.onStatusUpdate(status);
+  // ADR-059 — visible afterwards, not only as a passing status line.
+  emitTurnStep(agent, callbacks, guardStepFromStatus(status));
   return {
     action: 'continue',
     profileStageGuardFired,

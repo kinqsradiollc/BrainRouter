@@ -33,7 +33,7 @@ export const VALID_PANEL_IDS = new Set<PanelId>(PANEL_DEFS.map((p) => p.id));
 // background turn still updates its spinner and lands its result/error.
 export const FOREGROUND_ONLY_KINDS = new Set<string>([
   'status', 'reasoning-delta', 'assistant-turn-start', 'assistant-delta',
-  'assistant-turn-end', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
+  'assistant-turn-end', 'tool-start', 'tool-end', 'turn-step', 'child-tool-start', 'child-tool-end',
   'child-complete', 'plan-update', 'profile-stage', 'compaction', 'memory', 'tokens-updated', 'notice',
   'input-delivery',
 ]);

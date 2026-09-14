@@ -110,6 +110,7 @@ import {
   createProfileStageControllerForTurn,
   describeProfileStageTool,
 } from './profileStageRuntime.js';
+import { TURN_PATH_TRANSCRIPT_NAME, emitTurnStep, renderTurnPath, turnEndLabel } from './turnPath.js';
 import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
 import { beginToolProvenanceBatch, noteToolProvenance } from './contentProvenance.js';
 import { getLearnedItem } from '../../learning/index.js';
@@ -789,6 +790,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const fanOutHinted = preparedContext.fanOutHinted;
 
     let loopCount = 0;
+    this.turnPathSteps = []; // ADR-059 — a fresh path per turn
     // ADAPTIVE TOOL BUDGET — the agent should be allowed to FINISH the task,
     // weak model or strong. `maxToolLoops` is NOT a task limiter, it's a
     // checkpoint WINDOW: when the agent has made a full window of tool calls
@@ -2040,6 +2042,20 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
 
     assertReviewedTurnCurrent();
+    // ADR-059 — close the path with why the turn ended, then keep it in the
+    // transcript as a record the model never sees (loadHistory replays only
+    // user/assistant/tool roles) so a reopened session shows the same path.
+    emitTurnStep(this, callbacks, {
+      type: 'end',
+      label: turnEndLabel({ exitedCleanly, answered: finalAnswer.trim().length > 0, loopCount, maxLoops }),
+      ok: exitedCleanly,
+    });
+    this.recordTranscript({
+      role: 'system',
+      name: TURN_PATH_TRANSCRIPT_NAME,
+      content: renderTurnPath(this.turnPathSteps),
+      steps: [...this.turnPathSteps],
+    });
     return await finalizeTurnPhase(this, {
       prompt,
       answer: finalAnswer,

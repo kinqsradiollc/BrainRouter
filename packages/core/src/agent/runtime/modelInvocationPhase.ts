@@ -24,6 +24,7 @@ import { deriveModelRequest } from '../guards/toolCallRecovery.js';
 import { reportPairingRepair } from '../../runtime/invariantReports.js';
 import { resolveEffortForTurn } from '../support/effortRouting.js';
 import { recordRequestTrace, clampExcerpt } from '../../session/trace/requestTraceStore.js';
+import { emitTurnStep, modelStepDetail } from './turnPath.js';
 import {
   abortableDelay,
   callOpenAI,
@@ -171,6 +172,9 @@ export async function invokeModelPhase(
               callbacks.onAssistantDelta?.(delta);
             },
             onReasoning: (delta) => callbacks.onReasoningDelta?.(delta),
+            // ADR-059 — what the provider's platform did on its own (a server-side
+            // search, a safety replacement, an early end) is a step of the turn.
+            onActivity: (activity) => emitTurnStep(agent, callbacks, { type: 'provider', ...activity }),
           });
           const result = done.result;
           if (started) callbacks.onAssistantTurnEnd?.(result.content);
@@ -244,7 +248,17 @@ export async function invokeModelPhase(
     for (;;) {
       if (agent.interruptRequested) throw new InterruptError();
       try {
-        return await invokeLlm();
+        const startedAt = Date.now();
+        const response = await invokeLlm();
+        // ADR-059 — one model call, as the runtime saw it: the route, how it
+        // finished, what it cost, how long it took.
+        emitTurnStep(agent, callbacks, {
+          type: 'model',
+          label: `${agent.llmConfig.provider ?? 'provider'}/${agent.llmConfig.model}`,
+          detail: modelStepDetail(response, Date.now() - startedAt),
+          ok: true,
+        });
+        return response;
       } catch (error: any) {
         if (agent.interruptRequested || isInterrupt(error)) {
           throw isInterrupt(error) ? error : new InterruptError();
@@ -367,6 +381,12 @@ export async function invokeModelPhase(
               callbacks.onStatusUpdate(
                 `Router fallback: ${from} unavailable (${routeFailureStatus(failure)}) — trying ${to.slug}...`,
               );
+              emitTurnStep(agent, callbacks, {
+                type: 'model',
+                label: `${from} → ${to.slug}`,
+                detail: `router fallback: ${routeFailureStatus(failure)}`,
+                ok: false,
+              });
               agent.recordTranscript({
                 role: 'system',
                 name: 'router',
