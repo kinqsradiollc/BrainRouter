@@ -84,7 +84,9 @@ test('rankAndCapTools keeps pinned tools ahead of relevance (runtime-mandated + 
 });
 
 test('pinnedToolNames matches whole tool names only, and pins nothing from empty text beyond the mandated set', () => {
-  assert.deepEqual([...pinnedToolNames('use read_file_lines here', ['read_file', 'read_file_lines'])], ['read_file_lines']);
+  assert.deepEqual([...pinnedToolNames('use scan_repo_lines here', ['scan_repo', 'scan_repo_lines'])], ['scan_repo_lines']);
+  // Workspace essentials are pinned whenever offered, with no mention at all.
+  assert.deepEqual([...pinnedToolNames('', ['anything', 'list_dir', 'read_file'])], ['list_dir', 'read_file']);
   assert.deepEqual([...pinnedToolNames('', ['anything', 'goal_blocked'])], ['goal_blocked']);
   assert.equal(pinnedToolNames('', ['anything']).size, 0);
 });

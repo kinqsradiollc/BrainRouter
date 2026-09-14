@@ -326,6 +326,38 @@ completes, and a live `brainrouter run` completes against the native surface.*
 *Acceptance (behavioural, NOT met today — see §6): the model reliably calls the
 advertised client tool on realistic agent prompts.*
 
+**D19 · Where the 64 KiB goes, and the tools that must always be there.** A real
+`brainrouter run` turn captured through a local proxy: 63 473 bytes = 16 074 bytes of
+instructions (`messages[0]`, already tail-cut to 16 000 chars) + 47 056 bytes of
+**41 client tools** — 1 148 bytes per tool, of which 19 446 chars are descriptions
+and 25 114 bytes are parameter schemas (`task_agent` alone 3 765 bytes;
+`update_plan` 3 599). With any history at all the fit therefore shrinks the tool
+list to a handful, and on the desktop the model rightly said "I don't have a
+`list_dir` tool available in this environment". Three changes: (1) tool
+descriptions are budgeted to their lead sentences (~320 chars, at a sentence
+boundary) and parameter schemas are compacted for the wire (property
+descriptions clipped, `title`/`examples`/`default` dropped) — the model reads a
+schema, not a manual; (2) `WORKSPACE_ESSENTIAL_TOOLS` (read/list/grep/glob,
+write/edit/patch, run, fetch, search) are pinned after the runtime-mandated set
+in every byte fit; (3) the instructions block ends with the names of the tools
+actually advertised this turn, so the model's picture of its surface matches
+the wire. Measured in the same capture: with the full 41-tool surface advertised,
+Matilda answered "what is brainrouter?" from its own knowledge without calling a
+tool (and, that time, without its server search) — the tool-use gap is the
+model's choice as much as the budget's. *After* the budget change the same turn
+went out at 51 586 bytes (41 tools in 35 134 bytes) and Matilda **called
+`list_dir`** through the full adapter — the first client-tool call on a realistic
+agent turn — then, handed the runtime's compacted listing ("array length=61 … raw
+JSON omitted"), asked the person for the listing instead of reading further; that
+is the model's habit with a compacted result, not the adapter's doing.
+
+*What the fit never does:* add a tool. The runtime decides the surface first —
+profile tool groups, workspace tool toggles, skill allow/deny lists, access tiers,
+reviewed-execution narrowing — and hands the adapter that list; the fit only ever
+chooses a subset of it, with the order runtime-mandated → workspace essentials
+(if offered) → named in the latest message → relevance. A tool a profile or
+workspace disabled is never on the list, so nothing pins it back.
+
 **D16 · Not the vendor's agent SDK — our adapter, held to the SDK's wire.** The
 question "should BrainRouter run Matilda through `@maincode-ai/matilda-agent-sdk`?"
 was answered from the published packages themselves (agent 0.2.1, client 0.3.1 —

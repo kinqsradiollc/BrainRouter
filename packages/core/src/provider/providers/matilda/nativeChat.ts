@@ -43,7 +43,54 @@ export const MATILDA_NATIVE_LIMITS = {
   maxMessageChars: 16_000,
   /** `clientTools.N.description must be shorter than or equal to 2000 characters` (400). */
   maxToolDescriptionChars: 2_000,
+  /** What a description is ALLOWED to cost here: its lead sentences. Measured on a
+   *  real turn, 41 tools cost 47 KB of the 64 KiB — 19k chars of description and
+   *  25 KB of schema — leaving nothing for history; the model reads a schema, not
+   *  a manual. Cut at a sentence boundary past this many chars. */
+  toolDescriptionBudgetChars: 320,
+  /** Room for the "advertised now: …" name list at the end of the instructions. */
+  advertisedNamesChars: 600,
 } as const;
+
+/** Lead sentences of a description within `budget` chars (sentence boundary when
+ *  one exists past half the budget), never over the validator's `hardMax`. */
+export function budgetToolDescription(text: string, budget: number, hardMax: number): string {
+  const t = text.trim();
+  const cap = Math.min(budget, hardMax);
+  if (t.length <= cap) return t;
+  const head = t.slice(0, cap);
+  const lastStop = Math.max(head.lastIndexOf('. '), head.lastIndexOf('.\n'), head.endsWith('.') ? head.length - 1 : -1);
+  if (lastStop >= Math.floor(cap / 2)) return head.slice(0, lastStop + 1);
+  return `${head.slice(0, cap - 1)}…`;
+}
+
+const SCHEMA_DROP_KEYS = new Set(['title', 'examples', 'default', '$schema', '$comment', 'deprecated']);
+const SCHEMA_DESCRIPTION_CHARS = 100;
+
+/** A JSON Schema fit for the wire budget: property descriptions clipped, doc-only
+ *  keywords dropped, structure (type/properties/required/enum/items/…) untouched. */
+export function compactParameters(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(compactParameters);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (SCHEMA_DROP_KEYS.has(k)) continue;
+    if (k === 'description' && typeof v === 'string') {
+      out[k] = v.length > SCHEMA_DESCRIPTION_CHARS ? `${v.slice(0, SCHEMA_DESCRIPTION_CHARS - 1)}…` : v;
+      continue;
+    }
+    out[k] = typeof v === 'object' && v !== null ? compactParameters(v) : v;
+  }
+  return out;
+}
+
+/** `Client tools advertised now: a, b, c` — bounded; the tail is elided, never the head. */
+export function advertisedNamesLine(names: string[], maxChars: number): string {
+  const prefix = 'Client tools advertised now: ';
+  let line = prefix + names.join(', ');
+  if (line.length > maxChars) line = `${line.slice(0, maxChars - 1)}…`;
+  return line;
+}
 
 /** The sentence that makes the model actually use advertised client tools
  *  (measured: bare task ~2/3, with this hint as the tail of `messages[0]` 3/3). */
@@ -107,24 +154,26 @@ export function matildaConversationIdFor(sessionKey: string | undefined, message
 
 /** Build the native body from the transport's normalized input. */
 export function buildMatildaChatPayload(input: NativeBuildInput, opts: { conversationId: string }): MatildaChatPayload {
-  const { maxBodyBytes, maxClientTools, maxMessageChars, maxToolDescriptionChars } = MATILDA_NATIVE_LIMITS;
+  const { maxBodyBytes, maxClientTools, maxMessageChars, maxToolDescriptionChars, toolDescriptionBudgetChars, advertisedNamesChars } = MATILDA_NATIVE_LIMITS;
   const hasTools = input.tools.length > 0;
-  // A tool description over the validator's cap rejects the WHOLE request, so
-  // every description is tail-cut (the lead sentence is what the model reads).
-  const describe = (text: string | undefined): string => {
-    const t = text ?? '';
-    return t.length <= maxToolDescriptionChars ? t : t.slice(0, maxToolDescriptionChars - 1) + '…';
-  };
+  const describe = (text: string | undefined): string => budgetToolDescription(text ?? '', toolDescriptionBudgetChars, maxToolDescriptionChars);
   const messages: MatildaChatMessage[] = [];
 
   // 1) The system prompt + the client-tools hint as their OWN prior user message.
+  //    The hint ends with the NAMES of the tools actually advertised this turn
+  //    (filled in after the byte fit), so the model's picture of its surface is
+  //    the wire's — it once told the person it had no `list_dir` while the
+  //    platform had templated a different subset.
   const system = input.system.trim();
-  if (system || hasTools) {
-    const hint = hasTools ? MATILDA_CLIENT_TOOLS_HINT : '';
+  const instructionsIndex = system || hasTools ? 0 : -1;
+  const instructionsMessage = (advertised: string[]): MatildaChatMessage => {
+    const names = hasTools && advertised.length ? advertisedNamesLine(advertised, advertisedNamesChars) : '';
+    const hint = hasTools ? [MATILDA_CLIENT_TOOLS_HINT, names].filter(Boolean).join('\n') : '';
     const room = Math.max(0, maxMessageChars - (hint ? hint.length + 2 : 0));
     const sys = system ? (capMessageContent({ content: system }, room).content as string) : '';
-    messages.push({ role: 'user', content: [sys, hint].filter(Boolean).join('\n\n') });
-  }
+    return { role: 'user', content: [sys, hint].filter(Boolean).join('\n\n') };
+  };
+  if (instructionsIndex === 0) messages.push(instructionsMessage([]));
 
   // 2) The clean history. user → user; assistant → its visible text plus a
   //    compact note of any tool calls it made; tool results → user messages in
@@ -169,8 +218,9 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
     payload.clientTools = kept.map((r) => ({
       name: r.tool.name,
       description: describe(r.tool.description),
-      parameters: r.tool.inputSchema ?? { type: 'object', properties: {} },
+      parameters: compactParameters(r.tool.inputSchema ?? { type: 'object', properties: {} }),
     }));
+    if (instructionsIndex === 0) payload.messages[0] = capMessageContent(instructionsMessage(kept.map((r) => r.tool.name)), maxMessageChars);
     return utf8Bytes(JSON.stringify(payload));
   };
   const max = Math.min(ranked.length, maxClientTools);
@@ -181,7 +231,12 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
     const mid = Math.ceil((lo + hi) / 2); // ≥ 1 while lo < hi
     if (apply(mid) <= maxBodyBytes) lo = mid; else hi = mid - 1;
   }
-  if (lo === 0) delete payload.clientTools; else apply(lo);
+  if (lo === 0) {
+    delete payload.clientTools;
+    if (instructionsIndex === 0) payload.messages[0] = capMessageContent(instructionsMessage([]), maxMessageChars);
+  } else {
+    apply(lo);
+  }
   return payload;
 }
 
