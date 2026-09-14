@@ -58,7 +58,7 @@ export function classifyRouterFailure(error: unknown): RouterFailure {
   // time budget, an upstream outage, a stall: transient, worth another try —
   // and never retried once text has painted (the stream-started guard above).
   // `content_blocked` is deliberately absent: a safety refusal is final.
-  if (/\b(request_budget_exceeded|deadline_exceeded|upstream_unavailable|internal_error|stalled|stream_aborted|rate_limited)\b/.test(lower)) {
+  if (/\b(request_budget_exceeded|deadline_exceeded|upstream_unavailable|internal_error|stalled|stream_aborted|rate_limited|degenerate_output)\b/.test(lower)) {
     return { kind: 'provider_retryable', retryable: true, status, retryAfterMs, message };
   }
   if (status === 429 || (typeof status === 'number' && status >= 500) || /timeout|timed out|econnreset|network|fetch failed/i.test(message)) {

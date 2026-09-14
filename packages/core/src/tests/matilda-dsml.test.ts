@@ -129,3 +129,15 @@ test('dialect 4 (live 2026-09-14): one parameter named after the tool, block clo
   assert.equal(calls[0].name, 'code_exec');
 });
 
+test('interceptor: a second OPEN inside a block hands the held text to onDegenerate, drops it, and keeps going', () => {
+  const text: string[] = []; const calls: any[] = []; const bad: string[] = [];
+  const it = createDsmlInterceptor((t) => text.push(t), (c) => calls.push(c), (h) => bad.push(h));
+  const good = `${DSML_TOOL_CALL_OPEN}${BAR ? '' : ''}<${BAR}DSML${BAR}parameter name="tool">list_dir</${BAR}DSML${BAR}parameter>${DSML_TOOL_CALL_CLOSE}`;
+  for (const ch of `a ${DSML_TOOL_CALL_OPEN}\n${DSML_TOOL_CALL_OPEN}\n${DSML_TOOL_CALL_OPEN}${good.slice(DSML_TOOL_CALL_OPEN.length)} z`) it.push(ch);
+  it.flush();
+  assert.deepEqual(bad, ['\n', '\n'], 'each abandoned block is reported once with what it held');
+  assert.equal(calls.length, 1, 'the block that finally closes is still lifted');
+  assert.equal(calls[0].name, 'list_dir');
+  assert.equal(text.join(''), 'a  z');
+});
+
