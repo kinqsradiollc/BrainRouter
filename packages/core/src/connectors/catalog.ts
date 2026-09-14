@@ -95,6 +95,32 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     credentialFields: [secretField('botToken', 'Bot token', 'Slack bot token with channel read scopes.')],
   },
   {
+    // ADR-060 D1 — one source covers every calendar product, because every
+    // product publishes iCalendar: Google's "secret address in iCal format",
+    // iCloud's shared-calendar link (webcal://), Outlook's published calendar,
+    // Fastmail, Proton, Nextcloud, any CalDAV export. The feed URL carries its
+    // own secret, so there is no credential. Events become planner items.
+    source: 'ics-calendar',
+    title: 'Calendar subscription (iCal)',
+    description: 'Subscribe to a calendar feed URL (.ics or webcal://) from Google, Apple iCloud, Outlook or any calendar. Events appear in the planner as mirrored, time-blocked items and refresh on a cadence.',
+    flows: ['checkpoint'],
+    credentialModes: ['none'],
+    configFields: [
+      {
+        key: 'url',
+        label: 'Feed URL',
+        type: 'string',
+        required: true,
+        description: 'The calendar\'s .ics address or webcal:// link. Google: calendar settings → "Secret address in iCal format". iCloud: share the calendar and copy the link.',
+      },
+      textField('label', 'Calendar name', 'Shown on each event. Defaults to the name inside the feed.'),
+      numberField('pollMinutes', 'Auto run minutes', 'Background refresh cadence in minutes. Defaults to 30; empty disables scheduled runs.'),
+      numberField('windowDaysBack', 'Days back', 'How far into the past to keep events. Defaults to 7.'),
+      numberField('windowDaysAhead', 'Days ahead', 'How far into the future to read events. Defaults to 60.'),
+    ],
+    credentialFields: [],
+  },
+  {
     source: 'google-drive',
     title: 'Google Drive',
     description: 'Index Drive folders, shared docs, and sheets for workspace knowledge.',
