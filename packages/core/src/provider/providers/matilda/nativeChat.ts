@@ -32,7 +32,7 @@ import type { CleanMessage, CleanTool, NativeBuildInput, NativeOutput } from '..
 import { sseEvents, type NativeStreamHandlers } from '../../../agent/transport/nativeProviderStream.js';
 import { capMessageContent, utf8Bytes } from '../../requestLimits.js';
 import { pinnedToolNames, rankAndCapTools } from '../../../tool/policy/toolBudget.js';
-import { createDsmlInterceptor } from './dsml.js';
+import { createDsmlInterceptor, newToolCallId } from './dsml.js';
 
 export const MATILDA_NATIVE_LIMITS = {
   /** Edge-enforced request-body cap: 65 536 bytes → 200, 65 537 → 403. */
@@ -224,13 +224,24 @@ export async function parseMatildaChatStream(
   const toolCalls: NonNullable<NativeOutput['toolCalls']> = [];
   const seen = new Set<string>();
   let usage: NativeOutput['usage'];
-  let n = 0;
   let endedEarly = false;
+  // One call can reach us twice — as the DSML block in the token stream AND as
+  // the server's parsed `client_tool_call` event — with the arguments serialized
+  // differently (`{"path": "."}` vs `{"path":"."}`). Key on the parsed value so
+  // the same call is recorded once, never as two calls the runtime then runs twice.
+  const canonical = (args: string): string => {
+    try {
+      const parsed = JSON.parse(args) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? JSON.stringify(parsed, Object.keys(parsed as Record<string, unknown>).sort())
+        : JSON.stringify(parsed);
+    } catch { return args.trim(); }
+  };
   const record = (name: string, args: string, id?: string): void => {
-    const key = `${name} ${args}`;
+    const key = `${name} ${canonical(args)}`;
     if (seen.has(key)) return;
     seen.add(key);
-    toolCalls.push({ id: id ?? `call_matilda_${++n}`, type: 'function', function: { name, arguments: args } });
+    toolCalls.push({ id: id ?? newToolCallId('call_matilda'), type: 'function', function: { name, arguments: args } });
   };
   const interceptor = createDsmlInterceptor(
     (t) => { text += t; handlers.onTextDelta?.(t); },

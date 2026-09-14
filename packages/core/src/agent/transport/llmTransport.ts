@@ -26,7 +26,7 @@ import {
 } from './nativeProviders.js';
 import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
 import { buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
-import { createDsmlInterceptor } from '../../provider/providers/matilda/dsml.js';
+import { createDsmlInterceptor, newToolCallId } from '../../provider/providers/matilda/dsml.js';
 
 export interface ChatCompletionPayload {
   model: string;
@@ -1339,7 +1339,7 @@ function liftMarkupToolCalls(
   const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
   const interceptor = createDsmlInterceptor(
     (t) => { content += t; },
-    (c) => toolCalls.push({ id: c.id ?? `call_markup_${toolCalls.length + 1}`, type: 'function', function: { name: c.name, arguments: c.arguments } }),
+    (c) => toolCalls.push({ id: c.id ?? newToolCallId('call_markup'), type: 'function', function: { name: c.name, arguments: c.arguments } }),
   );
   interceptor.push(text);
   interceptor.flush();
@@ -1697,7 +1697,7 @@ export async function callOpenAIStream(
     .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
     .filter((tc) => tc.function.name); // drop incomplete entries
   if (markupCalls.length > 0) {
-    toolCalls.push(...markupCalls.map((c, i) => ({ id: c.id ?? `call_markup_${i + 1}`, type: 'function', function: { name: c.name, arguments: c.arguments } })));
+    toolCalls.push(...markupCalls.map((c) => ({ id: c.id ?? newToolCallId('call_markup'), type: 'function', function: { name: c.name, arguments: c.arguments } })));
     finishReason = 'tool_calls';
   }
 

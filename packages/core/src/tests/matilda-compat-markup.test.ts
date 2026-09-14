@@ -41,7 +41,9 @@ test('compat stream: a DSML block split across deltas becomes a tool call; the p
     const out = await callOpenAIStream(MATILDA_COMPAT, [{ role: 'user', content: 'look around' }], [{ type: 'function', function: { name: 'list_dir', parameters: { type: 'object' } } }], {}, { onTextDelta: (t: string) => deltas.push(t) });
     assert.equal(out.content, PROSE);
     assert.equal(deltas.join(''), out.content, 'nothing of the block was painted to the screen');
-    assert.deepEqual(out.toolCalls, [{ id: 'call_markup_1', type: 'function', function: { name: 'list_dir', arguments: '{"path": "."}' } }]);
+    assert.equal(out.toolCalls?.length, 1);
+    assert.match(String(out.toolCalls?.[0]?.id), /^call_markup_/);
+    assert.deepEqual(out.toolCalls?.[0]?.function, { name: 'list_dir', arguments: '{"path": "."}' });
     assert.equal(out.finishReason, 'tool_calls');
   });
 });
