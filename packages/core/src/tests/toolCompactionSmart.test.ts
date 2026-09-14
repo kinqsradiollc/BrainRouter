@@ -95,3 +95,21 @@ test('new runtime knobs resolve only from cli config and default to disabled', (
     agentMcpToolBudget: 16,
   });
 });
+
+test('json-summary never stubs a result the per-result cap can carry, and a stubbed one keeps a head + a resultRef', () => {
+  // A 61-entry directory listing (~4 KB): must reach the model whole.
+  const listing = JSON.stringify(Array.from({ length: 61 }, (_, i) => ({ name: `file-${i}.ts`, type: 'file', size: 1000 + i })), null, 2);
+  const whole = withKnobs({ contextCompaction: true, toolOutputCompressionEnabled: false, maxToolResultChars: 8_000 }, () => compactToolOutput({ toolName: 'list_dir', output: listing }));
+  assert.equal(whole.inlineText, listing);
+  assert.equal(whole.ruleId, 'passthrough');
+  // Beyond the cap: summarised, but with the head of the data and a handoff the model can expand.
+  const big = JSON.stringify(Array.from({ length: 900 }, (_, i) => ({ name: `file-${i}.ts`, type: 'file', size: 1000 + i })), null, 2);
+  const stub = withKnobs({ contextCompaction: true, toolOutputCompressionEnabled: false, maxToolResultChars: 8_000 }, () => compactToolOutput({ toolName: 'list_dir', output: big }));
+  assert.equal(stub.ruleId, 'json-summary');
+  assert.equal(stub.requiresResultHandoff, true, 'a resultRef is attached so extract_result can read the rest');
+  assert.match(stub.inlineText, /array length=900/);
+  assert.match(stub.inlineText, /head: \[\{"name":"file-0\.ts"/);
+  assert.match(stub.inlineText, /extract_result/);
+  const attached = attachCompactedResultHandoff(new ResultCache(), big, stub.inlineText, { label: 'list_dir' });
+  assert.match(attached.content, /resultRef/);
+});

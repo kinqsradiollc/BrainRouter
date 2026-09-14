@@ -36,29 +36,50 @@ function compactJson(text: string): ToolCompactionResult | undefined {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed) && (!parsed || typeof parsed !== 'object')) return undefined;
     const compact = JSON.stringify(parsed, null, 2);
-    if (compact.length <= 2500) return undefined;
+    // A result the per-result cap (`cli.maxToolResultChars`) can carry whole goes
+    // through whole. Stubbing a 4 KB directory listing to "array length=61"
+    // left a model with no file name to act on — and one that reads the stub
+    // as "the call did not execute". Only JSON beyond the cap is summarised,
+    // and then with the head of the data and a resultRef the model can expand.
+    const cap = Math.max(2_500, getCliKnobs().maxToolResultChars);
+    if (compact.length <= cap) return undefined;
     const keys = Array.isArray(parsed)
       ? [`array length=${parsed.length}`]
       : Object.keys(parsed).slice(0, 20).map((k) => `${k}: ${typeof parsed[k]}`);
+    const head = JSON.stringify(parsed).slice(0, 800);
     const inlineText = [
       '[compacted json]',
       ...keys.map((k) => `- ${k}`),
-      `…raw JSON omitted (${compact.length} chars); full output is in transcript.`,
+      `head: ${head}…`,
+      `…raw JSON omitted (${compact.length} chars); use extract_result with the resultRef below to read it.`,
     ].join('\n');
     return {
       inlineText,
       omittedChars: Math.max(0, text.length - inlineText.length),
       ruleId: 'json-summary',
       confidence: 0.75,
+      requiresResultHandoff: true,
     };
   } catch {
     return undefined;
   }
 }
 
+function isJsonDocument(text: string): boolean {
+  const t = text.trim();
+  if (!(t.startsWith('{') || t.startsWith('['))) return false;
+  try { JSON.parse(t); return true; } catch { return false; }
+}
+
 function compactCommandLike(input: ToolCompactionInput): ToolCompactionResult | undefined {
+  // Structured JSON is compactJson's to judge (and it passes anything the
+  // per-result cap can carry); the signal-line summary would shred a listing
+  // into "Paths: …" and lose the shape the model needs.
+  if (isJsonDocument(input.output)) return undefined;
   const clean = oneLine(input.output);
-  if (clean.length <= 2500) return undefined;
+  // Command noise (progress lines, spinners) keeps its own, lower threshold: the
+  // summary keeps every error and path line, so nothing the model acts on is lost.
+  if (clean.length <= 2_500) return undefined;
   const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
   const signalLines = lines.filter((line) => ERROR_RE.test(line) || PATH_RE.test(line));
   const paths = unique(lines.flatMap((line) => line.match(PATH_RE) ?? [])).slice(0, 20);

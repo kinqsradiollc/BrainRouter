@@ -27,6 +27,7 @@ import {
 import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
 import { buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
 import { createDsmlInterceptor, newToolCallId } from '../../provider/providers/matilda/dsml.js';
+import { readWithStallWatchdog } from './streamStall.js';
 
 export interface ChatCompletionPayload {
   model: string;
@@ -984,13 +985,17 @@ async function callNativeProvider(
     : normalizeGeminiOutput(data, endpoint, config.model);
 }
 
-/** Read a Response body as an async iterable of decoded text chunks (for SSE). */
+/** Read a Response body as an async iterable of decoded text chunks (for SSE).
+ *  Every read is bounded by the stall watchdog (`cli.llmStreamStallMs`): the
+ *  request timeout is cleared at the 200, so this is the only thing that stops a
+ *  silent stream from hanging the turn. */
 async function* readResponseTextChunks(res: Response): AsyncIterable<string> {
   const reader = (res.body as any).getReader();
   const decoder = new TextDecoder();
+  const stallMs = getCliKnobs().llmStreamStallMs;
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readWithStallWatchdog<Uint8Array>(reader, stallMs, 'the provider stream');
       if (done) break;
       if (value) yield decoder.decode(value, { stream: true });
     }
@@ -1553,7 +1558,9 @@ export async function callOpenAIStream(
       // reading the SSE and stop firing deltas. (The fetch abort also rejects
       // reader.read(), but this is the prompt, deterministic exit.)
       if (options.signal?.aborted) { try { await reader.cancel(); } catch { /* already closed */ } throw new InterruptError(); }
-      const { value, done } = await reader.read();
+      // The request timeout was cleared at the 200; the stall watchdog is what
+      // bounds a body that goes silent (cli.llmStreamStallMs).
+      const { value, done } = await readWithStallWatchdog<Uint8Array>(reader, getCliKnobs().llmStreamStallMs, endpoint);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       // SSE frames are separated by blank lines (`\n\n`). Some servers

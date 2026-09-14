@@ -694,6 +694,12 @@ export interface CliKnobs {
   /** Per-call LLM timeout in ms. Default 120000. A timeout is treated as a
    *  RECONNECT signal (not a hard failure) — see `llmMaxReconnects`. */
   llmTimeoutMs?: number;
+  /** Streaming stall budget in ms: the longest a provider's stream may go
+   *  without sending ANY bytes before the call is ended as a transient failure
+   *  (and reconnected like a timeout). The request timeout above is cleared at
+   *  the 200, so this is what stops a silent stream from hanging a turn.
+   *  Default 60000; 0 disables. */
+  llmStreamStallMs?: number;
   /** Provider-router v2. Default-inert; absent/disabled preserves legacy behavior. */
   router?: RouterCliKnobs;
   /**
@@ -1427,6 +1433,7 @@ export interface ResolvedCliKnobs {
   quiet: boolean;
   theme: 'light' | 'dark' | 'auto';
   llmTimeoutMs: number;
+  llmStreamStallMs: number;
   router: ResolvedRouterCliKnobs;
   llmMaxReconnects: number;
   llmMaxConcurrent: number;
