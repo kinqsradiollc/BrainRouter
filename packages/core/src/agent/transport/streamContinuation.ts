@@ -9,7 +9,7 @@
  * model: a fake `run` that yields a few deltas then throws once, and completes on
  * the retry, proves the stitch.
  */
-import type { StreamChunk, ProviderStreamResult } from './providerStream.js';
+import type { StreamChunk, ProviderStreamResult, ProviderActivity } from './providerStream.js';
 
 type DoneChunk = Extract<StreamChunk, { type: 'done' }>;
 
@@ -32,6 +32,8 @@ export interface StreamContinuationOptions {
   maxContinuations?: number;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
+  /** ADR-059 — provider-side activity (a server-side tool, a safety replacement, an early end). */
+  onActivity?: (activity: ProviderActivity) => void;
 }
 
 /**
@@ -55,6 +57,8 @@ export async function streamWithContinuation(opts: StreamContinuationOptions): P
           opts.onText?.(chunk.delta);
         } else if (chunk.type === 'reasoning') {
           opts.onReasoning?.(chunk.delta);
+        } else if (chunk.type === 'activity') {
+          opts.onActivity?.(chunk.activity);
         } else {
           done = chunk;
         }

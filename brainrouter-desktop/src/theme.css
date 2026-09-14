@@ -6191,3 +6191,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .split-pane-empty { color: var(--text-dim); padding: 18px 4px; display: flex; gap: 8px; align-items: center; font-size: 12.5px; }
 .split-pane-live { opacity: 0.92; }
 .split-pane-note { flex: none; padding: 6px 12px; font-size: 10.5px; line-height: 1.4; color: var(--text-dim); border-top: 1px solid var(--border); background: var(--raised); }
+
+/* ADR-059 — the turn path block: one ordered account of what the runtime did. */
+.turn-path { margin: 4px 0 6px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); font-size: 12px; }
+.turn-path.live { border-color: var(--ov-15, var(--border)); }
+.turn-path-summary { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; list-style: none; color: var(--text-dim); }
+.turn-path-summary::-webkit-details-marker { display: none; }
+.turn-path-title { font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; color: var(--text-faint); }
+.turn-path-meta { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.turn-path-steps { margin: 0; padding: 2px 10px 8px; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.turn-path-step { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 1.5; }
+.turn-path-time { font-family: var(--mono); font-size: 11px; color: var(--text-faint); flex: none; width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+.turn-path-kind { font-family: var(--mono); font-size: 10.5px; flex: none; width: 58px; color: var(--text-faint); }
+.turn-path-kind.guard { color: var(--warn, #c9a227); }
+.turn-path-kind.provider { color: var(--accent, var(--text-dim)); }
+.turn-path-label { color: var(--text); flex: none; max-width: 42%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.turn-path-detail { color: var(--text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.turn-path-mark { margin-left: auto; flex: none; font-family: var(--mono); color: var(--text-faint); }
+.turn-path-step.ok .turn-path-mark { color: var(--ok, #3aa76d); }
+.turn-path-step.failed .turn-path-mark { color: var(--danger, #d5553f); }
+.turn-path-step.pending .turn-path-mark { color: var(--text-faint); }

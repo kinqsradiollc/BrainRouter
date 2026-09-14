@@ -5,7 +5,7 @@
  * switch body (and its behavior) is unchanged. The hook calls
  * `createHandleQueryResult(ctx)` once and hands the result to the event handler.
  */
-import type { PlanView, ChatRow, ChangesetFile, SessionRow, FleetRow, WorkflowDetail } from '../../../types.js';
+import type { PlanView, ChatRow, ChangesetFile, SessionRow, FleetRow, WorkflowDetail, TurnPathStep } from '../../../types.js';
 import type { TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from '../../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView } from '../../../panels/index.js';
@@ -657,7 +657,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('../../../panels/index.js').GrepHit[]); return;
       case 'q-transcript': {
-        const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string; delegationState?: 'accepted' | 'not-started' }> }> };
+        const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; steps?: unknown[]; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string; delegationState?: 'accepted' | 'not-started' }> }> };
         if (data?.sessionKey && data.sessionKey !== sessionKeyRef.current) return;
         const mapped: ChatRow[] = (data?.rows ?? []).map((r, index) => {
           // DESK-6t — use the persisted per-message timestamp so resumed history
@@ -666,6 +666,8 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
           const stableId = getStableRowId(data.sessionKey ?? '', r, index);
           if (r.kind === 'user') return { id: stableId, kind: 'user' as const, text: r.text ?? '', ts };
           if (r.kind === 'assistant') return { id: stableId, kind: 'assistant' as const, text: r.text ?? '', ts };
+          // ADR-059 — the persisted turn path renders as the same Path block it showed live.
+          if (r.kind === 'turn-path') return { id: stableId, kind: 'turn-path' as const, ts, steps: Array.isArray(r.steps) ? (r.steps as TurnPathStep[]) : [] };
           // DESK-5p — reconstructed tool calls render as the live tool-group card.
           if (r.kind === 'tool-group') return {
             id: stableId, kind: 'tool-group' as const, ts,

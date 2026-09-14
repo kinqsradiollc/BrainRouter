@@ -15,6 +15,7 @@ import type {
   SteeringReceiptEventView,
 } from './events.js';
 import type { ChildExecutionReceipt } from './delegation.js';
+import type { TurnStepView } from './events.js';
 import type { PlanPhaseView, PlanStepView } from './planning.js';
 
 export interface BridgedCallbacks {
@@ -71,6 +72,8 @@ export interface BridgedCallbacks {
   onChildToolStart: (event: { childId: string; role: string; tool: string; args: Record<string, unknown> }) => void;
   onChildToolEnd: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
   onChildComplete: (receipt: ChildExecutionReceipt) => void;
+  /** ADR-059 — a step of the turn path. */
+  onTurnStep: (step: TurnStepView) => void;
 }
 
 /** Emitter the bridge writes to—the host wraps IPC/stdout behind this. */
@@ -81,6 +84,7 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
   return {
     onStatusUpdate: (text) => emit({ kind: 'status', text }),
     onNotice: (notice) => emit({ kind: 'notice', level: notice.level, message: notice.message }),
+    onTurnStep: (step) => emit({ kind: 'turn-step', step }),
     onSteerApplied: (input, receipt) => emit({
       kind: 'input-delivery',
       id: input.id,

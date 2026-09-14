@@ -18,9 +18,17 @@ export type ProviderStreamResult = Awaited<ReturnType<typeof callOpenAIStream>>;
  * rejects after yielding whatever deltas arrived first — matching the callback
  * transport, where deltas fire before a thrown error.
  */
+/** ADR-059 — something the provider's platform did on its own during the call. */
+export interface ProviderActivity {
+  label: string;
+  detail?: string;
+  ok?: boolean;
+}
+
 export type StreamChunk =
   | { readonly type: 'text'; readonly delta: string }
   | { readonly type: 'reasoning'; readonly delta: string }
+  | { readonly type: 'activity'; readonly activity: ProviderActivity }
   | { readonly type: 'done'; readonly result: ProviderStreamResult };
 
 /**
@@ -46,6 +54,7 @@ export async function* callProviderStream(
   const run = callOpenAIStream(config, messages, tools, options, {
     onTextDelta: (delta) => push({ type: 'text', delta }),
     onReasoningDelta: (delta) => push({ type: 'reasoning', delta }),
+    onProviderActivity: (activity) => push({ type: 'activity', activity }),
   }).then(
     (result) => { push({ type: 'done', result }); },
     (err) => { failure = err; },
