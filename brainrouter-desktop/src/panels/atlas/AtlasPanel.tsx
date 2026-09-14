@@ -40,6 +40,8 @@ export interface AtlasPanelProps {
   onBuild: () => void;
   onEnrich?: () => void;
   onSelectNode?: (nodeId: string, filePath?: string) => void;
+  /** ADR-056 D-A5 — a file another panel asked to focus (selects its file node when the graph has one). */
+  focusFilePath?: string | null;
   onOpenFile?: (path: string, line?: number) => void;
   onLoad?: () => void;
   /** Working-tree changes (path + git porcelain status) for the Review overlay. */
@@ -66,7 +68,7 @@ export interface AtlasPanelProps {
   onRunStory?: (story: Story) => void;
 }
 
-export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad, changedFiles, assessments, assessing, onAssess, uiMap, onExtractUi, onLoadUiMap, onDriveElement, stories, onLoadStories, onSuggestStories, onRunStory }: AtlasPanelProps): React.ReactElement {
+export function AtlasPanel({ graph, focusFilePath, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad, changedFiles, assessments, assessing, onAssess, uiMap, onExtractUi, onLoadUiMap, onDriveElement, stories, onLoadStories, onSuggestStories, onRunStory }: AtlasPanelProps): React.ReactElement {
   const a = useAtlasGraph({ graph, changedFiles, onLoad });
   const {
     selected, setSelected, tourStep, setTourStep, query, setQuery, mode, setMode, drill, setDrill,
@@ -75,6 +77,12 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     untestedChanged, hasServices, hasLayers, effMode, presentCats, searchIds, stats, reviewReach,
     structural, rfNodes: graphRfNodes, rfEdges: graphRfEdges, containerW, containerH, toggleCat,
   } = a;
+  // ADR-056 D-A5 — focus a file node when the Diagrams panel points here.
+  useEffect(() => {
+    if (!focusFilePath || !graph) return;
+    const node = graph.nodes.find((n) => n.filePath === focusFilePath && n.type !== "function" && n.type !== "class");
+    if (node) setSelected(node.id);
+  }, [focusFilePath, graph, setSelected]);
 
   // --- Screens mode (UI-TEST fusion) — panel-local state ---
   const [selectedScreens, setSelectedScreens] = useState<ReadonlySet<string>>(new Set()); // Screens mode selection

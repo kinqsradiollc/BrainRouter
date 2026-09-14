@@ -4,7 +4,7 @@
  * Extracted verbatim from App.tsx; the App owns the state and passes it through.
  * See the placement comment at the call site for why this must be the LAST child of .main.
  */
-import type { WorkspaceMode } from './ActivityBar.js';
+import type { WorkspaceMode } from '../../lib/workspace/modes.js';
 import React, { type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../../icons.js';
 import type { PopId } from '../../types.js';
@@ -41,6 +41,9 @@ export interface TopbarRightProps {
   setPop: Dispatch<SetStateAction<PopId>>;
   openSettings: (section: SettingsSection) => void;
   workspaceViewContext: WorkspaceViewContext;
+  /** ADR-057 D2 — split chat view. */
+  splitOn?: boolean;
+  onToggleSplit?: () => void;
 }
 
 export function TopbarRight(p: TopbarRightProps): React.ReactElement {
@@ -120,6 +123,7 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
       ) : null}
       {isCode ? <button type="button" className={`top-toggle${termDockOpen ? ' active' : ''}`} title="Toggle bottom panel (⌃`)" onClick={() => setTermDockOpen((o) => !o)}><Icon name="layout-bottom" size={16} /></button> : null}
       {hasRightRail ? <button type="button" className={`top-toggle${sidePanelOpen ? ' active' : ''}`} title="Toggle side panel (⌥⌘B)" onClick={() => setSidePanelOpen((o) => !o)}><Icon name="sidebar-right" size={16} /></button> : null}
+      {(isCode || mode === 'chat') && p.onToggleSplit ? <button type="button" className={`top-toggle${p.splitOn ? ' active' : ''}`} title="Split chat — view a second session side by side" aria-label="Toggle split chat view" onClick={p.onToggleSplit}><Icon name="panels" size={15} /></button> : null}
       <button type="button" className="top-toggle" title="Export session" onClick={() => setPop(pop === 'export' ? '' : 'export')}><Icon name="export" size={15} /></button>
       <button type="button" className="top-toggle" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={15} /></button>
     </span>

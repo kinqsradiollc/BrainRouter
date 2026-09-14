@@ -46,6 +46,23 @@ test('completion phase reports the bounded-loop ceiling', () => {
 
   assert.equal(result.hitLoopLimit, true);
   assert.match(result.answer, /hard tool-call budget ceiling \(30\)/);
+  // ADR-052 D1c — the work done before the budget was hit is PRESERVED and
+  // marked partial, not discarded for a bare ceiling notice.
+  assert.match(result.answer, /Partial response/, 'the actual work is kept');
+  assert.match(result.answer, /⚠️ PARTIAL/, 'and flagged partial');
+});
+
+test('a budget-hit turn with no answer falls back to just the ceiling notice', () => {
+  const result = normalizeTurnCompletionAnswer({
+    answer: '   ',
+    exitedCleanly: false,
+    maxLoops: 12,
+    toolCallCount: 12,
+    workspaceRoot: '/unused',
+  });
+  assert.equal(result.hitLoopLimit, true);
+  assert.match(result.answer, /hard tool-call budget ceiling \(12\)/);
+  assert.ok(!result.answer.includes('⚠️ PARTIAL'), 'no partial banner when there is no work to preserve');
 });
 
 test('completion phase surfaces recorded goal completion proof', () => {

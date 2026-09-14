@@ -7,6 +7,7 @@
  */
 import React from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { usePanelPolling } from '../../lib/panels/usePanelPolling.js';
 
 interface ServerStatus {
   name: string;
@@ -33,7 +34,7 @@ interface RuntimePreview {
 
 interface RuntimePreviewListResult { previews: RuntimePreview[] }
 
-export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: string) => void }): React.ReactElement {
+export function ServersPanel({ onOpenInBrowser, active = true }: { onOpenInBrowser: (url: string) => void; active?: boolean }): React.ReactElement {
   const [servers, setServers] = React.useState<ServerStatus[]>([]);
   const [runtimePreviews, setRuntimePreviews] = React.useState<RuntimePreview[]>([]);
   const [busy, setBusy] = React.useState(false);
@@ -51,48 +52,45 @@ export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: strin
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const refresh = React.useCallback(() => {
+  const refresh = React.useCallback(async (): Promise<void> => {
     setBusy(true);
-    void Promise.allSettled([
-      bridgeQuery<ServerListResult>('servers:list', {}, 10_000),
-      bridgeQuery<RuntimePreviewListResult>('runtime-previews-list', {}, 10_000),
-    ])
-      .then(([serverResult, previewResult]) => {
-        if (!mounted.current) return;
-        if (serverResult.status === 'fulfilled') {
-          setServers(Array.isArray(serverResult.value.servers) ? serverResult.value.servers : []);
-          setError('');
-        } else {
-          setError(serverResult.reason instanceof Error ? serverResult.reason.message : 'Server lookup failed.');
-        }
-        setRuntimePreviews(
-          previewResult.status === 'fulfilled' && Array.isArray(previewResult.value.previews)
-            ? previewResult.value.previews
-            : [],
-        );
-      })
-      .finally(() => { if (mounted.current) setBusy(false); });
+    try {
+      const [serverResult, previewResult] = await Promise.allSettled([
+        bridgeQuery<ServerListResult>('servers:list', {}, 10_000),
+        bridgeQuery<RuntimePreviewListResult>('runtime-previews-list', {}, 10_000),
+      ]);
+      if (!mounted.current) return;
+      if (serverResult.status === 'fulfilled') {
+        setServers(Array.isArray(serverResult.value.servers) ? serverResult.value.servers : []);
+        setError('');
+      } else {
+        setError(serverResult.reason instanceof Error ? serverResult.reason.message : 'Server lookup failed.');
+      }
+      setRuntimePreviews(
+        previewResult.status === 'fulfilled' && Array.isArray(previewResult.value.previews)
+          ? previewResult.value.previews
+          : [],
+      );
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
   }, []);
 
-  React.useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 2000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  usePanelPolling({ active, intervalMs: 2_000, refresh });
 
   const start = (name: string): void => {
     setPending(name);
     void bridgeQuery<ServerStatus>('servers:start', { name }, 40_000)
       .then((s) => { if (mounted.current && s?.error) setError(s.error); })
       .catch((err) => { if (mounted.current) setError((err as Error).message || 'Start failed.'); })
-      .finally(() => { if (mounted.current) { setPending(''); refresh(); } });
+      .finally(() => { if (mounted.current) { setPending(''); void refresh(); } });
   };
 
   const stop = (name: string): void => {
     setPending(name);
     void bridgeQuery<{ ok: boolean }>('servers:stop', { name }, 10_000)
       .catch((err) => { if (mounted.current) setError((err as Error).message || 'Stop failed.'); })
-      .finally(() => { if (mounted.current) { setPending(''); refresh(); } });
+      .finally(() => { if (mounted.current) { setPending(''); void refresh(); } });
   };
 
   const toggleLogs = (name: string): void => {
@@ -111,7 +109,7 @@ export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: strin
     }, 10_000)
       .then((r) => {
         if (!mounted.current) return;
-        if (r?.ok) { setAddName(''); setAddArgs('run dev'); setAddPort(''); refresh(); }
+        if (r?.ok) { setAddName(''); setAddArgs('run dev'); setAddPort(''); void refresh(); }
         else setAddError(r?.error || 'Could not add the server.');
       })
       .catch((err) => { if (mounted.current) setAddError((err as Error).message || 'Add failed.'); });
@@ -121,7 +119,7 @@ export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: strin
     <div className="scroll">
       <div className="tasks-section">
         <span>Workspace dev servers</span>
-        <button className="tasks-clear" type="button" onClick={refresh} disabled={busy}>{busy ? 'Refreshing...' : 'Refresh'}</button>
+        <button className="tasks-clear" type="button" onClick={() => void refresh()} disabled={busy}>{busy ? 'Refreshing...' : 'Refresh'}</button>
       </div>
       {error ? <div className="empty error">{error}</div> : null}
       {!error && servers.length === 0 ? <div className="empty">No dev servers in .claude/launch.json.</div> : null}

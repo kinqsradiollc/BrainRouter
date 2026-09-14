@@ -28,6 +28,7 @@ import {
 } from '@kinqs/brainrouter-core/notes/editing';
 import type { NoteCommentDto } from '@kinqs/brainrouter-ui/notes';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
+import { devDiagramDelta, devDiagramList, devDiagramRead } from './diagrams.js';
 import type { DevState } from './state.js';
 import {
   previewDevWorkspaceInstruction,
@@ -640,6 +641,15 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // REQUIREMENT-RECORDS — mock the requirementStore wrappers (mutate in-memory).
     // ATLAS — a small synthetic codebase graph so the Atlas panel renders in
     // browser-only dev (real builds come from the host's deterministic builder).
+    // ADR-056 D-A5 — Diagrams panel fixtures (see ./diagrams.ts).
+    'diagram-list': () => devDiagramList(),
+    'diagram-read': (a) => devDiagramRead(String(a.slug ?? '')),
+    'diagram-delta': (a) => devDiagramDelta(String(a.slug ?? '')),
+    // ADR-056 D-B5 — live variants: the browser dev bridge simulates the host's
+    // deterministic accept/discard/list so the Live Variants drawer is exercisable.
+    'design-variants-list': () => [],
+    'design-variants-accept': (a) => ({ ok: true, file: 'src/pages/Landing.tsx', lines: [42, 42], chosen: Number(a.index) || 0, text: '<h1 class="hero">Ship faster</h1>' }),
+    'design-variants-discard': () => ({ ok: true, file: 'src/pages/Landing.tsx', restoredBytes: 1024 }),
     'atlas-graph': () => devAtlasEnriched(),
     'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 20, functions: 1, classes: 1, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
     'atlas-enrich': () => {
@@ -855,6 +865,15 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       { number: 517, title: 'feat(desktop): native cross-platform installers (DESK-6 packaging)', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/517', headRefName: 'feat/desktop-packaging', baseRefName: 'release/0.4.16', isDraft: false, author: { login: 'luannn010' }, updatedAt: '2026-06-21T14:28:00Z', body: 'Native cross-platform installers (mac/win/linux) via electron-builder.' },
       { number: 513, title: 'docs(spec): typed extension API + audited self-update brief', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/513', headRefName: 'docs/typed-extension-api-spec', baseRefName: 'main', isDraft: false, author: { login: 'anhdang' }, updatedAt: '2026-06-21T10:19:00Z', body: 'Spec for a typed extension API and an audited self-update mechanism.' },
     ] }),
+    // Keep each sidebar session's PR marker available during browser QA. The
+    // host supplies this all-states view from `gh`; the fixture deliberately
+    // contains open, draft, merged, and conflict states for the same renderer.
+    'git-pr-status-map': () => ({ prs: [
+      { number: 395, state: 'OPEN', headRefName: 'release/0.4.15', isDraft: false, mergeable: 'MERGEABLE', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/395' },
+      { number: 394, state: 'OPEN', headRefName: 'feat/reranker-blend', isDraft: true, mergeable: 'MERGEABLE', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/394' },
+      { number: 389, state: 'MERGED', headRefName: 'fix/recall-logs', isDraft: false, mergeable: 'UNKNOWN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/389' },
+      { number: 388, state: 'OPEN', headRefName: 'fix/flaky-test', isDraft: false, mergeable: 'CONFLICTING', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/388' },
+    ] }),
     'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, mergeable: 'MERGEABLE', author: { login: 'anhdang' } } }),
     'git-pr-checks': () => ({ checks: [
       { name: 'Build & Test (Node 22.x)', bucket: 'pass', workflow: 'CI', link: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/1', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:03:06Z' },
@@ -894,6 +913,12 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       { id: 'btask_v7', kind: 'verification', status: 'completed', title: 'Verify — npm run typecheck', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 5 * 60_000).toISOString(), startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), completedAt: new Date(Date.now() - 4 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 4 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v7', parentSessionKey: 'internal:verify:btask_v7' } },
       { id: 'btask_v8', kind: 'verification', status: 'failed', title: 'Verify — npm test', error: '2 tests failed', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 9 * 60_000).toISOString(), startedAt: new Date(Date.now() - 9 * 60_000).toISOString(), completedAt: new Date(Date.now() - 8 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 8 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v8', parentSessionKey: 'internal:verify:btask_v8' } },
     ],
+    // ADR-057 — agent suggestions: browser-dev fixtures so the Tasks panel section is demoable.
+    'agent-suggestions': () => ({ suggestions: [
+      { id: 'sug-1', title: 'Fix stale README CI badge', suggestedPrompt: 'The CI badge in README.md points at an old workflow and 404s. Update it to the release/0.4.22 Build & Test workflow badge URL.', reason: 'noticed the badge 404s while reading the README', worktree: false, createdAt: Date.now() - 90_000, status: 'pending' },
+      { id: 'sug-2', title: 'Add coverage for the 5xx retry path', suggestedPrompt: 'llm.ts retries on 5xx but has no test. Add a unit test that stubs two 502s then a 200 and asserts the call is retried and resolves.', reason: 'saw the retry branch is untested', worktree: true, createdAt: Date.now() - 240_000, status: 'pending' },
+    ] }),
+    'agent-suggestion-status': () => ({ ok: true }),
     'suggested-tasks': () => ({
       repo: 'kinqsradiollc/BrainRouter',
       warnings: [],
@@ -1056,6 +1081,43 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       };
     },
     'session-info': () => ({ sessionKey: 'dev:demo', model: resolvedModel(S.activeSession), workspaceRoot: S.wsCurrent, username: 'Anh Dang', accountSignedIn: true, accountEmail: 'anh@example.test' }),
+    // Browser preview exposes the same credential-free account catalog shape
+    // as the host. The dev user is signed in but has no managed catalog, which
+    // leaves BYOK model selection usable without inventing an account model.
+    'account-model-catalog': () => ({
+      signedIn: true,
+      provider: { id: 'brainrouter', label: 'BrainRouter', readOnly: true },
+      revision: 'dev-catalog-1',
+      etag: 'dev-catalog-1',
+      models: [],
+      stale: false,
+      refreshedAt: '2026-08-23T00:00:00.000Z',
+    }),
+    // The preview has no tenant-partitioned store to rebind, but it still
+    // acknowledges the app-wide organization selection lifecycle.
+    'account-set-active-org': () => ({ ok: true, changed: false }),
+    // The preview owns no edge control channel. Returning an explicit inactive
+    // status makes the chrome badge correctly remain absent without surfacing
+    // a fake query failure during every browser QA session.
+    'egress-tunnel-status': () => ({ active: false }),
+    // Tool availability is deliberately quiet in the browser harness: it
+    // cannot inspect the developer's machine, so a ready plan avoids inventing
+    // a provisioning prompt while preserving the host response contract.
+    'tooling-check': () => ({ plan: { kind: 'ready' }, statuses: [] }),
+    // Keep the Settings → Tools surface usable in the browser preview. These
+    // records mirror the host query's public shape; only the live host decides
+    // which locally installed and MCP-provided tools are actually available.
+    'tool-catalog': () => ({
+      builtin: [
+        { name: 'read_file', description: 'Read a workspace file.', protected: true },
+        { name: 'grep_search', description: 'Search the workspace.', protected: true },
+        { name: 'run_command', description: 'Run a workspace command.', protected: false },
+        { name: 'write_file', description: 'Write an approved workspace file.', protected: false },
+      ],
+      mcp: [
+        { server: 'workspace', name: 'mcp_workspace_search' },
+      ],
+    }),
     'home-stats': () => {
       const perDay: Record<string, number> = {};
       const today = new Date();
@@ -1581,6 +1643,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         { id: 'gemini', label: 'Google Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', local: false },
         { id: 'openrouter', label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1', local: false },
         { id: 'zenmux', label: 'ZenMux', endpoint: 'https://zenmux.ai/api/v1', local: false },
+        { id: 'matilda', label: 'Matilda (Maincode)', endpoint: 'https://matilda.maincode.com/api/v1', local: false },
         { id: 'groq', label: 'Groq', endpoint: 'https://api.groq.com/openai/v1', local: false },
         { id: 'azure', label: 'Azure OpenAI', endpoint: '', local: false },
         { id: 'openai-compatible', label: 'OpenAI-compatible (custom)', endpoint: '', local: false },

@@ -72,6 +72,13 @@ owning `sessionKey`, and an agent may list, implicitly target, or explicitly
 drive only tabs opened by that chat. A new chat starts with no agent-visible
 tabs and opens its own tab while reusing the workspace profile.
 
+**The one exception (ADR-055 P7): a person may explicitly share a tab.** A
+tab-strip action hands one human tab to the *current* chat's agent
+(`share-tab` / `unshare-tab` → `BrowserAgentControlManager.grantTab` /
+`revokeTab`). The grant is explicit, per-tab, per-chat, badged on the tab
+(`sharedWithAgent`), and revoked by unsharing, closing the tab, or switching
+chats. Never widen agent tab authority any other way.
+
 - **Why:** sharing the profile keeps authenticated browsing useful, but sharing
   tab authority lets a clean chat mistake an older chat or human tab for its own
   fetch target and report false redirects or stale page content.

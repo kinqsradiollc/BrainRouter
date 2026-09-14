@@ -17,7 +17,7 @@ import {
   findDomainPersona,
   renderDomainPersonaBriefing,
 } from '../workspace/domainPersonas.js';
-import { readWorkspaceDesignArtifact } from '../workspace/designArtifact.js';
+import { readWorkspaceDesignArtifact, readWorkspaceProductArtifact } from '../workspace/workspaceArtifacts.js';
 import { getWorkspaceProfile } from '../workspace/profiles.js';
 import { workspaceToolProfileIds } from '../workspace/toolProfiles.js';
 
@@ -84,6 +84,8 @@ export function refreshWorkspaceCapabilityState(
     // changes while someone is working on the product it describes, and a
     // cached copy would be the version they just replaced.
     designArtifact: readWorkspaceDesignArtifact(host.workspaceRoot),
+    // ADR-056 D-B6 — product truth beside visual truth, same seam.
+    productArtifact: readWorkspaceProductArtifact(host.workspaceRoot),
   });
   host.activeWorkspaceCapabilities = resolution;
 

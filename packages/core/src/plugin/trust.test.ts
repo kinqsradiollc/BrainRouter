@@ -37,6 +37,7 @@ import {
   checkCompatibility,
   parseVersionExpr,
   assertMarketplaceAllowed,
+  assertPluginAllowed,
   hooksAllowed,
   commandHooksEnabled,
   mcpServersEnabled,
@@ -277,10 +278,19 @@ test('checkCompatibility: warns when the running version is below the required m
 // ---------------------------------------------------------------------------
 
 test('assertMarketplaceAllowed: blocks a blocked marketplace, enforces a non-empty allowlist', () => {
-  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: [], blockedMarketplaces: ['acme'], allowManagedHooksOnly: false }) !== null, true);
-  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: ['other'], blockedMarketplaces: [], allowManagedHooksOnly: false }) !== null, true);
-  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: ['acme'], blockedMarketplaces: [], allowManagedHooksOnly: false }), null);
-  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: [], blockedMarketplaces: [], allowManagedHooksOnly: false }), null);
+  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: [], blockedMarketplaces: ['acme'], allowManagedHooksOnly: false, allowedPlugins: [], blockedPlugins: [] }) !== null, true);
+  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: ['other'], blockedMarketplaces: [], allowManagedHooksOnly: false, allowedPlugins: [], blockedPlugins: [] }) !== null, true);
+  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: ['acme'], blockedMarketplaces: [], allowManagedHooksOnly: false, allowedPlugins: [], blockedPlugins: [] }), null);
+  assert.equal(assertMarketplaceAllowed('acme', { allowedMarketplaces: [], blockedMarketplaces: [], allowManagedHooksOnly: false, allowedPlugins: [], blockedPlugins: [] }), null);
+});
+
+test('assertPluginAllowed: blocks a blocked plugin, enforces a non-empty plugin allowlist (ADR-047 D4)', () => {
+  assert.equal(assertPluginAllowed('acme-devkit', { allowedPlugins: [], blockedPlugins: ['acme-devkit'] }) !== null, true);
+  assert.equal(assertPluginAllowed('acme-devkit', { allowedPlugins: ['other'], blockedPlugins: [] }) !== null, true);
+  assert.equal(assertPluginAllowed('acme-devkit', { allowedPlugins: ['acme-devkit'], blockedPlugins: [] }), null);
+  assert.equal(assertPluginAllowed('acme-devkit', { allowedPlugins: [], blockedPlugins: [] }), null);
+  // The refusal names the policy so an operator sees WHY.
+  assert.match(String(assertPluginAllowed('x', { allowedPlugins: ['y'], blockedPlugins: [] })), /allowedPlugins/);
 });
 
 const cfgWithGates = (over: Partial<{ blockedMarketplaces: string[]; allowedMarketplaces: string[]; allowManagedHooksOnly: boolean; marketplaces: unknown[] }>): Config =>
@@ -292,12 +302,12 @@ test('addMarketplaceIn: refuses a blocked marketplace', () => {
   assert.equal(addMarketplaceIn(cfg, 'fine', '/some/dir').ok, true);
 });
 
-test('resolvePluginByName: skips a blocked marketplace during resolution', () => {
+test('resolvePluginByName: skips a blocked marketplace during resolution', async () => {
   const cfg = cfgWithGates({
     blockedMarketplaces: ['evil'],
     marketplaces: [{ name: 'evil', sourceType: 'local', source: '/does/not/matter' }],
   });
-  const r = resolvePluginByName('anything', cfg);
+  const r = await resolvePluginByName('anything', cfg);
   assert.equal(r.ok, false);
   if (r.ok) return;
   assert.match(r.error, /blocked by managed policy/);

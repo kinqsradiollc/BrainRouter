@@ -79,9 +79,9 @@ html[data-visual-system="v2"] .views-rail .panel-body .kv:active {
 
 html[data-visual-system="v2"] .views-rail .panel-body .req-row.active,
 html[data-visual-system="v2"] .views-rail .panel-body .plan-item.in_progress {
-  background: var(--shell-focus-soft) !important;
-  border-color: color-mix(in srgb, var(--shell-focus) 42%, var(--shell-divider)) !important;
-  box-shadow: none !important;
+  background: var(--shell-elevated) !important;
+  border-color: var(--shell-divider-strong) !important;
+  box-shadow: inset 2px 0 0 var(--shell-focus) !important;
 }
 
 html[data-visual-system="v2"] .views-rail .panel-body .plan-item.completed {

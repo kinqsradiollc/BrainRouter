@@ -1,4 +1,4 @@
-import { validateUpstreamTarget, type UpstreamTargetPolicy } from "@kinqs/brainrouter-core/provider";
+import { validateUpstreamTarget, UpstreamPolicyError, type UpstreamTargetPolicy } from "@kinqs/brainrouter-core/provider";
 import { upstreamProbePolicy } from "./upstreamProbePolicy.js";
 
 /**
@@ -27,7 +27,19 @@ export function policyBoundFetch(
 ): (input: string | URL | Request, init: RequestInit) => Promise<Response> {
   return async (input, init) => {
     const url = typeof input === "string" || input instanceof URL ? input : input.url;
-    await validateUpstreamTarget(url, policy); // throws UpstreamPolicyError on an internal target
+    try {
+      await validateUpstreamTarget(url, policy); // throws UpstreamPolicyError on an internal target
+    } catch (err) {
+      // Name the exact server-env knob that opens a self-hosted backend, so a
+      // blocked embedding/rerank/cognition endpoint (e.g. a local Ollama/LM Studio)
+      // is diagnosable straight from the brain's log rather than needing this source.
+      if (err instanceof UpstreamPolicyError) {
+        throw new UpstreamPolicyError(
+          `${err.message} On a self-hosted brain, set BRAINROUTER_UPSTREAM_ALLOWLIST to a comma-separated list of exact origins (e.g. http://127.0.0.1:11434) to allow it.`,
+        );
+      }
+      throw err;
+    }
     return fetch(url, init);
   };
 }

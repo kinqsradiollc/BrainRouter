@@ -4,6 +4,7 @@ import type { LocalToolEntry } from '../tool/registry/registry.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { PROVIDER_REGISTRY } from '../provider/providers/index.js';
 import type { HookEvent } from '../hooks/hooksStore.js';
+import type { TurnUsageView } from '../util/tokens/turnUsageView.js';
 
 export interface ExtensionHookContext { event: HookEvent; tool?: string; args?: Record<string, unknown>; workspaceRoot: string }
 export interface ExtensionHookHandler { event: HookEvent; match?: string; handle(ctx: ExtensionHookContext): Promise<'deny' | void> | 'deny' | void }
@@ -16,7 +17,23 @@ export interface ExtensionHookHandler { event: HookEvent; match?: string; handle
 // transcript entry — it never mutates an in-flight message array.
 export type AgentPhaseName = 'turn-start' | 'provider-call' | 'tool-execution' | 'turn-end';
 export type PhaseNext = () => Promise<void> | void;
-export interface PhaseHookContext { phase: AgentPhaseName; workspaceRoot: string; sessionKey: string }
+export interface PhaseHookContext {
+  phase: AgentPhaseName;
+  workspaceRoot: string;
+  sessionKey: string;
+  /**
+   * ADR-041 A41-13 — a read-only usage snapshot, populated ONLY at the `turn-end`
+   * site (undefined at the other phases). Lets a turn-end observer (e.g. the token
+   * meter) read session/task usage without a handle onto the Agent.
+   */
+  usage?: TurnUsageView;
+  /**
+   * ADR-041 A41-13 / D4 — append model-visible context for the NEXT turn (drained
+   * into the next prompt, never mutating the in-flight message array). Populated
+   * only at `turn-end`; bounded by the host. A no-op if absent.
+   */
+  injectNextTurnContext?(text: string): void;
+}
 export interface PhaseHookHandler {
   before?(ctx: PhaseHookContext, next: PhaseNext): Promise<void> | void;
   after?(ctx: PhaseHookContext, next: PhaseNext): Promise<void> | void;

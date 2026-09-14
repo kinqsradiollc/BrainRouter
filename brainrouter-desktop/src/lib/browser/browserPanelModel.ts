@@ -17,7 +17,11 @@ export type BrowserShortcut =
   | { command: 'zoom-out' }
   | { command: 'zoom-reset' }
   | { command: 'back' }
-  | { command: 'forward' };
+  | { command: 'forward' }
+  // ADR-055 P10b leftovers — the chrome a person reaches for without a mouse.
+  | { command: 'cycle-tab'; delta: -1 | 1 }
+  | { command: 'downloads' }
+  | { command: 'stop' };
 
 export type BrowserShortcutInput = {
   key: string;
@@ -52,7 +56,13 @@ export function browserShortcut(input: BrowserShortcutInput): BrowserShortcut | 
 
   if (input.altKey && !primary && key === 'arrowleft') return { command: 'back' };
   if (input.altKey && !primary && key === 'arrowright') return { command: 'forward' };
+  // Esc with no modifier stops the page — the panel lets an editable target keep it.
+  if (key === 'escape' && !primary && !input.altKey && !input.shiftKey) return { command: 'stop' };
   if (!primary || input.altKey) return null;
+  // ⌘⇧[ / ⌘⇧] cycle tabs (on US layouts shift turns the brackets into braces; both spell the same intent).
+  if (input.shiftKey && (key === '[' || key === '{')) return { command: 'cycle-tab', delta: -1 };
+  if (input.shiftKey && (key === ']' || key === '}')) return { command: 'cycle-tab', delta: 1 };
+  if (input.shiftKey && key === 'j') return { command: 'downloads' };
 
   if (key === 't') return input.shiftKey ? { command: 'reopen-tab' } : { command: 'new-tab' };
   if (key === 'w' && !input.shiftKey) return { command: 'close-tab' };
@@ -86,4 +96,20 @@ export function browserTabTitle(title: string | null | undefined, url: string | 
 export function browserZoomLabel(factor: number | null | undefined): string {
   const safe = Number.isFinite(factor) ? Math.min(5, Math.max(0.25, factor as number)) : 1;
   return `${Math.round(safe * 100)}%`;
+}
+
+/** True when a keydown landed in something that edits text — a global shortcut like Esc must leave it alone. */
+export function shortcutTargetIsEditable(target: unknown): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as { tagName?: string; isContentEditable?: boolean; getAttribute?: (name: string) => string | null };
+  const tag = String(el.tagName ?? '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return el.isContentEditable === true || el.getAttribute?.('contenteditable') === 'true';
+}
+
+/** The index the tab strip lands on after cycling `delta` from `activeIndex`, wrapping; -1 when there is nothing to cycle. */
+export function cycledTabIndex(activeIndex: number, tabCount: number, delta: -1 | 1): number {
+  if (tabCount <= 0) return -1;
+  const current = activeIndex >= 0 && activeIndex < tabCount ? activeIndex : 0;
+  return (current + delta + tabCount) % tabCount;
 }

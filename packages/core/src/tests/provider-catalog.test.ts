@@ -10,6 +10,7 @@ const NEW = [
   { id: 'gemini',     endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY' },
   { id: 'openrouter', endpoint: 'https://openrouter.ai/api/v1',                          envKey: 'OPENROUTER_API_KEY' },
   { id: 'zenmux',     endpoint: 'https://zenmux.ai/api/v1',                              envKey: 'ZENMUX_API_KEY' },
+  { id: 'matilda',    endpoint: 'https://matilda.maincode.com/api/v1',                   envKey: 'MATILDA_API_KEY' },
   { id: 'groq',       endpoint: 'https://api.groq.com/openai/v1',                        envKey: 'GROQ_API_KEY' },
   { id: 'azure',      endpoint: '',                                                      envKey: 'AZURE_OPENAI_API_KEY' },
 ] as const;
@@ -38,6 +39,7 @@ test('findProviderByEndpoint resolves the new cloud providers by their endpoint'
   assert.equal(findProviderByEndpoint('https://api.anthropic.com/v1')?.id, 'anthropic');
   assert.equal(findProviderByEndpoint('https://openrouter.ai/api/v1')?.id, 'openrouter');
   assert.equal(findProviderByEndpoint('https://generativelanguage.googleapis.com/v1beta/openai')?.id, 'gemini');
+  assert.equal(findProviderByEndpoint('https://matilda.maincode.com/api/v1')?.id, 'matilda');
   // trailing slash / bare-host shapes still normalize to the same provider.
   assert.equal(findProviderByEndpoint('https://api.groq.com/openai/v1/')?.id, 'groq');
 });

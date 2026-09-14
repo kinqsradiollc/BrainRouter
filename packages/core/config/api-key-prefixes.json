@@ -12,7 +12,8 @@
     { "prefix": "fe_oa_", "vendor": "FreeModel" },
     { "prefix": "sk-or-v1-", "vendor": "OpenRouter" },
     { "prefix": "sk-proj-", "vendor": "OpenAI (scoped project key)" },
-    { "prefix": "dsk-", "vendor": "DeepSeek" }
+    { "prefix": "dsk-", "vendor": "DeepSeek" },
+    { "prefix": "mc_live_", "vendor": "Maincode Matilda" }
   ],
   "foreignModelPrefixes": [
     { "prefix": "anthropic/", "vendor": "Anthropic" },

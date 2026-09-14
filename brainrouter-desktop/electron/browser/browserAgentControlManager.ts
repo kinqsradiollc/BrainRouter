@@ -316,6 +316,38 @@ export class BrowserAgentControlManager {
     }
   }
 
+  /**
+   * ADR-055 P7 — the human hands a tab they opened to a chat. This is the ONE
+   * widening of the "a chat may drive only tabs it opened" rule, and it is
+   * explicit, per-tab, per-chat, and revocable.
+   */
+  grantTab(workspaceRoot: string, sessionKey: string, tabId: string): void {
+    const key = sessionKey.trim();
+    if (!key || !tabId) return;
+    this.ownedTabs(workspaceRoot, key).add(tabId);
+  }
+
+  /** Take a shared tab back. The chat's next command on it fails ownership_mismatch. */
+  revokeTab(workspaceRoot: string, sessionKey: string, tabId: string): void {
+    const key = sessionKey.trim();
+    if (!key || !tabId) return;
+    this.ownedTabs(workspaceRoot, key).delete(tabId);
+  }
+
+  /** Every chat loses this tab (used when the tab closes). */
+  revokeTabEverywhere(workspaceRoot: string, tabId: string): void {
+    const bySession = this.tabsByWorkspaceAndSession.get(workspaceRoot);
+    if (!bySession) return;
+    for (const tabs of bySession.values()) tabs.delete(tabId);
+  }
+
+  /** Does this chat currently hold authority over the tab? */
+  ownsTab(workspaceRoot: string, sessionKey: string, tabId: string): boolean {
+    const key = sessionKey.trim();
+    if (!key || !tabId) return false;
+    return this.ownedTabs(workspaceRoot, key).has(tabId);
+  }
+
   private ownedTabs(workspaceRoot: string, sessionKey: string): Set<string> {
     const bySession = this.tabsByWorkspaceAndSession.get(workspaceRoot) ?? new Map<string, Set<string>>();
     this.tabsByWorkspaceAndSession.set(workspaceRoot, bySession);

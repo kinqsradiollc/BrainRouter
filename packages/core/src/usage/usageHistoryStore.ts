@@ -23,6 +23,18 @@ export interface DailyUsage {
    *  pre-0.4.16 records, so readers treat a missing value as 0. */
   cachedTokens: number;
   missedTokens: number;
+  /** ADR-052 D2 — per-automation attribution (loop/fleet/subagent/interactive),
+   *  so a runaway automation is identifiable instead of lost in one total. Absent
+   *  on older records. */
+  byAutomation?: Record<string, AutomationUsage>;
+}
+
+/** ADR-052 D2 — one automation's slice of a day (or of a range, when aggregated). */
+export interface AutomationUsage {
+  promptTokens: number;
+  completionTokens: number;
+  calls: number;
+  turns: number;
 }
 
 type Store = Record<string, DailyUsage>;
@@ -64,6 +76,7 @@ const ZERO = (day: string): DailyUsage => ({
 export function recordDailyUsage(
   usage: { promptTokens?: number; completionTokens?: number; calls?: number; cachedTokens?: number; missedTokens?: number },
   nowMs: number,
+  attribution?: string,
 ): void {
   const day = dayKey(nowMs);
   const s = read();
@@ -75,8 +88,40 @@ export function recordDailyUsage(
   // `?? 0` on the bucket too: a pre-0.4.16 record on disk has no cache fields.
   b.cachedTokens = (b.cachedTokens ?? 0) + (usage.cachedTokens ?? 0);
   b.missedTokens = (b.missedTokens ?? 0) + (usage.missedTokens ?? 0);
+  // ADR-052 D2 — also fold this turn into its automation bucket, so the meter can
+  // answer "which automation is eating the budget?".
+  const key = (attribution ?? '').trim();
+  if (key) {
+    const by = b.byAutomation ?? (b.byAutomation = {});
+    const a = by[key] ?? (by[key] = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 });
+    a.promptTokens += usage.promptTokens ?? 0;
+    a.completionTokens += usage.completionTokens ?? 0;
+    a.calls += usage.calls ?? 0;
+    a.turns += 1;
+  }
   s[day] = b;
   write(s);
+}
+
+/**
+ * ADR-052 D2 — per-automation token totals over the last `days`, NEWEST cost
+ * first (by prompt+completion tokens). A runaway loop/fleet job surfaces by name.
+ */
+export function readAutomationUsage(days: number, nowMs: number): Array<AutomationUsage & { automation: string }> {
+  const totals = new Map<string, AutomationUsage>();
+  for (const rec of readUsageHistory(days, nowMs)) {
+    for (const [key, a] of Object.entries(rec.byAutomation ?? {})) {
+      const t = totals.get(key) ?? { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+      t.promptTokens += a.promptTokens;
+      t.completionTokens += a.completionTokens;
+      t.calls += a.calls;
+      t.turns += a.turns;
+      totals.set(key, t);
+    }
+  }
+  return [...totals.entries()]
+    .map(([automation, a]) => ({ automation, ...a }))
+    .sort((x, y) => (y.promptTokens + y.completionTokens) - (x.promptTokens + x.completionTokens));
 }
 
 /** The last `days` daily records, OLDEST→NEWEST, gaps filled with zero days (so a

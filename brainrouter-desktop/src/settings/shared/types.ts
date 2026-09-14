@@ -193,12 +193,13 @@ export const NAV: SettingsNavItem[] = [
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Agent', description: 'Recall, briefing, and persona behavior', keywords: 'pipeline memories persona quiet mode brain forget export import blackboard consolidation' },
   { section: 'tools', icon: 'gear', title: 'Tools', group: 'Agent', description: 'Built-in and connected tool access', keywords: 'enable disable override protected mcp local model read edit run plan goal' },
   { section: 'workflow-automation', icon: 'fork', title: 'Auto-planning', group: 'Automation', description: 'Requirements, plans, and sprint flow', keywords: 'autopilot propose detect requirements sync track reconcile sprints stages' },
-  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Automation', description: 'Execution backends, isolated runs, and preview port defaults', keywords: 'execution backend comprehension understand review questions container host worktree archive jit secrets serve remote runtime preview port reservations budget critic hosted cli agents' },
+  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Automation', description: 'Execution backends, isolated runs, and preview port defaults', keywords: 'execution backend comprehension understand review questions container host worktree archive jit secrets serve remote runtime preview port reservations budget critic hosted cli agents design hook detector findings tells' },
   { section: 'automations', icon: 'globe', title: 'Automations', group: 'Automation', description: 'Inbound triggers, webhooks, and jobs', keywords: 'github slack gitlab jira signing secret listener daemon rules allowed repos' },
   { section: 'reviews', icon: 'shield', title: 'PR reviews', group: 'Automation', description: 'Automated GitHub review behavior', keywords: 'security code review findings branch protection push repositories app installation webhook' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Automation', description: 'Agent lifecycle hook commands', keywords: 'session start stop turn tool command scripts timeout lifecycle' },
   { section: 'connectors', icon: 'bolt', title: 'MCP servers', group: 'Connections', description: 'Model Context Protocol servers', keywords: 'brain tools stdio http url command environment env enabled disabled' },
   { section: 'data-connectors', icon: 'branch', title: 'Connectors', group: 'Connections', description: 'Knowledge and repository sources', keywords: 'github gitlab slack jira confluence notion linear google drive gmail filesystem web sync checkpoint oauth' },
+  { section: 'repositories', icon: 'branch', title: 'Repositories', group: 'Connections', description: 'Link this repo to memory and index it', keywords: 'github repo memory index repotag remote origin scope ingest files checkout clone identity' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Connections', description: 'Workspace add-ons, trust, and skills', keywords: 'discover enable disable bundled keyword triggers stack org convention repo' },
   { section: 'marketplace', icon: 'plug', title: 'Marketplace', group: 'Connections', description: 'Find and manage plugins', keywords: 'install update registry publish manifest organization scope source community' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'System', description: 'Tokens, activity, and diagnostics', keywords: 'heatmap week month year telemetry workspace doctor debug trace latency calls turns' },
@@ -233,7 +234,12 @@ export function searchSettings(query: string): SettingsNavItem[] {
 export const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'github', 'providers', 'agentModels', 'providerRequestFormat',
   // MC-DESK — object-knobs now driven by their own structured Settings panels
   // (Runtime / Automations / Profiles), so they never appear as raw JSON rows.
-  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles', 'router']);
+  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles', 'router',
+  // ADR-045 M2 — per-model context-window overrides get their own editor
+  // (Models → Profiles → Context windows), so no raw JSON row.
+  'contextWindows',
+  // ADR-056 D-B2 — the design hook has its own row (Runtime → Design hook).
+  'design']);
 // WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
 // ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
 // from the default list. Still settable via `/config` or the raw disclosure.

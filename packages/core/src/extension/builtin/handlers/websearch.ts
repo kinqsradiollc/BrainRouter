@@ -13,7 +13,46 @@ import { buildSearchProvider } from '../../../websearch/factory.js';
 import { parseGoogleHtml, googleSearchUrl } from '../../../websearch/providers/google.js';
 import { looksStructuredUrl, fetchViaInAppBrowser, fetchHtmlViaInAppBrowser } from '../../../websearch/inAppBrowser.js';
 import type { WebSearchResult } from '../../../websearch/types.js';
-import type { BuiltinToolHandler } from './registry.js';
+import { buildPageArtifact } from '../../../browser/pageArtifact.js';
+import { createArtifact } from '../../../artifact/artifactStore.js';
+import type { BuiltinToolHandler, BuiltinToolHost } from './registry.js';
+
+/**
+ * ADR-044 M4 — land a successfully fetched page as a durable, recallable
+ * artifact (opt-in via `cli.webSearch.persistToMemory`). The page becomes a
+ * markdown artifact with provenance (source URL + fetch time) and addressable
+ * sections via `buildPageArtifact`, and is captured into session memory so a
+ * later turn can cite it. Best-effort: any failure here never breaks the fetch —
+ * the tool still returns the page. Returns the artifact id when one was written.
+ */
+export async function persistFetchedPage(
+  host: BuiltinToolHost,
+  page: { title: string; url: string; text: string },
+): Promise<string | undefined> {
+  if (!getCliKnobs().webSearch.persistToMemory) return undefined;
+  if (!host.workspaceRoot || !host.sessionKey) return undefined;
+  try {
+    const artifact = buildPageArtifact({
+      title: page.title,
+      url: page.url,
+      markdown: page.text,
+      fetchedAt: new Date().toISOString(),
+    });
+    const created = createArtifact(host.workspaceRoot, {
+      kind: 'markdown-report',
+      format: 'markdown',
+      title: artifact.title,
+      content: artifact.markdown,
+      summary: `Fetched from ${page.url}`,
+      sessionKey: host.sessionKey,
+      editedBy: 'agent',
+    });
+    await host.captureArtifactToMemory(created);
+    return created.id;
+  } catch {
+    return undefined;
+  }
+}
 
 export const websearchHandlers: Record<string, BuiltinToolHandler> = {
   fetch_url: async ({ args, host }) => {
@@ -43,7 +82,8 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
           // session, JavaScript, and authentication are still available.
           const viaBrowser = await fetchViaInAppBrowser(host.browserControlPort, String(url), 25_000, host.turnAbort?.signal);
           if (viaBrowser?.text) {
-            return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text }, null, 2);
+            const artifactId = await persistFetchedPage(host, { title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text });
+            return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text, ...(artifactId ? { artifactId } : {}) }, null, 2);
           }
         }
         const result = await fetchAndExtract(String(url), {
@@ -53,6 +93,10 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
           // private/loopback/metadata IPs on each hop as an always-on SSRF guard).
           isEgressAllowed: (target) => egressDecision(target, egressAllowlist).decision !== 'deny',
         });
+        if (result.ok) {
+          const artifactId = await persistFetchedPage(host, { title: result.title, url: result.url, text: result.text });
+          if (artifactId) return JSON.stringify({ ...result, artifactId }, null, 2);
+        }
         return JSON.stringify(result, null, 2);
   },
 
@@ -70,7 +114,9 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
         // locale and session. A consent wall, challenge, or parser miss falls
         // through to an explicitly configured HTTP provider; there is no hidden
         // second search engine.
+        let browserTried = false;
         if (host.browserControlPort && !host.silent) {
+          browserTried = true;
           const port = host.browserControlPort;
           const sig = host.turnAbort?.signal;
           const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
@@ -82,6 +128,18 @@ export const websearchHandlers: Record<string, BuiltinToolHandler> = {
           };
           const results = await tryEngine(googleSearchUrl(query, maxResults, page), [parseGoogleHtml]);
           if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
+        }
+        // The HTTP provider is a fallback the person has to OPT INTO. With nothing
+        // configured, the built-in browser IS the search — so say what actually
+        // happened instead of demanding an API key nobody asked for (the old
+        // behaviour surfaced "cli.webSearch.google.apiKey is required" from the
+        // default provider, which read as a broken setup rather than as a
+        // consent wall or a headless context).
+        const providerConfigured = knobs.webSearch.explicitlyConfigured || Boolean(knobs.webSearchEndpoint?.trim());
+        if (!providerConfigured) {
+          return browserTried
+            ? 'web_search: the built-in browser ran the search but found no parseable results (a consent wall, a challenge page, or a results layout it could not read). No HTTP search provider is configured, so there is nothing to fall back to. Retry with a narrower query, or open a specific page with fetch_url — it renders through the same built-in browser.'
+            : 'web_search: no built-in browser is available in this context (server/CLI, or a background agent), and no HTTP search provider is configured. Configure one under cli.webSearch (provider + credentials; Desktop: Settings → Search), or run this from BrainRouter Desktop where search uses the built-in browser. fetch_url still works here for a specific URL.';
         }
         if (page > 1) return 'web_search pagination requires the managed Desktop browser; headless API providers currently support page 1 only.';
         try {

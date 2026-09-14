@@ -17,6 +17,7 @@ import type {
   PlannerItemView,
   PlannerOps,
   PlannerSurfaceProps,
+  PlannerSyncBlocker,
   PlannerSyncView,
   PlannerView,
   TodayGroup,
@@ -156,20 +157,42 @@ export function PlannerSurface({
   );
 }
 
+/** The short reason for the label; the full sentence lives in the popover. */
+export function syncBlockerShort(kind: PlannerSyncBlocker['kind']): string {
+  switch (kind) {
+    case 'local-only': return 'no server configured';
+    case 'sign-in': return 'sign in to sync';
+    case 'organization': return 'choose an organization';
+    case 'unreachable': return 'server unreachable';
+    default: return 'sync failed';
+  }
+}
+
+/** What the label says, given what the host last learned. */
+export function syncLabel(sync: PlannerSyncView): string {
+  if (sync.blocker && sync.pendingCount > 0) {
+    return `${sync.pendingCount} change${sync.pendingCount === 1 ? '' : 's'} waiting — ${syncBlockerShort(sync.blocker.kind)}.`;
+  }
+  return sync.label;
+}
+
 function SyncControl({ sync }: { sync: PlannerSyncView }): ReactElement {
   const [open, setOpen] = useState(false);
   const failed = sync.issues.filter((issue) => issue.attempts > 0);
+  // A blocker is a failure the person can act on; "no server configured" is a
+  // mode, not a failure, and stays quiet.
+  const blocked = sync.blocker && sync.blocker.kind !== 'local-only' && sync.pendingCount > 0;
   return (
     <div className="br-planner-sync">
       <button
         type="button"
-        className={failed.length ? 'has-failure' : sync.pendingCount ? 'has-pending' : ''}
+        className={failed.length || blocked ? 'has-failure' : sync.pendingCount ? 'has-pending' : ''}
         aria-expanded={open}
         aria-controls="br-planner-sync-detail"
         onClick={() => setOpen((value) => !value)}
       >
         <span className="br-planner-sync-dot" aria-hidden="true" />
-        <span>{sync.label}</span>
+        <span>{syncLabel(sync)}</span>
       </button>
       {open ? (
         <div id="br-planner-sync-detail" className="br-planner-sync-popover" role="region" aria-label="Planner sync details">
@@ -177,6 +200,12 @@ function SyncControl({ sync }: { sync: PlannerSyncView }): ReactElement {
             <strong>{sync.pendingCount ? `${sync.pendingCount} queued change${sync.pendingCount === 1 ? '' : 's'}` : 'No queued changes'}</strong>
             {sync.lastSyncedAt ? <span>Last synced {formatSyncTime(sync.lastSyncedAt)}</span> : null}
           </div>
+          {sync.blocker ? (
+            <p className={`br-planner-sync-blocker is-${sync.blocker.kind}`} role="status">
+              {sync.blocker.message}
+              {sync.blocker.since ? <small> · since {formatSyncTime(sync.blocker.since)}</small> : null}
+            </p>
+          ) : null}
           {sync.issues.length ? (
             <ul>
               {sync.issues.map((issue) => (
@@ -185,7 +214,7 @@ function SyncControl({ sync }: { sync: PlannerSyncView }): ReactElement {
                   <small>
                     {issue.entity} · {issue.action}
                     {issue.ageLabel ? ` · queued ${issue.ageLabel}` : ''}
-                    {issue.lastError ? ` · ${issue.lastError}` : ' · Waiting for a connection.'}
+                    {issue.lastError ? ` · ${issue.lastError}` : sync.blocker ? '' : ' · Waiting for a connection.'}
                     {issue.attempts ? ` · ${issue.attempts} attempt${issue.attempts === 1 ? '' : 's'}` : ''}
                   </small>
                   {/* `stuck` alone is five failed attempts, and below it the row

@@ -9,7 +9,9 @@ export { scanWorkspace, type ScanResult, type ScannedFile, type ScanOptions } fr
 export { extractSymbols, type FileSymbols, type ExtractedSymbol, type ExtractedImport } from "./pipeline/extract.js";
 export { buildBaseGraph, type BuildOptions } from "./pipeline/buildGraph.js";
 export { validateAtlasGraph, type AtlasValidation } from "./pipeline/validate.js";
-export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag } from "./store/atlasStore.js";
+export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, readAtlasGraphCached, atlasGraphStats, atlasWorkspaceTag } from "./store/atlasStore.js";
+export { atlasRefreshNeeded, maybeRefreshAtlasInBackground } from "./autoRefresh.js";
 export { enrichAtlasGraph, carryForwardSummaries, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich/enrich.js";
 export { buildAtlasChangeContext } from "./changeContext.js";
+export { atlasOrientation, atlasPromptRetrieval, atlasPromptTerms, ATLAS_RETRIEVAL_MIN_PROMPT_CHARS } from "./agentContext.js";
 export { extractAtlasJson, extractAtlasJsonArray } from "./enrich/jsonExtract.js";

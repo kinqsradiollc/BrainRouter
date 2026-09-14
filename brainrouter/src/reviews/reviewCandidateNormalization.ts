@@ -11,6 +11,7 @@ import type {
   AssuranceFinding,
   AssuranceImpactPacketAssembly,
   AssuranceSeverity,
+  AssuranceSourceToSinkPath,
   RepositoryAssuranceRun,
 } from "@kinqs/brainrouter-types/review";
 import { isSafeRepositoryRelativePath } from "./repositoryContextAssurance.js";
@@ -81,6 +82,19 @@ function deterministicTitle(mechanism: string): string {
 
 function locationLabel(path: string, line: number | undefined): string {
   return line ? `${path}:${line}` : path;
+}
+
+/**
+ * ADR-039 D6 (S4) — render a source→sink path as the WHOLE hop chain when the
+ * analyzer carried one (`source → hop → … → sink`), not a two-point summary. A
+ * path is evidence of *how*, and the reader (and the D2 verifier) needs the
+ * traversal. Falls back to `source → sink` for a legacy packet with no hops.
+ */
+function renderPathMechanism(path: AssuranceSourceToSinkPath): string {
+  const kind = path.mechanism.replaceAll("_", " ");
+  const chain = (path.hops && path.hops.length >= 2 ? path.hops : [path.source, path.sink])
+    .map((hop) => locationLabel(hop.path, hop.line));
+  return `${kind}: ${chain.join(" → ")}`.slice(0, 4_000);
 }
 
 export function normalizeReviewCandidates(
@@ -203,13 +217,7 @@ export function normalizeDeterministicCandidates(
         severity: deterministicSeverity(input.run),
         confidence: 0.8,
         title,
-        mechanism: [
-          path.mechanism.replaceAll("_", " "),
-          "from",
-          locationLabel(path.source.path, path.source.line),
-          "to",
-          locationLabel(path.sink.path, path.sink.line),
-        ].join(" ").slice(0, 4_000),
+        mechanism: renderPathMechanism(path),
         location: { ...path.sink },
         evidence: evidence.slice(0, 256),
         provenance: [{

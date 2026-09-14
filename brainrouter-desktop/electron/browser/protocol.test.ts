@@ -13,6 +13,9 @@ import {
   redactBrowserValue,
   type BrowserCommand,
   type BrowserDialogPrompt,
+  resolveBrowserSearchTemplate,
+  browserSearchUrl,
+  DEFAULT_BROWSER_SEARCH_TEMPLATE,
 } from './protocol.js';
 
 test('browser protocol is versioned and caps normal-browser resource growth', () => {
@@ -92,4 +95,25 @@ test('page and certificate prompts use the bounded dialog response contract', ()
   assert.equal(isBrowserCommandRequest({ version: 1, id: 'prompt-request', command: prompt }), true);
   assert.equal(certificate.kind, 'certificate');
   assert.equal((redactBrowserValue(prompt) as Record<string, unknown>).value, 'bounded response');
+});
+
+// ADR-055 P9 — the omnibox search engine is configurable but always validated.
+test('P9 resolveBrowserSearchTemplate falls back on anything unsafe or malformed', () => {
+  assert.equal(resolveBrowserSearchTemplate('https://duckduckgo.com/?q=%s'), 'https://duckduckgo.com/?q=%s');
+  assert.equal(resolveBrowserSearchTemplate(undefined), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+  assert.equal(resolveBrowserSearchTemplate(''), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+  assert.equal(resolveBrowserSearchTemplate('https://x.example/?q=noplaceholder'), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+  assert.equal(resolveBrowserSearchTemplate('javascript:alert(%s)'), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+  assert.equal(resolveBrowserSearchTemplate('file:///etc/%s'), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+  assert.equal(resolveBrowserSearchTemplate('https://u:p@x.example/?q=%s'), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+  assert.equal(resolveBrowserSearchTemplate('not a url %s'), DEFAULT_BROWSER_SEARCH_TEMPLATE);
+});
+
+test('P9 typed omnibox text searches on the configured engine, and URLs still win', () => {
+  assert.equal(browserSearchUrl('hello world', 'https://duckduckgo.com/?q=%s'), 'https://duckduckgo.com/?q=hello%20world');
+  // normalizeBrowserAddress routes typed text through the engine...
+  assert.equal(normalizeBrowserAddress('hello world', 'https://duckduckgo.com/?q=%s'), 'https://duckduckgo.com/?q=hello%20world');
+  // ...but a real address is still navigated, not searched.
+  assert.equal(normalizeBrowserAddress('example.com', 'https://duckduckgo.com/?q=%s'), 'https://example.com/');
+  assert.equal(normalizeBrowserAddress('https://example.com/x', 'https://duckduckgo.com/?q=%s'), 'https://example.com/x');
 });

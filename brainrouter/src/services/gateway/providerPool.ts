@@ -13,6 +13,11 @@ import * as tenancy from "../../memory/store/postgres/queries/tenancyQueries.js"
 import * as users from "../../memory/store/postgres/queries/userStatsQueries.js";
 import * as remoteAccess from "../../memory/store/postgres/queries/remoteAccessQueries.js";
 import { getSetting } from "../../memory/store/postgres/queries/emailAuthQueries.js";
+import {
+  normalizeContextSettings,
+  resolveContextCapTokens,
+  type ContextCapSettings,
+} from "./orgContextSettings.js";
 import type { DeviceSessionRecord } from "../../remote/store.js";
 import { resolveProviderConfig } from "../../providers/resolver.js";
 import type { ProviderStore } from "../../providers/store.js";
@@ -179,6 +184,12 @@ export class GatewayProviderService {
   /** ADR-043 C6b — read a per-org system-settings value (e.g. the egress opt-in flag). */
   getOrgSetting<T = unknown>(key: string): Promise<T | null> {
     return getSetting<T>(this.exec, key);
+  }
+
+  /** ADR-045 M3 — the org's context-window cap in tokens, or undefined when unset. */
+  async getContextCapTokens(orgId: string): Promise<number | undefined> {
+    const stored = await this.getOrgSetting<ContextCapSettings>(`contextSettings:${orgId}`);
+    return resolveContextCapTokens(normalizeContextSettings(stored));
   }
 
   async ping(): Promise<boolean> {

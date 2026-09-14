@@ -1,5 +1,6 @@
 import { execSync } from 'node:child_process';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getCliKnobs } from '../config/config.js';
 
 /**
  * Lifecycle shell hooks. A hook is a shell command string that runs at a
@@ -25,7 +26,10 @@ export type HookEvent =
   | 'stop'            // Fired when the top-level agent finishes a turn; may return additionalContext injected into the next turn.
   | 'subagent-stop'   // Fired when a subagent/background worker finishes; may return additionalContext bubbled to the parent.
   | 'notification-agent-needs-input'   // Fired when a background/subagent blocks awaiting input — wire desktop/OS notifications.
-  | 'notification-agent-completed';    // Fired on agent/background completion — wire desktop/OS notifications.
+  | 'notification-agent-completed'    // Fired on agent/background completion — wire desktop/OS notifications.
+  // ---- ADR-052 P4.3 — model-switch lifecycle -----------------------------
+  | 'pre-model-switch'   // Fired before the session model changes ({from,to}); a deny decision (or non-zero exit) BLOCKS the switch.
+  | 'post-model-switch'; // Fired after the model changed ({from,to}); informational.
 
 export interface Hook {
   id: string;
@@ -43,6 +47,11 @@ interface HooksFile {
 const EMPTY: HooksFile = { hooks: [] };
 
 export function readHooks(workspaceRoot: string): Hook[] {
+  // ADR-052 D3 — a restricted session IGNORES project-supplied hooks. A hook runs
+  // an arbitrary command directly (bypassing the tool gate), so in an untrusted
+  // repo a project `hooks.json` is exactly what restricted must not honour: no
+  // hook is read, so none can fire.
+  if (getCliKnobs().restricted) return [];
   return readJsonFile<HooksFile>(getStateFile(workspaceRoot, 'hooks.json'), EMPTY).hooks;
 }
 

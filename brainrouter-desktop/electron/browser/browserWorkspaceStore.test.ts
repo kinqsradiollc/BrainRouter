@@ -101,3 +101,75 @@ test('browser workspace persistence coalesces event bursts and flushes lifecycle
   assert.equal(writes, 2, 'flush persists once and cancels the delayed duplicate');
   assert.equal(timer.pending, null);
 });
+
+// ── ADR-055 P9 — bookmarks, history, and omnibox autocomplete ──────────────
+import {
+  recordBrowserVisit,
+  addBrowserBookmark,
+  removeBrowserBookmark,
+  isBookmarked,
+  omniboxSuggest,
+  MAX_BROWSER_HISTORY,
+  type BrowserHistoryEntry,
+} from './browserWorkspaceStore.js';
+
+test('P9 recordBrowserVisit dedupes by url, counts revisits, and is newest-first', () => {
+  let h = recordBrowserVisit([], { url: 'https://a.example/', title: 'A', at: 1 });
+  h = recordBrowserVisit(h, { url: 'https://b.example/', title: 'B', at: 2 });
+  assert.deepEqual(h.map((e) => e.url), ['https://b.example/', 'https://a.example/']);
+
+  h = recordBrowserVisit(h, { url: 'https://a.example/', title: 'A again', at: 3 });
+  assert.equal(h.length, 2, 'a revisit does not add a row');
+  assert.equal(h[0].url, 'https://a.example/', 'the revisit moves to the front');
+  assert.equal(h[0].visits, 2);
+  assert.equal(h[0].visitedAt, 3);
+  assert.equal(h[0].title, 'A again');
+});
+
+test('P9 recordBrowserVisit never records a blank page and strips query/credentials', () => {
+  assert.deepEqual(recordBrowserVisit([], { url: 'about:blank', title: '', at: 1 }), []);
+  assert.deepEqual(recordBrowserVisit([], { url: '', title: '', at: 1 }), []);
+  const h = recordBrowserVisit([], { url: 'https://u:p@x.example/path?token=secret#frag', title: 'X', at: 1 });
+  assert.equal(h[0].url, 'https://x.example/path', 'query, hash and credentials are stripped before persisting');
+});
+
+test('P9 history is bounded', () => {
+  let h: BrowserHistoryEntry[] = [];
+  for (let i = 0; i < MAX_BROWSER_HISTORY + 25; i += 1) {
+    h = recordBrowserVisit(h, { url: `https://e.example/${i}`, title: `t${i}`, at: i });
+  }
+  assert.equal(h.length, MAX_BROWSER_HISTORY);
+});
+
+test('P9 bookmarks dedupe, remove, and report membership', () => {
+  let b = addBrowserBookmark([], { url: 'https://a.example/', title: 'A', at: 1 });
+  b = addBrowserBookmark(b, { url: 'https://b.example/', title: 'B', at: 2 });
+  b = addBrowserBookmark(b, { url: 'https://a.example/', title: 'A2', at: 3 });
+  assert.equal(b.length, 2, 're-adding refreshes rather than duplicating');
+  assert.equal(b[0].title, 'A2');
+  assert.equal(isBookmarked(b, 'https://a.example/'), true);
+  b = removeBrowserBookmark(b, 'https://a.example/');
+  assert.equal(isBookmarked(b, 'https://a.example/'), false);
+  assert.equal(b.length, 1);
+  // A blank page is never bookmarkable.
+  assert.equal(addBrowserBookmark([], { url: 'about:blank', title: '', at: 1 }).length, 0);
+});
+
+test('P9 omniboxSuggest ranks bookmarks first, then prefix, then visit count — local only', () => {
+  const bookmarks = [{ url: 'https://docs.example/guide', title: 'Guide', addedAt: 1 }];
+  const history = [
+    { url: 'https://other.example/docs', title: 'Other docs', visitedAt: 5, visits: 1 },
+    { url: 'https://docs.example/api', title: 'API', visitedAt: 4, visits: 9 },
+  ];
+  const out = omniboxSuggest('docs', { bookmarks, history });
+  assert.equal(out[0].url, 'https://docs.example/guide', 'the bookmark outranks history');
+  assert.equal(out[0].source, 'bookmark');
+  // Both history rows match; the more-visited prefix match outranks the substring match.
+  assert.deepEqual(out.slice(1).map((s) => s.url), ['https://docs.example/api', 'https://other.example/docs']);
+
+  assert.deepEqual(omniboxSuggest('', { bookmarks, history }), [], 'an empty query suggests nothing');
+  assert.deepEqual(omniboxSuggest('nomatch', { bookmarks, history }), []);
+  assert.equal(omniboxSuggest('docs', { bookmarks, history, limit: 1 }).length, 1);
+  // Title matches count too, case-insensitively.
+  assert.equal(omniboxSuggest('GUIDE', { bookmarks, history })[0].url, 'https://docs.example/guide');
+});

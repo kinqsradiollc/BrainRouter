@@ -62,7 +62,7 @@ import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent, classifyForVerification } from '@kinqs/brainrouter-core/agent';
 import { createBrowserControlBridge, type BrowserControlPort } from '@kinqs/brainrouter-core/browser';
-import { loadConfig, saveConfig, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import {
   setProvider,
@@ -75,6 +75,8 @@ import {
   inferModelReasoningCapabilities,
   registerModelReasoningCapabilities,
   refreshLmStudioCache,
+  buildModelRegistry,
+  resolveRoutes,
 } from '@kinqs/brainrouter-core/provider';
 import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
 import {
@@ -184,6 +186,7 @@ import {
   extractAtlasJson,
   type AtlasLlmCaller,
 } from '@kinqs/brainrouter-core/atlas';
+import { buildDiagramDeltaContext } from '@kinqs/brainrouter-core/diagram';
 import {
   ensureProject,
   getProject,
@@ -641,6 +644,36 @@ async function main(): Promise<void> {
     const p = loadConfig().providers?.[providerName];
     if (!p) return undefined;
     return { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
+  };
+  // Router-catalog picks from the composer carry a route id — a provider-prefixed
+  // canonical slug (e.g. "openrouter/stealth/ox-alpha"), a bare model, or an alias
+  // — with NO providerName. Resolve it through the router registry, exactly as the
+  // CLI switch_model handler and the :3747 gateway do, so the agent sends the
+  // concrete upstream model to the right endpoint instead of the slug verbatim
+  // (which a direct provider rejects as an unknown model). undefined for 'auto' or
+  // an unresolvable id → the caller sends it raw and the gateway resolves it.
+  const resolveRouteLlm = (model: string): { llm: LLMConfig; providerName: string } | undefined => {
+    const m = (model ?? '').trim();
+    if (!m || m === 'auto') return undefined;
+    const knobs = getCliKnobs();
+    if (knobs.router?.enabled === false) return undefined;
+    const cfg = loadConfig();
+    const baseName = cfg.providers?.base ? 'base-config' : 'base';
+    const global = loadGlobalLlm();
+    const registry = buildModelRegistry(
+      { ...(cfg.providers ?? {}), [baseName]: global },
+      {
+        aliases: knobs.router.aliases,
+        chain: [...(knobs.router.chain ?? []), ...(knobs.fallbackModels ?? []), `${baseName}/${global.model}`],
+        order: knobs.router.order,
+        strategy: knobs.router.strategy,
+        passThrough: knobs.router.passThrough,
+        availableModels: knobs.availableModels,
+        enforceAvailableModels: knobs.enforceAvailableModels,
+      },
+    );
+    const route = resolveRoutes(registry, m, { withFallbacks: true })[0];
+    return route ? { llm: { ...route.llm }, providerName: route.provider } : undefined;
   };
   const syncActiveSessionLlm = (base: LLMConfig = loadGlobalLlm()): LLMConfig => {
     // Restore the host-only credential for the built-in BrainRouter provider;
@@ -1116,6 +1149,13 @@ async function main(): Promise<void> {
     let atlasGraph = readAtlasGraph(workspaceRoot);
     try { atlasGraph = carryForwardSummaries(buildBaseGraph(workspaceRoot), atlasGraph); } catch { /* keep the stored graph as-is if a rebuild isn't possible */ }
     const changeCtx = buildAtlasChangeContext(atlasGraph, files);
+    // ADR-056 D-A4 — a pinned diagram whose specification changed in the working
+    // tree yields a deterministic Before/After fact list (added / removed /
+    // rerouted / moved / changed) beside the blast radius. Evidence, not a
+    // finding; model-free; empty when nothing is pinned or nothing changed.
+    let diagramDeltaCtx = '';
+    try { diagramDeltaCtx = buildDiagramDeltaContext(workspaceRoot); } catch { /* a delta must never block a review */ }
+    const changeCtxFull = [changeCtx, diagramDeltaCtx].filter(Boolean).join('\n\n');
     // REVIEW.md (if present) is surfaced only as fenced, non-authoritative
     // repository evidence. Checkout prose cannot override the review contract.
     const reviewInstr = buildReviewInstructionBlockForDiff(workspaceRoot, diff);
@@ -1144,7 +1184,7 @@ async function main(): Promise<void> {
       local = await runLocalReviewOrchestration({
         diff,
         reviewInstructions: reviewInstr,
-        changeContext: changeCtx,
+        changeContext: changeCtxFull,
         relatedPaths: graphEdges,
         concurrency: 4,
         maxBundleChars: 18_000,
@@ -1212,7 +1252,7 @@ async function main(): Promise<void> {
     // up a stale copy per run — so it always reflects the current changes, older
     // versions live in its history, and a provenance header records exactly what it
     // describes (date · files · diff hash). Best-effort — never blocks the review.
-    if (changeCtx || findings.length > 0 || incomplete) {
+    if (changeCtxFull || findings.length > 0 || incomplete) {
       try {
         const UNDERSTANDING_PATH = '.brainrouter/understanding/working-changes.md';
         const header = `> As of ${isoNow().slice(0, 10)} · ${files.length} changed file${files.length === 1 ? '' : 's'} · diff \`${base.diffHash.slice(0, 12)}\`. Regenerated on each review; older versions are in this artifact's history.`;
@@ -1221,7 +1261,7 @@ async function main(): Promise<void> {
           : findings.length
             ? ['## Findings', ...findings.map((finding) => `- **${finding.severity}** \`${finding.file}${finding.line ? `:${finding.line}` : ''}\` — ${finding.summary}`)].join('\n')
             : '## Findings\nNo issues found.';
-        const doc = [header, changeCtx, findingLines].filter(Boolean).join('\n\n');
+        const doc = [header, changeCtxFull, findingLines].filter(Boolean).join('\n\n');
         const title = `Understanding — working changes (${files.length} file${files.length === 1 ? '' : 's'})`;
         const existing = Object.values(readArtifactsAll(workspaceRoot)).find((a) => a.path === UNDERSTANDING_PATH);
         if (existing) updateArtifact(workspaceRoot, existing.id, { content: doc, title, status: 'draft' });
@@ -1632,6 +1672,7 @@ async function main(): Promise<void> {
     // Resolve a saved connection (by name) to a full LLM config — used to rebuild
     // the active agent when a cross-provider model is picked.
     resolveProviderLlm: (providerName, model) => resolveProviderLlm(providerName, model),
+    resolveRouteLlm: (model) => resolveRouteLlm(model),
     // Full per-session LLM (provider/model/endpoint + resolved key) for the active
     // chat — used to rebuild the agent on a session switch.
     resolveSessionLlm: (sessionKey) => llmForSession(sessionKey),

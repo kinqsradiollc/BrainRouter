@@ -188,7 +188,7 @@ for one purpose." **This is that decision, made:**
   competing schema — the one nobody wrote a generator for is the one that would rot.
 - The LOCATION is `design.md` at the workspace root, then `.brainrouter/design.md`,
   then `docs/design.md`; first match wins
-  (`packages/core/src/workspace/designArtifact.ts` `DESIGN_ARTIFACT_PATHS`).
+  (`packages/core/src/workspace/workspaceArtifacts.ts` `DESIGN_ARTIFACT_PATHS`).
 - The SEAM is `readWorkspaceDesignArtifact` → `resolveWorkspaceCapabilities`'s
   `designArtifact` input → a prompt block the `frontend` capability contributes. The
   reader touches disk; the resolver never does, so "which capabilities are active"
@@ -197,13 +197,21 @@ for one purpose." **This is that decision, made:**
   introduced as a description of the product rather than as instructions. A repository
   can be someone else's — the same position ADR-029 C4 takes about note content.
 
+- **`product.md` sits beside it** (ADR-056 D-B6): audience, purpose, operating context,
+  constraints, voice, evidence on hand — and the standing rule that no metric,
+  testimonial, customer, or benchmark is invented. The SAME reader module reads it
+  (`readWorkspaceProductArtifact`, `PRODUCT_ARTIFACT_PATHS`: `product.md`,
+  `.brainrouter/product.md`, `docs/product.md`), the same neutralisation applies, and
+  it rides the same frontend-capability block in its own `<product_artifact>` fence.
+  Tokens stay in `design.md`; product truth stays out of it. `/design product` writes it.
+
 Do not add a `design.json`, a manifest field holding design tokens, or a second reader.
 If the format needs to change, change the skill's reference and this one convention.
 
 - **Why:** the capability's prompt block told the agent to "discover and follow the
   workspace design artifact" for a release with nothing behind the sentence — an offer
   the product could not honour (ADR-029 F1).
-- **Evidence:** `packages/core/src/workspace/designArtifact.ts`,
+- **Evidence:** `packages/core/src/workspace/workspaceArtifacts.ts`,
   `packages/core/src/workspace/capabilities.ts` (`designArtifact`),
   `packages/core/src/agent/workspaceCapabilityState.ts`,
   `packages/core/src/tests/frontend-design-skill.test.ts`

@@ -202,3 +202,72 @@ test('browser-use availability is restricted to an interactive depth-zero local 
   assert.equal(browserUseAvailableFor({ ...base, tier: 'worker' }), false);
   assert.equal(browserUseAvailableFor({ ...base, remoteBrain: true }), false);
 });
+
+// ADR-055 P2 — coordinate targeting on click/hover/drag.
+test('P2: click/hover accept a screenshot {x,y} point and still accept refs', () => {
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.click', tabId: 'tab_x_1', x: 120, y: 40 }),
+    { kind: 'page.click', tabId: 'tab_x_1', x: 120, y: 40 },
+  );
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.hover', x: 5, y: 6 }),
+    { kind: 'page.hover', x: 5, y: 6 },
+  );
+  // A ref still works and carries no coordinates.
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.click', ref: 'r1', pageRevision: 2 }),
+    { kind: 'page.click', ref: 'r1', pageRevision: 2 },
+  );
+});
+
+test('P2: click/hover require a ref, testId, or BOTH x and y', () => {
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.click' }), /ref, testId, or both x and y/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.click', x: 10 }), /ref, testId, or both x and y/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.hover', y: 10 }), /ref, testId, or both x and y/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.click', x: -1, y: 4 }), /x must be/i);
+});
+
+test('P2: drag accepts two points OR two refs, and rejects neither', () => {
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.drag', fromX: 1, fromY: 2, toX: 3, toY: 4 }),
+    { kind: 'page.drag', fromX: 1, fromY: 2, toX: 3, toY: 4 },
+  );
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.drag', fromRef: 'a', toRef: 'b' }),
+    { kind: 'page.drag', fromRef: 'a', toRef: 'b' },
+  );
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.drag', fromX: 1, fromY: 2 }), /fromRef\+toRef or fromX/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.drag' }), /fromRef\+toRef or fromX/i);
+});
+
+// ADR-055 P3 — snapshot scope.
+test('P3: snapshot accepts scope viewport|page and rejects other values', () => {
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.snapshot', scope: 'page' }), { kind: 'page.snapshot', scope: 'page' });
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.snapshot' }), { kind: 'page.snapshot' });
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.snapshot', scope: 'everything' }), /scope/i);
+});
+
+// ADR-055 P4 — page.find (locator by role/text/label/testid).
+test('P4: page.find requires a query and accepts by/limit/scope', () => {
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.find', query: 'Sign in' }), { kind: 'page.find', query: 'Sign in' });
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.find', query: 'submit', by: 'role', limit: 5, scope: 'page' }),
+    { kind: 'page.find', query: 'submit', by: 'role', limit: 5, scope: 'page' },
+  );
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.find' }), /query/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.find', query: 'x', by: 'guess' }), /by/i);
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.find', query: 'x', limit: 0 }), /limit/i);
+});
+
+// ADR-055 P6 — page.wait human hand-back option.
+test('P6: page.wait accepts human:true with a longer timeout', () => {
+  assert.deepEqual(parseBrowserControlCommand({ kind: 'page.wait', human: true }), { kind: 'page.wait', human: true });
+  assert.deepEqual(
+    parseBrowserControlCommand({ kind: 'page.wait', human: true, timeoutMs: 300000 }),
+    { kind: 'page.wait', timeoutMs: 300000, human: true },
+  );
+  // A non-human wait keeps the 60s cap.
+  assert.throws(() => parseBrowserControlCommand({ kind: 'page.wait', timeoutMs: 120000 }), /timeoutMs/i);
+  // A human wait may exceed it (up to 10 min).
+  assert.doesNotThrow(() => parseBrowserControlCommand({ kind: 'page.wait', human: true, timeoutMs: 120000 }));
+});

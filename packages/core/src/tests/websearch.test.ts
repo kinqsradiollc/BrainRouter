@@ -25,6 +25,12 @@ test('websearch config resolves safe defaults', () => {
   assert.equal(knobs.webSearch.maxResults, 5);
   assert.equal(knobs.webSearch.crawler.respectRobots, true);
   assert.equal(knobs.webSearch.crawler.maxContentChars, 15_000);
+  // ADR-044 M4 — page persistence is opt-in (default off).
+  assert.equal(knobs.webSearch.persistToMemory, false);
+  assert.equal(
+    resolveCliKnobs({ activeServer: '', servers: {}, cli: { webSearch: { persistToMemory: true } } }).webSearch.persistToMemory,
+    true,
+  );
   assert.equal(knobs.computerUse.enabled, false);
   assert.equal(knobs.computerUse.mode, 'smart_approve');
 });
@@ -100,9 +106,11 @@ test('crawler extracts clean text, title, and strips non-content chrome', async 
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.title, 'Doc');
-    assert.match(result.text, /Head/);
-    assert.match(result.text, /Hello world\./);
-    assert.match(result.text, /- One/);
+    // ADR-044 M1: extraction is now structure-preserving markdown, not a flat
+    // run of words — the heading carries its `#`, and inline emphasis survives.
+    assert.match(result.text, /^# Head$/m);
+    assert.match(result.text, /Hello \*\*world\*\*\./);
+    assert.match(result.text, /^- One$/m);
     assert.doesNotMatch(result.text, /Skip|script|style/);
   }
 });

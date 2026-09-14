@@ -162,6 +162,14 @@ export function installTurnRunner(ctx: RunChatContext): void {
           });
         },
         onStatusUpdate: tickStatus,
+        // ADR-059 — the runtime's own steps a person would otherwise never see:
+        // a guardrail re-prompt, provider-side activity, why the turn ended.
+        // Model calls stay in the status tick (they would double the tool lines).
+        onTurnStep: (step) => {
+          if (step.type !== 'guard' && step.type !== 'provider' && step.type !== 'end') return;
+          const attempt = step.attempt ? ` (${step.attempt.n}/${step.attempt.max})` : '';
+          controller!.push.notice(`· ${step.label}${attempt}${step.detail ? ` — ${step.detail}` : ''}`);
+        },
         onSteerApplied: (input, receipt) => {
           if (input.source === 'peer-session') {
             markApprovedPeerMessageApplied(turnAgent, turnSessionKey, input.id);

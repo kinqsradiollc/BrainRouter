@@ -1,5 +1,6 @@
 ---
 name: minimalist-skill
+routed-by: hallmark
 description: Clean editorial-style interfaces. Warm monochrome palette, typographic contrast, flat bento grids, muted pastels. No gradients, no heavy shadows.
 hints:
   - "Enforce absolute negative constraints: zero emojis, zero Lucide default stroke-widths, and zero Inter."

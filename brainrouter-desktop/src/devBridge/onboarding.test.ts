@@ -107,6 +107,23 @@ test('registers the assisted proposal under the production query name', () => {
   assert.equal(preview.preview?.plan?.id, 'engineering');
 });
 
+test('keeps Settings and sidebar support queries available in browser preview', () => {
+  const queries = createQueries(createDevState());
+  const catalog = queries['tool-catalog']?.({}) as {
+    builtin?: Array<{ name: string; protected: boolean }>;
+    mcp?: Array<{ server: string; name: string }>;
+  };
+  assert.ok(catalog.builtin?.some((tool) => tool.name === 'read_file' && tool.protected));
+  assert.ok(catalog.mcp?.some((tool) => tool.server === 'workspace'));
+
+  const prMap = queries['git-pr-status-map']?.({}) as {
+    prs?: Array<{ state: string; headRefName: string }>;
+  };
+  assert.ok(prMap.prs?.some((pr) => pr.state === 'OPEN' && pr.headRefName === 'release/0.4.15'));
+  assert.deepEqual(queries['account-set-active-org']?.({ orgId: 'org-dev' }), { ok: true, changed: false });
+  assert.deepEqual(queries['tooling-check']?.({}), { plan: { kind: 'ready' }, statuses: [] });
+});
+
 test('browser preview exposes catalog choices and remains read-only', () => {
   const state = createDevOnboardingState();
   const info = getDevWorkspaceManifest(state, root);

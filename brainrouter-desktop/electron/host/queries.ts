@@ -22,8 +22,10 @@ import {
   syncOnce,
   updateBlock as plannerUpdateBlock,
   writePlanner,
+  type PlannerSyncOutcome,
 } from '@kinqs/brainrouter-core/planner';
 import { createPlannerTransport } from './plannerTransport.js';
+import { accountFailureOutcome, cycleOutcome, localOnlyOutcome, organizationOutcome, signInOutcome, withSince } from './plannerSyncOutcome.js';
 // ADR-029 Part B — Notes is USER-scoped for the same reason the planner is
 // (D1), so none of these take a workspace root either.
 import {
@@ -83,6 +85,25 @@ import {
   walkSubtree as walkNoteSubtree,
 } from '@kinqs/brainrouter-core/notes';
 import { createNotesTransport } from './notesTransport.js';
+// ADR-049 — Study mode. Pure logic from the browser-safe barrel; the node-fs
+// store from its own subpath.
+import {
+  buildReviewSession, applyGrade, newSchedule, previewIntervalDays,
+  deckStats, reviewStreak, parseDelimitedCards, proposalsToCards,
+  deckToCsv, deckToMarkdown, isoDay,
+  buildGenerationPrompt, parseCardProposals, profileGenerationSources,
+  buildStudyReminderSchedule, findStudyReminder, studyReminderState, shouldNudge,
+  STUDY_REMINDER_COMMAND,
+  type StudySourceKind,
+} from '@kinqs/brainrouter-core/study';
+import { atlasOrientation } from '@kinqs/brainrouter-core/atlas';
+import { listDiagrams, readDiagramSpec, readDiagramHtml, readDiagramReceipt, readDiagramSpecAtRevision, validateDiagram, compareDiagrams, renderDiagramDelta, isDiagramSlug } from '@kinqs/brainrouter-core/diagram';
+import { acceptVariant, discardVariants, listVariantSessions } from '@kinqs/brainrouter-core/design';
+import {
+  listStudyDecks, readStudyDeck, saveStudyDeck, deleteStudyDeck,
+  readStudyProgress, saveStudyProgress,
+} from '@kinqs/brainrouter-core/study/store';
+import type { StudyDeck, StudyGrade, StudyCard, WorkItem } from '@kinqs/brainrouter-types';
 import {
   formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
 } from '@kinqs/brainrouter-core/workspace/references';
@@ -272,7 +293,7 @@ import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/command
 import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
 import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
-import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled } from '@kinqs/brainrouter-core/triggers';
+import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled, pendingAgentSuggestions, setAgentSuggestionStatus } from '@kinqs/brainrouter-core/triggers';
 import { startTriggerServe, stopTriggerServe, triggerServeStatus } from './triggerServe.js';
 import { startRouterServe, stopRouterServe, routerServeStatus } from './routerServe.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
@@ -559,11 +580,33 @@ function readNoteConflictClock(
   };
 }
 
+/**
+ * ADR-049 — the identity a workspace's Study progress is keyed by. Git's
+ * `user.email` is the natural per-person id in a repo; `local` when there is no
+ * git identity, so a non-git folder still studies. Progress files
+ * (`progress/<user>.json`) are personal and recommend `.gitignore`.
+ */
+function studyUser(workspaceRoot: string): string {
+  try {
+    const email = execFileSync('git', ['-C', workspaceRoot, 'config', 'user.email'], {
+      encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (email) return email;
+  } catch {
+    // no git identity — fall through
+  }
+  return 'local';
+}
+
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
   // Planner state is persisted as one atomic JSON document. Keep every local
   // read-modify-write and network reconciliation in one queue so a sync that
   // started from snapshot A can never overwrite a mutation that produced A+B.
   const withPlannerStoreLock = createSerialWorkQueue();
+  // Notes state is one JSON document too, and `notes-sync` read → network →
+  // wrote it with no lock while every edit did the same: a sync that started
+  // from snapshot A could overwrite the edit that produced A+B. One queue.
+  const withNotesStoreLock = createSerialWorkQueue();
 
   const {
     browser,
@@ -753,7 +796,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     getConfig: loadConfig,
     getRemoteUrl: () => wsGit.remoteUrl,
   });
-  return {
+  const queries: Record<string, QueryHandler> = {
       ...workspaceKnowledgeQueries,
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -1060,7 +1103,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       },
-      'action:plugin-install': (args) => {
+      'action:plugin-install': async (args) => {
         try {
           const scope = args.scope === 'workspace' ? 'workspace' : 'user';
           const force = args.force === true;
@@ -1069,7 +1112,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           }
           const name = typeof args.name === 'string' ? args.name.trim() : '';
           if (!name) return { ok: false, error: 'plugin name or source is required' };
-          return installPluginFromRegistry(name, { scope, workspaceRoot, force });
+          return await installPluginFromRegistry(name, { scope, workspaceRoot, force });
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -1117,6 +1160,41 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'action:connector-run': async (args) => runConnector(typeof args.id === 'string' ? args.id : ''),
       'action:connector-index-memory': async (args) => indexConnectorMemory(typeof args.id === 'string' ? args.id : ''),
       'action:connector-sync-permissions': async (args) => syncConnectorPermissions(typeof args.id === 'string' ? args.id : ''),
+      // ADR-015 P3 — "Index this repo into memory": walk the git-aware file list
+      // (respects .gitignore, caps at 3000), read each file from the LOCAL checkout
+      // (D2 — no auth for file content), and route them through memory_ingest_repo
+      // scoped by the workspace's repoTag so a repo's files recall together and
+      // survive a moved/renamed folder. Opt-in, bounded, idempotent (hash dedup).
+      'action:index-repo': async () => {
+        try {
+          const repoTag = wsGit.repoTag || '';
+          if (!repoTag) {
+            return { ok: false, error: 'This workspace has no git remote, so there is no repo identity to scope memory by. Add an origin remote (git remote add origin …) and try again.' };
+          }
+          const listed = await listWorkspaceFilesCached({ limit: 3000 });
+          if (listed.error) return { ok: false, error: listed.error };
+          const files: Array<{ path: string; content: string }> = [];
+          for (const path of listed.files ?? []) {
+            const entry = readWorkspaceEntry(workspaceRoot, path);
+            if (entry.error || entry.binary || entry.kind !== 'file' || !entry.content) continue;
+            files.push({ path, content: entry.content });
+            if (files.length >= 3000) break;
+          }
+          if (files.length === 0) {
+            return { ok: true, repoTag, filesRead: 0, ingested: 0, skipped: 0, chunks: 0, truncated: listed.truncated ?? false };
+          }
+          const res = await mcpClient.callTool('memory_ingest_repo', { repoTag, files });
+          if (res?.isError) {
+            const text = typeof res.content?.[0]?.text === 'string' ? res.content[0].text : 'memory_ingest_repo failed.';
+            return { ok: false, repoTag, filesRead: files.length, error: text };
+          }
+          const text = typeof res?.content?.[0]?.text === 'string' ? res.content[0].text : '';
+          const parsed = text.trim() ? JSON.parse(text) : {};
+          return { ok: true, repoTag, filesRead: files.length, truncated: listed.truncated ?? false, ...parsed };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
       // DESK-5d — current branch's PR, for the project-row status chip.
       // Quietly null when gh is missing, unauthenticated, or there is no PR.
       'git-pr': async () => {
@@ -1227,6 +1305,258 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 20;
         return { records: readRequestTrace(workspaceRoot, key, limit) };
       },
+      // ADR-049 — Study mode. Decks live under this workspace's
+      // .brainrouter/study/; review progress is personal (keyed by studyUser).
+      // All logic runs here (the ADR-049 deterministic core); the renderer is a
+      // thin client over these queries.
+      'study:list': () => {
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const now = new Date();
+        const decks = listStudyDecks(workspaceRoot).map((d) => ({
+          id: d.id, name: d.name, description: d.description ?? '', tags: d.tags,
+          updatedAt: d.updatedAt, stats: deckStats(d, progress, now),
+        }));
+        return { decks, streak: reviewStreak(progress, now), user };
+      },
+      'study:read': (args) => {
+        const deck = readStudyDeck(workspaceRoot, String(args.id ?? ''));
+        return { deck: deck ?? null };
+      },
+      'study:save': (args) => {
+        const deck = args.deck as StudyDeck | undefined;
+        if (!deck || typeof deck.id !== 'string' || !deck.id.trim() || !Array.isArray(deck.cards)) {
+          return { ok: false, reason: 'invalid deck' };
+        }
+        saveStudyDeck(workspaceRoot, { ...deck, updatedAt: new Date().toISOString() });
+        return { ok: true, id: deck.id };
+      },
+      'study:delete': (args) => {
+        deleteStudyDeck(workspaceRoot, String(args.id ?? ''));
+        return { ok: true };
+      },
+      'study:import': (args) => {
+        const delimiter = args.delimiter === 'tab' ? '\t' : args.delimiter === 'comma' ? ',' : 'auto';
+        const proposals = parseDelimitedCards(String(args.text ?? ''), { delimiter });
+        const now = new Date().toISOString();
+        const base = Date.now();
+        const cards: StudyCard[] = proposalsToCards(proposals, (i) => `c-${base}-${i}`, now);
+        return { cards };
+      },
+      'study:export': (args) => {
+        const deck = readStudyDeck(workspaceRoot, String(args.id ?? ''));
+        if (!deck) return { ok: false, reason: 'no such deck' };
+        const format = args.format === 'csv' ? 'csv' : 'markdown';
+        return {
+          ok: true, format,
+          content: format === 'csv' ? deckToCsv(deck) : deckToMarkdown(deck),
+          filename: `${deck.id}.${format === 'csv' ? 'csv' : 'md'}`,
+        };
+      },
+      'study:session': (args) => {
+        const deck = readStudyDeck(workspaceRoot, String(args.id ?? ''));
+        if (!deck) return { items: [], streak: 0 };
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const now = new Date();
+        const newLimit = typeof args.newLimit === 'number' ? args.newLimit : 20;
+        const items = buildReviewSession(deck, progress, { now, newLimit }).map((it) => ({
+          card: it.card,
+          isNew: it.isNew,
+          mc: it.mc,
+          previews: {
+            again: previewIntervalDays(it.schedule, 'again'),
+            hard: previewIntervalDays(it.schedule, 'hard'),
+            good: previewIntervalDays(it.schedule, 'good'),
+            easy: previewIntervalDays(it.schedule, 'easy'),
+          },
+        }));
+        return { items, streak: reviewStreak(progress, now) };
+      },
+      'study:grade': (args) => {
+        const cardId = String(args.cardId ?? '');
+        const grade = args.grade as StudyGrade;
+        const deckId = String(args.deckId ?? '');
+        if (!cardId || !['again', 'hard', 'good', 'easy'].includes(grade)) return { ok: false };
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const now = new Date();
+        const current = progress.schedules[cardId] ?? newSchedule(cardId, now);
+        progress.schedules[cardId] = applyGrade(current, grade, now);
+        const day = isoDay(now);
+        progress.reviewsByDay[day] = (progress.reviewsByDay[day] ?? 0) + 1;
+        progress.updatedAt = now.toISOString();
+        saveStudyProgress(workspaceRoot, progress);
+        void deckId; // reserved for future per-deck review logs
+        return { ok: true, nextDueOn: progress.schedules[cardId]!.dueOn };
+      },
+      // ADR-049 S5 — generation with receipts. `study:sources` offers profile-
+      // ordered sources + the pickable docs/ADRs; `study:read-source` resolves
+      // one to text; `study:generate` runs the model and returns PROPOSALS (never
+      // committed cards — the renderer's tray gates every one).
+      'study:sources': () => {
+        let profile = 'custom';
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(workspaceRoot, '.brainrouter', 'workspace.json'), 'utf8'));
+          if (typeof raw?.profile === 'string') profile = raw.profile;
+        } catch { /* no manifest — generic order */ }
+        const listMd = (dir: string, limit: number): { path: string; title: string }[] => {
+          try {
+            return fs.readdirSync(path.join(workspaceRoot, dir))
+              .filter((n) => n.endsWith('.md')).sort().slice(0, limit)
+              .map((n) => ({ path: path.join(dir, n), title: n.replace(/\.md$/, '') }));
+          } catch { return []; }
+        };
+        // ADR-049 (completion) — local, workspace-scoped pickables: docs, ADRs,
+        // engineering rules (brainrouter-rules/), and Track work items. Meetings
+        // are org/server-backed, so the renderer fetches those via the existing
+        // meetings bridge and feeds the transcript to study:generate directly.
+        let track: { id: string; title: string }[] = [];
+        try {
+          track = listWorkItems(workspaceRoot, {})
+            .slice(0, 100)
+            .map((w: WorkItem) => ({ id: w.id, title: `${w.key ?? w.id}: ${w.title}` }));
+        } catch { /* no track board — empty */ }
+        // ADR-030 documents (ADR-049 D2 "documents/readings"): ingested attachments
+        // that were PARSED into a readable artifact (documentRef present).
+        let documents: { id: string; title: string }[] = [];
+        try {
+          documents = listAttachments(workspaceRoot)
+            .filter((a) => a.documentRef)
+            .slice(0, 80)
+            .map((a) => ({ id: a.id, title: a.name }));
+        } catch { /* no attachments — empty */ }
+        return {
+          profile,
+          sources: profileGenerationSources(profile),
+          docs: listMd('.', 40).concat(listMd('docs', 40)).slice(0, 60),
+          decisions: listMd(path.join('brainrouter-docs', 'decisions'), 100),
+          rules: listMd('brainrouter-rules', 60),
+          track,
+          documents,
+        };
+      },
+      'study:read-source': (args) => {
+        const kind = args.kind as StudySourceKind;
+        if (kind === 'atlas') {
+          const graph = readAtlasGraph(workspaceRoot);
+          if (!graph) return { ok: false, reason: 'No codebase map yet — build one with /atlas.' };
+          const layers = graph.layers.map((l) => `- ${l.name}: ${l.nodeIds.length} files`).join('\n');
+          const summaries = graph.nodes.filter((n) => n.summary).slice(0, 120)
+            .map((n) => `- ${n.filePath ?? n.name}: ${n.summary}`).join('\n');
+          return { ok: true, text: `${atlasOrientation(graph)}\n\nLayers:\n${layers}\n\nFiles:\n${summaries}`, ref: 'atlas' };
+        }
+        if (kind === 'document') {
+          // ADR-030 — an ingested document's parsed parts, concatenated + bounded.
+          const id = String(args.path ?? args.ref ?? '');
+          if (!getAttachment(workspaceRoot, id)) return { ok: false, reason: 'no such document' };
+          const artifact = readDocumentArtifact(workspaceRoot, id);
+          if (!artifact) return { ok: false, reason: 'that attachment has no parsed document yet' };
+          const text = artifact.parts.map((p) => p.text).join('\n\n').slice(0, 60_000);
+          if (!text.trim()) return { ok: false, reason: 'the document had no extractable text' };
+          return { ok: true, text, ref: id };
+        }
+        if (kind === 'track') {
+          // A single Track work item → its title + description + comments as text.
+          const id = String(args.path ?? args.ref ?? '');
+          try {
+            const item = listWorkItems(workspaceRoot, {}).find((w: WorkItem) => w.id === id || w.key === id);
+            if (!item) return { ok: false, reason: 'no such work item' };
+            const body = [
+              `# ${item.key ?? item.id}: ${item.title}`,
+              item.description ? `\n${item.description}` : '',
+              Array.isArray(item.comments) && item.comments.length
+                ? `\n\nComments:\n${item.comments.map((c) => `- ${c.body}`).join('\n')}`
+                : '',
+            ].join('');
+            return { ok: true, text: body.slice(0, 60_000), ref: item.id };
+          } catch {
+            return { ok: false, reason: 'could not read that work item' };
+          }
+        }
+        // doc / decisions / rules — a workspace-relative file, guarded within the root.
+        const rel = String(args.path ?? '');
+        const resolved = path.resolve(workspaceRoot, rel);
+        if (!resolved.startsWith(path.resolve(workspaceRoot) + path.sep)) {
+          return { ok: false, reason: 'path escapes the workspace' };
+        }
+        try {
+          return { ok: true, text: fs.readFileSync(resolved, 'utf8').slice(0, 60_000), ref: rel };
+        } catch {
+          return { ok: false, reason: 'could not read that file' };
+        }
+      },
+      'study:generate': async (args) => {
+        const text = String(args.text ?? '').trim();
+        if (!text) return { ok: false, reason: 'no source text' };
+        const kind = (args.kind as StudySourceKind) ?? 'text';
+        const ref = typeof args.ref === 'string' ? args.ref : undefined;
+        const llm = llmForSession(getActiveAgent().sessionKey);
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+          return { ok: false, reason: 'No model is configured — set one in the model picker to generate cards.' };
+        }
+        const { system, user } = buildGenerationPrompt(text, {
+          count: typeof args.count === 'number' ? args.count : 12,
+          focus: typeof args.focus === 'string' ? args.focus : undefined,
+        });
+        let raw = '';
+        try {
+          const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: user }], [], { effort: 'low' });
+          raw = (resp?.content as string) ?? '';
+        } catch (e) {
+          return { ok: false, reason: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        const provenance = kind === 'atlas'
+          ? { kind: 'atlas' as const, nodeId: 'atlas' }
+          : kind === 'decisions'
+            ? { kind: 'adr' as const, number: (ref ?? '').replace(/[^0-9]/g, '') || '?' }
+            : kind === 'track' && ref
+              ? { kind: 'track' as const, id: ref }
+              : kind === 'meeting' && ref
+                ? { kind: 'meeting' as const, id: ref }
+                : kind === 'document' && ref
+                  ? { kind: 'document' as const, attachmentId: ref }
+                  : ref
+                    ? { kind: 'doc' as const, path: ref } // doc + rules are files
+                    : undefined;
+        return { ok: true, proposals: parseCardProposals(raw, provenance) };
+      },
+      // ADR-049 S6 / D6 — the once-daily reminder, a record in the EXISTING
+      // schedule store (schedules.json). `study:reminder` reads it; `set` toggles
+      // exactly one study reminder record; `due-nudge` tells the desktop whether
+      // to surface the once-per-day, once-per-person nudge (in-app — §4 keeps
+      // study desktop-only, so no OS notification / CLI command is invented).
+      'study:reminder': () => studyReminderState(loadSchedules(workspaceRoot)),
+      'study:reminder:set': (args) => {
+        const enabled = args.enabled === true;
+        const hour = typeof args.hour === 'number' ? args.hour : 9;
+        const existing = findStudyReminder(loadSchedules(workspaceRoot));
+        if (existing) removeSchedule(workspaceRoot, existing.id);
+        if (enabled) {
+          addSchedule(workspaceRoot, buildStudyReminderSchedule(
+            { owner: getActiveAgent().sessionKey, hour },
+            new Date(),
+          ));
+        }
+        return studyReminderState(loadSchedules(workspaceRoot));
+      },
+      'study:due-nudge': () => {
+        const now = new Date();
+        const { enabled, hour } = studyReminderState(loadSchedules(workspaceRoot));
+        const user = studyUser(workspaceRoot);
+        const progress = readStudyProgress(workspaceRoot, user);
+        const dueCount = listStudyDecks(workspaceRoot).reduce((n, d) => {
+          const s = deckStats(d, progress, now);
+          return n + s.dueCards + s.newCards;
+        }, 0);
+        const show = shouldNudge({ enabled, hour, dueCount, lastNudgeDay: progress.lastNudgeDay }, now);
+        if (show) {
+          progress.lastNudgeDay = isoDay(now);
+          progress.updatedAt = now.toISOString();
+          saveStudyProgress(workspaceRoot, progress);
+        }
+        return { show, dueCount, hour, enabled };
+      },
       // DESK-5w — running background tasks for the active workspace. Rows keep
       // parentSessionKey for transcript lookup, but the renderer shows them in
       // Background tasks rather than as chat-list children.
@@ -1265,6 +1595,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // Desktop starter surface for the same suggested-task scanner the CLI
       // uses. Read-only GitHub REST scan; a human starts work by picking one of
       // the ready-to-run prompts in the Tasks panel.
+      // ADR-057 — agent-authored follow-up suggestions (the suggest_task store).
+      'agent-suggestions': () => ({ suggestions: pendingAgentSuggestions(workspaceRoot) }),
+      'agent-suggestion-status': (a) => {
+        const status = a.status === 'started' || a.status === 'dismissed' ? a.status : 'dismissed';
+        const updated = setAgentSuggestionStatus(workspaceRoot, typeof a.id === 'string' ? a.id : '', status, typeof a.sessionKey === 'string' ? a.sessionKey : undefined);
+        return { ok: !!updated };
+      },
       'suggested-tasks': async (a) => scanSuggestedTasks(workspaceRoot, {
         repo: typeof a.repo === 'string' ? a.repo : undefined,
         mentionHandle: getCliKnobs().triggers.mentionHandle,
@@ -2105,6 +2442,50 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // REMOTE-BRAIN Phase 3d — with a remote brain configured (cli.brainUrl),
       // the brain is the source of truth: pull the stored graph (caching it
       // locally) and fall back to the local artifact when absent/unreachable.
+      // ADR-056 D-A5 — the workspace's diagrams: the list with receipt summaries,
+      // one artifact with its cited sources, and the delta against a committed spec.
+      'diagram-list': () => listDiagrams(workspaceRoot).map((e) => {
+        const r = readDiagramReceipt(workspaceRoot, e.slug);
+        return r ? { ...e, checksPassed: r.checks.filter((c) => c.ok).length, checksTotal: r.checks.length, evidence: r.evidence } : e;
+      }),
+      'diagram-read': (a) => {
+        const slug = typeof a.slug === 'string' ? a.slug : '';
+        if (!isDiagramSlug(slug)) return null;
+        const spec = readDiagramSpec(workspaceRoot, slug);
+        const doc = spec ? validateDiagram(spec, { quality: 'standard' }).diagram : undefined;
+        const elements = doc ? (Object.values(doc) as unknown[]).flatMap((val) => (Array.isArray(val) ? val : [])) as Array<{ id?: unknown; label?: unknown; sources?: unknown; evidence?: unknown }> : [];
+        const sources = elements
+          .filter((el) => el && typeof el === 'object' && Array.isArray(el.sources) && el.sources.length)
+          .map((el) => ({ id: String(el.id), label: String(el.label ?? el.id), sources: el.sources as Array<{ path: string; lines?: [number, number]; revision?: string }>, ...(typeof el.evidence === 'string' ? { evidence: el.evidence } : {}) }));
+        return { slug, html: readDiagramHtml(workspaceRoot, slug), receipt: readDiagramReceipt(workspaceRoot, slug), ...(doc ? { kind: doc.kind, title: doc.meta.title } : {}), sources };
+      },
+      // ADR-056 D-B5 — live variants: the panel lists open sessions and accepts
+      // or discards one; all deterministic workspace-file work, no model.
+      'design-variants-list': () => listVariantSessions(workspaceRoot),
+      'design-variants-accept': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        const index = Math.trunc(Number(a.index));
+        try { return { ok: true, ...acceptVariant(workspaceRoot, id, index) }; }
+        catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
+      },
+      'design-variants-discard': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        try { return { ok: true, ...discardVariants(workspaceRoot, id) }; }
+        catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
+      },
+      'diagram-delta': (a) => {
+        const slug = typeof a.slug === 'string' ? a.slug : '';
+        const base = typeof a.base === 'string' && a.base.trim() ? a.base.trim() : 'HEAD';
+        const none = { added: 0, removed: 0, changed: 0, moved: 0, rerouted: 0 };
+        if (!isDiagramSlug(slug)) return { slug, base, identical: true, counts: none, facts: [], html: null, error: 'Invalid slug.' };
+        const headRaw = readDiagramSpec(workspaceRoot, slug);
+        const baseRaw = readDiagramSpecAtRevision(workspaceRoot, base, slug);
+        if (!headRaw || !baseRaw) return { slug, base, identical: true, counts: none, facts: [], html: null, error: !headRaw ? 'No pinned specification.' : `Not committed at ${base} — nothing to compare against.` };
+        const bv = validateDiagram(baseRaw, { quality: 'standard' }), hv = validateDiagram(headRaw, { quality: 'standard' });
+        if (!bv.diagram || !hv.diagram || bv.diagram.kind !== hv.diagram.kind) return { slug, base, identical: true, counts: none, facts: [], html: null, error: 'One side does not validate, or the kinds differ.' };
+        const receipt = compareDiagrams(bv.diagram, hv.diagram);
+        return { slug, base, identical: receipt.identical, counts: receipt.counts, facts: receipt.facts, html: receipt.identical ? null : renderDiagramDelta(bv.diagram, hv.diagram, receipt, { theme: getCliKnobs().diagram.theme }) };
+      },
       'atlas-graph': async () => {
         if (getCliKnobs().brainUrl) {
           const remote = await callBrainAtlas('atlas_get', { workspaceTag: atlasWorkspaceTag(workspaceRoot) });
@@ -2454,6 +2835,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         ].join('-');
         const view = todayView(plannerScope, { date: today, nowMs });
         const drift = summarizeDrift(blocks);
+        const lastSync = readPlanner(plannerScope).lastSync as (PlannerSyncOutcome & { since?: string }) | undefined;
         const itemTitle = new Map(items.map((item) => [item.id, item.title.value]));
         const blockItem = new Map(blocks.map((block) => [block.id, block.itemId]));
         const ageLabel = (ageMs: number): string => {
@@ -2519,6 +2901,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           sync: {
             label: view.syncState,
             pendingCount: pending.length,
+            ...(lastSync?.blocker
+              ? { blocker: { kind: lastSync.blocker.kind, message: lastSync.blocker.message, since: lastSync.since ?? lastSync.at } }
+              : {}),
+            ...(lastSync?.ok ? { lastSyncedAt: lastSync.at } : {}),
             issues: pending.map((detail) => {
               const parentItemId = detail.entity === 'block'
                 ? blockItem.get(detail.targetId)
@@ -2643,41 +3029,57 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const config = loadConfig();
         const plannerScope = desktopPlannerScope(config);
         const brainUrl = getCliKnobs().brainUrl;
+        const at = new Date().toISOString();
+        // Every exit records WHY (ADR-038 D4): the surface reads `lastSync` back
+        // and says it. Before this, the reason lived in a return value the
+        // renderer discarded, and the person saw "waiting to sync" for a server
+        // that was not running.
+        const record = (outcome: PlannerSyncOutcome): number => {
+          const state = readPlanner(plannerScope.storeId);
+          state.lastSync = withSince(outcome, state.lastSync);
+          writePlanner(plannerScope.storeId, state);
+          return state.outbox.operations.length;
+        };
         if (!brainUrl) {
           // Local-only is a supported mode, not a failure (D9). The planner is
           // authoritative until a server is configured.
-          return { pending: readPlanner(plannerScope.storeId).outbox.operations.length, localOnly: true };
+          return { pending: record(localOnlyOutcome(at)), localOnly: true };
         }
-        const account = await resolveBrainRouterAccountContext(config).catch(() => null);
+        let account: Awaited<ReturnType<typeof resolveBrainRouterAccountContext>> | null = null;
+        try {
+          account = await resolveBrainRouterAccountContext(config);
+        } catch (err) {
+          // A server that is not answering is not a person who is not signed in.
+          const outcome = accountFailureOutcome(err, brainUrl, at);
+          return { pending: record(outcome), offline: outcome.blocker?.kind === 'unreachable', error: outcome.blocker?.message };
+        }
         if (!account || !plannerScope.orgId || account.orgId !== plannerScope.orgId) {
+          const outcome = plannerScope.signedIn ? organizationOutcome(at) : signInOutcome(at);
           return {
-            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
+            pending: record(outcome),
             authRequired: !plannerScope.signedIn,
             orgRequired: plannerScope.signedIn,
-            error: plannerScope.signedIn
-              ? 'Choose an active BrainRouter organization before syncing Planner changes.'
-              : 'Sign in before syncing Planner changes with the server.',
+            error: outcome.blocker?.message,
           };
         }
         const token = account?.apiKey
           ?? await secretBridge?.get('account:access-token').catch(() => undefined);
         if (!token) {
-          return {
-            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
-            authRequired: true,
-            error: 'Sign in before syncing Planner changes with the server.',
-          };
+          const outcome = signInOutcome(at);
+          return { pending: record(outcome), authRequired: true, error: outcome.blocker?.message };
         }
         const state = readPlanner(plannerScope.storeId);
+        const baseUrl = account?.baseUrl ?? brainUrl;
         const result = await syncOnce(
           state,
           createPlannerTransport({
-            baseUrl: account?.baseUrl ?? brainUrl,
+            baseUrl,
             token,
             ...(account?.orgId ? { orgId: account.orgId } : {}),
           }),
           Date.now(),
         );
+        state.lastSync = withSince(cycleOutcome(result, baseUrl, at), state.lastSync);
         writePlanner(plannerScope.storeId, state);
         return {
           pending: state.outbox.operations.length,
@@ -2686,6 +3088,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           offline: result.offline,
           conflicted: result.conflicted,
           ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+          ...(result.repairNotice ? { repairNotice: result.repairNotice } : {}),
         };
       }),
 
@@ -5704,4 +6107,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { ok: false, what };
       },
   };
+  for (const key of Object.keys(queries)) {
+    if (!key.startsWith('notes-')) continue;
+    const handler = queries[key]!;
+    queries[key] = ((a) => withNotesStoreLock(() => handler(a))) as QueryHandler;
+  }
+  return queries;
 }

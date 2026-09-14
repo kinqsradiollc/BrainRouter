@@ -7,6 +7,7 @@ import type {
   PlanStepView,
   PlanUpdateView,
   SteeringReceiptEventView,
+  TurnStepView,
 } from '@kinqs/brainrouter-agent-protocol';
 
 /** Composer / header popover ids (which menu is open). */
@@ -61,7 +62,15 @@ export type ChatRow =
   // authors/updates an artifact (artifact_write), with an "Open" affordance that
   // pops the Artifacts panel and focuses this artifact by id.
   | { id: number | string; kind: 'artifact'; artifactId: string; title: string; format: string; artifactKind?: string; version?: number; action: 'created' | 'updated'; ts: number }
-  | { id: number | string; kind: 'tool-group'; items: ToolItem[]; ts: number };
+  | { id: number | string; kind: 'tool-group'; items: ToolItem[]; ts: number }
+  // ADR-059 — the turn path: what the runtime did or observed, in order.
+  | { id: number | string; kind: 'turn-path'; steps: TurnPathStep[]; ts: number };
+
+/** ADR-059 — a step of the path: the runtime's own steps (model / provider /
+ *  guard / end) plus the tool calls interleaved by time. */
+export type TurnPathStep =
+  | TurnStepView
+  | { at: number; type: 'tool'; label: string; detail?: string; ok?: boolean; callId?: string; pending?: boolean };
 
 export interface SessionRow {
   sessionKey: string; firstUserMessage?: string; modifiedAt?: string; turnCount?: number; lastRole?: string;

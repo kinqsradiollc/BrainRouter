@@ -116,7 +116,7 @@ export async function runCompaction(llm: LLMConfig, input: CompactionInput): Pro
 
   const rawEndpoint = llm.endpoint || 'https://api.openai.com/v1';
   const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
-  const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase());
+  const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase(), llm.sessionKey); // ADR-041 A41-9 session-scoped BYOK provider (undefined ⇒ global path)
   // Config-driven key (not env): env is imported into config at load time, so the
   // compaction call reads the same config knob as the main chat path.
   let apiKey = llm.apiKey || '';

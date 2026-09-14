@@ -28,6 +28,7 @@ import { canAccessGithubRepository, isRepoAvailableForManualReview, isRepoLinked
 import { resolveGithubAccountToken } from "../../../connectors/githubAccountToken.js";
 import { createReviewPullRequestLoader } from "./reviewDataLoader.js";
 import { buildManualDeepReviewRequest } from "../../../reviews/deepReviewRequest.js";
+import { listPrDiagrams, extractDiagramSvg, diagramShareCard } from "../../../reviews/prDiagrams.js";
 
 export const reviewsRouter = Router();
 reviewsRouter.use(requireAnyAuth);
@@ -635,6 +636,47 @@ reviewsRouter.get("/prs/:owner/:repo/:number/activity", requirePermission("revie
   if (!validRepo(repo) || !Number.isInteger(number) || number <= 0) { sendError(res, 400, "Invalid pull request"); return; }
   const jobs = (await (memoryEngine.store as Store).listReviewJobsForPr?.(req.orgId!, repo, number, 50)) ?? [];
   res.json({ reviews: jobs.map(reviewRecord), canRun: await canRun(req) });
+});
+
+// ADR-056 A7 — a pull request's diagrams, read at its head sha, for the
+// read-only viewer; and a 1200×630 share image (SVG) for one of them.
+async function prHeadSha(auth: GithubReviewAuthorization, repo: string, number: number): Promise<string | null> {
+  const pull = await fetch(`${auth.apiBase}/repos/${repo}/pulls/${number}`, { headers: ghHeaders(auth.token), signal: AbortSignal.timeout(5_000) });
+  if (!pull.ok) return null;
+  const pr = await pull.json() as { head?: { sha?: string } };
+  return typeof pr.head?.sha === "string" && pr.head.sha ? pr.head.sha : null;
+}
+
+reviewsRouter.get("/prs/:owner/:repo/:number/diagrams", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
+  const repo = `${req.params.owner}/${req.params.repo}`;
+  const number = Number(req.params.number);
+  if (!validRepo(repo) || !Number.isInteger(number)) { sendError(res, 400, "Invalid pull request"); return; }
+  const auth = await githubReviewAuthorization(req.orgId!, req.userId!, repo);
+  if (!auth) { sendError(res, 404, "Pull request not found"); return; }
+  try {
+    const headSha = await prHeadSha(auth, repo, number);
+    if (!headSha) { sendError(res, 404, "Pull request not found"); return; }
+    const diagrams = await listPrDiagrams({ fetchImpl: fetch, apiBase: auth.apiBase, repo, ref: headSha, headers: ghHeaders(auth.token) });
+    res.json({ headSha, diagrams: diagrams.map((d) => ({ slug: d.slug, title: d.title, kind: d.kind, receipt: d.receipt, html: d.html })) });
+  } catch { sendError(res, 502, "Unable to load diagrams"); }
+});
+
+reviewsRouter.get("/prs/:owner/:repo/:number/diagrams/:slug/share", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
+  const repo = `${req.params.owner}/${req.params.repo}`;
+  const number = Number(req.params.number);
+  const slug = String(req.params.slug ?? "");
+  if (!validRepo(repo) || !Number.isInteger(number) || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(slug)) { sendError(res, 400, "Invalid diagram"); return; }
+  const auth = await githubReviewAuthorization(req.orgId!, req.userId!, repo);
+  if (!auth) { sendError(res, 404, "Pull request not found"); return; }
+  try {
+    const headSha = await prHeadSha(auth, repo, number);
+    if (!headSha) { sendError(res, 404, "Pull request not found"); return; }
+    const diagrams = await listPrDiagrams({ fetchImpl: fetch, apiBase: auth.apiBase, repo, ref: headSha, headers: ghHeaders(auth.token) });
+    const diagram = diagrams.find((d) => d.slug === slug);
+    const svg = diagram ? extractDiagramSvg(diagram.html) : null;
+    if (!diagram || !svg) { sendError(res, 404, "Diagram not found"); return; }
+    res.json({ slug, filename: `${slug}-share.svg`, contentType: "image/svg+xml", svg: diagramShareCard({ title: diagram.title, kind: diagram.kind, repo, number, svg, receiptSha256: diagram.receipt?.artifactSha256 ?? null }) });
+  } catch { sendError(res, 502, "Unable to build the share image"); }
 });
 
 /** GET /prs/:owner/:repo/:number — PR metadata, check-runs and both lens results. */

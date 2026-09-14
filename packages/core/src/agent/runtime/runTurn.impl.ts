@@ -100,6 +100,7 @@ import {
   repairOrphanToolResults,
 } from './toolBatchExecutionPhase.js';
 import { frameToolResultForModel } from './toolResultTrustBoundary.js';
+import { browserScreenshotImageHandoff, type BrowserVisionImage } from '../browser/browserVision.js';
 import {
   finalizeTurnPhase,
   resolveTurnTerminationReason,
@@ -109,11 +110,13 @@ import {
   createProfileStageControllerForTurn,
   describeProfileStageTool,
 } from './profileStageRuntime.js';
+import { TURN_PATH_TRANSCRIPT_NAME, emitTurnStep, renderTurnPath, turnEndLabel } from './turnPath.js';
 import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
 import { beginToolProvenanceBatch, noteToolProvenance } from './contentProvenance.js';
 import { getLearnedItem } from '../../learning/index.js';
 import { learnedTenantForAgent } from './learningPhase.js';
 import { resolveMcpCatalogTool } from '../../mcp/discovery/discovery.js';
+import { designHookAfterWrite } from '../../design/hook.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -131,6 +134,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    this.turnWrittenFiles.clear();
     // CC-hooks parity — drain any additionalContext a prior `stop` /
     // `subagent-stop` hook (or a child's subagent-stop) asked to inject back
     // into the model on THIS turn. Read-and-clear so it fires exactly once.
@@ -786,6 +790,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const fanOutHinted = preparedContext.fanOutHinted;
 
     let loopCount = 0;
+    this.turnPathSteps = []; // ADR-059 — a fresh path per turn
     // ADAPTIVE TOOL BUDGET — the agent should be allowed to FINISH the task,
     // weak model or strong. `maxToolLoops` is NOT a task limiter, it's a
     // checkpoint WINDOW: when the agent has made a full window of tool calls
@@ -1312,7 +1317,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         this.sessionKey,
       );
       const provenanceBatch = beginToolProvenanceBatch(this.sessionProvenance);
-      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any; imageMsg?: any }> => {
         this.lastTurnToolCalls += 1;
         const delegationLaunch = registryDelegationLaunchTool(name);
         if (executionIntentBatchViolation) {
@@ -1463,7 +1468,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             const p = typeof args?.path === 'string' ? args.path
               : typeof args?.file === 'string' ? args.file
               : typeof args?.filePath === 'string' ? args.filePath : '';
-            if (p) this.filesWrittenThisTurn.push(p);
+            if (p) {
+              this.filesWrittenThisTurn.push(p);
+              // ADR-056 D-B2 — immediate design check of the one UI file just written.
+              designHookAfterWrite(this, p);
+            }
           }
         } else if (verificationSignal === 'verified') {
           this.verifiedThisTurn = true;
@@ -1628,6 +1637,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.assertInheritedExecutionAuthorityCurrent();
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
+          // ADR-048 S5 — record written paths for the turn-end blast-radius tap.
+          if (name === 'write_file' || name === 'edit_file' || name === 'notebook_edit') {
+            const written = (args as Record<string, unknown>).path;
+            if (typeof written === 'string' && written.trim()) this.turnWrittenFiles.add(written.trim());
+          } else if (name === 'apply_patch') {
+            const patch = (args as Record<string, unknown>).patch;
+            if (typeof patch === 'string') {
+              for (const m of patch.matchAll(/^\*\*\* (?:Update|Add) File: (.+)$/gm)) {
+                this.turnWrittenFiles.add(m[1]!.trim());
+              }
+            }
+          }
           // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
           // the breakdown can show per-server call counts. `mcp_<server>_<tool>`
           // → serverId; non-MCP tools return undefined and aren't counted.
@@ -1900,6 +1921,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // Browser observations contain page-controlled text. Frame them before
         // compaction, result handoff, and transcript persistence so restored
         // sessions keep the same trust boundary as the live turn.
+        // ADR-055 P1 — attach a browser screenshot the model can SEE. Read from
+        // the (pre-trust-frame, pre-clamp) result path; advisory, never blocks.
+        let browserImageMsg: { role: 'user'; content: string; images: BrowserVisionImage[] } | undefined;
+        if (!this.silent && name === 'browser_screenshot' && getCliKnobs().browser.vision !== 'off') {
+          const shot = browserScreenshotImageHandoff(name, resultText, this.workspaceRoot);
+          if (shot) browserImageMsg = { role: 'user', content: `[Browser screenshot for tool_call ${tc.id} — attached as an image below.]`, images: [shot] };
+        }
         const trustFrame = frameToolResultForModel(name, resultText);
         resultText = trustFrame.content;
 
@@ -1953,7 +1981,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // /transcript. Doing the push here would let parallel batches land
         // in finish order, which the LLM's next turn would see as a
         // non-deterministic trace.
-        return { toolMsg, fullResultText: resultText, systemMsg };
+        return { toolMsg, fullResultText: resultText, systemMsg, imageMsg: browserImageMsg };
       };
 
       // Partition the tool_calls into runs of consecutive parallel-safe
@@ -1990,6 +2018,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.chatHistory.push(systemMsg);
           this.recordTranscript(systemMsg);
         },
+        publishImageMessage: (imageMsg) => {
+          // Full base64 rides chatHistory (like a pasted image); the transcript
+          // keeps only a light placeholder so the on-disk log stays readable.
+          this.chatHistory.push(imageMsg as never);
+          const content = (imageMsg as { content?: unknown })?.content;
+          this.recordTranscript({ role: 'user', content: typeof content === 'string' ? content : '[browser screenshot]' } as never);
+        },
       });
 
       repairOrphanToolResults({
@@ -2007,6 +2042,20 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
 
     assertReviewedTurnCurrent();
+    // ADR-059 — close the path with why the turn ended, then keep it in the
+    // transcript as a record the model never sees (loadHistory replays only
+    // user/assistant/tool roles) so a reopened session shows the same path.
+    emitTurnStep(this, callbacks, {
+      type: 'end',
+      label: turnEndLabel({ exitedCleanly, answered: finalAnswer.trim().length > 0, loopCount, maxLoops }),
+      ok: exitedCleanly,
+    });
+    this.recordTranscript({
+      role: 'system',
+      name: TURN_PATH_TRANSCRIPT_NAME,
+      content: renderTurnPath(this.turnPathSteps),
+      steps: [...this.turnPathSteps],
+    });
     return await finalizeTurnPhase(this, {
       prompt,
       answer: finalAnswer,

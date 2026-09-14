@@ -80,7 +80,7 @@ describe("fetchCodeqlSourceToSinkPaths", () => {
       throw new Error(`unexpected url ${url}`);
     });
 
-    const paths = await fetchCodeqlSourceToSinkPaths({
+    const result = await fetchCodeqlSourceToSinkPaths({
       apiBase: "https://api.github.com",
       repo: "o/r",
       ref: "refs/heads/main",
@@ -88,16 +88,35 @@ describe("fetchCodeqlSourceToSinkPaths", () => {
       fetchImpl,
     });
 
-    expect(paths).toHaveLength(1);
-    expect(paths[0].source.path).toBe("a.ts");
-    expect(paths[0].sink.path).toBe("b.ts");
+    expect(result.status).toBe("analyzed");
+    if (result.status !== "analyzed") throw new Error("expected analyzed");
+    expect(result.paths).toHaveLength(1);
+    expect(result.paths[0].source.path).toBe("a.ts");
+    expect(result.paths[0].sink.path).toBe("b.ts");
     // the analyses list uses the JSON accept; the SARIF fetch uses the sarif accept.
     expect(calls[0].url).toContain("/code-scanning/analyses?ref=refs%2Fheads%2Fmain");
     expect(calls[1].url).toContain("/code-scanning/analyses/29");
     expect(calls[1].accept).toBe("application/sarif+json");
   });
 
-  it("returns [] when the analyses list is non-2xx (code scanning unavailable)", async () => {
+  it("reports an EMPTY analyzed result (clean) apart from unavailable", async () => {
+    // Analysis exists but carries no taint paths — this is a genuine clean run,
+    // NOT 'not analyzed', so the caller must not attach a coverage limitation.
+    const fetchImpl: SarifFetchImpl = async (url) =>
+      url.includes("analyses?")
+        ? ok([{ id: 9, category: "/language:javascript-typescript" }])
+        : ok({ runs: [{ results: [] }] });
+    const result = await fetchCodeqlSourceToSinkPaths({
+      apiBase: "https://api.github.com",
+      repo: "o/r",
+      ref: "sha",
+      token: "t",
+      fetchImpl,
+    });
+    expect(result).toEqual({ status: "analyzed", paths: [] });
+  });
+
+  it("is unavailable (not clean) when the analyses list is non-2xx", async () => {
     const fetchImpl: SarifFetchImpl = async () => notOk(404);
     expect(
       await fetchCodeqlSourceToSinkPaths({
@@ -107,10 +126,23 @@ describe("fetchCodeqlSourceToSinkPaths", () => {
         token: "t",
         fetchImpl,
       }),
-    ).toEqual([]);
+    ).toEqual({ status: "unavailable", reasonCode: "ANALYSES_LIST_HTTP_404" });
   });
 
-  it("returns [] when no analysis matches the language", async () => {
+  it("is unavailable when the analyses list is not an array", async () => {
+    const fetchImpl: SarifFetchImpl = async () => ok({ message: "Not Found" });
+    expect(
+      await fetchCodeqlSourceToSinkPaths({
+        apiBase: "https://api.github.com",
+        repo: "o/r",
+        ref: "sha",
+        token: "t",
+        fetchImpl,
+      }),
+    ).toEqual({ status: "unavailable", reasonCode: "ANALYSES_LIST_MALFORMED" });
+  });
+
+  it("is unavailable when no analysis matches the language", async () => {
     const fetchImpl: SarifFetchImpl = async () => ok([{ id: 5, category: "/language:python" }]);
     expect(
       await fetchCodeqlSourceToSinkPaths({
@@ -120,10 +152,10 @@ describe("fetchCodeqlSourceToSinkPaths", () => {
         token: "t",
         fetchImpl,
       }),
-    ).toEqual([]);
+    ).toEqual({ status: "unavailable", reasonCode: "NO_MATCHING_ANALYSIS" });
   });
 
-  it("returns [] when the SARIF fetch is non-2xx", async () => {
+  it("is unavailable when the SARIF fetch is non-2xx", async () => {
     const fetchImpl: SarifFetchImpl = async (url) =>
       url.includes("analyses?")
         ? ok([{ id: 7, category: "/language:javascript-typescript" }])
@@ -136,6 +168,6 @@ describe("fetchCodeqlSourceToSinkPaths", () => {
         token: "t",
         fetchImpl,
       }),
-    ).toEqual([]);
+    ).toEqual({ status: "unavailable", reasonCode: "SARIF_FETCH_HTTP_500" });
   });
 });

@@ -9,6 +9,7 @@ import { DiffView } from '../diff.js';
 import { Button } from '../../components/primitives/Button.js';
 import { type WorktreeEntry } from '../../lib/worktree/worktreeParser.js';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { usePanelPolling } from '../../lib/panels/usePanelPolling.js';
 
 type FanoutCandidateView = {
   id: string; adapterId: string; status: string; worktreeRoot?: string; terminalId?: string;
@@ -28,13 +29,14 @@ type SshHostView = {
   workspaceRoot: string; hostKeySha256: string;
 };
 
-export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, onDiff }: {
+export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, onDiff, active = true }: {
   worktrees: WorktreeEntry[];
   diffs: Record<string, string>;
   onCreate: (name: string, ref: string) => void;
   onRemove: (path: string) => void;
   onOpen: (path: string) => void;
   onDiff: (path: string) => void;
+  active?: boolean;
 }): React.ReactElement {
   const [name, setName] = useState('');
   const [ref, setRef] = useState('');
@@ -76,8 +78,12 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
     } catch (error) { setFanoutError((error as Error).message || 'Fan-out refresh failed.'); }
   }, []);
 
-  const refreshRelay = React.useCallback(() => {
-    void bridgeQuery<RelayStatusView>('mobile-relay-status', {}, 5_000).then(setRelay).catch(() => {});
+  const refreshRelay = React.useCallback(async (): Promise<void> => {
+    try {
+      setRelay(await bridgeQuery<RelayStatusView>('mobile-relay-status', {}, 5_000));
+    } catch {
+      // Relay status is advisory; retain the last known state on a transient failure.
+    }
   }, []);
 
   const refreshSshHosts = React.useCallback(() => {
@@ -101,17 +107,16 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
   }, []);
 
   React.useEffect(() => {
+    if (!active) return;
     refreshFanoutAdapters();
-    void refreshFanout();
-    refreshRelay();
     refreshSshHosts();
     // A persisted open panel can mount while the Desktop host is still
     // registering queries. Retry once instead of leaving an empty adapter list.
     const adapterRetry = window.setTimeout(refreshFanoutAdapters, 1_500);
-    const timer = window.setInterval(() => void refreshFanout(), 2_000);
-    const relayTimer = window.setInterval(refreshRelay, 2_000);
-    return () => { window.clearTimeout(adapterRetry); window.clearInterval(timer); window.clearInterval(relayTimer); };
-  }, [refreshFanout, refreshFanoutAdapters, refreshRelay, refreshSshHosts]);
+    return () => window.clearTimeout(adapterRetry);
+  }, [active, refreshFanoutAdapters, refreshSshHosts]);
+  usePanelPolling({ active, intervalMs: 2_000, refresh: refreshFanout });
+  usePanelPolling({ active, intervalMs: 2_000, refresh: refreshRelay });
 
   const discoverSshKey = async (): Promise<void> => {
     setSshBusy(true); setSshError('');

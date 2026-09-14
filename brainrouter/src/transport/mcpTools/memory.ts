@@ -21,6 +21,7 @@ import {
   handleMemoryCaptureAnnotation,
   handleMemoryRecordLesson,
   handleMemoryCreateRequirement,
+  handleMemoryIngestRepo,
 } from '../../tools/capture/index.js';
 import {
   handleMemoryGovernanceTool,
@@ -77,6 +78,8 @@ import { registerMcpTool } from './registry.js';
 // ── (args, { defaultUserId, defaultOrgId }) ──────────────────────────────────
 registerMcpTool('memory_capture_turn', (ctx) =>
   handleMemoryCaptureTurn(ctx.args, { defaultUserId: ctx.host.defaultUserId, defaultOrgId: ctx.host.defaultOrgId }));
+registerMcpTool('memory_ingest_repo', (ctx) =>
+  handleMemoryIngestRepo(ctx.args, { defaultUserId: ctx.host.defaultUserId }));
 registerMcpTool('memory_recall', (ctx) =>
   handleMemoryRecall(ctx.args, { defaultUserId: ctx.host.defaultUserId, defaultOrgId: ctx.host.defaultOrgId }));
 registerMcpTool('memory_search', (ctx) =>

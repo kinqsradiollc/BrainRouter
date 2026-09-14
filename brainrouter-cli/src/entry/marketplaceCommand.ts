@@ -64,7 +64,7 @@ export function registerMarketplaceCommand(program: Command): void {
         }
 
         case 'update': {
-          const results = plugin.updateMarketplaces(name ? String(name) : undefined);
+          const results = await plugin.updateMarketplaces(name ? String(name) : undefined);
           if (options.json) { process.stdout.write(JSON.stringify(results) + '\n'); return; }
           if (results.length === 0) { console.log(chalk.gray('No marketplaces to update.')); return; }
           for (const r of results) {

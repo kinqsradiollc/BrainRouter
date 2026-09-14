@@ -138,7 +138,7 @@ export const ADR039_MUST_REPORT: readonly ReplayCorpusDefect[] = [
     source: "raw admin-supplied baseUrl reaching the LM Studio /models full read (guard on three paths of four)",
     fixedBy: "#1414",
     fixedStaysFixedCanonical: true,
-    note: "Routed through fetchUpstreamWithPolicy (DNS-pinned upstream policy). §6's canonical fixed-stays-fixed sink.",
+    note: "Routed through fetchUpstreamWithPolicy (DNS-pinned upstream policy). §6's canonical fixed-stays-fixed sink. The D4 barrier model must recognize the guard on the SPECIFIC tainted path — the fix guarded three of four paths, and a barrier modeled at file granularity would suppress the fourth-path bug the engine must still catch. A barrier that does not dominate THIS flow is not a barrier for it (ADR-039 D4); see adr039BarrierPack.ts.",
   },
   {
     id: "redos-file-path-hint",

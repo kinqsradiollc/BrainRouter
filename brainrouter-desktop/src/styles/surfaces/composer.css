@@ -6,15 +6,15 @@
  */
 
 html[data-visual-system="v2"] .composer {
-  padding-block: 8px 14px;
+  padding-block: 10px 16px;
 }
 
 html[data-visual-system="v2"] .composer .box,
 html[data-visual-system="v2"] .home-mode .composer .box {
-  padding: 9px 10px 7px;
+  padding: 10px 12px 8px;
   background: var(--input);
   border-color: var(--shell-divider-strong);
-  border-radius: 12px;
+  border-radius: var(--r-lg);
   box-shadow: none;
 }
 
@@ -95,11 +95,12 @@ html[data-visual-system="v2"] .input-attach:hover {
 }
 
 html[data-visual-system="v2"] .input-send {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   color: var(--accent-fg);
   background: var(--accent);
   border: 0;
+  border-radius: 50%;
   box-shadow: none;
 }
 
@@ -124,12 +125,12 @@ html[data-visual-system="v2"] .input-stop:hover {
 }
 
 html[data-visual-system="v2"] .delivery-mode-btn {
-  height: 26px;
+  height: 28px;
   padding-inline: 8px;
   color: var(--shell-text-secondary);
   background: var(--shell-panel);
+  border-radius: 999px;
   border-color: var(--shell-divider);
-  border-radius: var(--shell-control-radius);
 }
 
 html[data-visual-system="v2"] .delivery-mode-btn:hover,

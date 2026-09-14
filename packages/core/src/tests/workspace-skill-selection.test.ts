@@ -57,7 +57,8 @@ test('W4b engineering keeps starter skills bundled and activates frontend only p
   assert.equal(frontend.skillRoots.length, 1);
   assert.ok(frontend.ambientSkillIds.includes('a11y-skill'));
   assert.ok(frontend.ambientSkillIds.includes('browser-testing-skill'));
-  assert.ok(frontend.ambientSkillIds.includes('taste-skill'));
+  assert.ok(frontend.ambientSkillIds.includes('hallmark'), 'the one visual-craft skill rides the frontend capability');
+  assert.equal(frontend.ambientSkillIds.includes('taste-skill'), false, 'ADR-056 D-B4: a world, not an ambient skill');
 });
 
 test('W4b backend skills activate only for the live task capability', () => {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { memoryEngine } from "../../memory/engine.js";
-import { workspaceTagFromPath, projectTagFromName } from "@kinqs/brainrouter-types";
+import { projectTagFromName } from "@kinqs/brainrouter-types";
+import { repoScopedWorkspaceTag } from "../../memory/repoScope.js";
 import { redactSensitiveMemoryText } from "../../memory/util/redaction.js";
 import {
   MEMORY_CAPTURE_MAX_TAGS,
@@ -66,6 +67,10 @@ export const memoryCaptureTurnToolSchema = {
         type: "string",
         description: "Absolute path of the workspace this turn belongs to — hashed to a stable workspace_tag for per-workspace scoping."
       },
+      repoTag: {
+        type: "string",
+        description: "ADR-015 P1c — the repo-identity tag (16-hex hash of the normalized git remote, from git-info). When present it scopes this turn by REPO instead of the folder path, so recall survives a moved/renamed folder or a second clone. Omit for a non-git workspace to fall back to workspaceRoot's path hash. Send the same repoTag to memory_recall to read it back."
+      },
       projectName: {
         type: "string",
         description: "Project name (from .brainrouter/project.json) — hashed to a stable project_tag."
@@ -93,6 +98,7 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
     skillHints: z.string().optional(),
     memoryTags: memoryTagsSchema.optional(),
     workspaceRoot: z.string().optional(),
+    repoTag: z.string().trim().max(64).optional(),
     projectName: z.string().optional()
   }).parse(args);
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
@@ -114,7 +120,9 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
       // authenticated MCP connection (defaultOrgId), never a client argument,
       // so a caller can't write into another org's memory (mirrors memory_recall).
       orgId: options?.defaultOrgId ?? null,
-      workspaceTag: workspaceTagFromPath(params.workspaceRoot),
+      // ADR-015 P1c — scope by repo identity when the client knows its git remote
+      // (survives a moved/renamed folder), else the workspace path hash.
+      workspaceTag: repoScopedWorkspaceTag(params.repoTag, params.workspaceRoot),
       projectTag: projectTagFromName(params.projectName)
     });
 

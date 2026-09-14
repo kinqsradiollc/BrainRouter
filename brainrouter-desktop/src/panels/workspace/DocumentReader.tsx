@@ -18,6 +18,7 @@
  * before it draws anything. Q2's argument does not stop at the parser.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { requestStudyGenerate } from '../../study/studyHandoff.js';
 
 /** The outline the host returns — ADR-030's `documentOutlineState`, flattened. */
 export interface DocumentOutline {
@@ -129,6 +130,14 @@ export function DocumentReader({ attachmentId }: { attachmentId: string }): Reac
         {/* D5: the document becomes a page of blocks you can edit and cite. */}
         <button className="pc-tag" disabled={importing} onClick={importAsNote}>
           {importing ? 'Importing…' : 'Import as note'}
+        </button>
+        {/* ADR-049 — study this reading: hand it to Study's generate tray. */}
+        <button
+          className="pc-tag"
+          title="Draft spaced-repetition flashcards from this document (you review every one)"
+          onClick={() => requestStudyGenerate({ kind: 'document', ref: attachmentId, name: outline.name })}
+        >
+          Make flashcards
         </button>
       </div>
       {imported ? <div className="sched-note">{imported}</div> : null}

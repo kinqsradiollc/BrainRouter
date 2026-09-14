@@ -33,6 +33,24 @@ import {
 import type { PlannerProvenance } from '@kinqs/brainrouter-types/planner';
 import { carryOver, type TimeBlock } from './timetable.js';
 
+/**
+ * Why the last sync did or did not happen. Persisted with the state so the
+ * surface can say it — "21 changes waiting" with no reason is the ADR-038 D4
+ * failure: a status the product knows and the person cannot act on.
+ */
+export type PlannerSyncBlockerKind = 'local-only' | 'sign-in' | 'organization' | 'unreachable' | 'error';
+export interface PlannerSyncOutcome {
+  /** When this outcome was recorded (ISO). */
+  at: string;
+  /** True when a cycle reached the server, whatever it pushed. */
+  ok: boolean;
+  blocker?: { kind: PlannerSyncBlockerKind; message: string };
+  pulled?: number;
+  pushed?: number;
+  /** Shed / repair / clock notices worth a line in the sync detail. */
+  notice?: string;
+}
+
 export interface PlannerState {
   schemaVersion: 1;
   /** This device's stable id, persisted so it cannot drift. */
@@ -44,6 +62,8 @@ export interface PlannerState {
   items: Record<string, PlannerItem>;
   blocks: Record<string, TimeBlock>;
   outbox: OutboxState;
+  /** The last sync attempt's outcome, for the surface (see `PlannerSyncOutcome`). */
+  lastSync?: PlannerSyncOutcome;
 }
 
 /**

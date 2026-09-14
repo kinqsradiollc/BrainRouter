@@ -93,6 +93,13 @@ services:
       # Pending — the point of this line is that it now CAN be.
       BRAINROUTER_STT_STREAM_URL: ${BRAINROUTER_STT_STREAM_URL:-}
       BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
+      # ADR-039 SSRF guard: the memory pipeline (embeddings / rerank / cognition)
+      # refuses a non-HTTPS upstream unless its EXACT origin is allowlisted. A dev
+      # stack reaches host-run local models (LM Studio :1234, Ollama :11434, a
+      # local reranker :8000) over http://host.docker.internal — so allow those
+      # origins here. Override with your own exact origins if they differ; keep it
+      # EMPTY on any non-loopback deployment (production uses HTTPS providers).
+      BRAINROUTER_UPSTREAM_ALLOWLIST: ${BRAINROUTER_UPSTREAM_ALLOWLIST:-http://host.docker.internal:1234,http://host.docker.internal:11434,http://host.docker.internal:8000}
     volumes:
       - ../../:/repo
       - brain_node_modules:/repo/node_modules

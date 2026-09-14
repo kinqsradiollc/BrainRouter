@@ -34,6 +34,9 @@ export interface TranscriptEntry {
   /** Authenticated sender metadata captured by the receiving host. */
   provenance?: Record<string, unknown>;
   isError?: boolean;
+  /** ADR-059 — the structured turn path on a `name: 'turn-path'` system record
+   *  (`content` carries the rendered text for exports and search). */
+  steps?: unknown[];
   timestamp: string;
 }
 

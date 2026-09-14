@@ -40,6 +40,16 @@ export interface SuggestedTasksViewResult {
   warnings: string[];
 }
 
+/** ADR-057 — an agent-authored follow-up suggestion (the suggest_task store). */
+export interface AgentSuggestionView {
+  id: string;
+  title: string;
+  suggestedPrompt: string;
+  reason?: string;
+  worktree?: boolean;
+  createdAt: number;
+}
+
 const TAB_LABEL: Record<DashTab, string> = { running: 'Running', finished: 'Finished', failed: 'Failed/Stale', workflows: 'Workflows', agents: 'Agents', bash: 'Bash' };
 
 const SUGGESTED_KIND_TAGS: Record<string, string> = {
@@ -105,12 +115,75 @@ export function TasksPanel({ scope, setScope, tab, setTab, boards, busy, onRefre
   }, []);
   React.useEffect(() => { refreshSuggested(); }, [refreshSuggested]);
 
+  // ADR-057 — agent-authored follow-ups the current or a past session flagged.
+  const [agentSuggestions, setAgentSuggestions] = React.useState<AgentSuggestionView[]>([]);
+  const refreshAgentSuggestions = React.useCallback(() => {
+    void bridgeQuery<{ suggestions: AgentSuggestionView[] }>('agent-suggestions', {}, 8_000)
+      .then((result) => setAgentSuggestions(Array.isArray(result?.suggestions) ? result.suggestions : []))
+      .catch(() => setAgentSuggestions([]));
+  }, []);
+  React.useEffect(() => {
+    refreshAgentSuggestions();
+    const timer = window.setInterval(refreshAgentSuggestions, 5_000);
+    return () => window.clearInterval(timer);
+  }, [refreshAgentSuggestions]);
+  const resolveAgentSuggestion = React.useCallback((id: string, status: 'started' | 'dismissed') => {
+    setAgentSuggestions((list) => list.filter((s) => s.id !== id));
+    void bridgeQuery('agent-suggestion-status', { id, status }, 8_000).catch(() => undefined).finally(refreshAgentSuggestions);
+  }, [refreshAgentSuggestions]);
+
   const counts = countByTab(allTasks(boards));
   const shown = visibleDashboardBoards(boards, tab, scope);
   const totalShown = shown.reduce((n, b) => n + b.tasks.length, 0);
 
   return (
     <div className="scroll dash-panel">
+      {/* ADR-057 — agent suggestions: out-of-scope follow-ups a session flagged. */}
+      {agentSuggestions.length ? (
+        <>
+          <div className="tasks-section">
+            <span>Suggestions from the agent</span>
+            <button className="tasks-clear" type="button" onClick={refreshAgentSuggestions}>Refresh</button>
+          </div>
+          {agentSuggestions.slice(0, 10).map((sug) => {
+            const rowKey = `agent:${sug.id}`;
+            const start = (mode: StartMode, branch?: string): void => {
+              setStartMenu(null);
+              onStartSuggested?.(sug.suggestedPrompt, { mode, branch });
+              resolveAgentSuggestion(sug.id, 'started');
+            };
+            return (
+              <div key={rowKey} className="task-row suggested-task-row agent-suggestion-row">
+                <span className="task-kind agent-suggestion-kind" title="Suggested by the agent">agent</span>
+                <span className="file-name suggested-task-title" title={sug.reason || sug.title}>
+                  {sug.title}{sug.reason ? <span className="agent-suggestion-reason"> — {sug.reason}</span> : null}
+                </span>
+                {sug.worktree ? <span className="agent-suggestion-hint" title="The agent thinks this wants its own branch">worktree</span> : null}
+                <button className="task-link agent-suggestion-dismiss" type="button" title="Dismiss this suggestion" onClick={() => resolveAgentSuggestion(sug.id, 'dismissed')}>Dismiss</button>
+                <div className="start-wrap" onBlur={() => window.setTimeout(() => setStartMenu((k) => (k === rowKey ? null : k)), 120)}>
+                  <button className="task-stop task-start" type="button" disabled={!onStartSuggested} onClick={() => setStartMenu((k) => (k === rowKey ? null : rowKey))} title="Choose how to start this follow-up">Start ▾</button>
+                  {startMenu === rowKey ? (
+                    <div className="start-menu">
+                      <button type="button" className="start-item" onMouseDown={(e) => e.preventDefault()} onClick={() => start('here')}>Start here <span className="start-hint">draft into this chat</span></button>
+                      <button type="button" className="start-item" onMouseDown={(e) => e.preventDefault()} onClick={() => start('session')}>New session <span className="start-hint">a fresh chat</span></button>
+                      <button type="button" className="start-item" onMouseDown={(e) => e.preventDefault()} onClick={() => start('worktree')}>New worktree <span className="start-hint">isolated branch</span></button>
+                      {branches.length ? (
+                        <>
+                          <div className="start-sep">Worktree from branch…</div>
+                          {branches.slice(0, 8).map((b) => (
+                            <button key={b} type="button" className="start-item start-branch" onMouseDown={(e) => e.preventDefault()} onClick={() => start('worktree', b)}>{b}</button>
+                          ))}
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      ) : null}
+
       {/* 1. Suggested starters — repo work the agent could pick up. */}
       <div className="tasks-section">
         <span>Suggested starters{suggested?.repo ? ` · ${suggested.repo}` : ''}</span>

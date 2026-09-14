@@ -36,3 +36,5 @@ export * from './ciNudge.js';
 // merge conflicts / review threads awaiting the author / labeled issues →
 // one-click starters with a ready-to-run prompt).
 export * from './suggestedTasks.js';
+// ADR-057 — agent-authored follow-up suggestions (the suggest_task store).
+export * from './suggestionStore.js';

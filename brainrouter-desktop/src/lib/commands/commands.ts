@@ -14,7 +14,7 @@ export type SettingsSection =
   | 'account'
   | 'general' | 'models' | 'permissions' | 'memory' | 'hooks' | 'workflow-automation'
   | 'runtime' | 'automations' | 'reviews'
-  | 'extensions' | 'connectors' | 'tools' | 'data-connectors' | 'marketplace' | 'advanced' | 'observability' | 'appearance' | 'commands';
+  | 'extensions' | 'connectors' | 'tools' | 'data-connectors' | 'repositories' | 'marketplace' | 'advanced' | 'observability' | 'appearance' | 'commands';
 
 export interface CmdCtx {
   send(command: unknown): void;

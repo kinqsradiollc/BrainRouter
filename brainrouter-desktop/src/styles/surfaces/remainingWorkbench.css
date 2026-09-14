@@ -686,3 +686,442 @@ html[data-visual-system="v2"] :is(
     forced-color-adjust: auto;
   }
 }
+
+/* ADR-056 D-A5 — Diagrams panel. A compact library above, the opened diagram
+   below: title, receipt strip, segmented view switch with exports, the sealed
+   frame taking the remaining height, then cited sources. Semantic tokens only;
+   flat surfaces; no motion beyond the shared row transition. */
+html[data-visual-system="v2"] .dgp {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+}
+
+html[data-visual-system="v2"] .dgp-library {
+  flex: 0 0 auto;
+  max-height: 38%;
+  overflow: auto;
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--shell-divider-strong);
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .dgp-library-head,
+html[data-visual-system="v2"] .dgp-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-library-count {
+  padding: 0 6px;
+  border: 1px solid var(--shell-divider-strong);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .dgp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 2px;
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--shell-text);
+  border: 1px solid transparent !important;
+  background: transparent !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .dgp-row.active {
+  background: var(--shell-interaction-selected) !important;
+  border-color: var(--shell-divider-strong) !important;
+}
+
+html[data-visual-system="v2"] .dgp-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+html[data-visual-system="v2"] .dgp-row-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-visual-system="v2"] .dgp-row-slug {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--shell-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-visual-system="v2"] .dgp-row-meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+html[data-visual-system="v2"] .dgp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--shell-divider-strong);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--shell-text-secondary);
+  background: var(--shell-interaction-subtle);
+  white-space: nowrap;
+}
+
+html[data-visual-system="v2"] .dgp-pill-ok {
+  color: var(--shell-text);
+  border-color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-pill-warn {
+  color: var(--shell-text);
+  border-style: dashed;
+}
+
+html[data-visual-system="v2"] .dgp-pill-muted {
+  color: var(--shell-text-muted);
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .dgp-detail {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+html[data-visual-system="v2"] .dgp-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--shell-divider);
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .dgp-head-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+html[data-visual-system="v2"] .dgp-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .dgp-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--shell-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+html[data-visual-system="v2"] .dgp-subtitle code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-visual-system="v2"] .dgp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  overflow: hidden;
+}
+
+html[data-visual-system="v2"] .dgp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-right: 1px solid var(--shell-divider);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .dgp-stat:last-child {
+  border-right: 0;
+}
+
+html[data-visual-system="v2"] .dgp-stat dt {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-stat dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .dgp-stat dd code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+html[data-visual-system="v2"] .dgp-stat.warn dd {
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
+
+html[data-visual-system="v2"] .dgp-notice {
+  padding: 8px 10px;
+  border: 1px dashed var(--shell-divider-strong);
+  border-radius: var(--shell-row-radius);
+  font-size: 11.5px;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .dgp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+html[data-visual-system="v2"] .dgp-segment,
+html[data-visual-system="v2"] .dgp-exports,
+html[data-visual-system="v2"] .dgp-source-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .dgp-segment button.btn {
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body button.btn.ghost {
+  padding: 2px 7px;
+  font-size: 10.5px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body button.btn.ghost:hover {
+  border-color: var(--shell-divider-strong);
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .dgp-frame {
+  flex: 1 1 auto;
+  min-height: 420px;
+  width: 100%;
+  border: 0;
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .dgp-delta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 14px 0;
+  gap: 8px;
+}
+
+html[data-visual-system="v2"] .dgp-delta-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .dgp-count strong {
+  font-weight: 600;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .dgp-count.zero {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-count.zero strong {
+  color: var(--shell-text-muted);
+  font-weight: 500;
+}
+
+html[data-visual-system="v2"] .dgp-count-base {
+  margin-left: auto;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-facts {
+  flex: 0 0 auto;
+  max-height: 38%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  overflow: auto;
+}
+
+html[data-visual-system="v2"] .dgp-delta .dgp-frame {
+  min-height: 320px;
+}
+
+html[data-visual-system="v2"] .dgp-fact-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--shell-divider);
+  font-size: 11.5px;
+}
+
+html[data-visual-system="v2"] .dgp-fact-row:last-child {
+  border-bottom: 0;
+}
+
+html[data-visual-system="v2"] .dgp-fact-row .dgp-pill {
+  width: 64px;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+html[data-visual-system="v2"] .dgp-fact-removed {
+  border-style: dashed;
+  text-decoration: line-through;
+}
+
+html[data-visual-system="v2"] .dgp-fact-added,
+html[data-visual-system="v2"] .dgp-fact-rerouted {
+  color: var(--shell-text);
+  border-color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-fact-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .dgp-fact-body code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+html[data-visual-system="v2"] .dgp-fact-label {
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .dgp-fact-fields {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--shell-text-muted);
+  word-break: break-word;
+}
+
+html[data-visual-system="v2"] .dgp-sources {
+  padding: 8px 14px 14px;
+  border-top: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .dgp-source-el {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .dgp-source-el:last-child {
+  border-bottom: 0;
+}
+
+html[data-visual-system="v2"] .dgp-source-el-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .dgp-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0 3px 10px;
+}
+
+html[data-visual-system="v2"] .dgp-source-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--shell-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-visual-system="v2"] .dgp-source-lines {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-empty {
+  padding: 18px 14px;
+  font-size: 12px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .dgp-empty-hint {
+  margin-top: 6px;
+  font-size: 11.5px;
+}
+
+html[data-visual-system="v2"] .dgp-empty code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--shell-text-secondary);
+}

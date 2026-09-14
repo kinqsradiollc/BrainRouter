@@ -566,6 +566,13 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     agentBrowserControl,
   };
   browser.setAgentTakeoverHandler(() => wp.agentBrowserControl.handleUserTakeover());
+  // ADR-055 P7 — a share/unshare from the tab strip moves per-chat tab
+  // authority in the agent-control manager (the owner of that boundary).
+  browser.setTabShareHandler(({ workspaceRoot, sessionKey, tabId, share }) => {
+    if (!workspaceRoot || !sessionKey) return;
+    if (share) wp.agentBrowserControl.grantTab(workspaceRoot, sessionKey, tabId);
+    else wp.agentBrowserControl.revokeTab(workspaceRoot, sessionKey, tabId);
+  });
   wins.set(win.webContents.id, wp);
 
   win.webContents.on('will-attach-webview', (event, webPreferences, params) => {

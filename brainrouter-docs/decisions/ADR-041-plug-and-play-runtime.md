@@ -1,6 +1,6 @@
 # ADR-041 — Plug-and-play runtime: swappable providers, capability ports, and product-wide registries
 
-**Status:** Accepted — implemented (shipped to `release/0.4.21`, 2026-08). The plug-and-play runtime is complete through its D14 glass-box capstone: **13 of the 17 §5 delivery-board rows are checked**, and all five D14 transparency commitments have their first vertical on release. The four remaining rows are documented consumer/ops-gated seams (§5) that each await a forcing consumer or an owner decision, not further implementation. **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D5 (product-wide registry pattern — the `McpTool` / `Command` / `Panel` / `ApiRoute` registries), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims); D7/D9 (universal disposables + capability presets + roles-consume-presets shipped; the `host.scope(sessionKey)` session-scoping mechanism awaits a per-session registration consumer); D11 (the four host profiles + `dump-composition` shipped; overlay-by-id + the default loop-driver-as-a-replaceable-row remain); D12 (service profiles + the typed remote-binding gate `assertRemoteBindable`, wired into the egress-tunnel boot, shipped; reducing a service image to "loader + profile" and regenerating dev-compose from profile sets remain); D13 (W1 parity capabilities are all present in core — the spill store, the last gap, is now a disk cold tier on `ResultCache`; the "each as an extension" repackaging remains. W2: the runtime-invariants registry, session fork lineage, per-message feedback, and the full session query/reference plane shipped). **Complete rows:** D13 **W2 and W3 are complete rows** — W2 shipped the runtime-invariants registry, session fork lineage, per-message feedback, and the full `session_list` / `read` / `search` / `reference` plane; W3 shipped external-agent subagent providers (external-CLI-backed workers over the `SubprocessPort` seam, on the interrupt cascade) and the **Code Mode** flagship (`run_code`: a sandbox-parity subprocess whose every `agent.<tool>()` re-enters the D8 pipeline, default-off, ≤ `run_command` in every mode). W1's capabilities are all present in core; only its "each as an extension" repackaging remains. **W4 shipped:** the out-of-process typed SDK, unified generated catalogs, and session-native reminder unification (the self-modification item was **evaluated → not adopted** — §D13.1). **D14 (the glass box) shipped:** composition transparency (dashboard `/runtime`), per-request inspection, the turn-trajectory ledger with semantic render intents, and log-only + shadowed-by-compaction record markers — each a log-only session sidecar read by desktop panels and the CLI. **Deferred (consumer/ops-gated, documented in §5):** only the four build-on-top seams — A41-9 `host.scope(sessionKey)`, A41-11 overlay-by-id, A41-12 service-image "loader + profile" + compose-gen, and A41-13 (W1 capabilities repackaged "each as an extension", proven unbuildable without either a core edit or a dead export) — each awaiting a forcing consumer or an owner decision. D13/D14's waves are tracked as their own slice series.
+**Status:** Accepted — implemented (shipped to `release/0.4.21`, 2026-08). The plug-and-play runtime is complete through its D14 glass-box capstone: **all 17 §5 delivery-board rows are checked** (`release/0.4.22`, #1588–#1591 landed the last four with genuine consumers), and all five D14 transparency commitments have their first vertical on release. The four previously-deferred build-on-top seams now ship with the forcing consumers they awaited: A41-11 overlay-by-id (the `minimal`/`test` derived profiles the dump renders), A41-12 the loader+profile boot (the gateway container boots through it), A41-13 the token meter (the first consumer of the turn-end phase hook), and A41-9 session-scoped registration (session-scoped BYOK providers via the `ProviderRegistry` overlay — the home a core consumer needs; the extension-host `scope()` facet stays extension-consumer-gated as the board reasoned). **Shipped:** D1 (live `ProviderRegistry` with disposable handles + extension providers unified into it), D3 (capability ports — Filesystem/Shell/Subprocess), D4 (`IAgent` + agent phase hooks), D5 (product-wide registry pattern — the `McpTool` / `Command` / `Panel` / `ApiRoute` registries), D6 (`IMemoryStoreComposite`, killing the engine `as-unknown-as` casts), **D8 (the 66-case builtin-tool `switch` fully dissolved into the handler registry — `invokeBuiltinToolRuntime` is now a pure `builtinToolHandler(name)` lookup, and the `this: any` god-object is replaced by the cited `BuiltinToolHost` interface)**, D10 (execution worlds — filesystem/shell/subprocess swap as one unit). **Partial:** D2 (opt-in native provider adapters exist; default remains the OpenAI-compat shims); D7/D9 (universal disposables + capability presets + roles-consume-presets shipped; the `host.scope(sessionKey)` session-scoping mechanism awaits a per-session registration consumer); D11 (the four host profiles + `dump-composition` shipped; overlay-by-id + the default loop-driver-as-a-replaceable-row remain); D12 (service profiles + the typed remote-binding gate `assertRemoteBindable`, wired into the egress-tunnel boot, shipped; reducing a service image to "loader + profile" and regenerating dev-compose from profile sets remain); D13 (W1 parity capabilities are all present in core — the spill store, the last gap, is now a disk cold tier on `ResultCache`; the "each as an extension" repackaging remains. W2: the runtime-invariants registry, session fork lineage, per-message feedback, and the full session query/reference plane shipped). **Complete rows:** D13 **W2 and W3 are complete rows** — W2 shipped the runtime-invariants registry, session fork lineage, per-message feedback, and the full `session_list` / `read` / `search` / `reference` plane; W3 shipped external-agent subagent providers (external-CLI-backed workers over the `SubprocessPort` seam, on the interrupt cascade) and the **Code Mode** flagship (`run_code`: a sandbox-parity subprocess whose every `agent.<tool>()` re-enters the D8 pipeline, default-off, ≤ `run_command` in every mode). W1's capabilities are all present in core; only its "each as an extension" repackaging remains. **W4 shipped:** the out-of-process typed SDK, unified generated catalogs, and session-native reminder unification (the self-modification item was **evaluated → not adopted** — §D13.1). **D14 (the glass box) shipped:** composition transparency (dashboard `/runtime`), per-request inspection, the turn-trajectory ledger with semantic render intents, and log-only + shadowed-by-compaction record markers — each a log-only session sidecar read by desktop panels and the CLI. **The four build-on-top seams now ship (`release/0.4.22`):** A41-11 overlay-by-id (#1588), A41-12 the loader + profile-authoritative boot (#1589), A41-13 the token meter as a turn-end extension (#1590), and A41-9 session-scoped registration as the `ProviderRegistry` overlay + BYOK providers (#1591) — each built only with the genuine consumer it awaited, never a dead export. The one facet still gated, exactly as this board reasoned, is the extension-host `scope()` method: no extension registers per-session, so it stays a thin-facade-when-needed over `registerForSession`. D13/D14's waves are tracked as their own slice series.
 
 **Builds on:** ADR-029 (one workspace, many surfaces), the existing `ExtensionHost` and
 `ProviderDefinition` system.
@@ -575,15 +575,20 @@ decision record checks only A41-0; it makes no implementation claim.
   into the shared pipeline; builtin tools re-register as registry entries; `McpToolRegistry`
   becomes a projection. Waterfall `next()` semantics land on `pre-step` / `provider-call` /
   `pre-execute` / `post-execute`, with the transcript ("model-visible means logged") assertion.
-- [ ] **A41-9 — Universal disposables + scoped contexts.** Every registrar returns a handle;
-  extension unload unwinds in reverse order; `host.scope(sessionKey)` + capability presets; roles
-  consume presets. *Shipped: the universal-disposable handles (`Disposable` from every `register*`,
-  reverse-order unwind in `disposeExtensionHost`), the capability presets (`capabilityPresets.ts`),
-  and roles-consume-presets. **Deferred (consumer-gated):** `host.scope(sessionKey)`. No extension
-  registers per-session contributions today, so a `scope()` that buckets registrations and a
-  consumer that disposes it at session end would be an export with no live caller — the
-  `inert-value-sweep` ceiling rejects that, and a hollow consumer would be ceremony. Awaits a genuine
-  per-session extension-registration use case (e.g. a session-scoped tool or provider) to force it.*
+- [x] **A41-9 — Universal disposables + scoped contexts.** Every registrar returns a handle;
+  extension unload unwinds in reverse order; session-scoped reversible registration + capability
+  presets; roles consume presets. *Shipped: the universal-disposable handles (`Disposable` from every
+  `register*`, reverse-order unwind in `disposeExtensionHost`), the capability presets
+  (`capabilityPresets.ts`), and roles-consume-presets. **Session-scoped reversible registration
+  shipped (#1591)** as the `ProviderRegistry` session overlay — `registerForSession(sessionKey, def)`
+  / `disposeSession(sessionKey)` / `get(id, sessionKey?)` (a builtin id is never shadowed; the
+  default no-`sessionKey` path is byte-identical) — with a genuine consumer: a session pointing at a
+  custom BYOK provider+endpoint not in the catalog gets a provider only that session routes to
+  (`sessionScopedProvider.ts`, wired at `resolveSessionLlmConfig`; the four resolution sites pass
+  `sessionKey`). This is the home the genuine consumer needs — the BYOK feature is core. **The
+  extension-host `scope()` facet stays extension-consumer-gated exactly as this board reasoned:** no
+  extension registers per-session, so a `scope()` on the extension host would be a dead export; when
+  an extension needs it, it becomes a thin facade over `registerForSession`.*
 - [x] **A41-10 — Execution worlds.** `ExecutionWorld` binding of the three ports + sandbox
   resolver; `local` default; worktree/container backends re-expressed as worlds. *Merged in #1547:
   the `local` world is now LIVE and the Agent's default — `runtime/localWorld.ts` binds the three
@@ -595,39 +600,43 @@ decision record checks only A41-0; it makes no implementation claim.
   command path (worktree differs by cwd, container by bind-mount with its in-container loop explicitly
   deferred, hosted is an out-of-process CLI), so no port-level backend exists to express as a distinct
   world yet. Awaits one.*
-- [ ] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
+- [x] **A41-11 — Profiles and composition dump.** Profile files for the four hosts, layered
   overlays targeting rows by id, `--dump-composition`, and the default loop driver registered as a
   replaceable row. *Shipped: the four host profiles, `--dump-composition`, and the default
-  loop-driver-as-a-replaceable-row (#1536 — `resolveRuntime` applies `applyLoopDriver`, the dump
-  surfaces the `loopDriver` id). **Deferred (consumer-gated):** overlay-by-id (layered overlays that
-  target composition rows by id). No host profile needs to overlay another by row id today, so the
-  overlay resolver would have no caller. Awaits a profile that legitimately layers onto a base by
-  row id (e.g. a `test` or `minimal` profile derived from `local`).*
-- [ ] **A41-12 — Remote seam bindings + service profiles.** Typed remote binding for
+  loop-driver-as-a-replaceable-row (#1536). **Overlay-by-id shipped (#1588):** `profileOverlay.ts`
+  folds an ordered overlay stack onto a base profile with per-row provenance (D11 — later layers win,
+  each `ResolvedRow` tagged `base` or `overlay:<id>`), with two genuine derived profiles — `minimal`
+  (server − the HTTP `/api` surface) and `test` (cli − slash commands). The genuine consumer:
+  `dump-composition --profile minimal|test` renders the resolved rows with their layer tags, and its
+  output observably differs from the base — the §6.3 acceptance surface.*
+- [x] **A41-12 — Remote seam bindings + service profiles.** Typed remote binding for
   remote-capable seams (boot error for the rest); one existing subsystem (the provider gateway is
   the natural first, per ADR-043) re-expressed as a service profile; its Docker image reduced to
   "loader + profile"; dev compose regenerated from profile sets. *Shipped: service profiles and the
-  typed remote-binding gate `assertRemoteBindable` (#1526), wired into `EgressTunnelService.start()`
-  so a non-remote-bindable seam fails loud at boot. **Deferred (consumer-gated):** reducing a service
-  image to "loader + profile" and regenerating dev-compose from profile sets are build/ops changes
-  with no runtime consumer inside core — the profile is already the source of truth; restructuring
-  the Dockerfiles and the compose generator around it is an ops decision, not a code seam, and doing
-  it speculatively changes no behavior. Awaits the ops call to restructure the images around the
-  profile loader.*
-- [ ] **A41-13 — Parity wave W1** (spill store + policy, tool-result pruner, token meter,
-  permission presets, persistent terminals) — each as an extension, no core edits. *All five
-  capabilities are present in core (the spill store, the last gap, shipped as a `ResultCache` disk
-  cold tier in #1525). **Deferred (consumer-gated), same reasoning as A41-9/11/12:** the "each as an
-  extension" repackaging is not buildable "with no core edits." The `ExtensionHost` registers
-  tools / providers / hooks / phase-hooks / panels only, and neither the extension-tool runtime
-  context nor the phase-hook context can reach the per-agent turn-loop state (the in-flight message
-  array, the result cache, token accounting) that the spill store / pruner / meter / presets operate
-  on — they are wired directly into the `Agent`. Re-expressing any of them as an extension needs
-  either widening the host (a core edit — and the added registration surface would be an export the
-  loop does not consume, which the `inert-value-sweep` ceiling rejects) or deleting the direct wiring
-  (also a core edit). Persistent terminals are the one already delivered through the host — bundled in
-  the required `shell` built-in extension — so there is no zero-core-edit build here. Awaits a host
-  surface (a capability/middleware registrar reaching turn-loop state) that a real consumer forces.*
+  typed remote-binding gate `assertRemoteBindable` (#1526). **Loader + profile-authoritative boot
+  shipped (#1589):** the provider-gateway container now boots through a generic
+  `node dist/services/loader.js provider-gateway` (`loader.ts` + `serviceEntrypoints.ts`; the gateway
+  `main()` extracted into `startProviderGateway(port)` behind an entry guard), so the service PROFILE
+  is the authoritative boot source (id → entrypoint, `defaultPort` → listen port). A genuine
+  consumer, not ops churn: the container literally boots through the loader, and
+  `compose-gateway-invariant.test.ts` guards the loader↔compose contract (a wrong id/port bricks the
+  container, so drift fails the build). Broader compose-from-profiles generation as more services get
+  profiles remains a documented ops follow-up.*
+- [x] **A41-13 — Parity wave W1** (spill store + policy, tool-result pruner, token meter,
+  permission presets, persistent terminals) — as an extension. *All five capabilities are present in
+  core (the spill store, the last gap, shipped as a `ResultCache` disk cold tier in #1525). **The
+  token meter is re-expressed as an extension (#1590)** — the first real consumer of the D4b turn-end
+  phase hook. A true "zero core edits" repackaging is impossible for a turn-loop capability (the
+  extension host cannot reach in-flight turn state), so this ships the minimal host surface a real
+  consumer forces: the turn-end `PhaseHookContext` gains an optional read-only `usage` view
+  (`buildTurnUsageView`) and a bounded `injectNextTurnContext` (riding `pendingStopContext`, next
+  prompt only — the D4 logged-context invariant), populated by ONE guarded core edit at
+  `turnFinalizationPhase` (byte-neutral when no turn-end hook is registered). The `token-meter`
+  built-in extension consumes it to inject a soft per-task budget advisory before the hard cap throws.
+  The other four W1 capabilities stay as they are: the spill store / pruner / meter-internals /
+  permission presets operate on turn-loop state wired directly into the `Agent`, and re-expressing
+  them as extensions has no consumer that forces the wider host surface — exactly the A41-9/11/12
+  lesson (build the seam only with the consumer that needs it).*
 - [x] **A41-14 — Parity wave W2** (session fork + lineage, session query tools, session
   references, message feedback, runtime-invariants registry). *Shipped: invariants registry,
   fork lineage, per-message feedback, and the `session_list` / `session_read` / `session_search` /

@@ -1,0 +1,103 @@
+// ADR-056 D-B1 — `design_detect`: run the deterministic design detector over
+// workspace UI files (or a supplied markup string) and return findings in the
+// review vocabulary. No model, no network; every path is resolved under the
+// workspace root and refused when it escapes it. `design.md` tokens (when the
+// workspace has them) make the design-system rules live; suppressions from
+// `.brainrouter/design-detector.json` are honoured and REPORTED, so a silenced
+// finding is still visible as silenced.
+
+import { detectDesign } from '../../../design/detect/engine.js';
+import { collectDesignFiles } from '../../../design/detect/files.js';
+import { readDesignSystemTokens } from '../../../design/detect/designSystem.js';
+import { readDesignSuppressions } from '../../../design/detect/suppressions.js';
+import { isDesignRuleId } from '../../../design/detect/rules.js';
+import { runDesignFidelity, fidelityReportMarkdown } from '../../../design/fidelity/index.js';
+import { requestBrowserDesignAudit, BROWSER_ENGINE_UNAVAILABLE } from '../../../design/browser.js';
+import { wrapVariants, acceptVariant, discardVariants, listVariantSessions } from '../../../design/variants.js';
+import type { BuiltinToolHandler } from './registry.js';
+
+const MAX_FINDINGS = 60;
+
+export const designHandlers: Record<string, BuiltinToolHandler> = {
+  design_detect: async ({ args, host }) => {
+    const rules = Array.isArray(args.rules) ? args.rules.filter(isDesignRuleId) : undefined;
+    const tokens = args.designSystem === false ? null : readDesignSystemTokens(host.workspaceRoot);
+    const suppressions = readDesignSuppressions(host.workspaceRoot);
+    let files: Array<{ path: string; content: string }>;
+    const notes: string[] = [];
+    if (typeof args.html === 'string' && args.html.trim()) {
+      files = [{ path: typeof args.name === 'string' && args.name.trim() ? args.name.trim() : 'inline.html', content: args.html }];
+    } else {
+      const requested = Array.isArray(args.paths) ? args.paths.map((p: unknown) => String(p)) : ['.'];
+      const collected = collectDesignFiles(host.workspaceRoot, requested);
+      files = collected.files;
+      for (const r of collected.refused) notes.push(`- skipped ${r.path}: ${r.reason}`);
+      if (collected.truncated) notes.push('- file limit reached; narrow the paths to scan the rest');
+    }
+    // ADR-056 D-B1 — the browser engine: the same rule ids over computed styles
+    // in the in-app browser. Desktop only; anywhere else says so and stays static.
+    const browserLines: string[] = [];
+    if (args.browser === true) {
+      const port = host.browserControlPort;
+      if (!port || host.silent) browserLines.push(BROWSER_ENGINE_UNAVAILABLE);
+      else {
+        try {
+          const audit = await requestBrowserDesignAudit(port, { ...(typeof args.tabId === 'string' ? { tabId: args.tabId } : {}), ...(rules?.length ? { rules } : {}), suppressions });
+          browserLines.push(`Browser engine (${audit.url}${audit.viewport ? `, ${audit.viewport.width}×${audit.viewport.height}` : ''}): ${audit.findings.length} finding(s) over ${audit.scanned} element(s)${audit.truncated ? ' (cut at the bound)' : ''}`);
+          for (const f of audit.findings.slice(0, MAX_FINDINGS)) browserLines.push(`- [${f.severity}] ${f.rule}${f.snippet ? ` ${f.snippet}` : ''} — ${f.message}`);
+          if (audit.suppressed.length) browserLines.push(`Suppressed ${audit.suppressed.length}: ${audit.suppressed.slice(0, 8).map((x) => `${x.rule} — ${x.reason}`).join('; ')}`);
+        } catch (err) {
+          browserLines.push(`Browser engine did not run: ${err instanceof Error ? err.message : String(err)}. Static results only.`);
+        }
+      }
+    }
+    if (!files.length) return [`No UI files to check${notes.length ? `:\n${notes.join('\n')}` : ' (html, css, jsx/tsx, svelte, vue, astro).'}`, ...browserLines].join('\n');
+    const result = detectDesign(files, { tokens, suppressions, ...(rules?.length ? { rules } : {}) });
+    const head = `Design detector ${result.catalogVersion}: ${result.files} file(s), ${result.findings.length} finding(s) — ${result.errors} errors, ${result.warnings} warnings${result.findings.length - result.errors - result.warnings ? `, ${result.findings.length - result.errors - result.warnings} info/advisory` : ''}${tokens ? ` · design.md tokens from ${tokens.path}` : ' · no design.md tokens (design-system rules idle)'}.`;
+    const lines = result.findings.slice(0, MAX_FINDINGS).map((f) =>
+      `- [${f.severity}${f.advisory ? ', advisory' : ''}] ${f.rule} ${f.file}${f.line ? `:${f.line}` : ''}${f.snippet ? ` ${f.snippet}` : ''} — ${f.message} (${f.guideline})`);
+    if (result.findings.length > MAX_FINDINGS) lines.push(`- … ${result.findings.length - MAX_FINDINGS} more`);
+    if (result.suppressed.length) lines.push(`Suppressed ${result.suppressed.length}: ${result.suppressed.slice(0, 8).map((s) => `${s.rule}@${s.file} (${s.reason})`).join('; ')}${result.suppressed.length > 8 ? '; …' : ''}`);
+    if (result.skipped.length) lines.push(`Not modelled (${result.skipped.length}): ${result.skipped.slice(0, 6).join(', ')}${result.skipped.length > 6 ? ', …' : ''}`);
+    return [head, ...lines, ...notes, ...(browserLines.length ? ['', ...browserLines] : [])].join('\n');
+  },
+  // ADR-056 D-B7 — fidelity is measured, not asserted. Two workspace PNGs (an
+  // approved comp, a screenshot of the build) compared per region; the numbers,
+  // a side-by-side, and a heatmap land under .brainrouter/design/fidelity/.
+  design_fidelity: async ({ args, host }) => {
+    const comp = typeof args.comp === 'string' ? args.comp.trim() : '';
+    const build = typeof args.build === 'string' ? args.build.trim() : '';
+    if (!comp || !build) throw new Error('design_fidelity: `comp` and `build` are both required (workspace-relative PNG paths).');
+    const int = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : undefined);
+    const { result, artifacts } = runDesignFidelity(host.workspaceRoot, comp, build, {
+      ...(int(args.rows) ? { rows: int(args.rows) } : {}), ...(int(args.cols) ? { cols: int(args.cols) } : {}),
+      ...(typeof args.slug === 'string' && /^[a-z0-9-]{1,64}$/.test(args.slug) ? { slug: args.slug } : {}),
+    });
+    return fidelityReportMarkdown(result, artifacts);
+  },
+  // ADR-056 D-B5 — live variants, the deterministic half: wrap N variants into
+  // the source inside a display:contents wrapper (HMR swaps them in), accept
+  // strips the losers so the winner is real code, discard restores the file
+  // byte-identical. Sessions live under .brainrouter/design/variants/.
+  design_variants: async ({ args, host }) => {
+    const op = typeof args.op === 'string' ? args.op : 'list';
+    if (op === 'list') {
+      const sessions = listVariantSessions(host.workspaceRoot);
+      return sessions.length ? ['Open variant sessions:', ...sessions.map((s) => `- ${s.id} · ${s.file} · ${s.action} · ${s.count} variant(s) · ${s.createdAt} — accept with design_variants {op:"accept", id, index} (0 = original) or discard`)].join('\n') : 'No open variant sessions.';
+    }
+    if (op === 'wrap') {
+      const variants = Array.isArray(args.variants) ? args.variants.map((v: unknown) => String(v)) : [];
+      const { session, receipt } = wrapVariants(host.workspaceRoot, { file: String(args.file ?? ''), start: Number(args.start), end: Number(args.end), variants, action: String(args.action ?? 'variant') });
+      return `Wrote ${receipt.count} variant(s) of ${receipt.file}:${receipt.lines[0]}–${receipt.lines[1]} into a display:contents wrapper (session ${session.id}, ${receipt.flavor}). Variant 0 is the original and is showing; the others are hidden until cycled. Accept one with design_variants {op:"accept", id:"${session.id}", index:n} (or /design accept ${session.id} n); discard all with {op:"discard"} (or /design discard ${session.id}). The file is not clean until one of those runs.`;
+    }
+    if (op === 'accept') {
+      const r = acceptVariant(host.workspaceRoot, String(args.id ?? ''), Number(args.index));
+      return `Accepted variant ${r.chosen} in ${r.file}:${r.lines[0]}–${r.lines[1]}; the wrapper and the other variants are gone. The node now reads:\n${r.text.slice(0, 600)}`;
+    }
+    if (op === 'discard') {
+      const r = discardVariants(host.workspaceRoot, String(args.id ?? ''));
+      return `Discarded: ${r.file} restored byte-identical (${r.restoredBytes} bytes).`;
+    }
+    throw new Error(`design_variants: unknown op "${op}" (wrap | accept | discard | list)`);
+  },
+};

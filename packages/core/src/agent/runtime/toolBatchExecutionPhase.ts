@@ -18,6 +18,9 @@ export interface BatchToolResult {
   toolMsg: BatchToolMessage;
   fullResultText: string;
   systemMsg?: unknown;
+  /** ADR-055 P1 — an optional companion user message carrying a browser
+   *  screenshot image, flushed AFTER all tool results so the batch stays valid. */
+  imageMsg?: unknown;
 }
 
 interface ExecuteToolBatchInput {
@@ -33,6 +36,7 @@ interface PublishToolBatchInput {
   results: BatchToolResult[];
   publishToolResult: (message: BatchToolMessage, fullResultText: string) => void;
   publishSystemMessage: (message: unknown) => void;
+  publishImageMessage: (message: unknown) => void;
 }
 
 interface RepairOrphanToolResultsInput {
@@ -135,13 +139,19 @@ export function publishToolBatch({
   results,
   publishToolResult,
   publishSystemMessage,
+  publishImageMessage,
 }: PublishToolBatchInput): void {
   const systemMessages: unknown[] = [];
+  const imageMessages: unknown[] = [];
   for (const result of results) {
     publishToolResult(result.toolMsg, result.fullResultText);
     if (result.systemMsg !== undefined) systemMessages.push(result.systemMsg);
+    if (result.imageMsg !== undefined) imageMessages.push(result.imageMsg);
   }
   for (const message of systemMessages) publishSystemMessage(message);
+  // Images ride a user message; flush LAST so every tool result immediately
+  // follows the assistant tool_calls (OpenAI requires this ordering).
+  for (const message of imageMessages) publishImageMessage(message);
 }
 
 export function repairOrphanToolResults({

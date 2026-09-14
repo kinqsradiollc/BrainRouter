@@ -12,10 +12,19 @@ import { collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
+import { readGoal } from '../../goal/store/goalStore.js';
+import { drainIdleNotices } from '../../session/messaging/idleNotifyStore.js';
+import { sendLocalSessionMessage } from '../../session/messaging/client.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
-import { phaseHookHandlers } from '../../extension/registry.js';
+import { phaseHookHandlers, type PhaseHookContext } from '../../extension/registry.js';
+import { buildTurnUsageView } from '../../util/tokens/turnUsageView.js';
 import { scheduleLearningCheckpoint } from './learningPhase.js';
+import { getCliKnobs } from '../../config/config.js';
+import { readAtlasGraphCached } from '../../atlas/store/atlasStore.js';
+import { buildAtlasChangeContext } from '../../atlas/changeContext.js';
+import { designHookAtTurnEnd } from '../../design/hook.js';
+import path from 'node:path';
 
 interface TurnSpan {
   end(extra?: Record<string, unknown>): void;
@@ -182,10 +191,29 @@ export async function finalizeTurnPhase(
           missedTokens: agent.lastTurnUsage.missedTokens,
         },
         Date.now(),
+        // ADR-052 D2 — attribute the turn so a runaway automation is identifiable:
+        // a turn driven by an active goal loop vs. an ordinary interactive turn.
+        readGoal(agent.workspaceRoot, agent.sessionKey)?.status === 'active' ? 'goal' : 'interactive',
       );
     } catch {
       // Usage history is observability only.
     }
+  }
+
+  // ADR-052 P4.2 — this session just finished a turn, i.e. it went idle. Deliver
+  // any one-shot "notify me when this session goes idle" notices, then they clear
+  // themselves. Best-effort and off the critical path (a peer that is gone just
+  // fails the delivery); only top-level sessions are notifiable peers.
+  if (!agent.silent) {
+    try {
+      const requesters = drainIdleNotices(agent.workspaceRoot, agent.sessionKey);
+      for (const requester of requesters) {
+        void sendLocalSessionMessage(requester, {
+          senderSessionKey: agent.sessionKey,
+          text: `Session ${agent.sessionKey} is now idle.`,
+        }).catch(() => { /* peer gone / unreachable — one-shot, don't retry */ });
+      }
+    } catch { /* idle-notify is advisory — never break a turn */ }
   }
 
   const shrinkResult = shrinkOversizedToolResults(agent.chatHistory, {
@@ -204,14 +232,67 @@ export async function finalizeTurnPhase(
   // notification, not a waterfall: advisory, so a throwing hook never fails the
   // turn. The logged invariant holds — a hook adds model-visible context only via
   // agent.recordTranscript, never by mutating an in-flight message array.
-  for (const phaseHook of phaseHookHandlers('turn-end')) {
-    try {
-      await phaseHook.after?.(
-        { phase: 'turn-end', workspaceRoot: agent.workspaceRoot, sessionKey: agent.sessionKey },
-        () => {},
-      );
-    } catch {
-      /* turn-end phase hooks are advisory */
+  // ADR-048 S5 — the blast radius of this turn's edits. Files the write tools
+  // touched are mapped onto the Atlas graph and their dependents-by-layer
+  // summary rides the stop-context channel into the NEXT turn (never the
+  // in-flight array — ADR-041 D4). Deterministic and bounded (D2): no graph, no
+  // edits, or taps knobbed off ⇒ nothing; the set clears regardless so a skipped
+  // turn never leaks stale paths into the next.
+  {
+    const written = [...agent.turnWrittenFiles];
+    agent.turnWrittenFiles.clear();
+    if (written.length > 0 && !agent.silent && !agent.reviewSourceSafety) {
+      try {
+        const atlasKnobs = getCliKnobs().atlas;
+        const graph = (atlasKnobs.orient || atlasKnobs.retrieval)
+          ? readAtlasGraphCached(agent.workspaceRoot)
+          : null;
+        if (graph) {
+          const relative = written.map((p) =>
+            path.isAbsolute(p) ? path.relative(agent.workspaceRoot, p) : p,
+          );
+          const block = buildAtlasChangeContext(graph, relative);
+          if (block) {
+            const bounded = block.slice(0, 1_000).trim();
+            agent.pendingStopContext = agent.pendingStopContext
+              ? `${agent.pendingStopContext}\n${bounded}`
+              : bounded;
+          }
+        }
+      } catch { /* the map enriches a turn; it must never break one */ }
+      // ADR-056 D-B2 — the design hook's full tier: every UI file this turn wrote,
+      // checked once, findings into the next turn via the same channel. Knobbed
+      // off by default; never throws; never denies.
+      designHookAtTurnEnd(agent, written);
+    }
+  }
+
+  const turnEndHooks = phaseHookHandlers('turn-end');
+  if (turnEndHooks.length > 0) {
+    // ADR-041 A41-13 — enrich the turn-end context with a read-only usage view and
+    // a bounded next-turn write channel. Built ONCE, and only when a hook is
+    // registered, so a run with no turn-end observer is byte-for-byte unchanged.
+    const ctx: PhaseHookContext = {
+      phase: 'turn-end',
+      workspaceRoot: agent.workspaceRoot,
+      sessionKey: agent.sessionKey,
+      usage: buildTurnUsageView(agent),
+      injectNextTurnContext: (text: string) => {
+        const bounded = String(text ?? '').slice(0, 2_000).trim();
+        if (!bounded) return;
+        // Same channel stop-hooks use — drained into the next prompt, never the
+        // in-flight message array (the D4 logged-context invariant).
+        agent.pendingStopContext = agent.pendingStopContext
+          ? `${agent.pendingStopContext}\n${bounded}`
+          : bounded;
+      },
+    };
+    for (const phaseHook of turnEndHooks) {
+      try {
+        await phaseHook.after?.(ctx, () => {});
+      } catch {
+        /* turn-end phase hooks are advisory */
+      }
     }
   }
 

@@ -20,7 +20,7 @@ const FRONTEND_AVAILABILITY = {
   skillPacks: ['frontend'],
   // ADR-031 D1 — `hallmark` is the vendored design skill, carried by the shipped
   // library rather than the pack, and named by the capability like the rest.
-  skills: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'hallmark'],
+  skills: ['a11y-skill', 'browser-testing-skill', 'hallmark'],
   toolProfiles: ['browser', 'artifacts', 'interactive-browser'],
 };
 
@@ -597,10 +597,10 @@ test('live availability filters capability contributions and prevents phantom id
   const partialCatalog = resolveWorkspaceCapabilities({
     manifest,
     task: 'Fix the React dashboard.',
-    availability: { skills: ['taste-skill', 'unrelated-skill'], toolProfiles: ['browser'] },
+    availability: { skills: ['a11y-skill', 'unrelated-skill'], toolProfiles: ['browser'] },
   });
   assert.deepEqual(partialCatalog.skillPacks, []);
-  assert.deepEqual(partialCatalog.skills, ['taste-skill']);
+  assert.deepEqual(partialCatalog.skills, ['a11y-skill']);
   assert.deepEqual(partialCatalog.toolProfiles, ['browser']);
 });
 
