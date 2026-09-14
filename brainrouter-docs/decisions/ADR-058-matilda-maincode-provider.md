@@ -632,6 +632,23 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   **tool result** (`[Client tool result: list_dir] …` → results about
   directory-listing tools in other projects). Every round trip of the tool loop
   therefore costs a server-side web search of the tool output — not switchable.
+- **The platform templates its own tools next to ours, and routes by the shape of
+  the request.** The model, asked to explore the workspace, listed its tools as
+  "code execution, spreadsheet operations, RAG query, and web search" and reached for
+  `code_exec` — Python in Matilda's server sandbox, whose only file is a stub
+  `code.py` — then reported *that* as the workspace. None of these names appear in
+  the docs (which say only "server-side tools (web search, code execution, etc.) are
+  handled by Matilda core"); on the wire they surface as `tool_start` events named
+  `processing`, `memory`, `search`, `assistant` ("Running code"). Measured through
+  the capture proxy with all 41 client tools advertised: a question-shaped prompt
+  ("what is brainrouter?") called a client tool on the first request 0/3 with the
+  original hint and **2/3 → 2/2** once the hint states that the workspace exists
+  only on the client and names the platform tools that cannot see it; an
+  imperative prompt ("explore brainrouter") still went server-side every time —
+  `processing` + `assistant` ×6, then an `error` — the orchestrator's routing, which
+  no request field influences. BrainRouter shows that activity as
+  `[Matilda server-side assistant] Running code` lines so the person can see what
+  happened; it cannot prevent it.
 - **The platform can run out of its own steps.** A real agent turn ended with the
   `error` event `{"code":"request_budget_exceeded","error":"The assistant ran out of
   steps before it could finish."}` — Matilda's server-side loop (search → read → …)
