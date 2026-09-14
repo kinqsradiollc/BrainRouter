@@ -119,7 +119,11 @@ export function advertisedNamesLine(names: string[], maxChars: number): string {
  *  (measured: bare task ~2/3, with this hint as the tail of `messages[0]` 3/3). */
 export const MATILDA_CLIENT_TOOLS_HINT =
   'You have CLIENT TOOLS advertised for this turn (listed by the platform). When a task needs one, call it by ' +
-  'emitting a DSML tool call block for that tool — do not describe the call in prose and do not claim you lack the tool.';
+  'emitting a DSML tool call block for that tool — do not describe the call in prose and do not claim you lack the tool. ' +
+  'The workspace, its files and its code exist ONLY on the client: the platform\'s own tools (code_exec, rag_query, ' +
+  'spreadsheet operations, built-in web search) run in a separate sandbox that cannot see them — never use those to ' +
+  'inspect this workspace. For anything about this workspace call the client tools (list_dir, read_file, grep_search, ' +
+  'glob_files) first, in this reply, before answering.';
 
 export interface MatildaChatMessage { role: 'user' | 'assistant'; content: string }
 export interface MatildaClientTool { name: string; description: string; parameters: unknown }
