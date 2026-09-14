@@ -895,6 +895,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     quiet: c.quiet ?? false,
     theme: c.theme ?? 'auto',
     llmTimeoutMs: c.llmTimeoutMs ?? 120_000,
+    llmStreamStallMs: Number.isFinite(c.llmStreamStallMs) ? Math.max(0, Math.floor(c.llmStreamStallMs!)) : 60_000,
     router: resolveRouterKnobs(c.router),
     llmMaxReconnects: Math.max(1, Math.floor(c.llmMaxReconnects ?? 5)),
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
