@@ -351,6 +351,59 @@ agent turn — then, handed the runtime's compacted listing ("array length=61 �
 JSON omitted"), asked the person for the listing instead of reading further; that
 is the model's habit with a compacted result, not the adapter's doing.
 
+**D22 · A sandbox detour is cut and the request asked once more in the shape the
+platform routes to the client tools.** The turn that "ran out of steps" on the
+desktop (`error {"code":"request_budget_exceeded"}` after `assistant` "Running
+code" ×7, no client tool called) was replayed through the capture proxy and
+reproduced 2/2: with all 41 client tools advertised and the hint in place, a
+task-shaped last message ("are there any improvements we can do?") is routed by
+the platform's orchestrator (`processing`) to its code specialist — a sandbox
+whose only file is a stub and which does **not** template the client tools (the
+model says so: "I don't have a `list_dir` tool available") — where it burns the
+per-request step budget. No request field changes that routing. What does
+change it is the **shape of the last user message**, measured on the same
+captured request: the shape BrainRouter's own runtime produces a turn later —
+the model's announcement as the assistant turn, then the promise-then-ask guard
+as the last user message — reached the client tools 6/6 (four replayed
+follow-ups, two on the desktop session itself); a bare "which client tool call
+do you emit first?" question 2/4 (2/2 in the probe, then a prose answer and a
+one-token garbage answer end to end); a note that mentioned the "code sandbox"
+went back to the sandbox 2/2; a guard-styled paraphrase once sent the model into
+a loop of empty DSML openers until the upstream timeout. So the adapter now (1)
+**cuts the attempt at the first sandbox `tool_start`** (`assistant` "Running
+code/python") when client tools were offered and none has been called —
+cancelling the body, not just releasing the reader, and recording a provider
+turn-path step *"Matilda routed the request to its own sandbox — asking again
+with the client tools"* — and (2) **asks once more** with the history unchanged,
+what the model had said as the assistant turn, and the runtime's own
+`promisedToolsGuardMessage()` plus the client-tool question as the last user
+message. The re-ask streams to its end without the cut (a second detour keeps
+the partial answer as before); nothing of the re-ask enters the transcript, and
+the next request is rebuilt from the transcript as usual. What this buys: the
+turn spends seconds instead of ~30 s on the detour, the platform's step budget
+is not consumed by a sandbox that cannot see the workspace, and the correction
+the runtime would have sent a turn later is sent now. What it does not buy: the
+routing itself is still Maincode's, the model still narrates before it calls,
+and every round trip still runs the platform's server-side search on the tool
+result — the runtime's guards (D19, ADR-059) remain the backstop.
+Three things found on the same live runs travel with it: (a) the reasoning
+stream's narration of the platform's steps now reads as a path — `[Matilda web
+search] "<query>"`, `[Matilda web search] on BrainRouter's own message to it (a
+platform step, not a request)` when it searched our guard text or a tool result,
+`[Matilda web search → success] 3 sources` instead of the evidence pack's URLs,
+`[Matilda sandbox] Running code` — because Matilda emits no `thinking` events at
+all on these turns (0 across every capture) and what a person saw as "weird
+thinking" was that narration quoted raw; (b) the assistant history note for a
+tool call is a sentence ("I called the client tool list_dir with {…}; its result
+follows."), since a bracketed stub as the whole assistant turn was read back as
+"a message containing only a tool-call block" and the task was dropped; (c) the
+command-log compaction (`command-signal-lines`) applies to command-shaped tools
+only — a `read_file` of a URL-rich README had been reduced to "Paths: …" and the
+model rightly reported that the result was not the file. Live, end to end
+through the CLI after the change: 2 of 3 agent-shaped turns that previously
+died in the sandbox ran 8–10 client tool calls to a grounded answer; the third
+lost the thread after its first call (the note in (b) addresses what it said).
+
 *Prose before tools.* The whole enabled surface is worth more to a turn than any
 of the prose around it, so the fit runs in tiers (`MATILDA_BUDGET_TIERS`): the
 standard prose first (descriptions 320, schema notes 100, instructions 16 000,
@@ -646,9 +699,14 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   only on the client and names the platform tools that cannot see it; an
   imperative prompt ("explore brainrouter") still went server-side every time —
   `processing` + `assistant` ×6, then an `error` — the orchestrator's routing, which
-  no request field influences. BrainRouter shows that activity as
-  `[Matilda server-side assistant] Running code` lines so the person can see what
-  happened; it cannot prevent it.
+  no request field influences. On the sandbox path the client tools are not
+  templated at all (the model: "I don't have a `list_dir` tool available"). What
+  the routing DOES follow is the shape of the last user message (D22): the
+  runtime's promise guard, replying to the model's own announcement, reaches the
+  client tools 6/6 on the same request that went to the sandbox 5/5 (a bare
+  question only 2/4). BrainRouter shows the sandbox activity as
+  `[Matilda server-side assistant] Running code` lines, cuts the attempt at the
+  first one when client tools were offered, and asks once more in that shape.
 - **The platform can run out of its own steps.** A real agent turn ended with the
   `error` event `{"code":"request_budget_exceeded","error":"The assistant ran out of
   steps before it could finish."}` — Matilda's server-side loop (search → read → …)

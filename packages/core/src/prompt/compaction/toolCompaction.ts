@@ -71,7 +71,18 @@ function isJsonDocument(text: string): boolean {
   try { JSON.parse(t); return true; } catch { return false; }
 }
 
+/** A command's output (a test run, a build, a shell command) is where progress
+ *  noise and signal lines live. A FILE the model asked to read is not: a README
+ *  full of badge URLs was once reduced to "Paths: img.shields.io/…" and the
+ *  model rightly said the result was not the file. Only command-shaped tools
+ *  (a `command` argument, or a run/exec/shell/test tool name) qualify. */
+function isCommandLikeTool(input: ToolCompactionInput): boolean {
+  if (typeof input.args?.command === 'string') return true;
+  return /(^|_)(run|exec|shell|bash|command|test|build)(_|$)/i.test(input.toolName);
+}
+
 function compactCommandLike(input: ToolCompactionInput): ToolCompactionResult | undefined {
+  if (!isCommandLikeTool(input)) return undefined;
   // Structured JSON is compactJson's to judge (and it passes anything the
   // per-result cap can carry); the signal-line summary would shred a listing
   // into "Paths: …" and lose the shape the model needs.
