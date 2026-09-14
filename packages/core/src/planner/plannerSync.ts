@@ -12,7 +12,7 @@
  * than to the engine.
  */
 import type { OutboxOperation } from '../sync/outbox.js';
-import { compareHlc, hlcReceive, type Hlc } from '../sync/hybridClock.js';
+import { compareHlc, hlcNow, hlcReceive, type Hlc } from '../sync/hybridClock.js';
 import {
   isFirstSync, syncRecords,
   type PullResponse as RecordPullResponse, type PushResponse,
@@ -37,6 +37,8 @@ export interface PlannerTransport {
 
 export interface PlannerSyncResult extends SyncResult {
   pulledBlocks: number;
+  /** Set when a rejected block was repaired (parent re-sent) or dropped (parent gone). */
+  repairNotice?: string;
 }
 
 const PLANNER_RECORDS: SyncRecords<PlannerState, PlannerItem> = {
@@ -149,7 +151,63 @@ export async function syncOnce(
     push: transport.push,
   };
   const result = await syncRecords(state, itemTransport, PLANNER_RECORDS, nowMs);
-  return { ...result, pulledBlocks };
+  const repairNotice = repairRejectedBlocks(state, result.rejected, nowMs);
+  return { ...result, pulledBlocks, ...(repairNotice ? { repairNotice } : {}) };
+}
+
+const MISSING_PARENT_RE = /^The parent planner item (\S+) does not exist\.$/;
+
+/**
+ * A block the server refuses because its parent item is not there.
+ *
+ * Seen live: a desktop outbox with 21 changes, one of them a block update the
+ * server had rejected with "The parent planner item … does not exist" — the
+ * item's `create` had never reached the server while the item sat in the
+ * local store. Per-item ordering then holds every later change to that block
+ * behind the rejected one, so nothing the person does (retry included) can
+ * ever succeed. The repair is the obvious one: if the parent exists here,
+ * re-send it — a `create` placed at the FRONT of the queue so it precedes the
+ * block on the next push; if it does not exist here either, the block can
+ * never be accepted and its queued changes are dropped, with a notice.
+ */
+export function repairRejectedBlocks(
+  state: PlannerState,
+  rejected: SyncResult['rejected'],
+  nowMs: number,
+): string | undefined {
+  const resent: string[] = [];
+  const dropped: string[] = [];
+  for (const rejection of rejected) {
+    const op = state.outbox.operations.find((o) => o.idempotencyKey === rejection.idempotencyKey);
+    if (!op || op.entity !== 'block') continue;
+    const parentId = MISSING_PARENT_RE.exec(rejection.reason)?.[1];
+    if (!parentId) continue;
+    const parent = state.items[parentId];
+    if (parent && !parent.deletedAt) {
+      const queued = state.outbox.operations.some((o) => o.entity === 'item' && o.itemId === parentId && o.kind === 'create');
+      if (!queued && !resent.includes(parentId)) {
+        state.clock = hlcNow(state.clock, nowMs);
+        state.outbox = {
+          operations: [
+            { idempotencyKey: globalThis.crypto.randomUUID(), itemId: parentId, entity: 'item', kind: 'create', at: state.clock, payload: parent, attempts: 0 },
+            ...state.outbox.operations,
+          ],
+        };
+        resent.push(parentId);
+      }
+    } else {
+      const blockId = op.itemId;
+      state.outbox = { operations: state.outbox.operations.filter((o) => !(o.entity === 'block' && o.itemId === blockId)) };
+      if (!dropped.includes(blockId)) dropped.push(blockId);
+    }
+  }
+  const parts: string[] = [];
+  if (resent.length) {
+    const titles = resent.map((id) => state.items[id]?.title?.value ?? id);
+    parts.push(`Re-sending ${resent.length === 1 ? 'an item' : `${resent.length} items`} the server had not received (${titles.join(', ')}).`);
+  }
+  if (dropped.length) parts.push(`Dropped queued changes for ${dropped.length === 1 ? 'a time block' : `${dropped.length} time blocks`} whose item no longer exists.`);
+  return parts.length ? parts.join(' ') : undefined;
 }
 
 /*
