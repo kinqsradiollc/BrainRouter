@@ -30,7 +30,7 @@
  */
 import type { CleanMessage, CleanTool, NativeBuildInput, NativeOutput } from '../../../agent/transport/nativeProviders.js';
 import { sseEvents, type NativeStreamHandlers } from '../../../agent/transport/nativeProviderStream.js';
-import { capMessageContent, utf8Bytes } from '../../requestLimits.js';
+import { HISTORY_RESERVE_FOR_TOOLS_BYTES, capMessageContent, elideOldestToolResultsToBudget, elidedToolResultNote, utf8Bytes } from '../../requestLimits.js';
 import { pinnedToolNames, rankAndCapTools } from '../../../tool/policy/toolBudget.js';
 import { createDsmlInterceptor, newToolCallId } from './dsml.js';
 import { promisedToolsGuardMessage } from '../../../agent/runtime/turnGuardMessages.js';
@@ -282,7 +282,7 @@ function buildAtTier(
   pinned: Set<string>,
   taskText: string,
 ): { payload: MatildaChatPayload; apply: (k: number) => number } {
-  const { maxMessageChars, maxToolDescriptionChars, advertisedNamesChars } = MATILDA_NATIVE_LIMITS;
+  const { maxBodyBytes, maxMessageChars, maxToolDescriptionChars, advertisedNamesChars } = MATILDA_NATIVE_LIMITS;
   const hasTools = ranked.length > 0;
   const instructionsChars = Math.min(tier.instructionsChars, maxMessageChars);
   const toolResultChars = Math.min(tier.toolResultChars, maxMessageChars);
@@ -337,14 +337,32 @@ function buildAtTier(
     messages.push({ role: 'user', content: matildaReaskNote() });
   }
 
-  const payload: MatildaChatPayload = {
-    messages: messages.map((msg) => capMessageContent(msg, maxMessageChars)),
+  const framed = (ms: MatildaChatMessage[]): MatildaChatPayload => ({
+    messages: ms,
     conversation_id: opts.conversationId,
     responseMode: 'auto',
     // Agent turns are BrainRouter's, not the person's Matilda web-app chat
     // history: never persist them there (the official agent SDK sends the same).
     persist: false,
-  };
+  });
+
+  // 2c) D23 — the history must fit on its own. A session with eight 16k tool
+  //     results is ~100 KB of messages; no tool cut can bring that under the
+  //     64 KiB edge limit (403 "forbidden" before the model sees a byte). The
+  //     oldest tool results are elided to a note (header kept, newest kept whole).
+  const historyBudget = maxBodyBytes - 1_024 - (hasTools ? HISTORY_RESERVE_FOR_TOOLS_BYTES : 0);
+  const isResult = (m: MatildaChatMessage): boolean => m.role === 'user' && /^\[Client tool (result|error): /.test(m.content);
+  const fitted = elideOldestToolResultsToBudget<MatildaChatMessage>(messages.map((msg) => capMessageContent(msg, maxMessageChars)), historyBudget, {
+    measure: (ms) => utf8Bytes(JSON.stringify(framed(ms))),
+    isToolResult: isResult,
+    contentChars: (m) => m.content.length,
+    elide: (m) => {
+      const nl = m.content.indexOf('\n');
+      const header = nl === -1 ? m.content : m.content.slice(0, nl);
+      return { role: m.role, content: `${header}\n${elidedToolResultNote(m.content.length - header.length)}` };
+    },
+  });
+  const payload: MatildaChatPayload = framed(fitted);
 
   // 3) clientTools: pinned first (runtime-mandated, workspace essentials, named in
   //    the latest message), then the most task-relevant — the first live turns

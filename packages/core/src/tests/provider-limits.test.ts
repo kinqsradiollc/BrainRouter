@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildChatCompletionPayload } from '../agent/transport/llmTransport.js';
-import { shapeChatCompletionToLimits } from '../provider/requestLimits.js';
+import { shapeChatCompletionToLimits, utf8Bytes } from '../provider/requestLimits.js';
 import type { LLMConfig } from '../config/config.js';
 
 // ADR-058 — `ProviderDefinition.limits`: a provider declares the hard per-request
@@ -136,3 +136,21 @@ test('limits.maxBodyBytes: a runtime-mandated tool and a tool the task names ver
   assert.ok(keptAfterGuard.includes('qq_zz'), 'a tool the latest user text names verbatim is pinned');
   assert.ok(keptAfterGuard.includes('profile_stage'));
 });
+
+test('compat shaper: a history over the body limit elides the oldest tool results (newest kept whole) before fitting tools', () => {
+  const messages: any[] = [{ role: 'user', content: 'what inside this codebase?' }];
+  for (let i = 0; i < 8; i += 1) {
+    messages.push({ role: 'assistant', content: null, tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }] });
+    messages.push({ role: 'tool', tool_call_id: `c${i}`, content: `file ${i}\n${'y'.repeat(20_000)}` });
+  }
+  messages.push({ role: 'user', content: 'continue' });
+  const tools = Array.from({ length: 12 }, (_, i) => ({ type: 'function', function: { name: `t${i}`, description: 'A tool. '.repeat(20), parameters: { type: 'object', properties: { path: { type: 'string' } } } } }));
+  const body = shapeChatCompletionToLimits({ model: 'matilda', messages, tools }, { maxBodyBytes: 65_536, maxMessageChars: 16_000 });
+  assert.ok(utf8Bytes(JSON.stringify(body)) <= 65_536, 'the shaped body fits');
+  const results = body.messages.filter((m: any) => m.role === 'tool');
+  assert.equal(results.length, 8);
+  assert.match(String(results[0].content), /elided to fit the provider's request limit/);
+  assert.ok(String(results[7].content).startsWith('file 7\nyyyy'), 'the newest result is whole');
+  assert.ok((body.tools?.length ?? 0) >= 10, `tools still travel (${body.tools?.length})`);
+});
+

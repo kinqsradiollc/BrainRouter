@@ -404,6 +404,31 @@ through the CLI after the change: 2 of 3 agent-shaped turns that previously
 died in the sandbox ran 8–10 client tool calls to a grounded answer; the third
 lost the thread after its first call (the note in (b) addresses what it said).
 
+**D23 · The history must fit the body on its own; a fourth DSML dialect.** A
+desktop session died with `403 {"error":"forbidden"}` — the 64 KiB edge limit —
+on a turn whose history alone was ~103 KB: eight tool results (two 39k-char
+`task.md` reads among them), each already tail-capped to 16k. Both wires fitted
+only the tool list; with zero tools left to drop the request went out over the
+limit and the edge refused it before the model saw a byte. Now
+`elideOldestToolResultsToBudget` (shared in `requestLimits.ts`) elides the
+OLDEST tool results to a one-line note — the `[Client tool result: <name>]`
+header (native) / the `role:'tool'` message (compat) stays, so call/result
+pairing is intact — until the history fits `maxBodyBytes` minus the framing and,
+when tools are offered, a 20 KB reserve for them; the newest tool result is never
+touched (it is what the model acts on next), nor is any user or assistant
+message. Applied in the native builder before the tool fit and in the compat
+shaper (transport and gateway) before its tool fit. The same session, rebuilt
+with the shipped builder and all 41 tools: 8 results, 7 elided (the 64 KiB simply cannot hold 16k instructions, 20 KB of tools and more than one whole 16k result), 59 KB, HTTP 200. In a second
+session ("tool calls fail") the model wrote a fourth DSML dialect — one
+parameter element NAMED after the tool with the input as its text, the block
+closed with `</｜DSML｜invoke>`:
+`<｜DSML｜parameter name="code_exec" class="inline">ls -la openSrc/</｜DSML｜parameter></｜DSML｜invoke>`.
+Unrecognised, the block leaked into the visible answer and the runtime's guards
+argued with it for four rounds. The interceptor now accepts either close marker
+and lifts a single tool-named parameter as a call with `{"input": …}`; for a
+platform tool the runtime answers "unknown tool — did you mean …", which is the
+correction the model needs, and nothing leaks.
+
 *Prose before tools.* The whole enabled surface is worth more to a turn than any
 of the prose around it, so the fit runs in tiers (`MATILDA_BUDGET_TIERS`): the
 standard prose first (descriptions 320, schema notes 100, instructions 16 000,

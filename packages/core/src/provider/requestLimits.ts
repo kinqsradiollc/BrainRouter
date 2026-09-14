@@ -121,12 +121,61 @@ function fitToolSpecsToByteBudget(body: ShapeableChatBody, specs: WireToolSpec[]
   withTopK(lo);
 }
 
+/** Bytes the history must leave for the tool list when tools are offered: the
+ *  D19 measurement put the essential-plus-relevant set for a real turn at
+ *  ~20 KB; below that the fit starts dropping tools the task needs. */
+export const HISTORY_RESERVE_FOR_TOOLS_BYTES = 20_000;
+/** Framing bytes of the body around the messages (ids, mode flags, JSON). */
+const HISTORY_FRAMING_BYTES = 1_024;
+
+/** What an elided tool result says in place of its content. */
+export function elidedToolResultNote(chars: number): string {
+  return `(result of ${chars.toLocaleString('en-US')} chars from earlier in this session elided to fit the provider's request limit — call the tool again if you need it)`;
+}
+
+/**
+ * `limits.maxBodyBytes`, the other half: a session whose HISTORY alone exceeds
+ * the budget (eight 16k-char tool results are ~100 KB) cannot be saved by any
+ * tool cut — the edge answers 403 before the model sees a byte. The elastic part
+ * of history is old tool output: elide the OLDEST tool results first (their
+ * content becomes a one-line note; the header stays so the pairing is intact),
+ * always keeping the newest tool result whole (it is what the model acts on
+ * next) and never touching anything that is not a tool result. Returns a new
+ * array when something was elided, the same array otherwise.
+ *
+ * `measure` serializes the candidate messages the way the wire will (the
+ * native and the compat bodies frame them differently); `isToolResult` and
+ * `elide` are the wire's own shapes.
+ */
+export function elideOldestToolResultsToBudget<M>(
+  messages: M[],
+  budgetBytes: number,
+  wire: {
+    measure: (messages: M[]) => number;
+    isToolResult: (m: M) => boolean;
+    contentChars: (m: M) => number;
+    elide: (m: M) => M;
+  },
+): M[] {
+  if (!(budgetBytes > 0) || wire.measure(messages) <= budgetBytes) return messages;
+  const out = messages.slice();
+  const resultIdx = out.map((m, i) => (wire.isToolResult(m) ? i : -1)).filter((i) => i >= 0);
+  // Oldest first, the newest result never.
+  for (const i of resultIdx.slice(0, -1)) {
+    if (wire.contentChars(out[i]) < 200) continue; // already a note or trivially small
+    out[i] = wire.elide(out[i]);
+    if (wire.measure(out) <= budgetBytes) return out;
+  }
+  return out;
+}
+
 /**
  * Shape a wire-shaped chat-completions body to a provider's declared limits:
- * cap every message's content to `maxMessageChars` (tail cut, marked), then fit
- * the tool list — the only elastic part once messages are capped — to
- * `maxBodyBytes` by task relevance. A provider that declares no limits gets the
- * body back byte-for-byte untouched. Mutates and returns `body`.
+ * cap every message's content to `maxMessageChars` (tail cut, marked), elide the
+ * oldest tool results when the history alone would not fit, then fit the tool
+ * list — the elastic part once messages are capped — to `maxBodyBytes` by task
+ * relevance. A provider that declares no limits gets the body back
+ * byte-for-byte untouched. Mutates and returns `body`.
  */
 export function shapeChatCompletionToLimits<B extends ShapeableChatBody>(
   body: B,
@@ -136,6 +185,18 @@ export function shapeChatCompletionToLimits<B extends ShapeableChatBody>(
   if (!limits) return body;
   if (limits.maxMessageChars && limits.maxMessageChars > 0 && Array.isArray(body.messages)) {
     body.messages = body.messages.map((m) => capMessageContent(m, limits.maxMessageChars));
+  }
+  if (limits.maxBodyBytes && limits.maxBodyBytes > 0 && Array.isArray(body.messages)) {
+    const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+    const budget = limits.maxBodyBytes - HISTORY_FRAMING_BYTES - (hasTools ? HISTORY_RESERVE_FOR_TOOLS_BYTES : 0);
+    type Msg = NonNullable<B['messages']>[number];
+    const text = (m: Msg): string => (typeof m?.content === 'string' ? m.content : Array.isArray(m?.content) ? m.content.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('') : '');
+    body.messages = elideOldestToolResultsToBudget<Msg>(body.messages, budget, {
+      measure: (ms) => utf8Bytes(JSON.stringify({ ...body, messages: ms, tools: undefined })),
+      isToolResult: (m) => m?.role === 'tool',
+      contentChars: (m) => text(m).length,
+      elide: (m) => ({ ...m, content: elidedToolResultNote(text(m).length) }),
+    });
   }
   if (limits.maxBodyBytes && limits.maxBodyBytes > 0 && Array.isArray(body.tools) && body.tools.length > 0) {
     const taskText = opts.taskText ?? latestUserTextFrom(body.messages ?? []);
