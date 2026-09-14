@@ -69,20 +69,43 @@ const SCHEMA_DESCRIPTION_CHARS = 100;
 
 /** A JSON Schema fit for the wire budget: property descriptions clipped, doc-only
  *  keywords dropped, structure (type/properties/required/enum/items/…) untouched. */
-export function compactParameters(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(compactParameters);
+export function compactParameters(schema: unknown, descriptionChars: number = SCHEMA_DESCRIPTION_CHARS): unknown {
+  if (Array.isArray(schema)) return schema.map((s) => compactParameters(s, descriptionChars));
   if (!schema || typeof schema !== 'object') return schema;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
     if (SCHEMA_DROP_KEYS.has(k)) continue;
     if (k === 'description' && typeof v === 'string') {
-      out[k] = v.length > SCHEMA_DESCRIPTION_CHARS ? `${v.slice(0, SCHEMA_DESCRIPTION_CHARS - 1)}…` : v;
+      out[k] = v.length > descriptionChars ? `${v.slice(0, descriptionChars - 1)}…` : v;
       continue;
     }
-    out[k] = typeof v === 'object' && v !== null ? compactParameters(v) : v;
+    out[k] = typeof v === 'object' && v !== null ? compactParameters(v, descriptionChars) : v;
   }
   return out;
 }
+
+/**
+ * How much prose each part of the request may cost, in two tiers. The whole
+ * enabled tool surface is worth more to the turn than any of this prose: when
+ * the standard tier cannot carry every tool the runtime offered (≤ 64), the
+ * tight tier trims descriptions, schema notes, the instructions block and old
+ * tool results FIRST — and only if even that cannot hold the surface does the
+ * fit start dropping tools (pinned ones last).
+ */
+export interface MatildaBudgetTier {
+  /** Lead-sentence budget for a tool description. */
+  descriptionChars: number;
+  /** Cap for a schema property's `description`. */
+  schemaDescriptionChars: number;
+  /** Room for the instructions block (`messages[0]`, incl. the hint). */
+  instructionsChars: number;
+  /** Cap for a tool RESULT message in the history (fresh text, not instructions). */
+  toolResultChars: number;
+}
+export const MATILDA_BUDGET_TIERS: readonly MatildaBudgetTier[] = [
+  { descriptionChars: 320, schemaDescriptionChars: 100, instructionsChars: 16_000, toolResultChars: 16_000 },
+  { descriptionChars: 200, schemaDescriptionChars: 60, instructionsChars: 12_000, toolResultChars: 8_000 },
+];
 
 /** `Client tools advertised now: a, b, c` — bounded; the tail is elided, never the head. */
 export function advertisedNamesLine(names: string[], maxChars: number): string {
@@ -154,9 +177,51 @@ export function matildaConversationIdFor(sessionKey: string | undefined, message
 
 /** Build the native body from the transport's normalized input. */
 export function buildMatildaChatPayload(input: NativeBuildInput, opts: { conversationId: string }): MatildaChatPayload {
-  const { maxBodyBytes, maxClientTools, maxMessageChars, maxToolDescriptionChars, toolDescriptionBudgetChars, advertisedNamesChars } = MATILDA_NATIVE_LIMITS;
+  const { maxBodyBytes, maxClientTools } = MATILDA_NATIVE_LIMITS;
   const hasTools = input.tools.length > 0;
-  const describe = (text: string | undefined): string => budgetToolDescription(text ?? '', toolDescriptionBudgetChars, maxToolDescriptionChars);
+  const taskText = latestUserText(input.messages);
+  const ranked = input.tools.map((t: CleanTool) => ({ name: t.name, description: t.description, tool: t }));
+  const pinned = pinnedToolNames(taskText, ranked.map((r) => r.name));
+  const max = Math.min(ranked.length, maxClientTools);
+
+  // Tier by tier: the standard prose first; if it cannot carry every tool the
+  // runtime offered, the tight prose; only then fewer tools (binary search on
+  // the largest pinned-first, relevance-ranked top-k that fits).
+  let built = buildAtTier(input, opts, MATILDA_BUDGET_TIERS[0], ranked, pinned, taskText);
+  if (!hasTools) return built.payload;
+  if (built.apply(max) <= maxBodyBytes) return built.payload;
+  for (const tier of MATILDA_BUDGET_TIERS.slice(1)) {
+    built = buildAtTier(input, opts, tier, ranked, pinned, taskText);
+    if (built.apply(max) <= maxBodyBytes) return built.payload;
+  }
+  let lo = 0;
+  let hi = max - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2); // ≥ 1 while lo < hi
+    if (built.apply(mid) <= maxBodyBytes) lo = mid; else hi = mid - 1;
+  }
+  built.apply(lo);
+  return built.payload;
+}
+
+interface RankedTool { name: string; description?: string; tool: CleanTool }
+
+/** The body at one prose tier plus `apply(k)`: advertise the top-k tools (all when
+ *  k ≥ offered, none when k = 0), refresh the advertised-names line, return the
+ *  wire byte count. */
+function buildAtTier(
+  input: NativeBuildInput,
+  opts: { conversationId: string },
+  tier: MatildaBudgetTier,
+  ranked: RankedTool[],
+  pinned: Set<string>,
+  taskText: string,
+): { payload: MatildaChatPayload; apply: (k: number) => number } {
+  const { maxMessageChars, maxToolDescriptionChars, advertisedNamesChars } = MATILDA_NATIVE_LIMITS;
+  const hasTools = ranked.length > 0;
+  const instructionsChars = Math.min(tier.instructionsChars, maxMessageChars);
+  const toolResultChars = Math.min(tier.toolResultChars, maxMessageChars);
+  const describe = (text: string | undefined): string => budgetToolDescription(text ?? '', tier.descriptionChars, maxToolDescriptionChars);
   const messages: MatildaChatMessage[] = [];
 
   // 1) The system prompt + the client-tools hint as their OWN prior user message.
@@ -169,7 +234,7 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
   const instructionsMessage = (advertised: string[]): MatildaChatMessage => {
     const names = hasTools && advertised.length ? advertisedNamesLine(advertised, advertisedNamesChars) : '';
     const hint = hasTools ? [MATILDA_CLIENT_TOOLS_HINT, names].filter(Boolean).join('\n') : '';
-    const room = Math.max(0, maxMessageChars - (hint ? hint.length + 2 : 0));
+    const room = Math.max(0, instructionsChars - (hint ? hint.length + 2 : 0));
     const sys = system ? (capMessageContent({ content: system }, room).content as string) : '';
     return { role: 'user', content: [sys, hint].filter(Boolean).join('\n\n') };
   };
@@ -177,7 +242,8 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
 
   // 2) The clean history. user → user; assistant → its visible text plus a
   //    compact note of any tool calls it made; tool results → user messages in
-  //    the SDK's roundtrip shape. (The model's own DSML is never echoed back.)
+  //    the SDK's roundtrip shape, capped at the tier's result budget. (The
+  //    model's own DSML is never echoed back.)
   for (const m of input.messages) {
     if (m.role === 'user') {
       messages.push({ role: 'user', content: textOf(m.content) });
@@ -190,7 +256,8 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
     } else if (m.role === 'tool') {
       const name = (m as { name?: string }).name ?? 'tool';
       const failed = (m as { isError?: boolean }).isError === true;
-      messages.push({ role: 'user', content: `${toolResultHeader(name, failed)}\n${neutralizeToolResultHeaders(textOf(m.content))}` });
+      const body = neutralizeToolResultHeaders(textOf(m.content));
+      messages.push(capMessageContent({ role: 'user', content: `${toolResultHeader(name, failed)}\n${body}` }, toolResultChars));
     }
   }
 
@@ -202,42 +269,27 @@ export function buildMatildaChatPayload(input: NativeBuildInput, opts: { convers
     // history: never persist them there (the official agent SDK sends the same).
     persist: false,
   };
-  if (!hasTools) return payload;
 
-  // 3) clientTools: at most 64, the most task-relevant first, then fitted to the
-  //    byte budget (binary search on the largest relevance-ranked top-k that fits).
-  //    Runtime-mandated tools and tools the latest user text names verbatim are
-  //    pinned ahead of relevance — the first live turns cut `profile_stage` on a
-  //    question about the economy and the model, told to call it, rightly said
-  //    no such tool existed.
-  const taskText = latestUserText(input.messages);
-  const ranked = input.tools.map((t: CleanTool) => ({ name: t.name, description: t.description, tool: t }));
-  const pinned = pinnedToolNames(taskText, ranked.map((r) => r.name));
+  // 3) clientTools: pinned first (runtime-mandated, workspace essentials, named in
+  //    the latest message), then the most task-relevant — the first live turns
+  //    cut `profile_stage` on a question about the economy and the model, told
+  //    to call it, rightly said no such tool existed.
   const apply = (k: number): number => {
+    if (k <= 0 || !hasTools) {
+      delete payload.clientTools;
+      if (instructionsIndex === 0) payload.messages[0] = capMessageContent(instructionsMessage([]), maxMessageChars);
+      return utf8Bytes(JSON.stringify(payload));
+    }
     const kept = k >= ranked.length ? ranked : rankAndCapTools(ranked, taskText, k, { pinned }).kept;
     payload.clientTools = kept.map((r) => ({
       name: r.tool.name,
       description: describe(r.tool.description),
-      parameters: compactParameters(r.tool.inputSchema ?? { type: 'object', properties: {} }),
+      parameters: compactParameters(r.tool.inputSchema ?? { type: 'object', properties: {} }, tier.schemaDescriptionChars),
     }));
     if (instructionsIndex === 0) payload.messages[0] = capMessageContent(instructionsMessage(kept.map((r) => r.tool.name)), maxMessageChars);
     return utf8Bytes(JSON.stringify(payload));
   };
-  const max = Math.min(ranked.length, maxClientTools);
-  if (apply(max) <= maxBodyBytes) return payload;
-  let lo = 0;
-  let hi = max - 1;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2); // ≥ 1 while lo < hi
-    if (apply(mid) <= maxBodyBytes) lo = mid; else hi = mid - 1;
-  }
-  if (lo === 0) {
-    delete payload.clientTools;
-    if (instructionsIndex === 0) payload.messages[0] = capMessageContent(instructionsMessage([]), maxMessageChars);
-  } else {
-    apply(lo);
-  }
-  return payload;
+  return { payload, apply };
 }
 
 const SERVER_TOOL_OUTPUT_PREVIEW_CHARS = 400;

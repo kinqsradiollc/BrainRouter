@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MATILDA_CLIENT_TOOLS_HINT,
+  MATILDA_BUDGET_TIERS,
   MATILDA_NATIVE_LIMITS,
   advertisedNamesLine,
   budgetToolDescription,
@@ -270,11 +271,35 @@ test('payload: the instructions end with the names actually advertised, essentia
   // Squeeze: a 24k-char history forces a cut — the essential tools still make it
   // (a history so large that even the pinned dozen cannot fit is a context problem
   // the fit cannot solve; the pins hold whenever the budget holds them at all).
-  const squeezed = buildMatildaChatPayload(input({ system: 'S'.repeat(16_000), messages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a'.repeat(12_000) }, { role: 'user', content: 'b'.repeat(12_000) }, { role: 'user', content: 'what is brainrouter?' }], tools }), { conversationId: 'c' });
+  const squeezed = buildMatildaChatPayload(input({ system: 'S'.repeat(16_000), messages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a'.repeat(15_000) }, { role: 'user', content: 'b'.repeat(15_000) }, { role: 'assistant', content: 'c'.repeat(10_000) }, { role: 'user', content: 'what is brainrouter?' }], tools }), { conversationId: 'c' });
   const kept = squeezed.clientTools!.map((t) => t.name);
   assert.ok(kept.length < 41 && kept.length > 0, `a real cut happened: ${kept.length}`);
   for (const essential of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'run_command']) assert.ok(kept.includes(essential), `${essential} survives the cut`);
   assert.ok(kept.includes('profile_stage') && kept.includes('update_plan'), 'runtime-mandated tools survive too');
   assert.match(squeezed.messages[0].content, /Client tools advertised now: /);
   assert.ok(!squeezed.messages[0].content.includes('delegate_thing_28') || kept.includes('delegate_thing_28'), 'the list names only what is advertised');
+});
+
+test('tiers: when the standard prose cannot carry every offered tool, the tight tier trims prose BEFORE any tool is dropped', () => {
+  const fat = (name: string) => ({ name, description: `${name} does a thing. ${'Detail sentence about behaviour and caveats. '.repeat(30)}`, inputSchema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`p${i}`, { type: 'string', description: 'x'.repeat(200) }])), required: ['p0'] } });
+  const tools = Array.from({ length: 60 }, (_, i) => fat(i < 10 ? ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'run_command', 'fetch_url', 'web_search'][i] : `mcp_server_tool_${i}`));
+  // A 16k-char tool result in the history: standard tier keeps it whole and cannot fit 60 tools.
+  const history = [
+    { role: 'user', content: 'list everything' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_dir', arguments: '{}' } }] } as never,
+    { role: 'tool', name: 'list_dir', content: 'r'.repeat(16_000) } as never,
+    { role: 'user', content: 'now what is brainrouter?' },
+  ] as unknown as NativeBuildInput['messages'];
+  const p = buildMatildaChatPayload(input({ system: 'S'.repeat(16_000), messages: history, tools }), { conversationId: 'c' });
+  assert.ok(utf8(JSON.stringify(p)) <= MATILDA_NATIVE_LIMITS.maxBodyBytes);
+  assert.equal(p.clientTools!.length, 60, 'every offered tool is still advertised');
+  const tight = MATILDA_BUDGET_TIERS[1];
+  assert.ok(p.messages[0].content.length <= tight.instructionsChars, `instructions trimmed to the tight tier (${p.messages[0].content.length})`);
+  const result = p.messages.find((m) => m.content.startsWith('[Client tool result: list_dir]'))!;
+  assert.ok(result.content.length <= tight.toolResultChars, `old tool result trimmed to the tight tier (${result.content.length})`);
+  assert.ok(p.clientTools!.every((t) => t.description.length <= tight.descriptionChars), 'descriptions at the tight budget');
+  assert.match(p.messages[0].content, /Client tools advertised now: /);
+  // Sanity: with no pressure, the standard tier is used untouched.
+  const easy = buildMatildaChatPayload(input({ system: 'Be brief.', messages: [{ role: 'user', content: 'hi' }], tools: tools.slice(0, 3) }), { conversationId: 'c' });
+  assert.ok(easy.clientTools!.some((t) => t.description.length > tight.descriptionChars), 'standard descriptions when there is room');
 });

@@ -351,6 +351,16 @@ agent turn — then, handed the runtime's compacted listing ("array length=61 �
 JSON omitted"), asked the person for the listing instead of reading further; that
 is the model's habit with a compacted result, not the adapter's doing.
 
+*Prose before tools.* The whole enabled surface is worth more to a turn than any
+of the prose around it, so the fit runs in tiers (`MATILDA_BUDGET_TIERS`): the
+standard prose first (descriptions 320, schema notes 100, instructions 16 000,
+tool results 16 000 chars); if that cannot carry every tool the runtime offered
+(≤ 64, the platform's hard cap), the tight tier (200 / 60 / 12 000 / 8 000)
+trims prose before a single tool is dropped; only if even that cannot hold the
+surface does the fit cut tools, pinned ones last. Measured over the full 96-tool
+built-in catalogue: 947 → 726 → 627 bytes per tool across raw / standard /
+tight, so 64 tools cost ~40 KB at the tight tier and still leave room.
+
 *What the fit never does:* add a tool. The runtime decides the surface first —
 profile tool groups, workspace tool toggles, skill allow/deny lists, access tiers,
 reviewed-execution narrowing — and hands the adapter that list; the fit only ever
