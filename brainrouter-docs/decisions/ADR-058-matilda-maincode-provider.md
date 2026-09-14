@@ -326,6 +326,48 @@ completes, and a live `brainrouter run` completes against the native surface.*
 *Acceptance (behavioural, NOT met today — see §6): the model reliably calls the
 advertised client tool on realistic agent prompts.*
 
+**D19 · Where the 64 KiB goes, and the tools that must always be there.** A real
+`brainrouter run` turn captured through a local proxy: 63 473 bytes = 16 074 bytes of
+instructions (`messages[0]`, already tail-cut to 16 000 chars) + 47 056 bytes of
+**41 client tools** — 1 148 bytes per tool, of which 19 446 chars are descriptions
+and 25 114 bytes are parameter schemas (`task_agent` alone 3 765 bytes;
+`update_plan` 3 599). With any history at all the fit therefore shrinks the tool
+list to a handful, and on the desktop the model rightly said "I don't have a
+`list_dir` tool available in this environment". Three changes: (1) tool
+descriptions are budgeted to their lead sentences (~320 chars, at a sentence
+boundary) and parameter schemas are compacted for the wire (property
+descriptions clipped, `title`/`examples`/`default` dropped) — the model reads a
+schema, not a manual; (2) `WORKSPACE_ESSENTIAL_TOOLS` (read/list/grep/glob,
+write/edit/patch, run, fetch, search) are pinned after the runtime-mandated set
+in every byte fit; (3) the instructions block ends with the names of the tools
+actually advertised this turn, so the model's picture of its surface matches
+the wire. Measured in the same capture: with the full 41-tool surface advertised,
+Matilda answered "what is brainrouter?" from its own knowledge without calling a
+tool (and, that time, without its server search) — the tool-use gap is the
+model's choice as much as the budget's. *After* the budget change the same turn
+went out at 51 586 bytes (41 tools in 35 134 bytes) and Matilda **called
+`list_dir`** through the full adapter — the first client-tool call on a realistic
+agent turn — then, handed the runtime's compacted listing ("array length=61 … raw
+JSON omitted"), asked the person for the listing instead of reading further; that
+is the model's habit with a compacted result, not the adapter's doing.
+
+*Prose before tools.* The whole enabled surface is worth more to a turn than any
+of the prose around it, so the fit runs in tiers (`MATILDA_BUDGET_TIERS`): the
+standard prose first (descriptions 320, schema notes 100, instructions 16 000,
+tool results 16 000 chars); if that cannot carry every tool the runtime offered
+(≤ 64, the platform's hard cap), the tight tier (200 / 60 / 12 000 / 8 000)
+trims prose before a single tool is dropped; only if even that cannot hold the
+surface does the fit cut tools, pinned ones last. Measured over the full 96-tool
+built-in catalogue: 947 → 726 → 627 bytes per tool across raw / standard /
+tight, so 64 tools cost ~40 KB at the tight tier and still leave room.
+
+*What the fit never does:* add a tool. The runtime decides the surface first —
+profile tool groups, workspace tool toggles, skill allow/deny lists, access tiers,
+reviewed-execution narrowing — and hands the adapter that list; the fit only ever
+chooses a subset of it, with the order runtime-mandated → workspace essentials
+(if offered) → named in the latest message → relevance. A tool a profile or
+workspace disabled is never on the list, so nothing pins it back.
+
 **D16 · Not the vendor's agent SDK — our adapter, held to the SDK's wire.** The
 question "should BrainRouter run Matilda through `@maincode-ai/matilda-agent-sdk`?"
 was answered from the published packages themselves (agent 0.2.1, client 0.3.1 —
@@ -590,6 +632,23 @@ require a valid `mc_live_` key are isolated below and none blocks P1.
   **tool result** (`[Client tool result: list_dir] …` → results about
   directory-listing tools in other projects). Every round trip of the tool loop
   therefore costs a server-side web search of the tool output — not switchable.
+- **The platform templates its own tools next to ours, and routes by the shape of
+  the request.** The model, asked to explore the workspace, listed its tools as
+  "code execution, spreadsheet operations, RAG query, and web search" and reached for
+  `code_exec` — Python in Matilda's server sandbox, whose only file is a stub
+  `code.py` — then reported *that* as the workspace. None of these names appear in
+  the docs (which say only "server-side tools (web search, code execution, etc.) are
+  handled by Matilda core"); on the wire they surface as `tool_start` events named
+  `processing`, `memory`, `search`, `assistant` ("Running code"). Measured through
+  the capture proxy with all 41 client tools advertised: a question-shaped prompt
+  ("what is brainrouter?") called a client tool on the first request 0/3 with the
+  original hint and **2/3 → 2/2** once the hint states that the workspace exists
+  only on the client and names the platform tools that cannot see it; an
+  imperative prompt ("explore brainrouter") still went server-side every time —
+  `processing` + `assistant` ×6, then an `error` — the orchestrator's routing, which
+  no request field influences. BrainRouter shows that activity as
+  `[Matilda server-side assistant] Running code` lines so the person can see what
+  happened; it cannot prevent it.
 - **The platform can run out of its own steps.** A real agent turn ended with the
   `error` event `{"code":"request_budget_exceeded","error":"The assistant ran out of
   steps before it could finish."}` — Matilda's server-side loop (search → read → …)

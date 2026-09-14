@@ -86,6 +86,18 @@ export const RUNTIME_MANDATED_TOOLS: readonly string[] = [
   'profile_stage', 'task_agent', 'reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked',
 ];
 
+/**
+ * The workspace tools every agent instruction block assumes exist — read,
+ * search, write, run, fetch. A byte fit that keeps `delegate_reviewer` and drops
+ * `list_dir` leaves the model unable to do the plain work the instructions
+ * describe ("I don't have a list_dir tool available in this environment").
+ * Pinned after the runtime-mandated set, ahead of relevance.
+ */
+export const WORKSPACE_ESSENTIAL_TOOLS: readonly string[] = [
+  'read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch',
+  'run_command', 'fetch_url', 'web_search',
+];
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -102,7 +114,7 @@ export function pinnedToolNames(taskText: string, toolNames: Iterable<string>): 
   const text = taskText || '';
   for (const name of toolNames) {
     if (!name) continue;
-    if (RUNTIME_MANDATED_TOOLS.includes(name)) { pinned.add(name); continue; }
+    if (RUNTIME_MANDATED_TOOLS.includes(name) || WORKSPACE_ESSENTIAL_TOOLS.includes(name)) { pinned.add(name); continue; }
     if (text.includes(name) && new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`).test(text)) pinned.add(name);
   }
   return pinned;

@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MATILDA_CLIENT_TOOLS_HINT,
+  MATILDA_BUDGET_TIERS,
   MATILDA_NATIVE_LIMITS,
+  advertisedNamesLine,
+  budgetToolDescription,
   buildMatildaChatPayload,
+  compactParameters,
   matildaConversationIdFor,
   neutralizeToolResultHeaders,
   parseMatildaChatStream,
@@ -31,7 +35,8 @@ test('payload: the system prompt + hint are messages[0], the task stays its own 
   assert.equal(p.messages.length, 2);
   assert.equal(p.messages[0].role, 'user');
   assert.ok(p.messages[0].content.startsWith('Be concise.'));
-  assert.ok(p.messages[0].content.endsWith(MATILDA_CLIENT_TOOLS_HINT), 'hint is the tail of messages[0]');
+  assert.ok(p.messages[0].content.includes(MATILDA_CLIENT_TOOLS_HINT), 'the hint is in messages[0]');
+  assert.ok(p.messages[0].content.endsWith('Client tools advertised now: read_file'), 'the advertised names close messages[0]');
   assert.deepEqual(p.messages[1], { role: 'user', content: 'read x' });
   assert.equal(p.responseMode, 'auto');
   assert.equal(p.conversation_id, 'c1');
@@ -51,7 +56,7 @@ test('payload: a 22k system prompt is tail-capped under the native limit with th
   const first = p.messages[0].content;
   assert.ok(first.length <= MATILDA_NATIVE_LIMITS.maxMessageChars, `≤ ${MATILDA_NATIVE_LIMITS.maxMessageChars}, got ${first.length}`);
   assert.ok(first.startsWith('HEAD'));
-  assert.ok(first.endsWith(MATILDA_CLIENT_TOOLS_HINT));
+  assert.ok(first.includes(MATILDA_CLIENT_TOOLS_HINT) && first.endsWith('Client tools advertised now: f'));
 });
 
 test('payload: history maps user/assistant through, tool results become user messages, assistant tool calls are noted', () => {
@@ -229,4 +234,72 @@ test('stream: the DSML block and the server-parsed event for the SAME call (whit
   const two = await parseMatildaChatStream(sse([['token', { content: block }], ['done', {}]]), {}, 'e', 'm');
   assert.notEqual(one.toolCalls?.[0]?.id, two.toolCalls?.[0]?.id, 'a second model call in the same turn never reuses an id (the runtime pairs results by id)');
   assert.match(String(two.toolCalls?.[0]?.id), /^call_matilda_/);
+});
+
+test('budget: descriptions are cut to lead sentences, schemas are compacted, and the wire stays valid', () => {
+  const long = 'Read a file from the workspace. Returns the text with line numbers. ' + 'Long manual paragraph about edge cases. '.repeat(40);
+  const d = budgetToolDescription(long, 320, 2000);
+  assert.ok(d.length <= 320 && d.endsWith('.'), `cut at a sentence boundary: ${JSON.stringify(d.slice(-40))}`);
+  assert.equal(budgetToolDescription('Short.', 320, 2000), 'Short.');
+  assert.ok(budgetToolDescription('x'.repeat(1000), 320, 2000).endsWith('…'), 'no sentence boundary → hard cut with a marker');
+  const schema = { type: 'object', title: 'Args', properties: { path: { type: 'string', description: 'p'.repeat(300), examples: ['a'] }, mode: { type: 'string', enum: ['a', 'b'], default: 'a' } }, required: ['path'] };
+  const c = compactParameters(schema) as { title?: unknown; properties: { path: { description: string; examples?: unknown }; mode: { enum: string[]; default?: unknown } }; required: string[] };
+  assert.equal(c.title, undefined);
+  assert.equal(c.properties.path.examples, undefined);
+  assert.ok(c.properties.path.description.length <= 100 && c.properties.path.description.endsWith('…'));
+  assert.deepEqual(c.properties.mode.enum, ['a', 'b']);
+  assert.equal(c.properties.mode.default, undefined);
+  assert.deepEqual(c.required, ['path']);
+  assert.equal(advertisedNamesLine(['a', 'b'], 600), 'Client tools advertised now: a, b');
+  assert.ok(advertisedNamesLine(Array.from({ length: 200 }, (_, i) => `tool_${i}`), 100).length === 100);
+});
+
+test('payload: the instructions end with the names actually advertised, essential workspace tools survive a cut, and the 41-tool surface now leaves room', () => {
+  // A realistic surface: 41 tools with manual-length descriptions and fat schemas.
+  // Realistic surface (measured): a manual-length description and a schema with a few
+  // documented properties per tool — 41 of them cost 47 KB on the wire before budgeting.
+  const fat = (name: string) => ({ name, description: `${name} does a thing. ${'Detail sentence about behaviour and caveats. '.repeat(30)}`, inputSchema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 3 }, (_, i) => [`p${i}`, { type: 'string', description: 'x'.repeat(200), examples: ['e'] }])), required: ['p0'] } });
+  const names = ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'run_command', 'fetch_url', 'web_search', 'profile_stage', 'update_plan', ...Array.from({ length: 29 }, (_, i) => `delegate_thing_${i}`)];
+  const tools = names.map(fat);
+  const p = buildMatildaChatPayload(input({ system: 'S'.repeat(16_000), messages: [{ role: 'user', content: 'what is brainrouter?' }], tools }), { conversationId: 'c' });
+  const bytes = utf8(JSON.stringify(p));
+  assert.ok(bytes <= MATILDA_NATIVE_LIMITS.maxBodyBytes, `≤ 64 KiB, got ${bytes}`);
+  assert.equal(p.clientTools!.length, 41, 'all 41 fit once descriptions and schemas are budgeted');
+  assert.ok(bytes <= MATILDA_NATIVE_LIMITS.maxBodyBytes - 12_000, `and leave real room for history — ≥ 12 KB (got ${bytes} bytes)`);
+  assert.match(p.messages[0].content, /Client tools advertised now: [^\n]*list_dir/);
+  assert.ok(p.messages[0].content.length <= MATILDA_NATIVE_LIMITS.maxMessageChars);
+  // Squeeze: a 24k-char history forces a cut — the essential tools still make it
+  // (a history so large that even the pinned dozen cannot fit is a context problem
+  // the fit cannot solve; the pins hold whenever the budget holds them at all).
+  const squeezed = buildMatildaChatPayload(input({ system: 'S'.repeat(16_000), messages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a'.repeat(15_000) }, { role: 'user', content: 'b'.repeat(15_000) }, { role: 'assistant', content: 'c'.repeat(10_000) }, { role: 'user', content: 'what is brainrouter?' }], tools }), { conversationId: 'c' });
+  const kept = squeezed.clientTools!.map((t) => t.name);
+  assert.ok(kept.length < 41 && kept.length > 0, `a real cut happened: ${kept.length}`);
+  for (const essential of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'run_command']) assert.ok(kept.includes(essential), `${essential} survives the cut`);
+  assert.ok(kept.includes('profile_stage') && kept.includes('update_plan'), 'runtime-mandated tools survive too');
+  assert.match(squeezed.messages[0].content, /Client tools advertised now: /);
+  assert.ok(!squeezed.messages[0].content.includes('delegate_thing_28') || kept.includes('delegate_thing_28'), 'the list names only what is advertised');
+});
+
+test('tiers: when the standard prose cannot carry every offered tool, the tight tier trims prose BEFORE any tool is dropped', () => {
+  const fat = (name: string) => ({ name, description: `${name} does a thing. ${'Detail sentence about behaviour and caveats. '.repeat(30)}`, inputSchema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`p${i}`, { type: 'string', description: 'x'.repeat(200) }])), required: ['p0'] } });
+  const tools = Array.from({ length: 60 }, (_, i) => fat(i < 10 ? ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'run_command', 'fetch_url', 'web_search'][i] : `mcp_server_tool_${i}`));
+  // A 16k-char tool result in the history: standard tier keeps it whole and cannot fit 60 tools.
+  const history = [
+    { role: 'user', content: 'list everything' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_dir', arguments: '{}' } }] } as never,
+    { role: 'tool', name: 'list_dir', content: 'r'.repeat(16_000) } as never,
+    { role: 'user', content: 'now what is brainrouter?' },
+  ] as unknown as NativeBuildInput['messages'];
+  const p = buildMatildaChatPayload(input({ system: 'S'.repeat(16_000), messages: history, tools }), { conversationId: 'c' });
+  assert.ok(utf8(JSON.stringify(p)) <= MATILDA_NATIVE_LIMITS.maxBodyBytes);
+  assert.equal(p.clientTools!.length, 60, 'every offered tool is still advertised');
+  const tight = MATILDA_BUDGET_TIERS[1];
+  assert.ok(p.messages[0].content.length <= tight.instructionsChars, `instructions trimmed to the tight tier (${p.messages[0].content.length})`);
+  const result = p.messages.find((m) => m.content.startsWith('[Client tool result: list_dir]'))!;
+  assert.ok(result.content.length <= tight.toolResultChars, `old tool result trimmed to the tight tier (${result.content.length})`);
+  assert.ok(p.clientTools!.every((t) => t.description.length <= tight.descriptionChars), 'descriptions at the tight budget');
+  assert.match(p.messages[0].content, /Client tools advertised now: /);
+  // Sanity: with no pressure, the standard tier is used untouched.
+  const easy = buildMatildaChatPayload(input({ system: 'Be brief.', messages: [{ role: 'user', content: 'hi' }], tools: tools.slice(0, 3) }), { conversationId: 'c' });
+  assert.ok(easy.clientTools!.some((t) => t.description.length > tight.descriptionChars), 'standard descriptions when there is room');
 });
