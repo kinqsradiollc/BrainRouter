@@ -26,6 +26,11 @@ const REQUIRED_LAZY_CHUNKS = Object.freeze([
   'NotesModeContainer-',
   'MeetingsView-',
   'WorkflowsPanel-',
+  // The browser-only dev bridge: 5,000 lines of canned demo data the Electron
+  // app never runs. It shipped in the initial chunk for months because App.tsx
+  // imported it statically; main.tsx now loads it only when no preload bridge
+  // exists. Listed so a static import cannot quietly bring it back.
+  'devBridge-',
 ]);
 
 function assertWithin(name, value, limit) {

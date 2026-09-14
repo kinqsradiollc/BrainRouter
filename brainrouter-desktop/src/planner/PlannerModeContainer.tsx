@@ -17,6 +17,9 @@ import type {
   PlannerItemView,
   PlannerSyncView,
 } from '@kinqs/brainrouter-ui/planner';
+// The planner's stylesheet travels with this lazy chunk (as notes.css does with
+// Notes): the shell's initial CSS budget is for the shell.
+import '@kinqs/brainrouter-ui/planner.css';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 import { splitTextByWorkspaceRefs } from '@kinqs/brainrouter-core/workspace/references';
 import { createAndCite, plannerItemUri } from '../lib/workspace/crossMode.js';

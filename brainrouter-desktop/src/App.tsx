@@ -26,7 +26,6 @@ import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
 import { type ConfigSnapshot, type UsageHistory } from './settings.js';
 import type { MarketplaceState } from './settings/marketplace/index.js';
-import { installDevBridge } from './devBridge.js';
 import type { AttachmentUpload, PlanItem, PlanView, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { useClosable } from './lib/useClosable.js';
@@ -52,7 +51,6 @@ import { STUDY_GENERATE_EVENT } from './study/studyHandoff.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import {
-  bootstrapAppearanceDocument,
   useAppearance,
   useZoom,
   useAppHandlers,
@@ -65,8 +63,9 @@ import { AppDialogs, MainContent } from './App/layout/index.js';
 import { SplitSessionPane } from './components/chat/SplitSessionPane.js';
 import { defaultSplitSession } from './lib/chat/splitSession.js';
 
-installDevBridge();
-bootstrapAppearanceDocument();
+// Startup side effects (the browser-only dev bridge, the appearance bootstrap
+// that reads it) run in main.tsx's boot sequence, in order, before the first
+// render — not at this module's load, which happens before the bridge exists.
 
 export function App(): React.ReactElement {
   const [draft, setDraft] = useState('');
