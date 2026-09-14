@@ -315,6 +315,10 @@
       "types": "./dist/tooling/index.d.ts",
       "default": "./dist/tooling/index.js"
     },
+    "./calendar": {
+      "types": "./dist/calendar/ics.d.ts",
+      "default": "./dist/calendar/ics.js"
+    },
     "./planner/presentation": {
       "types": "./dist/planner/presentation.d.ts",
       "default": "./dist/planner/presentation.js"

@@ -63,6 +63,7 @@ import { upsertConnectorDocuments } from '../store/documentStore.js';
 import type { ConnectorRuntimeHost } from './host/contracts.js';
 import { nodeConnectorRuntimeHost } from './host/nodeConnectorRuntimeHost.js';
 import type { PlannerIssueProjection } from '../../planner/connectorIssueAdapter.js';
+import { icsFeedClient, runIcsCalendarConnectorCheckpoint } from '../sources/icsCalendarConnector.js';
 
 /** The shared checkpoint result shape every `run<Source>ConnectorCheckpoint` returns. */
 export interface CheckpointResult {
@@ -248,6 +249,8 @@ export function buildCheckpointRunner(
         );
       case 'gmail':
         return await runGmailConnectorCheckpoint(connector, gmailTokenClient(requireStaticToken(connector, 'Gmail').token));
+      case 'ics-calendar':
+        return await runIcsCalendarConnectorCheckpoint(connector, icsFeedClient());
       default:
         throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
     }
