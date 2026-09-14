@@ -77,8 +77,9 @@ function compactCommandLike(input: ToolCompactionInput): ToolCompactionResult | 
   // into "Paths: …" and lose the shape the model needs.
   if (isJsonDocument(input.output)) return undefined;
   const clean = oneLine(input.output);
-  // Same rule as JSON: nothing the per-result cap can carry whole is stubbed.
-  if (clean.length <= Math.max(2_500, getCliKnobs().maxToolResultChars)) return undefined;
+  // Command noise (progress lines, spinners) keeps its own, lower threshold: the
+  // summary keeps every error and path line, so nothing the model acts on is lost.
+  if (clean.length <= 2_500) return undefined;
   const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
   const signalLines = lines.filter((line) => ERROR_RE.test(line) || PATH_RE.test(line));
   const paths = unique(lines.flatMap((line) => line.match(PATH_RE) ?? [])).slice(0, 20);
