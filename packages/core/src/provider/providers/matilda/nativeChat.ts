@@ -227,7 +227,7 @@ export async function parseMatildaChatStream(
   let n = 0;
   let endedEarly = false;
   const record = (name: string, args: string, id?: string): void => {
-    const key = `${name} ${args}`;
+    const key = `${name}\0${args}`;
     if (seen.has(key)) return;
     seen.add(key);
     toolCalls.push({ id: id ?? `call_matilda_${++n}`, type: 'function', function: { name, arguments: args } });

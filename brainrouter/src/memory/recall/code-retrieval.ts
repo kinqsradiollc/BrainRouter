@@ -352,7 +352,7 @@ export function extractIntraFileCallEdges(
     for (const id of ids) {
       const target = symbolToChunk.get(id);
       if (!target || target === c.id) continue;
-      const key = `${c.id} ${target}`;
+      const key = `${c.id}\0${target}`;
       if (seen.has(key)) continue;
       seen.add(key);
       edges.push({ fromChunkId: c.id, toChunkId: target });
