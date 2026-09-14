@@ -11,6 +11,9 @@ import { getCliKnobs } from '../../config/config.js';
 import { readPlan } from '../../task/taskStore.js';
 import { pendingSteeringConstraint } from '../../task/steeringReceiptStore.js';
 import { emitTurnStep, guardStepFromStatus } from './turnPath.js';
+
+/** Hard per-turn ceiling on preamble/promise nudges, across budget resets. */
+const PREAMBLE_GUARD_TOTAL_MAX = 6;
 import {
   mergePendingChildIds,
   unsynthesizedChildIds,
@@ -87,6 +90,11 @@ export class TurnLifecycleCoordinator {
   private readonly planCompletedAtTurnStart: number;
   private budgetCheckpointsFired = 0;
   private preambleGuardFired = 0;
+  // Progress earns another nudge: the preamble/promise budget (2) resets when
+  // the model ran tools since the last nudge — it is not spinning, it is
+  // working in prose-then-tool steps. A hard per-turn total still bounds it.
+  private toolCallsAtLastPreambleGuard = 0;
+  private preambleGuardTotal = 0;
   private fanOutGuardFired = 0;
   private fanOutDifferentiationGuardFired = 0;
   private deliverableGuardFired = 0;
@@ -191,11 +199,20 @@ export class TurnLifecycleCoordinator {
   evaluateTerminalGuards(input: TerminalGuardInput): TerminalGuardResult {
     const content = input.response.content ?? '';
     if (
+      this.preambleGuardFired > 0
+      && this.agent.lastTurnToolCalls > this.toolCallsAtLastPreambleGuard
+      && this.preambleGuardTotal < PREAMBLE_GUARD_TOTAL_MAX
+    ) {
+      this.preambleGuardFired = 0;
+    }
+    if (
       this.preambleGuardFired < 2
       && this.agent.lastTurnToolCalls > 0
       && !content.trim()
     ) {
       this.preambleGuardFired += 1;
+      this.preambleGuardTotal += 1;
+      this.toolCallsAtLastPreambleGuard = this.agent.lastTurnToolCalls;
       this.continueWithGuard(
         emptyAnswerGuardMessage(this.agent.lastTurnToolCalls),
         `Recovery: empty-answer-after-tools (${this.preambleGuardFired}/2) — forcing synthesis`,
@@ -212,6 +229,8 @@ export class TurnLifecycleCoordinator {
       )
     ) {
       this.preambleGuardFired += 1;
+      this.preambleGuardTotal += 1;
+      this.toolCallsAtLastPreambleGuard = this.agent.lastTurnToolCalls;
       this.continueWithGuard(
         stalledPreambleGuardMessage(content),
         `Recovery: preamble-without-action (${this.preambleGuardFired}/2) — forcing continuation`,
@@ -225,6 +244,8 @@ export class TurnLifecycleCoordinator {
       && this.agent.lastTurnToolCalls === this.promisedToolsAtCount
     ) {
       this.preambleGuardFired += 1;
+      this.preambleGuardTotal += 1;
+      this.toolCallsAtLastPreambleGuard = this.agent.lastTurnToolCalls;
       this.promisedToolsAtCount = -1;
       this.continueWithGuard(
         promisedToolsGuardMessage(),
