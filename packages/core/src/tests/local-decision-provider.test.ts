@@ -81,7 +81,12 @@ test('the model is forced to call the one tool, with the state bounded into the 
   await provider.answer('x'.repeat(5_000), { risky: QUESTIONS.risky! }, new AbortController().signal);
 
   assert.equal(capture.seen.tools.length, 1, 'one tool, so there is nothing else to call');
-  assert.equal(capture.seen.tools[0].function.name, ANSWER_TOOL_NAME);
+  // The transport's INTERNAL shape — {name, description, inputSchema} — which it
+  // wraps into the wire format itself. This assertion was written the other way
+  // round at first, matching the code, and both were wrong together; the
+  // wire-level test at the bottom of this file is what settles it.
+  assert.equal(capture.seen.tools[0].name, ANSWER_TOOL_NAME);
+  assert.equal(capture.seen.tools[0].inputSchema.properties.risky.properties.answer.type, 'number');
   assert.deepEqual(capture.seen.options.tool_choice, { type: 'function', function: { name: ANSWER_TOOL_NAME } });
   assert.ok(capture.seen.options.maxResponseBytes > 0, 'a classifier reply is bounded');
   assert.ok(capture.seen.options.signal, 'the port\'s timeout has to reach the transport');
@@ -173,4 +178,69 @@ test('a structured state is serialized and bounded, never sent whole', () => {
   assert.ok(state.length <= 201, `got ${state.length}`);
   assert.ok(state.endsWith('…'), 'truncation is visible to the model, not silent');
   assert.equal(serializeState('short', 8_000), 'short');
+});
+
+// ---------------------------------------------------------------------------
+// The test above this line injects the transport, which is exactly why it
+// could not catch what this one does: the tool spec handed to `callOpenAI` is
+// the transport's INTERNAL shape, and it wraps that into the wire format
+// itself. A pre-wrapped OpenAI spec produces a NAMELESS tool with an empty
+// schema on the wire — no error, no warning, just a model that is suddenly
+// free to answer anything. The entire "cannot be creative" property lives in
+// bytes this suite was not looking at, so this one looks at them.
+// ---------------------------------------------------------------------------
+
+test('the schema reaches the wire, and a real tool call comes back through the port', async () => {
+  const http = await import('node:http');
+  let sent: any;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      sent = JSON.parse(body);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'x', object: 'chat.completion', created: 1, model: 'small-1',
+        choices: [{
+          index: 0,
+          finish_reason: 'tool_calls',
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 't1',
+              type: 'function',
+              function: { name: 'answer', arguments: JSON.stringify({ risky: { answer: 0.91, confidence: 0.64 } }) },
+            }],
+          },
+        }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port: tcpPort } = server.address() as { port: number };
+  try {
+    const decisionPort = createDecisionPort({
+      provider: createLocalDecisionProvider({
+        llm: { ...llm, endpoint: `http://127.0.0.1:${tcpPort}/v1` } as LLMConfig,
+      }),
+    });
+    const answers = await decisionPort.ask({ command: 'npm publish' }, { risky: QUESTIONS.risky! });
+
+    const tool = sent.tools?.[0];
+    assert.equal(tool?.function?.name, ANSWER_TOOL_NAME, 'a nameless tool is a tool the model cannot be made to call');
+    assert.deepEqual(sent.tool_choice, { type: 'function', function: { name: ANSWER_TOOL_NAME } });
+    const answerSchema = tool.function.parameters?.properties?.risky?.properties?.answer;
+    assert.equal(answerSchema?.type, 'number', 'the bound has to be ON THE WIRE, not just in our object');
+    assert.equal(answerSchema.minimum, 0);
+    assert.equal(answerSchema.maximum, 1);
+    assert.match(sent.messages.find((m: any) => m.role === 'user').content, /^STATE:/);
+
+    assert.equal(answers.risky!.value, 0.91);
+    assert.equal(answers.risky!.confidence, 0.64);
+    assert.equal(answers.risky!.provider, 'local');
+    assert.equal(answers.risky!.fellBack, undefined);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
