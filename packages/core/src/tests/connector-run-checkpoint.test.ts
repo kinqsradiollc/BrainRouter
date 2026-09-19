@@ -246,7 +246,7 @@ test('a successful connector ingestion invokes the scoped Planner sink and updat
         // called; this test's subject was never that function, it is that
         // `runConnectorCheckpointCore` invokes the sink it was given and counts
         // what came back.
-        projectPlannerIssues: async ({ connector: scopedConnector, documents }) => {
+        projectPlannerDocuments: async ({ connector: scopedConnector, documents }) => {
           const projected = await createConnectorIssueSourceAdapter({
             connectorId: scopedConnector.id,
             source: scopedConnector.source,

@@ -62,7 +62,7 @@ import { finishConnectorRun, getConnector, recordConnectorRun } from '../store/c
 import { upsertConnectorDocuments } from '../store/documentStore.js';
 import type { ConnectorRuntimeHost } from './host/contracts.js';
 import { nodeConnectorRuntimeHost } from './host/nodeConnectorRuntimeHost.js';
-import type { PlannerIssueProjection } from '../../planner/connectorIssueAdapter.js';
+import type { PlannerDocumentProjection } from '../../planner/connectorIssueAdapter.js';
 import { icsFeedClient, runIcsCalendarConnectorCheckpoint } from '../sources/icsCalendarConnector.js';
 
 /** The shared checkpoint result shape every `run<Source>ConnectorCheckpoint` returns. */
@@ -108,7 +108,7 @@ export interface CheckpointRunnerDeps {
    * this shared runtime cannot guess which personal planner owns server or
    * multi-user connector data.
    */
-  projectPlannerIssues?: PlannerIssueProjection;
+  projectPlannerDocuments?: PlannerDocumentProjection;
 }
 
 const OAUTH_KEYCHAIN_GUIDANCE =
@@ -297,8 +297,8 @@ export async function runConnectorCheckpointCore(
   try {
     const result = await runCheckpoint(connector);
     const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
-    const plannerItemsProjected = result.failures.length === 0 && deps.projectPlannerIssues
-      ? await deps.projectPlannerIssues({ connector, documents: persisted })
+    const plannerItemsProjected = result.failures.length === 0 && deps.projectPlannerDocuments
+      ? await deps.projectPlannerDocuments({ connector, documents: persisted })
       : 0;
     const run =
       finishConnectorRun(workspaceRoot, connector.id, running.id, {

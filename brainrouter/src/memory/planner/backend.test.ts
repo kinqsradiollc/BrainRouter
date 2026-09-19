@@ -330,6 +330,116 @@ describe("planner push contract", () => {
     expect(Object.hasOwn(stored ?? {}, "completed")).toBe(false);
   });
 
+  describe("connected calendar events (ADR-060 D3)", () => {
+    const eventDocument = (over: Record<string, unknown> = {}, metadata: Record<string, unknown> = {}) => ({
+      id: "standup@google.com/2026-08-12T23:00:00.000Z",
+      connectorId: "runtime-connector",
+      source: "ics-calendar" as const,
+      kind: "event" as const,
+      title: "Standup",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      text: "Standup",
+      firstSeenAt: "2026-08-11T01:00:00.000Z",
+      lastSeenAt: "2026-08-11T01:00:00.000Z",
+      ...over,
+      metadata: {
+        startAt: "2026-08-12T23:00:00.000Z",
+        endAt: "2026-08-12T23:30:00.000Z",
+        allDay: false,
+        timeZone: "Australia/Melbourne",
+        status: "CONFIRMED",
+        calendarLabel: "Work · Google",
+        uid: "standup@google.com",
+        ...metadata,
+      },
+    });
+    const scope = (documents: ReturnType<typeof eventDocument>[]) => ({
+      connectorId: "db-calendar", source: "ics-calendar" as const,
+      sourceLabel: "Work", documents,
+    });
+
+    it("writes the meeting as an item on its own day AND a block at its time, then stops writing when nothing changed", async () => {
+      const input = scope([eventDocument()]);
+      const first = await planner.refreshConnectedEventDocuments(ORG, USER, input);
+      const revisionAfterFirst = fake.revision;
+      const second = await planner.refreshConnectedEventDocuments(ORG, USER, input);
+
+      expect(first).toEqual({ created: 1, updated: 0, unchanged: 0, skipped: 0 });
+      expect(second).toEqual({ created: 0, updated: 0, unchanged: 1, skipped: 0 });
+      expect(fake.revision).toBe(revisionAfterFirst);
+
+      const item = [...fake.items.values()][0]!;
+      expect(item.origin).toBe("mirrored");
+      expect(item.payload.title.value).toBe("Standup");
+      // 23:00Z is 9am the next day in Melbourne — the day the person will have it.
+      expect(item.payload.dueDate?.value).toBe("2026-08-13");
+      expect(item.payload.provenance?.sourceLabel).toBe("Work · Google");
+      expect(Object.hasOwn(item.payload, "completed")).toBe(false);
+
+      const block = [...fake.blocks.values()][0]!;
+      expect(block.itemId).toBe(item.id);
+      expect(block.scheduledFor).toBe("2026-08-12T23:00:00.000Z");
+      expect(block.estimateMinutes).toBe(30);
+      expect(block.deletedAt).toBeNull();
+    });
+
+    it("moves the block when the meeting moves, and keeps the person's own record of it", async () => {
+      await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument()]));
+      const blockKey = [...fake.blocks.keys()][0]!;
+      fake.blocks.set(blockKey, { ...fake.blocks.get(blockKey)!, actualMinutes: 25, completedAt: "2026-08-12T23:25:00.000Z" });
+
+      const moved = await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument(
+        { updatedAt: "2026-08-11T09:00:00.000Z" },
+        { startAt: "2026-08-13T00:00:00.000Z", endAt: "2026-08-13T01:00:00.000Z" },
+      )]));
+
+      expect(moved.updated).toBe(1);
+      const block = fake.blocks.get(blockKey)!;
+      expect(block.scheduledFor).toBe("2026-08-13T00:00:00.000Z");
+      expect(block.estimateMinutes).toBe(60);
+      expect(block.actualMinutes).toBe(25);
+      expect(block.completedAt).toBe("2026-08-12T23:25:00.000Z");
+      expect(fake.blocks.size).toBe(1);
+    });
+
+    it("a cancelled meeting is tombstoned, and takes its block with it", async () => {
+      await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument()]));
+      const cancelled = await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument(
+        { updatedAt: "2026-08-11T10:00:00.000Z" }, { status: "CANCELLED" },
+      )]));
+
+      expect(cancelled.updated).toBe(1);
+      const item = [...fake.items.values()][0]!;
+      expect(item.payload.deletedAt).toBeTruthy();
+      const block = [...fake.blocks.values()][0]!;
+      expect(block.deletedAt).toBeTruthy();
+    });
+
+    it("an all-day event is a day with no invented hour on the calendar", async () => {
+      const summary = await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument(
+        { id: "bday", title: "Mum's birthday" },
+        { startAt: "2026-08-19T00:00:00.000Z", endAt: "2026-08-20T00:00:00.000Z", allDay: true, timeZone: undefined },
+      )]));
+
+      expect(summary.created).toBe(1);
+      expect([...fake.items.values()][0]!.payload.dueDate?.value).toBe("2026-08-19");
+      expect(fake.blocks.size).toBe(0);
+    });
+
+    it("refuses to overwrite an item the person owns, and counts what it could not map", async () => {
+      await planner.pushUntrustedOperations(ORG, USER, [itemOperation({
+        payload: { origin: "owned", title: "Mine" },
+      })], "2026-08-11T00:00:00.000Z");
+      const ownedId = [...fake.items.values()][0]!.id;
+
+      const summary = await planner.refreshConnectedEventDocuments(ORG, USER, scope([
+        eventDocument({ id: "not-an-event", kind: "issue" as never }),
+      ]));
+      expect(summary.skipped).toBe(1);
+      expect(fake.items.get([...fake.items.keys()].find((k) => k.endsWith(ownedId))!)!.payload.title.value).toBe("Mine");
+    });
+  });
+
   it("rejects source-owned mirrored writes without changing the cached source record", async () => {
     await planner.pushUntrustedOperations(ORG, USER, [itemOperation({
       payload: { origin: "mirrored", source: "github", title: "Connected issue" },

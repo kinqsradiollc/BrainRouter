@@ -89,15 +89,26 @@ real Outlook export (identifying content replaced).
 ### D3 · Projection: an event is an item plus a block
 
 `connectorEventAdapter.ts` sits beside `connectorIssueAdapter.ts` and is called by the same
-`projectPlannerIssues` hook, renamed to `projectPlannerDocuments` (the old name stays as an
-alias for one release). For each `event` document:
+runtime hook, renamed `projectPlannerIssues` → `projectPlannerDocuments`. **No alias was kept**,
+against this ADR as written: the hook has four call sites in one repository, and two names for
+one hook is the drift the rename exists to remove. The sink routes on the DOCUMENT's `kind`
+rather than on the connector's source, so a source that some day emits both kinds lands both. For each `event` document:
 
 - an item with `id = stablePlannerId(connectorId, documentId)`, `origin: 'mirrored'`,
   `title = summary`, `dueDate = start date`, `notes = location + description (bounded)`,
   provenance `{ source: calendarLabel, kind: 'event', externalId: uid, url }`;
-- a time block with `id = 'evt:' + item id`, `scheduledFor = startAt`, `estimateMinutes =
-  duration` (all-day → the day's first hour, 60 minutes, marked `allDay` in metadata so the
-  calendar draws it as a banner, not a block), source-owned like the item.
+- a time block at `scheduledFor = startAt` for `estimateMinutes = duration`, source-owned
+  like the item — **and no block at all for an all-day event.**
+
+> **This bullet CHANGED between the decision and the build, and the change is recorded here
+> rather than left in the diff.** As written it said an all-day event becomes "the day's first
+> hour, 60 minutes, marked `allDay` so the calendar draws it as a banner". Building it made the
+> cost visible: a block exists to say when work happens, and there is no banner lane in the
+> Calendar tab, so a public holiday would have taken a real hour at 9am and counted sixty real
+> minutes against the day's commitment — the number ADR-028 D5 uses to tell someone they have
+> over-committed. An all-day event now has a day and no time, which is what it is; the item's
+> due date carries it, and the Today list, the week strip and the day score already read that.
+> A banner lane remains available to C4 if the calendar grows one.
 
 Cancelled events (`STATUS:CANCELLED`, or gone from the feed within the window) delete their
 projection on the next run — the same "the source is the truth" rule as issues that close.
@@ -122,7 +133,16 @@ not reimplement it.
   hairline in the source's colour when the feed declares one (`X-APPLE-CALENDAR-COLOR`,
   Google's `backgroundColor`), else the default.
 - Dragging a calendar event in the Calendar tab is refused with the existing "belongs to the
-  source" tooltip. Completing it is allowed. Deleting it is not — remove the calendar instead.
+  source" tooltip. Deleting it is not offered — remove the calendar instead.
+- **Completing it is NOT yet possible, and D3 as written was wrong to say it already was.**
+  `completed` is not in Core's `PLANNER_OWNED_FIELDS` and both hosts derive
+  `capabilities.complete` from `origin === 'owned'`, so no mirrored item can be ticked — an
+  issue by design ("source state never completes the user's intention by inference"), and an
+  event by accident of sharing the rule. Attending a meeting *is* the person's own act, so the
+  capability is real and the decision is C4's: either the hosts grant `complete` for
+  event-sourced items, or `completed` joins the owned set. Until one of those lands, §6's
+  "a meeting the person completed stays completed" cannot be demonstrated, and this ADR does
+  not claim it can.
 - Freshness: a subscription that has not answered for longer than its cadence ×2 shows in
   `staleSources` exactly as GitHub does today ("Family calendar last refreshed 3 hours ago").
 
@@ -154,12 +174,13 @@ not reimplement it.
 |---|---|---|---|
 | C1 | iCalendar parser | `packages/core/src/calendar/ics.ts` + tests on real exports (Google, iCloud, Outlook), recurrence within a window, time zones via Intl | D2 |
 | C2 | `ics-calendar` source | types (`event` kind, source), catalog entry, `runIcsCalendarConnectorCheckpoint`, runner switch, desktop + server HTTP client (webcal→https) | D1 |
-| C3 | Event projection | `connectorEventAdapter.ts`, `projectPlannerDocuments`, block upsert for source-owned blocks, cancel/vanish removal, owned-field survival tests | D3 |
+| C3 | Event projection | ✅ `connectorEventAdapter.ts` + the server sink `refreshConnectedEventDocuments`, hook renamed and routing on `kind`, cancelled → tombstone incl. its block, the person's measured time and completion on a block survive a re-read | D3 |
+| C3b | Vanished events | An event that leaves the feed *inside the window* without a CANCELLED marker is still projected until it is cancelled or the calendar is removed; tombstoning it needs the run's window threaded to the sink | D3 |
 | C4 | Surface | provenance chip + colour hairline, all-day banner, drag refusal, `staleSources` wording, **Add calendar…** on the Calendar tab, file import flow on desktop (dialog) and dashboard (upload) | D4, D5 |
 | C5 | `google-calendar` source | scope on the server's Google OAuth, calendar list for the picker, events runner, desktop OAuth allowlist | D1 |
 | C6 | Docs + catalog | configuration.md, connectors guide, STATUS row | — |
 
-C1–C3 are Core-only and ship first; C4 makes it visible; C5 is the OAuth path. Each slice is
+C1–C2 are Core-only and shipped first; C3 adds the server sink; C4 makes it visible and decides the completion capability; C5 is the OAuth path. Each slice is
 its own PR into the release branch with the focused checks plus the planner visual gate where
 the surface changes.
 

@@ -19,7 +19,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ConnectorDocumentRecord, ConnectorSource } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../engine.js";
 import {
-  causalValue, createConnectorIssueSourceAdapter, mergeOwnedItem, refreshMirrored, compareHlc, validatePlannerOperation,
+  causalValue, createConnectorIssueSourceAdapter, projectConnectorEvents, mergeOwnedItem, refreshMirrored, compareHlc, validatePlannerOperation,
   type PlannerItem, type Hlc, type TimeBlock,
   type PlannerProjectionSummary,
   type PlannerPushOperation, type PlannerPushOutcome,
@@ -564,6 +564,95 @@ export async function refreshConnectedIssueDocuments(
       return existing ? "updated" as const : "created" as const;
     });
     summary[result] += 1;
+  }
+  return summary;
+}
+
+/**
+ * ADR-060 D3 — project a connector's CALENDAR events into the durable Planner.
+ *
+ * The sibling of `refreshConnectedIssueDocuments`, and the same contract: a
+ * source re-read, so it bypasses the client outbox, and it avoids a write when
+ * nothing changed so re-reading a feed every half hour does not churn
+ * revisions. Two things are specific to events:
+ *
+ *  - **An event brings a block.** The item says which day; the block says when
+ *    and for how long, which is what the Calendar tab draws. Both are written
+ *    under one mutation so a pull can never see the meeting without its time.
+ *  - **A cancelled meeting is a tombstone, and it takes its block with it.**
+ *    `refreshMirrored` carries no `deletedAt` — it merges a live record — so
+ *    the tombstone is applied over the merge rather than left to it.
+ *
+ * What the person owns survives: measured time, carry-over and completion on
+ * the block are read back from the stored row rather than reset to the feed's
+ * idea of the meeting.
+ */
+export async function refreshConnectedEventDocuments(
+  orgId: string,
+  userId: string,
+  input: {
+    connectorId: string;
+    source: ConnectorSource;
+    sourceLabel: string;
+    documents: readonly ConnectorDocumentRecord[];
+  },
+): Promise<PlannerProjectionSummary> {
+  if (!orgId.trim() || !userId.trim()) {
+    throw new Error("Connected Planner projection requires explicit organization and user scope.");
+  }
+  const projected = projectConnectorEvents(input);
+  const summary: PlannerProjectionSummary = {
+    created: 0, updated: 0, unchanged: 0,
+    skipped: input.documents.length - projected.length,
+  };
+
+  for (const { item: remote, block } of projected) {
+    const outcome = await store().withPlannerMutation(orgId, userId, async (locked) => {
+      const existing = await locked.getPlannerItem(orgId, userId, remote.id);
+      if (existing && (existing.payload.origin !== "mirrored" || existing.payload.source !== remote.source)) {
+        return "skipped" as const;
+      }
+      const merged = existing
+        ? refreshMirrored(existing.payload, remote, remote.fetchedAt!)
+        : remote;
+      const next: PlannerItem = remote.deletedAt ? { ...merged, deletedAt: remote.deletedAt } : merged;
+      const itemChanged = !existing || !isDeepStrictEqual(existing.payload, next);
+      if (itemChanged) await persistPlannerItem(locked, orgId, userId, next);
+
+      let blockChanged = false;
+      if (remote.deletedAt) {
+        blockChanged = (await locked.tombstonePlannerBlocksForItem(
+          orgId, userId, remote.id, remote.deletedAt,
+        )) > 0;
+      } else if (block) {
+        const current = await locked.getPlannerBlock(orgId, userId, block.id);
+        const unchanged = current
+          && current.itemId === block.itemId
+          && current.scheduledFor === (block.scheduledFor ?? null)
+          && current.estimateMinutes === block.estimateMinutes
+          && current.deletedAt === null;
+        if (!unchanged) {
+          await locked.upsertPlannerBlock(orgId, userId, {
+            id: block.id,
+            itemId: block.itemId,
+            scheduledFor: block.scheduledFor ?? null,
+            estimateMinutes: block.estimateMinutes,
+            // The person's own record of the meeting is theirs, not the feed's.
+            actualMinutes: current?.actualMinutes ?? null,
+            carriedOver: current?.carriedOver ?? 0,
+            completedAt: current?.completedAt ?? null,
+            revision: current?.revision ?? "0",
+            updatedAt: block.updatedAt!,
+            deletedAt: null,
+          });
+          blockChanged = true;
+        }
+      }
+
+      if (!itemChanged && !blockChanged) return "unchanged" as const;
+      return existing ? "updated" as const : "created" as const;
+    });
+    summary[outcome] += 1;
   }
   return summary;
 }
