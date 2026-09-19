@@ -1,3 +1,4 @@
+import http from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Config } from '../config/config.js';
@@ -337,4 +338,113 @@ test('an explicit model never reaches the route choice', async () => {
     assert.equal(res.status, 200);
     assert.deepEqual(decisions, [], "an explicit pick is the caller's, and ADR-041's contract stands");
   } finally { await handle.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// Every test above injects `transport`, which is precisely why none of them
+// could see that the gateway was destroying client tool definitions. The
+// conversion bug lives BETWEEN the gateway and `callOpenAI`, so the only test
+// that can catch it is one that uses the real transport and reads the bytes an
+// upstream provider actually receives.
+// ---------------------------------------------------------------------------
+
+async function withUpstream(fn: (baseUrl: string, seen: () => any) => Promise<void>) {
+  let received: any;
+  const origin = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      received = JSON.parse(raw);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'x', object: 'chat.completion', created: 1, model: 'm',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', () => resolve()));
+  const upstreamPort = (origin.address() as { port: number }).port;
+  const endpoint = `http://127.0.0.1:${upstreamPort}/v1`;
+  // No `transport` override: this must go through the real callOpenAI.
+  const handle = await startRouterGateway({
+    config: {
+      activeServer: 's', servers: {},
+      llm: { provider: 'openai', apiKey: 'k', model: 'm', endpoint },
+      providers: { up: { provider: 'openai', apiKey: 'k', model: 'm', endpoint, cachedModels: ['m'] } },
+      cli: { router: { enabled: true, chain: ['up/m'], serve: true } },
+    } as unknown as Config,
+    host: '127.0.0.1',
+    port: 0,
+  });
+  try {
+    await fn(`http://${handle.host}:${handle.port}`, () => received);
+  } finally {
+    await handle.close();
+    await new Promise<void>((resolve) => origin.close(() => resolve()));
+  }
+}
+
+test('a client\'s tool definitions reach the upstream intact', async () => {
+  await withUpstream(async (baseUrl, seen) => {
+    const parameters = {
+      type: 'object',
+      properties: { city: { type: 'string' }, unit: { type: 'string', enum: ['c', 'f'] } },
+      required: ['city'],
+    };
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'weather?' }],
+        tools: [{ type: 'function', function: { name: 'get_weather', description: 'Look up the weather', parameters } }],
+        tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      }),
+    });
+    assert.equal(res.status, 200);
+    const sent = seen();
+    // The whole point: a NAME (or `tool_choice` names a tool that isn't there)
+    // and the SCHEMA (or the model is asked to fill `{}`).
+    assert.equal(sent.tools[0].function.name, 'get_weather');
+    assert.equal(sent.tools[0].function.description, 'Look up the weather');
+    assert.deepEqual(sent.tools[0].function.parameters, parameters);
+    assert.deepEqual(sent.tool_choice, { type: 'function', function: { name: 'get_weather' } });
+  });
+});
+
+test('a malformed tool is dropped rather than forwarded blank', async () => {
+  await withUpstream(async (baseUrl, seen) => {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [
+          { type: 'function', function: { description: 'no name at all' } },
+          { type: 'function', function: { name: '   ' } },
+          null,
+          { type: 'function', function: { name: 'real_one' } },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    const sent = seen();
+    assert.equal(sent.tools.length, 1, 'a blank tool IS the bug; forwarding one would reintroduce it');
+    assert.equal(sent.tools[0].function.name, 'real_one');
+    assert.deepEqual(sent.tools[0].function.parameters, { type: 'object', properties: {} },
+      'a tool with no parameters still gets a valid empty schema');
+  });
+});
+
+test('a request with no tools sends no tools key at all', async () => {
+  await withUpstream(async (baseUrl, seen) => {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seen().tools, undefined, 'an empty tools array must not become `tools: []`');
+  });
 });
