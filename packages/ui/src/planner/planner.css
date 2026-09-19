@@ -179,7 +179,7 @@
   padding: var(--br-space-3, 12px) var(--br-space-4, 16px) var(--br-space-6, 24px);
   scrollbar-gutter: stable;
 }
-.br-planner-capture { display: flex; gap: var(--br-space-2, 8px); margin-bottom: var(--br-space-3, 12px); }
+.br-planner-capture { display: flex; gap: var(--br-space-2, 8px); margin-bottom: var(--br-space-2, 8px); }
 .br-planner-capture input {
   flex: 1 1 auto;
   min-width: 0;
@@ -203,9 +203,9 @@
   font-weight: 650;
 }
 .br-planner-capture > button:disabled { opacity: .45; cursor: default; }
-.br-planner-drift { margin-bottom: var(--br-space-3, 12px); color: var(--br-ui-text-muted); font-size: var(--br-type-meta, 11px); line-height: 1.45; }
+.br-planner-drift { margin-bottom: var(--br-space-2, 8px); color: var(--br-ui-text-muted); font-size: var(--br-type-meta, 11px); line-height: 1.45; }
 .br-planner-group {
-  margin: var(--br-space-4, 16px) var(--br-space-2, 8px) var(--br-space-1, 4px);
+  margin: var(--br-space-3, 12px) var(--br-space-2, 8px) 2px;
   color: var(--br-ui-text-muted);
   font-size: var(--br-type-label, 10px);
   font-weight: 650;
@@ -247,19 +247,7 @@
 .br-planner-row.is-complete .br-planner-title { color: var(--br-ui-text-muted); text-decoration: line-through; text-decoration-thickness: 1px; }
 .br-planner-badge,
 .br-planner-due,
-.br-planner-source {
-  flex: 0 0 auto;
-  min-height: 24px;
-  padding: 2px var(--br-space-2, 8px);
-  border: 1px solid var(--br-ui-border);
-  border-radius: var(--br-radius-chip, 5px);
-  background: transparent;
-  color: var(--br-ui-text-muted);
-  font-family: var(--br-ui-mono);
-  font-size: var(--br-type-label, 10px);
-  line-height: 16px;
-  white-space: nowrap;
-}
+.br-planner-source { flex: 0 0 auto; }
 .br-planner-source { cursor: pointer; }
 .br-planner-source:disabled { cursor: default; }
 .br-planner-source[data-stale="true"] { border-style: dashed; }
@@ -278,6 +266,8 @@
   font-size: 10px;
 }
 .br-planner-delete { border-color: transparent; opacity: 0; font-size: 18px; line-height: 1; }
+/* A row that cannot be deleted keeps the delete button's width, so the meta columns align across every row. */
+.br-planner-delete-slot { flex: 0 0 28px; width: 28px; min-height: 28px; }
 .br-planner-row:hover .br-planner-delete,
 .br-planner-row:focus-within .br-planner-delete,
 .br-planner-delete:focus-visible { opacity: 1; }
@@ -356,13 +346,200 @@
 .br-planner-calendar-now::before { position: absolute; top: -3px; left: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--br-ui-accent); content: ''; }
 .br-planner-calendar-empty { margin: 0 var(--br-space-4, 16px); }
 
+/* ---- The day header: what day this is and how it is going ---- */
+.br-planner-day { display: flex; align-items: baseline; justify-content: space-between; gap: var(--br-space-3, 12px); min-height: 22px; margin-bottom: 6px; }
+.br-planner-day-title { display: flex; align-items: baseline; gap: var(--br-space-2, 8px); min-width: 0; }
+.br-planner-day-title strong { font-size: 16px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; }
+.br-planner-day-title > span { color: var(--br-ui-text-muted); font-size: var(--br-type-body-small, 12px); white-space: nowrap; }
+.br-planner-day-back,
+.br-planner-week-today,
+.br-planner-group-action {
+  min-height: 24px;
+  padding: 0 var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-chip, 5px);
+  background: transparent;
+  color: var(--br-ui-text-secondary);
+  cursor: pointer;
+  font-size: var(--br-type-meta, 11px);
+}
+.br-planner-day-back:hover, .br-planner-week-today:hover, .br-planner-group-action:hover { border-color: var(--br-ui-border-strong); color: var(--br-ui-text); background: var(--br-ui-accent-soft); }
+.br-planner-day-score { display: flex; align-items: center; gap: var(--br-space-2, 8px); color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: var(--br-type-meta, 11px); white-space: nowrap; }
+.br-planner-progress { width: 120px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--br-ui-border); }
+.br-planner-progress > div { height: 100%; border-radius: 3px; background: var(--br-ui-ok); transition: width .25s ease; }
+.br-planner-day-pct { min-width: 3ch; text-align: right; color: var(--br-ui-text); }
+
+/* ---- The week strip: seven days, each carrying what it holds ---- */
+.br-planner-week { display: flex; align-items: stretch; gap: var(--br-space-1, 4px); margin-bottom: var(--br-space-2, 8px); }
+.br-planner-week-nav { flex: 0 0 auto; min-width: 26px; min-height: 38px; border: 1px solid transparent; border-radius: var(--br-radius-control, 7px); background: transparent; color: var(--br-ui-text-muted); cursor: pointer; }
+.br-planner-week-nav:hover { border-color: var(--br-ui-border); color: var(--br-ui-text); }
+.br-planner-week-day {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 2px 2px;
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-control, 7px);
+  background: var(--br-ui-surface);
+  color: var(--br-ui-text-secondary);
+  cursor: pointer;
+  line-height: 1.1;
+}
+.br-planner-week-day > span { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--br-ui-text-muted); }
+.br-planner-week-day > strong { font-size: 12px; font-weight: 650; color: var(--br-ui-text); }
+.br-planner-week-day > small { font-family: var(--br-ui-mono); font-size: 9px; color: var(--br-ui-text-muted); }
+.br-planner-week-day.is-open > small { color: var(--br-ui-text); }
+.br-planner-week-day.is-done > small { color: var(--br-ui-ok); }
+.br-planner-week-day.is-past { opacity: .72; }
+.br-planner-week-day:hover { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
+.br-planner-week-day.is-today > span, .br-planner-week-day.is-today > strong { color: var(--br-ui-accent); }
+.br-planner-week-day.is-focused { border-color: var(--br-ui-accent); background: color-mix(in srgb, var(--br-ui-accent) 10%, transparent); }
+.br-planner-week-today { align-self: center; }
+
+/* ---- Group headings can carry one action ---- */
+.br-planner-group-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--br-space-2, 8px); }
+.br-planner-group-row .br-planner-group { flex: 1 1 auto; }
+.br-planner-group-row .br-planner-group-action { margin-top: var(--br-space-2, 8px); margin-right: var(--br-space-2, 8px); }
+
+/* ---- Row meta: chips right-aligned in one column so titles line up ---- */
+.br-planner-meta {
+  display: grid;
+  /* flags · source · estimate · day — fixed tracks so the columns align ACROSS rows. */
+  grid-template-columns: 72px 108px 58px 94px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-items: end;
+  gap: var(--br-space-1, 4px);
+  margin-left: auto;
+}
+.br-planner-cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.br-planner-cell:empty { display: block; }
+/* One chip vocabulary for every fact on a row — same face, same size, whether
+   it is a button (editable) or a plain reading (mirrored). Specificity above
+   `.br-planner button { font: inherit }` so buttons do not fall back to body type. */
+.br-planner .br-planner-badge,
+.br-planner .br-planner-due,
+.br-planner .br-planner-source,
+.br-planner time.br-planner-due {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-chip, 5px);
+  background: transparent;
+  color: var(--br-ui-text-secondary);
+  font-family: var(--br-ui-mono);
+  font-size: var(--br-type-meta, 11px);
+  line-height: 1;
+  white-space: nowrap;
+}
+.br-planner .br-planner-cell > .br-planner-due,
+.br-planner .br-planner-cell > .br-planner-estimate,
+.br-planner .br-planner-cell > .br-planner-chip { width: 100%; }
+.br-planner .br-planner-cell > .br-planner-chip > .br-planner-due,
+.br-planner .br-planner-cell > .br-planner-chip > .br-planner-estimate { width: 100%; }
+.br-planner .br-planner-chip { width: 100%; justify-content: flex-end; }
+.br-planner time.br-planner-due { color: var(--br-ui-text-muted); border-style: dotted; }
+.br-planner .br-planner-source[data-stale="true"] { border-style: dashed; }
+.br-planner .br-planner-cell > .br-planner-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 22px; }
+.br-planner-due { cursor: default; }
+button.br-planner-due { cursor: pointer; }
+button.br-planner-due:hover, button.br-planner-due[aria-expanded="true"] { border-color: var(--br-ui-border-strong); color: var(--br-ui-text); }
+button.br-planner-due.is-unset { border-style: dashed; opacity: 0; }
+.br-planner-row:hover button.br-planner-due.is-unset,
+.br-planner-row:focus-within button.br-planner-due.is-unset,
+button.br-planner-due.is-unset:focus-visible,
+button.br-planner-due.is-unset[aria-expanded="true"] { opacity: 1; }
+button.br-planner-due.is-late { border-color: color-mix(in srgb, var(--br-ui-warning) 45%, transparent); color: var(--br-ui-warning); }
+button.br-planner-estimate { cursor: pointer; }
+button.br-planner-estimate:hover, button.br-planner-estimate[aria-expanded="true"] { border-color: var(--br-ui-border-strong); color: var(--br-ui-text); }
+button.br-planner-estimate.is-unset { border-style: dashed; opacity: 0; }
+.br-planner-row:hover button.br-planner-estimate.is-unset,
+.br-planner-row:focus-within button.br-planner-estimate.is-unset,
+button.br-planner-estimate.is-unset:focus-visible,
+button.br-planner-estimate.is-unset[aria-expanded="true"] { opacity: 1; }
+
+/* ---- Chip popovers (When, Estimate): anchored, non-modal, keyboard-closable ---- */
+.br-planner-chip { position: relative; display: inline-flex; }
+.br-planner-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--br-space-2, 8px);
+  min-width: 240px;
+  padding: var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border-strong);
+  border-radius: var(--br-radius-card, 10px);
+  background: var(--br-ui-raised);
+  box-shadow: var(--br-elevation-overlay, 0 18px 50px rgba(0, 0, 0, 0.36));
+  font-family: var(--br-ui-font);
+  white-space: normal;
+}
+.br-planner-popover-row { display: flex; flex-wrap: wrap; gap: var(--br-space-1, 4px); }
+.br-planner-popover-row > button,
+.br-planner-popover-days > button {
+  min-height: 28px;
+  padding: 0 var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-chip, 5px);
+  background: var(--br-ui-surface);
+  color: var(--br-ui-text);
+  cursor: pointer;
+  font-size: var(--br-type-body-small, 12px);
+}
+.br-planner-popover-row > button:hover, .br-planner-popover-days > button:hover { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
+.br-planner-popover-row > button.is-selected, .br-planner-popover-days > button.is-selected { border-color: var(--br-ui-accent); background: color-mix(in srgb, var(--br-ui-accent) 14%, transparent); }
+.br-planner-popover-row > input[type="date"] { flex: 1 1 auto; min-height: 28px; padding: 0 var(--br-space-2, 8px); border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-chip, 5px); background: var(--br-ui-input); color: var(--br-ui-text); font-size: var(--br-type-body-small, 12px); }
+.br-planner-popover-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.br-planner-popover-days > button { display: flex; flex-direction: column; align-items: center; gap: 0; min-width: 0; padding: 3px 0; line-height: 1.1; }
+.br-planner-popover-days > button > span { font-size: 9px; color: var(--br-ui-text-muted); }
+.br-planner-popover-days > button > strong { font-size: 12px; font-weight: 600; }
+.br-planner-popover-days > button.is-today > strong { color: var(--br-ui-accent); }
+.br-planner-popover-days > button.is-past { opacity: .6; }
+.br-planner-estimate-popover { min-width: 200px; }
+
+/* ---- The empty day is a starting point ---- */
+.br-planner-starters { padding-top: var(--br-space-5, 20px); }
+.br-planner-starter-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--br-space-2, 8px); margin-top: var(--br-space-2, 8px); }
+.br-planner-starter-list > button,
+.br-planner-starter-list > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 72px;
+  padding: var(--br-space-3, 12px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-card, 10px);
+  background: var(--br-ui-surface);
+  color: var(--br-ui-text-muted);
+  text-align: left;
+  font-size: var(--br-type-body-small, 12px);
+  line-height: 1.45;
+}
+.br-planner-starter-list > button { cursor: pointer; }
+.br-planner-starter-list > button:hover { border-color: var(--br-ui-accent); background: var(--br-ui-accent-soft); }
+.br-planner-starter-list strong { color: var(--br-ui-text); font-size: var(--br-type-body, 13px); }
+
 @media (max-width: 900px) {
   .br-planner-header { padding-right: calc(var(--br-space-3, 12px) + var(--topbar-right-clearance, 0px)); }
   .br-planner-sync > button { max-width: 210px; }
   .br-planner-row { flex-wrap: wrap; }
   .br-planner-title { flex-basis: calc(100% - 40px); }
-  .br-planner-badge:first-of-type,
-  .br-planner-source { margin-left: 32px; }
+  .br-planner-meta { grid-template-columns: repeat(4, max-content); justify-items: start; flex-basis: 100%; margin-left: 32px; }
+  .br-planner-cell:empty { display: none; }
+  .br-planner-row:not(:focus-within) .br-planner-meta .is-unset { display: none; }
+  .br-planner-popover { right: auto; left: 0; }
+  .br-planner-day { flex-wrap: wrap; }
   .br-planner-calendar { overflow-x: auto; overscroll-behavior-inline: contain; }
 }
 
@@ -376,9 +553,9 @@
   .br-planner-scroll { padding-inline: var(--br-space-2, 8px); }
   .br-planner-capture { position: sticky; top: 0; z-index: 3; padding-block: var(--br-space-1, 4px); background: var(--br-ui-canvas); }
   .br-planner-row { gap: var(--br-space-1, 4px); }
-  .br-planner-badge:first-of-type,
-  .br-planner-source { margin-left: 28px; }
-  .br-planner-due { margin-left: 28px; }
+  .br-planner-meta { margin-left: 28px; }
+  .br-planner-week-nav { min-width: 22px; }
+  .br-planner-progress { width: 80px; }
   .br-planner-calendar-bar { position: sticky; left: 0; width: calc(100vw - 16px); }
 }
 

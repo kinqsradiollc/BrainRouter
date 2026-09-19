@@ -6,6 +6,12 @@ import test from 'node:test';
 
 import {
   GROUP_LABEL,
+  addDays,
+  dayProgress,
+  itemsForDay,
+  relativeDayLabel,
+  shortDayLabel,
+  weekStrip,
   canEdit,
   conflictBanner,
   emptyMessage,
@@ -131,3 +137,57 @@ test('"Now · scheduled" means scheduled TODAY, not merely blocked at some point
 
   assert.deepEqual([...scheduledTodayIds(blocks, today)], ['today']);
 });
+
+test('the week strip counts what each day holds: due items, blocked-out items, finished ones, and carried work on today', () => {
+  const today = '2026-09-16'; // a Wednesday
+  const items = [
+    { id: 'a', title: 'a', completed: false, origin: 'owned' as const, conflictFields: [], dueDate: '2026-09-14' }, // overdue → carried onto today
+    { id: 'b', title: 'b', completed: false, origin: 'owned' as const, conflictFields: [], dueDate: today },
+    { id: 'c', title: 'c', completed: true, origin: 'owned' as const, conflictFields: [], dueDate: today },
+    { id: 'd', title: 'd', completed: false, origin: 'owned' as const, conflictFields: [] }, // blocked out on Friday
+    { id: 'e', title: 'e', completed: false, origin: 'owned' as const, conflictFields: [] }, // anytime: no day
+  ];
+  const blocks = [
+    { id: 'bd', itemId: 'd', scheduledFor: '2026-09-18T01:00:00.000Z', estimateMinutes: 30, carriedOver: 0 },
+  ];
+  const strip = weekStrip(items, blocks, '2026-09-14', today);
+  assert.equal(strip.length, 7);
+  assert.deepEqual(strip.map((d) => d.weekday), ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+  const wed = strip[2]!;
+  assert.equal(wed.isToday, true);
+  assert.equal(wed.open, 1, 'b is due today');
+  assert.equal(wed.done, 1, 'c was finished today');
+  assert.equal(wed.carried, 1, 'a is overdue and lands on today');
+  assert.equal(strip[0]!.open, 1, 'a still shows on its own day');
+  assert.equal(strip[0]!.isPast, true);
+  const friday = strip.find((d) => itemsForDay(items, blocks, d.date).some((i) => i.id === 'd'))!;
+  assert.ok(friday, 'a block gives an item a day');
+  assert.equal(friday.open, 1);
+  assert.equal(itemsForDay(items, blocks, '2026-09-20').length, 0);
+});
+
+test('today\'s progress counts the Now groups plus what was finished today, and never the Later work', () => {
+  const today = '2026-09-16';
+  const items = [
+    { id: 'a', title: 'a', completed: false, origin: 'owned' as const, conflictFields: [], dueDate: '2026-09-14' },
+    { id: 'b', title: 'b', completed: false, origin: 'owned' as const, conflictFields: [], dueDate: today },
+    { id: 'c', title: 'c', completed: true, origin: 'owned' as const, conflictFields: [], dueDate: today },
+    { id: 'n', title: 'n', completed: false, origin: 'owned' as const, conflictFields: [], dueDate: '2026-09-18' },
+    { id: 'z', title: 'z', completed: false, origin: 'owned' as const, conflictFields: [] },
+  ];
+  const p = dayProgress(items, [], today);
+  assert.deepEqual(p, { total: 3, done: 1, percent: 33 });
+  assert.deepEqual(dayProgress([], [], today), { total: 0, done: 0, percent: 0 });
+});
+
+test('days are named the way a person says them', () => {
+  assert.equal(relativeDayLabel('2026-09-16', '2026-09-16'), 'Today');
+  assert.equal(relativeDayLabel('2026-09-17', '2026-09-16'), 'Tomorrow');
+  assert.equal(relativeDayLabel('2026-09-15', '2026-09-16'), 'Yesterday');
+  assert.equal(relativeDayLabel('2026-09-19', '2026-09-16'), 'Saturday 19 Sep');
+  assert.equal(addDays('2026-09-30', 1), '2026-10-01');
+  assert.equal(shortDayLabel('2026-09-19', '2026-09-16'), 'Sat 19');
+  assert.equal(shortDayLabel('2026-10-02', '2026-09-16'), 'Fri 2 Oct');
+  assert.equal(shortDayLabel('2026-09-17', '2026-09-16'), 'Tomorrow');
+});
+
