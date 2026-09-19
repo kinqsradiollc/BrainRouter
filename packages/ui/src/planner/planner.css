@@ -248,9 +248,37 @@
   white-space: nowrap;
 }
 .br-planner-row.is-complete .br-planner-title { color: var(--br-ui-text-muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+/* One chip vocabulary for every fact on a row — same face, same size, whether
+   it is a button (editable) or a plain reading (mirrored). Geometry sits on the
+   bare class: nothing competes for it, and it is the contract the desktop's CSS
+   test reads. */
 .br-planner-badge,
 .br-planner-due,
-.br-planner-source { flex: 0 0 auto; }
+.br-planner-source {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-chip, 5px);
+  background: transparent;
+  white-space: nowrap;
+}
+/* Type and colour have to out-specify `.br-planner button { font: inherit }` and
+   `{ color: inherit }`, or an editable chip drops to body type. It sits HERE,
+   ahead of the modifiers below, because it ties with them on specificity — one
+   line further down and it would quietly repaint the blocked badge's warning. */
+.br-planner .br-planner-badge,
+.br-planner .br-planner-due,
+.br-planner .br-planner-source,
+.br-planner time.br-planner-due {
+  color: var(--br-ui-text-secondary);
+  font-family: var(--br-ui-mono);
+  font-size: var(--br-type-meta, 11px);
+  line-height: 1;
+}
 .br-planner-source { cursor: pointer; }
 .br-planner-source:disabled { cursor: default; }
 .br-planner-source[data-stale="true"] { border-style: dashed; }
@@ -422,27 +450,6 @@
 }
 .br-planner-cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
 .br-planner-cell:empty { display: block; }
-/* One chip vocabulary for every fact on a row — same face, same size, whether
-   it is a button (editable) or a plain reading (mirrored). Specificity above
-   `.br-planner button { font: inherit }` so buttons do not fall back to body type. */
-.br-planner .br-planner-badge,
-.br-planner .br-planner-due,
-.br-planner .br-planner-source,
-.br-planner time.br-planner-due {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 24px;
-  padding: 0 var(--br-space-2, 8px);
-  border: 1px solid var(--br-ui-border);
-  border-radius: var(--br-radius-chip, 5px);
-  background: transparent;
-  color: var(--br-ui-text-secondary);
-  font-family: var(--br-ui-mono);
-  font-size: var(--br-type-meta, 11px);
-  line-height: 1;
-  white-space: nowrap;
-}
 .br-planner .br-planner-cell > .br-planner-due,
 .br-planner .br-planner-cell > .br-planner-estimate,
 .br-planner .br-planner-cell > .br-planner-chip { width: 100%; }
