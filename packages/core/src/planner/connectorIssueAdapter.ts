@@ -111,6 +111,7 @@ export function connectorIssueToPlannerItem(
       externalId: document.id,
       sourceUrl: document.url,
       fetchedAt,
+      documentKind: document.kind,
     },
     title: { value: title, at },
     ...(estimate !== undefined ? { estimateMinutes: estimate, estimateUpdatedAt: at } : {}),

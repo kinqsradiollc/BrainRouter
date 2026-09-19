@@ -31,7 +31,19 @@ export interface PlannerProvenance {
   sourceUrl?: string;
   /** When the source was last read successfully. */
   fetchedAt: string;
+  /**
+   * Which kind of record the source handed us, when it said.
+   *
+   * Not decoration: it decides whether the SOURCE states completion. An issue
+   * carries its own done-ness and a tick here would be a claim about GitHub
+   * that the next refresh corrects; a calendar event carries no such field —
+   * the feed says a meeting exists at 10:00, never that anyone attended it.
+   */
+  documentKind?: PlannerProvenanceDocumentKind;
 }
+
+/** Mirrors `ConnectorDocumentKind`; kept here so the planner wire owns its own vocabulary. */
+export type PlannerProvenanceDocumentKind = 'issue' | 'pull-request' | 'file' | 'event';
 
 export type PlannerOperationEntity = 'item' | 'block';
 export type PlannerItemMutationKind = 'create' | 'update' | 'delete' | 'source_action';

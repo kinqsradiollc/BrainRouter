@@ -17,4 +17,6 @@ export {
   ATTEMPTS_BEFORE_SURFACING,
   describeSyncState,
   stuckOperations,
+  plannerFieldIsLocal,
+  sourceOwnsCompletion,
 } from '@kinqs/brainrouter-core/planner/presentation';

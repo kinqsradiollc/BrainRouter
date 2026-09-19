@@ -14,6 +14,7 @@ import type {
   PlannerItemMutationOperation,
   PlannerItemWirePayload,
   PlannerProvenance,
+  PlannerProvenanceDocumentKind,
   PlannerPushOperation,
   PlannerWireHlc,
 } from '@kinqs/brainrouter-types/planner';
@@ -30,6 +31,7 @@ export type {
   PlannerOperationEntity,
   PlannerOperationRejection,
   PlannerProvenance,
+  PlannerProvenanceDocumentKind,
   PlannerPullEnvelope,
   PlannerPushOperation,
   PlannerPushOutcome,
@@ -153,6 +155,8 @@ function readField(
   return { ok: true, present: true, value: unwrapped.value, ...(unwrapped.seen ? { seen: unwrapped.seen } : {}) };
 }
 
+const DOCUMENT_KINDS = new Set(['issue', 'pull-request', 'file', 'event']);
+
 function parseProvenance(value: unknown): PlannerProvenance | null {
   if (!isRecord(value)) return null;
   if (!validText(value.sourceId, 200) || !value.sourceId.trim()) return null;
@@ -168,12 +172,18 @@ function parseProvenance(value: unknown): PlannerProvenance | null {
       return null;
     }
   }
+  if (value.documentKind !== undefined && !DOCUMENT_KINDS.has(value.documentKind as string)) return null;
   return {
     sourceId: value.sourceId,
     sourceLabel: value.sourceLabel,
     fetchedAt: value.fetchedAt,
     ...(typeof value.externalId === 'string' ? { externalId: value.externalId } : {}),
     ...(typeof value.sourceUrl === 'string' ? { sourceUrl: value.sourceUrl } : {}),
+    // Dropped here, and completing a meeting would be reverted by the next
+    // poll: the rule that permits the tick reads this field off the record.
+    ...(value.documentKind !== undefined
+      ? { documentKind: value.documentKind as PlannerProvenanceDocumentKind }
+      : {}),
   };
 }
 

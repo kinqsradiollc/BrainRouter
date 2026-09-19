@@ -134,15 +134,17 @@ not reimplement it.
   Google's `backgroundColor`), else the default.
 - Dragging a calendar event in the Calendar tab is refused with the existing "belongs to the
   source" tooltip. Deleting it is not offered — remove the calendar instead.
-- **Completing it is NOT yet possible, and D3 as written was wrong to say it already was.**
-  `completed` is not in Core's `PLANNER_OWNED_FIELDS` and both hosts derive
-  `capabilities.complete` from `origin === 'owned'`, so no mirrored item can be ticked — an
-  issue by design ("source state never completes the user's intention by inference"), and an
-  event by accident of sharing the rule. Attending a meeting *is* the person's own act, so the
-  capability is real and the decision is C4's: either the hosts grant `complete` for
-  event-sourced items, or `completed` joins the owned set. Until one of those lands, §6's
-  "a meeting the person completed stays completed" cannot be demonstrated, and this ADR does
-  not claim it can.
+- **Completing it is the person's, and C4a settled how.** Neither option this ADR offered was
+  taken. Granting the hosts a capability would have put the rule in the surfaces, where a
+  refresh could still undo the tick; adding `completed` to `PLANNER_OWNED_FIELDS` would have
+  changed the rule for GitHub too, letting someone mark an open issue done locally.
+  The rule that landed is narrower and sits in one place: **the source owns completion unless
+  it never had one to state.** `PlannerProvenance` grew `documentKind`, both adapters stamp it,
+  and Core's `sourceOwnsCompletion` answers the question for `canEditLocally`, for
+  `refreshMirrored` (a tick on an event survives the poll; on an issue it never existed), for
+  the server's mirrored-update guard — which was a third inline copy of the owned-field list and
+  now reads Core's — and for both hosts' `capabilities.complete`. The tick also says what it
+  records: a meeting reads *"Mark Standup as attended"*, not *"Complete Standup"*.
 - Freshness: a subscription that has not answered for longer than its cadence ×2 shows in
   `staleSources` exactly as GitHub does today ("Family calendar last refreshed 3 hours ago").
 
@@ -176,11 +178,14 @@ not reimplement it.
 | C2 | `ics-calendar` source | types (`event` kind, source), catalog entry, `runIcsCalendarConnectorCheckpoint`, runner switch, desktop + server HTTP client (webcal→https) | D1 |
 | C3 | Event projection | ✅ `connectorEventAdapter.ts` + the server sink `refreshConnectedEventDocuments`, hook renamed and routing on `kind`, cancelled → tombstone incl. its block, the person's measured time and completion on a block survive a re-read | D3 |
 | C3b | Vanished events | An event that leaves the feed *inside the window* without a CANCELLED marker is still projected until it is cancelled or the calendar is removed; tombstoning it needs the run's window threaded to the sink | D3 |
-| C4 | Surface | provenance chip + colour hairline, all-day banner, drag refusal, `staleSources` wording, **Add calendar…** on the Calendar tab, file import flow on desktop (dialog) and dashboard (upload) | D4, D5 |
+| C4a | Attendance | ✅ `documentKind` on the wire, `sourceOwnsCompletion` in Core, one rule for both hosts and the server guard, tick wording | D5 (completion) |
+| C4b | Calendar surface | provenance chip + colour hairline, all-day banner, drag refusal, `staleSources` wording | D5 |
+| C4c | Add calendar… | the control on the Calendar tab, file import on desktop (dialog) and dashboard (upload) | D4 |
 | C5 | `google-calendar` source | scope on the server's Google OAuth, calendar list for the picker, events runner, desktop OAuth allowlist | D1 |
 | C6 | Docs + catalog | configuration.md, connectors guide, STATUS row | — |
 
-C1–C2 are Core-only and shipped first; C3 adds the server sink; C4 makes it visible and decides the completion capability; C5 is the OAuth path. Each slice is
+C1–C2 are Core-only and shipped first; C3 adds the server sink; C4a settles who owns a meeting's
+completion, C4b and C4c make it visible; C5 is the OAuth path. Each slice is
 its own PR into the release branch with the focused checks plus the planner visual gate where
 the surface changes.
 
@@ -191,8 +196,8 @@ the surface changes.
 
 - Today's meetings are in the Now group with their times, and the week strip counts them.
 - A meeting moved on the phone is moved here within one poll, with no page reload.
-- A cancelled meeting disappears; a meeting the person completed stays completed after a
-  refresh.
+- A cancelled meeting disappears; a meeting the person marked as attended stays that way after
+  a refresh (C4a).
 - Nothing here can change the calendar on the phone — and the surface says so where the
   person would try.
 - A feed that stops answering says so in the same words GitHub uses.

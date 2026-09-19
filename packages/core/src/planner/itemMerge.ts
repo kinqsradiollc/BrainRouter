@@ -254,7 +254,14 @@ export function refreshMirrored(
     title: remote.title,
     ...(remote.notes ? { notes: remote.notes } : {}),
     ...(remote.dueDate ? { dueDate: remote.dueDate } : {}),
-    ...(remote.completed ? { completed: remote.completed } : {}),
+    ...(remote.completed
+      ? { completed: remote.completed }
+      : sourceOwnsCompletion({ provenance: remote.provenance ?? local.provenance }) || !local.completed
+        ? {}
+        // The source has no completion field for this kind of record, so the
+        // tick was the person's ("I attended"). Dropping it here is how a
+        // meeting someone had already marked as attended came back every poll.
+        : { completed: local.completed }),
     ...(remote.blockedReason ? { blockedReason: remote.blockedReason } : {}),
     // Planner-owned metadata survives the re-read.
     ...(local.priority ? { priority: local.priority } : {}),
@@ -294,12 +301,56 @@ export const PLANNER_OWNED_FIELDS: ReadonlySet<string> = new Set([
   'priority', 'estimateMinutes', 'scheduledFor', 'snoozedUntil', 'order',
 ]);
 
+/**
+ * The subset of the above that are fields of an ITEM.
+ *
+ * `scheduledFor`, `snoozedUntil` and `order` belong to a time block, so an item
+ * update carrying one would be accepted and then quietly change nothing — worse
+ * than the refusal, which at least says so. The server kept its own two-element
+ * copy of this list inline; it now reads this one.
+ */
+export const PLANNER_OWNED_ITEM_FIELDS: ReadonlySet<string> = new Set([
+  'priority', 'estimateMinutes',
+]);
+
+/** Enough of an item to decide ownership: where it came from, and what kind of record it is. */
+export type OwnershipSubject = {
+  origin?: ItemOrigin;
+  provenance?: { documentKind?: string } | undefined;
+};
+
+/**
+ * Does the SOURCE state whether this record is done?
+ *
+ * For everything the planner mirrors today except a calendar event, yes: an
+ * issue is closed in GitHub, a pull request is merged there, and a tick here
+ * would be a claim about that system which the next refresh corrects. A
+ * calendar feed has no such field. It says a meeting exists at 10:00; whether
+ * the person attended it is theirs to say, and theirs to keep.
+ */
+export function sourceOwnsCompletion(item: OwnershipSubject): boolean {
+  return item.provenance?.documentKind !== 'event';
+}
+
+/** May this field be written locally on this item — the one statement of the rule. */
+export function plannerFieldIsLocal(item: OwnershipSubject, field: string): boolean {
+  if (item.origin === 'owned') return true;
+  if (PLANNER_OWNED_FIELDS.has(field)) return true;
+  return field === 'completed' && !sourceOwnsCompletion(item);
+}
+
+/** The same rule for an item-shaped payload, over the item fields only. */
+export function plannerItemFieldIsLocal(item: OwnershipSubject, field: string): boolean {
+  if (item.origin === 'owned') return true;
+  if (PLANNER_OWNED_ITEM_FIELDS.has(field)) return true;
+  return field === 'completed' && !sourceOwnsCompletion(item);
+}
+
 export function canEditLocally(
-  item: Pick<PlannerItem, 'origin' | 'source'>,
+  item: Pick<PlannerItem, 'origin' | 'source' | 'provenance'>,
   field: string,
 ): { allowed: boolean; reason?: string } {
-  if (item.origin === 'owned') return { allowed: true };
-  if (PLANNER_OWNED_FIELDS.has(field)) return { allowed: true };
+  if (plannerFieldIsLocal(item, field)) return { allowed: true };
   if (field === 'delete') {
     return {
       allowed: false,

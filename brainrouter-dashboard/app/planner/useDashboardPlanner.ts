@@ -26,7 +26,7 @@ import type {
 import { authFetch } from "../../lib/adminApi";
 import { useAuth } from "../../components/AuthProvider";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
-import { ATTEMPTS_BEFORE_SURFACING, describeSyncState } from "@kinqs/brainrouter-ui/planner";
+import { ATTEMPTS_BEFORE_SURFACING, describeSyncState, plannerFieldIsLocal } from "@kinqs/brainrouter-ui/planner";
 import {
   type ApiPlannerBlock,
   type ApiPlannerItem,
@@ -415,6 +415,7 @@ export function useDashboardPlanner(): DashboardPlannerState {
             provenance: {
               source: provenance.sourceLabel,
               kind: provenance.sourceId,
+              documentKind: provenance.documentKind,
               externalId: provenance.externalId,
               url: provenance.sourceUrl,
               fetchedAt: provenance.fetchedAt,
@@ -425,7 +426,8 @@ export function useDashboardPlanner(): DashboardPlannerState {
       blockedReason: item.blockedReason?.value ?? undefined,
       capabilities: {
         editTitle: item.origin === "owned",
-        complete: item.origin === "owned",
+        // A meeting can be ticked — Core decides, both hosts ask the same question.
+        complete: plannerFieldIsLocal(item, "completed"),
         delete: item.origin === "owned",
       },
       ...(fetchedAt

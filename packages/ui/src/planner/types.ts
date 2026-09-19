@@ -48,7 +48,10 @@ export interface PlannerItemCapabilities {
 
 export interface PlannerProvenanceView {
   source: string;
+  /** The source's id, as the host projected it (`connector:cal_1`, `github`). */
   kind?: string;
+  /** Which kind of record the source handed over — an event may be ticked. */
+  documentKind?: string;
   externalId?: string;
   url?: string;
   fetchedAt?: string;
