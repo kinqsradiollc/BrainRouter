@@ -45,6 +45,11 @@ export interface TodayOptions {
   nowMs: number;
   /** Minutes genuinely available. Defaults to a working day. */
   availableMinutes?: number;
+  /**
+   * What each source last managed. Built with `freshnessFromItems`, which needs
+   * something only a host has: how often each source is supposed to refresh
+   * itself.
+   */
   freshness?: readonly SourceFreshness[];
 }
 
