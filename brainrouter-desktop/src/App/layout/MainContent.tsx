@@ -314,7 +314,10 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         // rail: a personal planner has no per-workspace tabs to carry.
         <div className="workrow" ref={workrowRef}>
           <Suspense fallback={<div className="br-planner" />}>
-            <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
+            <PlannerModeContainer
+              onOpenNotes={() => setMode('notes')}
+              onOpenRef={openWorkspaceRef}
+              onAddCalendar={() => openSettings('data-connectors')} />
           </Suspense>
         </div>
       ) : mode === 'study' ? (

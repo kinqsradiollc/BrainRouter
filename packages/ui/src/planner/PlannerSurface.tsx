@@ -163,6 +163,7 @@ export function PlannerSurface({
             weekOf={weekOf}
             onWeek={setWeekOf}
             onCreateAt={ops.blockTimeAt}
+            onAddCalendar={ops.addCalendar}
             onRescheduleBlock={ops.rescheduleBlock}
             onRecordActual={ops.recordActual}
           />

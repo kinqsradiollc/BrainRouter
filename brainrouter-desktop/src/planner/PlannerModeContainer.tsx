@@ -53,11 +53,14 @@ const EMPTY: PlannerSnapshot = {
 export function PlannerModeContainer({
   onOpenNotes,
   onOpenRef,
+  onAddCalendar,
 }: {
   /** Leaving for the Notes mode is the shell's to do, not this container's. */
   onOpenNotes?: () => void;
   /** Following a reference leaves this mode, which only the shell can do. */
   onOpenRef?: (uri: string) => void;
+  /** Opening Settings is the shell's too — the calendar control only asks. */
+  onAddCalendar?: () => void;
 } = {}): React.ReactElement {
   const [snapshot, setSnapshot] = useState<PlannerSnapshot>(EMPTY);
   const [refLabels, setRefLabels] = useState<Record<string, string>>({});
@@ -245,6 +248,7 @@ export function PlannerModeContainer({
 
     openRef: (uri) => onOpenRef?.(uri),
     openSource: (url) => { void bridgeQuery('action:open-external', { url }); },
+    ...(onAddCalendar ? { addCalendar: onAddCalendar } : {}),
   };
 
   return (

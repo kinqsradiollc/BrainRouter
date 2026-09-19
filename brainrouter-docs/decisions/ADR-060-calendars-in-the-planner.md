@@ -126,6 +126,17 @@ The planner's Calendar tab gains one control: **Add calendar…** → *Subscribe
 *Sign in with Google* / *Import an .ics file*. The control opens the connector flow; it does
 not reimplement it.
 
+> **As built (C4c), it is one control and no menu.** A menu of three routes where two do not
+> exist yet would be a menu that mostly apologises; the control opens the host's connector flow,
+> where the *Calendar subscription (iCal)* card already stands, and it grows a menu when C4d and
+> C5 give it something to choose between.
+>
+> **The desktop gets it; the dashboard does not.** `PlannerOps.addCalendar` is optional and the
+> control renders only when a host supplies it. The dashboard's connector surface is org-admin
+> (`triggers:manage`), so offering every planner user a button that lands them on a page they
+> cannot act on is worse than not offering it. It becomes the dashboard's when there is a
+> per-user connector surface to open.
+
 ### D5 · The surface shows where an event came from, and what it cannot edit
 
 - Rows and calendar blocks from a calendar carry the calendar's chip (`Work · Google
@@ -189,7 +200,8 @@ not reimplement it.
 | C3b | Vanished events | An event that leaves the feed *inside the window* without a CANCELLED marker is still projected until it is cancelled or the calendar is removed; tombstoning it needs the run's window threaded to the sink | D3 |
 | C4a | Attendance | ✅ `documentKind` on the wire, `sourceOwnsCompletion` in Core, one rule for both hosts and the server guard, tick wording | D5 (completion) |
 | C4b | Calendar surface | ✅ the calendar named under the meeting + a hairline in the feed's colour, an all-day lane, drag refused with the reason, the canonical fixture grew a calendar | D5 |
-| C4c | Add calendar… | the control on the Calendar tab, file import on desktop (dialog) and dashboard (upload) | D4 |
+| C4c | Add calendar… | ✅ the control on the Calendar tab, opening the host's connector flow (desktop: Settings → Data connectors) | D4 |
+| C4d | Import an .ics file | `mode: 'file'` on `ics-calendar` — stored once, run once, never polled — with the desktop file dialog and a dashboard upload | D4 |
 | C5 | `google-calendar` source | scope on the server's Google OAuth, calendar list for the picker, events runner, desktop OAuth allowlist | D1 |
 | C6 | Docs + catalog | configuration.md, connectors guide, STATUS row | — |
 

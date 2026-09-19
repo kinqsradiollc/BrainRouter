@@ -334,6 +334,8 @@
 .br-planner-calendar-nav button:hover:not(:disabled) { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
 .br-planner-calendar-nav button:disabled { opacity: .45; cursor: default; }
 .br-planner-calendar-range { font-size: var(--br-type-body, 13px); }
+.br-planner-add-calendar { margin-left: auto; min-height: 30px; padding: 0 var(--br-space-3, 12px); border: 1px solid var(--br-ui-border) !important; border-radius: var(--br-radius-control, 7px); color: var(--br-ui-text-secondary); cursor: pointer; font-size: var(--br-type-meta, 11px); }
+.br-planner-add-calendar:hover { border-color: var(--br-ui-border-strong) !important; background: var(--br-ui-accent-soft) !important; color: var(--br-ui-text); }
 .br-planner-unscheduled { display: flex; flex: 0 0 auto; gap: var(--br-space-2, 8px); padding: 0 var(--br-space-4, 16px) var(--br-space-2, 8px); border-bottom: 1px solid var(--br-ui-border); }
 .br-planner-calendar-gutter-label { flex: 0 0 52px; padding-top: 7px; color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: var(--br-type-label, 10px); text-transform: uppercase; }
 .br-planner-unscheduled-items { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: var(--br-space-1, 4px); }

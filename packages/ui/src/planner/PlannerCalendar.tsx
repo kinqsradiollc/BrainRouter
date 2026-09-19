@@ -40,6 +40,8 @@ export interface PlannerCalendarProps {
   weekOf: string;
   onWeek: (startDate: string) => void;
   onCreateAt?: (iso: string) => void;
+  /** Subscribe to a calendar — the host owns the flow, this only opens it. */
+  onAddCalendar?: () => void;
   onRescheduleBlock?: (blockId: string, scheduledFor: string) => void;
   onRecordActual?: (blockId: string, actualMinutes: number) => void;
 }
@@ -53,6 +55,7 @@ export function PlannerCalendar({
   weekOf,
   onWeek,
   onCreateAt,
+  onAddCalendar,
   onRescheduleBlock,
   onRecordActual,
 }: PlannerCalendarProps): ReactElement {
@@ -122,6 +125,11 @@ export function PlannerCalendar({
           <button type="button" aria-label="Next week" onClick={() => onWeek(shiftWeek(weekOf, 1))}>›</button>
         </div>
         <span className="br-planner-calendar-range">{monthLabel(days[0]!.date, days[6]!.date)}</span>
+        {onAddCalendar ? (
+          <button type="button" className="br-planner-add-calendar" onClick={onAddCalendar}>
+            Add calendar…
+          </button>
+        ) : null}
       </header>
 
       {loose.length > 0 ? (
@@ -249,6 +257,9 @@ export function PlannerCalendar({
         <div className="br-planner-empty br-planner-calendar-empty">
           <strong>No time blocked this week</strong>
           <span>Choose an hour to make room for work; estimates become useful once actual time is recorded.</span>
+          {onAddCalendar ? (
+            <span>Subscribe to a calendar and the meetings you already have will be here too.</span>
+          ) : null}
         </div>
       ) : null}
       {selectedBlockId ? (

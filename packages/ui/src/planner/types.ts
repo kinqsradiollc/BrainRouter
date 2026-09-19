@@ -138,6 +138,13 @@ export interface PlannerOps {
   openNotesPage?: (itemId: string, title: string, notes: string) => void;
   openRef?: (uri: string) => void;
   openSource?: (url: string) => void;
+  /**
+   * Open the host's connector flow at the calendar sources (ADR-060 D4).
+   *
+   * Omitted by a host with nowhere useful to send the person — the control then
+   * does not appear at all, rather than appearing and going nowhere.
+   */
+  addCalendar?: () => void;
 }
 
 export interface PlannerSurfaceProps {
