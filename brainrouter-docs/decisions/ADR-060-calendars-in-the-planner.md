@@ -206,7 +206,7 @@ not reimplement it.
 | C4c | Add calendar… | ✅ the control on the Calendar tab, offering the routes the host has | D4 |
 | C4d | Import an .ics file | ✅ `mode: 'file'` on `ics-calendar` — stored beside the connector, run once, never polled — with the desktop's file dialog. The dashboard's upload waits with its connector surface. | D4 |
 | C5 | `google-calendar` source | scope on the server's Google OAuth, calendar list for the picker, events runner, desktop OAuth allowlist | D1 |
-| C6 | Docs + catalog | configuration.md, connectors guide, STATUS row | — |
+| C6 | Docs | ✅ [Calendars in the planner](../guides/calendars-in-the-planner.md) — where each product hides its feed address, what is yours and what is the calendar's | — |
 
 C1–C2 are Core-only and shipped first; C3 adds the server sink; C4a settles who owns a meeting's
 completion, C4b makes it visible and C4c/C4d let a person add one; C5 is the OAuth path. Each slice is
