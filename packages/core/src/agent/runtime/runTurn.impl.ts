@@ -55,7 +55,7 @@ import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { NoTTYError } from '../support/prompter.js';
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
 import {
-  isSequenceGuardExempt, buildSequenceSignature,
+  isSequenceGuardExempt, buildSequenceSignature, noteUnchangedResult,
   countRepeatsInWindow, pruneRepeatWindow, type RepeatWindowEntry,
 } from '../guards/repeatGuard.js';
 import {
@@ -1975,6 +1975,14 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
         }
         refreshResultExpansionTool();
+        // Across turns the per-turn window above is blind, and a counter would
+        // be the wrong instrument anyway — a file edited between turns SHOULD
+        // be re-read. Compare the result instead: when it is byte-identical to
+        // last time, say so. Blocks nothing; removes the reason to try again.
+        const unchangedNote = noteUnchangedResult(
+          this.unchangedResults, signature, resultText, Date.now(),
+        );
+        if (unchangedNote) clampedContent = `${clampedContent}${unchangedNote}`;
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
