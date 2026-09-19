@@ -55,6 +55,13 @@ export function registerServeCommand(program: Command): void {
             host: bind.host,
             port: bind.port,
             serveKey: router.serveKey || undefined,
+            // ADR-061 D5 — a gateway has no session file to append a decision
+            // to, so the server log is where its route choices are readable.
+            // Silent on the default `rules` provider: nothing is decided there.
+            onRouteDecision: (entry) => {
+              const why = entry.fellBack ? ` — fell back: ${entry.fellBack}` : '';
+              console.log(chalk.gray(`  auto: ${entry.outcome} (${entry.provider}, ${entry.latencyMs}ms)${why}`));
+            },
           });
         } catch (error) {
           console.error(chalk.red(`Router gateway failed to start: ${(error as Error).message}`));

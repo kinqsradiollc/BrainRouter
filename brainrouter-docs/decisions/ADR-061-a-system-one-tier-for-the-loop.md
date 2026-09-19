@@ -232,7 +232,7 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 | S1+S2 | The port, the floor, and the shell gate | `packages/core/src/decision/` — types, `DecisionPort`, the `rules` provider, `recent-decisions.json` + `/recent-decisions`, the ADR-059 `decision` step — **plus** the shell consumer above the lexical floor, `cli.decisions.shell.{low,high}`, and the equivalence test that pins byte-for-byte behaviour on `rules`. | D1, D2, D3.1, D5 |
 | S3 | Recall gate | `briefingTriggers.ts` consumes the port; entity count becomes the `rules` answer | D3.2 |
 | S4 | The `jev` provider | HTTP client through the credential path; redaction + size bound on every state; fallback to `rules` recorded | D4, D6 |
-| S5 | Route choice | `resolve.ts` picks the chain's starting route by `choice` when `auto`; explicit picks untouched | D3.3 |
+| S5 | Route choice | one `choice` re-heads the chain an `auto` request resolved to; explicit picks untouched, `resolve.ts` untouched | D3.3 |
 | S6 | Turn checkpoint | `turnBudget.ts` scores progress by the port and attaches recorded denials to the corrective prompt | D3.4 |
 | S7 | Calibration | held-out eval from recorded decisions and outcomes; advisory demotion | D7 |
 | S8 | Docs | configuration.md `cli.decisions`, a guide, STATUS row | — |
@@ -243,6 +243,22 @@ repository's own inert-value sweep fails a module with no non-test importer, so 
 port *with* its first consumer satisfies the sweep and costs nothing, because the consumer on
 the `rules` provider is a no-op. The same rule is why `/recent-decisions` ships in the first
 slice rather than later: a recorder nobody reads is a dead export.
+
+**S5 sits beside `resolve.ts`, not inside it, and the reason is the same kind of
+constraint.** The board first read *"`resolve.ts` picks the chain's starting route"*, but
+that resolver is pure and synchronous and is called from eight places, most of them
+resolving an explicit model. Making it `async` to ask a question that only `auto` needs
+would push a promise into every one of those callers to change the behaviour of one. So the
+choice lives in `routeDecision.ts` and runs on the array the resolver returned — the resolver
+stays pure, the promotion is one re-head with every other route in its configured order, and
+the always-on router's contract (explicit picks need `withFallbacks: false`) is untouched by
+construction, because an explicit pick never reaches the port.
+
+Its consumer is the gateway, which is the only place in the product where `auto` is a live
+request: everywhere else the model is an explicit pick the user made. A gateway is not a
+session, so its decisions have no `recent-decisions.json` to append to; D5's record is the
+server log, which both hosts already own, and which stays silent on `rules` because the chain
+head is then the answer by definition.
 
 The combined slice still changes nothing for anyone. S3 is a day and retires another heuristic
 this repository has been bitten by. S4 is the first slice that sends a byte anywhere.
