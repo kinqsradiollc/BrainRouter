@@ -18,6 +18,8 @@
 import { getCliKnobs, loadOrInitConfig, type Config, type ResolvedCliKnobs } from '../config/config.js';
 import { resolveDecisionLlm } from '../provider/agentModels.js';
 import { createLocalDecisionProvider } from './providers/local.js';
+import { assessCalibration, samplesFromDecisions } from './calibration.js';
+import { listRecentDecisions } from './recentDecisions.js';
 import { createDecisionPort, rulesProvider, type DecisionProvider } from './port.js';
 import type { DecisionPort } from './types.js';
 
@@ -33,6 +35,15 @@ export interface SessionDecisionPortOptions {
   knobs?: ResolvedCliKnobs['decisions'];
   /** The config the model request resolves against; defaults to the session's. */
   config?: Config;
+  /**
+   * Where the session's decision record lives. Given both, the port checks
+   * whether the provider has earned its thresholds (D7) and demotes it to
+   * advisory if not. Without them nothing is measured and nothing is demoted —
+   * the gateway is that case, and an unmeasured provider is trusted rather
+   * than punished for a record it does not have.
+   */
+  workspaceRoot?: string;
+  sessionKey?: string;
 }
 
 /** What one consumer needs: the port, plus the bound its state must respect. */
@@ -40,6 +51,42 @@ export interface SessionDecisionPort {
   port: DecisionPort;
   maxStateChars: number;
   providerName: string;
+  /** Why the provider was demoted to advisory, when it was (D7). */
+  advisory?: string;
+}
+
+/**
+ * Calibration is read off a file, and a gate must not pay for that per call.
+ *
+ * A verdict cannot change quickly — it needs tens of labelled decisions — so a
+ * minute-old reading is as good as a fresh one and costs nothing.
+ */
+const CALIBRATION_TTL_MS = 60_000;
+const calibrationCache = new Map<string, { checkedAt: number; advisory?: string }>();
+
+function advisoryReason(
+  provider: string,
+  workspaceRoot: string | undefined,
+  sessionKey: string | undefined,
+  now: number,
+): string | undefined {
+  if (!workspaceRoot || !sessionKey || provider === 'rules') return undefined;
+  const key = `${workspaceRoot}\u0000${sessionKey}\u0000${provider}`;
+  const cached = calibrationCache.get(key);
+  if (cached && now - cached.checkedAt < CALIBRATION_TTL_MS) return cached.advisory;
+  let advisory: string | undefined;
+  try {
+    const entries = listRecentDecisions(workspaceRoot, sessionKey, 1_000);
+    const { samples, unlabelled } = samplesFromDecisions(entries, provider);
+    const report = assessCalibration(provider, samples, { unlabelled });
+    // `insufficient` is NOT a demotion: never having been measured is not the
+    // same as having been measured and failed.
+    if (report.verdict === 'uncalibrated') advisory = report.summary;
+  } catch {
+    // An unreadable record measures nothing, so it demotes nothing.
+  }
+  calibrationCache.set(key, { checkedAt: now, advisory });
+  return advisory;
 }
 
 function failing(name: string, reason: string): DecisionProvider {
@@ -86,6 +133,16 @@ export function decisionPortForSession(options: SessionDecisionPortOptions = {})
   // Recording is the CONSUMER's, not the port's: only the consumer knows what
   // it did with the answer, and one row carrying the outcome and the threshold
   // is worth more than two rows carrying halves of it (D5).
-  const port = createDecisionPort({ provider, timeoutMs: knobs.timeoutMs });
-  return { port, maxStateChars: knobs.maxStateChars, providerName: provider.name };
+  const advisory = advisoryReason(provider.name, options.workspaceRoot, options.sessionKey, Date.now());
+  const port = createDecisionPort({
+    provider,
+    timeoutMs: knobs.timeoutMs,
+    ...(advisory ? { advisory } : {}),
+  });
+  return {
+    port,
+    maxStateChars: knobs.maxStateChars,
+    providerName: provider.name,
+    ...(advisory ? { advisory } : {}),
+  };
 }

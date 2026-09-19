@@ -220,11 +220,32 @@ Two call, and must never quietly bill one.
 
 ### D7 · Calibration is verified, not trusted
 
-A stated confidence is only useful if it tracks accuracy. Recorded decisions plus their
-eventual outcomes (the user approved, the command ran clean, the recalled records were cited)
-form a held-out set; a provider whose confidence does not track accuracy on it is demoted to
-**advisory** — its answers are recorded and shown, and the rules decide. Calibration is a
-measured property of a provider in *this* deployment, not a claim on a vendor's page.
+A stated confidence is only useful if it tracks accuracy. "0.9 risk" has to mean the thing was
+risky about nine times in ten, or the number is decoration and the thresholds around it are
+arbitrary. Nothing outside this workspace can establish that for *this* model on *these*
+questions — only the record can.
+
+So the tier grades itself. Recorded decisions (D5) carry the probability; a consumer that later
+learns the truth writes it back on the same entry, and two readings follow:
+
+- **ECE** — bucket by stated probability, compare each bucket's average claim to its observed
+  rate, and weight the gaps by sample count.
+- **Brier** — the mean squared error of the probability itself, which catches what ECE alone
+  misses: a classifier answering 0.5 to everything is perfectly calibrated and perfectly
+  useless.
+
+A provider that fails either is demoted to **advisory**: it keeps being asked, its answer keeps
+being recorded on `advised`, and the rules decide. Demotion is applied once, in
+`createDecisionPort`, so no consumer has to remember to honour it — and *never having been
+measured is not the same as having been measured and failed*, so an `insufficient` verdict
+demotes nothing.
+
+**Ground truth is scarce on purpose.** Only a gate that actually finds out may label a decision:
+the shell gate does, because a human approving a command the tier flagged *is* the answer, and
+a human refusing it is the other one. An auto-deny and a silent session learn nothing and label
+nothing, and an unlabelled decision is excluded from the grade rather than counted as a win.
+That is why the verdict stays `insufficient` for a long time, and why that is the honest state
+rather than a bug.
 
 ### Alternatives rejected
 
@@ -236,9 +257,9 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 - **Bring back an LLM judge.** The recall relevance judge was removed (migration 029) because it
   was slow and no more accurate than the heuristic it replaced. This ADR does not propose a
   judge; it proposes a *classifier* with a measured calibration and a rules floor beneath it.
-- **Integrate the vendor directly, without the port.** Ties four loop sites to one HTTP API
-  and one company. The port costs one interface and buys the ability to answer the same
-  questions locally.
+- **Integrate a hosted classifier directly, without the port.** Ties four loop sites to one
+  HTTP API and one company. The port costs one interface — and, as it turned out, bought the
+  ability to drop the hosted classifier entirely without touching a single consumer (D6).
 
 ## 4. What this does not do
 
@@ -260,7 +281,7 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 | S4 | The `local` provider | our own classifier: closed schema over a declared small model, `withFallbacks: false`, size bound on every state; failure to `rules` recorded with a reason that names the fix | D4, D6 |
 | S5 | Route choice | one `choice` re-heads the chain an `auto` request resolved to; explicit picks untouched, `resolve.ts` untouched | D3.3 |
 | S6 | Turn checkpoint | `turnBudget.ts` scores progress by the port and attaches recorded denials to the corrective prompt | D3.4 |
-| S7 | Calibration | held-out eval from recorded decisions and outcomes; advisory demotion | D7 |
+| S7 | Calibration | ECE + Brier over recorded decisions and their outcomes; ground truth from the shell gate; advisory demotion in the port; `/decision-calibration` | D7 |
 | S8 | Docs | configuration.md `cli.decisions`, a guide, STATUS row | — |
 
 **S1 and S2 merged into one slice during the build, and the reason belongs here:** the

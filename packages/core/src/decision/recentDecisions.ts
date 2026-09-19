@@ -35,6 +35,18 @@ export interface DecisionEntry {
   latencyMs: number;
   /** Why the rules floor stood in, when it did. */
   fellBack?: string;
+  /**
+   * ADR-061 D7 — what turned out to be true, when something later said.
+   *
+   * The other half of a calibration pair. Only a consumer that learns the
+   * answer sets it: the shell gate does, because a human approving a command
+   * the tier flagged IS the ground truth. Left unset everywhere nothing finds
+   * out, which is most places, and an unset entry is counted as unlabelled
+   * rather than assumed either way.
+   */
+  correct?: boolean;
+  /** What an advisory provider said, when it was demoted and not acted on (D7). */
+  advised?: number | string;
   ts: number;
 }
 
@@ -63,6 +75,10 @@ function normalize(entry: DecisionEntry): DecisionEntry {
     provider: text(entry.provider, 40) || 'unknown',
     latencyMs: Number.isFinite(entry.latencyMs) ? Math.max(0, Math.round(entry.latencyMs)) : 0,
     ...(entry.fellBack ? { fellBack: text(entry.fellBack, 300) } : {}),
+    ...(typeof entry.correct === 'boolean' ? { correct: entry.correct } : {}),
+    ...(entry.advised !== undefined
+      ? { advised: typeof entry.advised === 'number' ? Math.round(entry.advised * 1000) / 1000 : text(entry.advised, 120) }
+      : {}),
     ts: Number.isFinite(entry.ts) ? entry.ts : Date.now(),
   };
 }
@@ -72,7 +88,7 @@ export function decisionEntry(
   consumer: string,
   question: string,
   answer: DecisionAnswer,
-  extra: { outcome?: string; threshold?: string; ts?: number } = {},
+  extra: { outcome?: string; threshold?: string; correct?: boolean; ts?: number } = {},
 ): DecisionEntry {
   return normalize({
     consumer,
@@ -82,9 +98,11 @@ export function decisionEntry(
     ...(typeof answer.confidence === 'number' ? { confidence: answer.confidence } : {}),
     ...(extra.outcome ? { outcome: extra.outcome } : {}),
     ...(extra.threshold ? { threshold: extra.threshold } : {}),
+    ...(typeof extra.correct === 'boolean' ? { correct: extra.correct } : {}),
     provider: answer.provider,
     latencyMs: answer.latencyMs,
     ...(answer.fellBack ? { fellBack: answer.fellBack } : {}),
+    ...(answer.advised ? { advised: answer.advised.value } : {}),
     ts: extra.ts ?? Date.now(),
   });
 }
@@ -165,5 +183,7 @@ export function describeDecision(entry: DecisionEntry): string {
   if (entry.threshold) parts.push(`(${entry.threshold})`);
   parts.push(`${entry.provider} · ${entry.latencyMs}ms`);
   if (entry.fellBack) parts.push(`· fell back: ${entry.fellBack}`);
+  if (entry.advised !== undefined) parts.push(`· advised ${entry.advised} (not used)`);
+  if (typeof entry.correct === 'boolean') parts.push(entry.correct ? '· held up' : '· overruled');
   return parts.join(' ');
 }

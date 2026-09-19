@@ -67,6 +67,10 @@
       "types": "./dist/decision/recentDecisions.d.ts",
       "default": "./dist/decision/recentDecisions.js"
     },
+    "./decision/calibration": {
+      "types": "./dist/decision/calibration.d.ts",
+      "default": "./dist/decision/calibration.js"
+    },
     "./diagram": {
       "types": "./dist/diagram/index.d.ts",
       "default": "./dist/diagram/index.js"

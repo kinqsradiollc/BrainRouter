@@ -117,7 +117,10 @@ export const execHandlers: Record<string, BuiltinToolHandler> = {
         // With the default `rules` provider the probability is 0 and this is a
         // no-op, which is what makes the tier landable.
         if (!destructiveOverride) {
-          const { port, maxStateChars } = decisionPortForSession();
+          const { port, maxStateChars } = decisionPortForSession({
+            workspaceRoot: host.workspaceRoot,
+            sessionKey: host.sessionKey,
+          });
           const shellBands = getCliKnobs().decisions.shell;
           const risk = await decideShellRisk(port, {
             // D4 — redacted before it can reach any provider that leaves this
@@ -127,10 +130,16 @@ export const execHandlers: Record<string, BuiltinToolHandler> = {
             ...(cwdOverride ? { cwd: cwdOverride } : {}),
           }, { thresholds: shellBands, maxStateChars });
           if (risk.decision !== 'allow') {
-            const recordRisk = (outcome: string) => {
+            // ADR-061 D7 — `correct` is ground truth, so it is only set where a
+            // human actually said. A refusal at the prompt agrees the command
+            // was risky; an auto-deny and a silent session say nothing, and an
+            // unlabelled decision is excluded from calibration rather than
+            // counted as a win.
+            const recordRisk = (outcome: string, correct?: boolean) => {
               try {
                 recordDecision(host.workspaceRoot, host.sessionKey, decisionEntry(
-                  'shell', 'risky', risk.answer, { outcome, threshold: risk.threshold },
+                  'shell', 'risky', risk.answer,
+                  { outcome, threshold: risk.threshold, ...(typeof correct === 'boolean' ? { correct } : {}) },
                 ));
               } catch { /* best-effort */ }
               try { recordDenial(host.workspaceRoot, host.sessionKey, 'run_command', risk.reason); } catch { /* best-effort */ }
@@ -144,12 +153,14 @@ export const execHandlers: Record<string, BuiltinToolHandler> = {
               ? await host.interactionPort.confirm({ title: 'Run this command?', detail: `${cmd}\n\n${risk.reason}`, dangerous: true, tool: 'run_command' })
               : await host.prompter.askYesNo(`${risk.reason}\nRun it anyway? (y/N) `, false);
             if (!approved) {
-              recordRisk('declined');
+              // The human refused what the tier flagged: the tier was right.
+              recordRisk('declined', true);
               return `Command blocked (safety classifier): ${risk.reason}`;
             }
             try {
+              // The human waved through what the tier flagged: the tier was wrong.
               recordDecision(host.workspaceRoot, host.sessionKey, decisionEntry(
-                'shell', 'risky', risk.answer, { outcome: 'approved', threshold: risk.threshold },
+                'shell', 'risky', risk.answer, { outcome: 'approved', threshold: risk.threshold, correct: false },
               ));
             } catch { /* best-effort */ }
           }

@@ -83,6 +83,16 @@ export interface DecisionAnswer {
    * impossible to confuse with a real answer.
    */
   fellBack?: string;
+  /**
+   * ADR-061 D7 — what an ADVISORY provider said, which was not acted on.
+   *
+   * A provider whose confidence does not track accuracy is demoted rather than
+   * switched off: it keeps answering, the answer keeps being recorded, and the
+   * rules decide. This is where the unused answer rides along so it can be
+   * recorded and shown — a demoted classifier that went quiet would be a
+   * classifier nobody could ever re-qualify.
+   */
+  advised?: { value: number | string; confidence?: number; provider: string };
 }
 
 export type DecisionAnswers = Record<string, DecisionAnswer>;
