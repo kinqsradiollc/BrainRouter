@@ -112,3 +112,51 @@ test('the runtime feed client sends a calendar Accept header and follows the nor
   assert.equal(seen!.url, 'https://example.com/cal.ics');
   assert.match(String((seen!.init.headers as Record<string, string>).Accept), /text\/calendar/);
 });
+
+/* ------------------------------------- an import is a subscription that ran once */
+
+test('an imported file is read from the host, parsed identically, and never touches the network', async () => {
+  const reads: string[] = [];
+  const imported = connector({ url: undefined, mode: 'file', file: 'cx_family.ics', fileName: 'timetable.ics' });
+  const net = fake('SHOULD NOT BE FETCHED');
+  const out = await runIcsCalendarConnectorCheckpoint(imported, {
+    ...net.client,
+    readImported: async (ref) => { reads.push(ref); return FEED; },
+  }, { now: NOW });
+
+  assert.deepEqual(net.urls, [], 'an imported calendar makes no request');
+  assert.deepEqual(reads, ['cx_family.ics']);
+  assert.deepEqual(out.failures, []);
+  assert.equal(out.documents.length, 4, 'the same parse as the feed above');
+  assert.equal(out.checkpoint.importedFile, 'timetable.ics', 'the checkpoint names the file the person chose');
+});
+
+test('an imported calendar a host cannot read says so, in the file\'s name and never a path', async () => {
+  const imported = connector({ url: undefined, mode: 'file', file: 'cx_family.ics', fileName: 'timetable.ics' });
+  const noReader = await runIcsCalendarConnectorCheckpoint(imported, fake('').client, { now: NOW });
+  assert.equal(noReader.documents.length, 0);
+  assert.match(noReader.failures[0]!, /^timetable\.ics: this host cannot read imported calendar files$/);
+  assert.match(String(noReader.checkpoint.lastError), /cannot read imported/);
+
+  const notCalendar = await runIcsCalendarConnectorCheckpoint(imported, {
+    ...fake('').client,
+    readImported: async () => 'Subject,Start\nMaths,9am',
+  }, { now: NOW });
+  assert.match(notCalendar.failures[0]!, /not an iCalendar file\. Export the calendar again as \.ics\./);
+});
+
+test('a stored reference is a plain file name — a path is refused rather than followed', async () => {
+  for (const ref of ['../../../etc/passwd', '/etc/passwd', 'a/b.ics', '']) {
+    await assert.rejects(
+      () => runIcsCalendarConnectorCheckpoint(
+        connector({ url: undefined, mode: 'file', file: ref }),
+        { ...fake('').client, readImported: async () => FEED },
+        { now: NOW },
+      ),
+      /plain file name|has no stored file/,
+      `refused: ${ref || '(empty)'}`,
+    );
+  }
+  // And the client refuses independently of the runner, for a host that calls it directly.
+  await assert.rejects(() => icsFeedClient({ importedRoot: '/tmp' }).readImported!('../x'), /plain file name/);
+});

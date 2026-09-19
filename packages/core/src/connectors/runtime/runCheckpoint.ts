@@ -82,6 +82,14 @@ export interface CheckpointRunnerDeps {
   /** Process context. Defaults to the local Node host. */
   runtimeHost?: ConnectorRuntimeHost;
   /**
+   * Where this host keeps calendars the person imported (ADR-060 D4).
+   *
+   * Only the host knows where its app data lives, and a host that has nowhere
+   * to put them simply does not offer the import — the connector then fails
+   * with that as its reason rather than appearing to have read an empty file.
+   */
+  calendarImportRoot?: string;
+  /**
    * GitHub connector client. The host passes its keychain/gh-CLI-aware client;
    * the agent passes a static/dynamic-token REST client. When absent, a github
    * connector in `oauth`/`keychain` mode throws the desktop-only guidance error.
@@ -250,7 +258,10 @@ export function buildCheckpointRunner(
       case 'gmail':
         return await runGmailConnectorCheckpoint(connector, gmailTokenClient(requireStaticToken(connector, 'Gmail').token));
       case 'ics-calendar':
-        return await runIcsCalendarConnectorCheckpoint(connector, icsFeedClient());
+        return await runIcsCalendarConnectorCheckpoint(
+          connector,
+          icsFeedClient(deps.calendarImportRoot ? { importedRoot: deps.calendarImportRoot } : undefined),
+        );
       default:
         throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
     }

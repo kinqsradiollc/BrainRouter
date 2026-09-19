@@ -16,7 +16,28 @@ import { normalizeCalendarFeedUrl, parseIcs, type IcsEvent } from '../../calenda
 export interface IcsCalendarFeedClient {
   /** GET the feed; resolves to its text. Throws on a network failure. */
   fetchText(url: string): Promise<{ status: number; contentType: string; body: string }>;
+  /**
+   * Read a calendar the person imported once (D4), by the reference the host
+   * stored it under. Absent on a client that only fetches — an imported
+   * connector then fails with that as its reason rather than silently emptying.
+   */
+  readImported?(ref: string): Promise<string>;
 }
+
+/**
+ * Where this connector's calendar comes from.
+ *
+ * "Import an `.ics` file" is a subscription that ran once (D4): the same parse,
+ * the same projection, the same removal when the connector is removed. The only
+ * difference is where the text comes from and that nothing polls it — which
+ * falls out of `pollMinutes: 0`, the rule every source already obeys.
+ */
+export type IcsCalendarSource =
+  | { kind: 'url'; url: string }
+  | { kind: 'imported'; ref: string; name: string };
+
+/** A stored reference is a file name this process wrote, never a path. */
+const IMPORT_REF = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 
 export interface IcsCalendarRunResult {
   documents: ConnectorDocument[];
@@ -42,7 +63,7 @@ export async function runIcsCalendarConnectorCheckpoint(
   options?: IcsCalendarRunOptions,
 ): Promise<IcsCalendarRunResult> {
   if (connector.source !== 'ics-calendar') throw new Error(`Connector source ${connector.source} is not ics-calendar.`);
-  const url = feedUrl(connector);
+  const origin = calendarSource(connector);
   const now = options?.now ?? new Date().toISOString();
   const nowMs = Date.parse(now);
   const daysBack = positiveNumber(connector.config.windowDaysBack) ?? ICS_DEFAULT_WINDOW_DAYS_BACK;
@@ -52,27 +73,38 @@ export async function runIcsCalendarConnectorCheckpoint(
   const maxEvents = Math.max(1, Math.floor(options?.maxEvents ?? ICS_MAX_EVENTS_PER_RUN));
 
   const failures: string[] = [];
+  const where = origin.kind === 'url' ? redactFeedUrl(origin.url) : origin.name;
   let body: string;
   try {
-    const res = await client.fetchText(url);
-    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
-    if (res.body.length > ICS_MAX_FEED_BYTES) throw new Error(`feed is ${res.body.length} bytes; the limit is ${ICS_MAX_FEED_BYTES}`);
-    if (!/BEGIN:VCALENDAR/i.test(res.body.slice(0, 2048))) {
-      throw new Error(`not an iCalendar feed (content-type ${res.contentType || 'unknown'}). Google and iCloud links must be the .ics / webcal address, not the calendar's web page.`);
+    if (origin.kind === 'imported') {
+      if (!client.readImported) throw new Error('this host cannot read imported calendar files');
+      body = await client.readImported(origin.ref);
+      if (body.length > ICS_MAX_FEED_BYTES) throw new Error(`the file is ${body.length} bytes; the limit is ${ICS_MAX_FEED_BYTES}`);
+      if (!/BEGIN:VCALENDAR/i.test(body.slice(0, 2048))) {
+        throw new Error('this is not an iCalendar file. Export the calendar again as .ics.');
+      }
+    } else {
+      const res = await client.fetchText(origin.url);
+      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+      if (res.body.length > ICS_MAX_FEED_BYTES) throw new Error(`feed is ${res.body.length} bytes; the limit is ${ICS_MAX_FEED_BYTES}`);
+      if (!/BEGIN:VCALENDAR/i.test(res.body.slice(0, 2048))) {
+        throw new Error(`not an iCalendar feed (content-type ${res.contentType || 'unknown'}). Google and iCloud links must be the .ics / webcal address, not the calendar's web page.`);
+      }
+      body = res.body;
     }
-    body = res.body;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return result([], [`${redactFeedUrl(url)}: ${message}`], now, { ...checkpointOf(connector), lastError: message, windowStart, windowEnd });
+    return result([], [`${where}: ${message}`], now, { ...checkpointOf(connector), lastError: message, windowStart, windowEnd });
   }
 
   const parsed = parseIcs(body, { windowStart, windowEnd });
-  failures.push(...parsed.failures.map((f) => `${redactFeedUrl(url)}: ${f}`));
+  failures.push(...parsed.failures.map((f) => `${where}: ${f}`));
   const label = configString(connector, 'label') || parsed.calendarName || connector.name || 'Calendar';
   const documents = parsed.events.slice(0, maxEvents).map((event) => eventDocument(connector, event, label, parsed.color, now));
   if (parsed.events.length > maxEvents) failures.push(`Stopped after ${maxEvents} events in the window.`);
   return result(documents, failures, now, {
     highWatermark: now,
+    ...(origin.kind === 'imported' ? { importedFile: origin.name } : {}),
     windowStart,
     windowEnd,
     eventCount: documents.length,
@@ -115,11 +147,32 @@ function eventDocument(connector: ConnectorRecord, event: IcsEvent, calendarLabe
   };
 }
 
-/** The feed client the runtime uses: plain GET, bounded, `webcal://` normalised. */
-export function icsFeedClient(options?: { fetchImpl?: typeof fetch; timeoutMs?: number }): IcsCalendarFeedClient {
+/**
+ * The feed client the runtime uses: plain GET, bounded, `webcal://` normalised.
+ *
+ * `importedRoot` is the directory a host writes imported `.ics` files into. It
+ * is passed rather than assumed because only the host knows where its app data
+ * lives; without it, an imported connector says so instead of reading nothing.
+ */
+export function icsFeedClient(options?: {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  importedRoot?: string;
+}): IcsCalendarFeedClient {
   const fetcher = options?.fetchImpl ?? fetch;
   const timeoutMs = Math.max(1, options?.timeoutMs ?? 20_000);
+  const importedRoot = options?.importedRoot;
   return {
+    ...(importedRoot
+      ? {
+        async readImported(ref: string): Promise<string> {
+          if (!IMPORT_REF.test(ref)) throw new Error('An imported calendar reference must be a plain file name.');
+          const { readFile } = await import('node:fs/promises');
+          const { join } = await import('node:path');
+          return await readFile(join(importedRoot, ref), 'utf8');
+        },
+      }
+      : {}),
     async fetchText(url) {
       const res = await fetcher(normalizeCalendarFeedUrl(url), {
         headers: { 'User-Agent': 'brainrouter-calendar', Accept: 'text/calendar, text/plain;q=0.8, */*;q=0.5' },
@@ -129,6 +182,19 @@ export function icsFeedClient(options?: { fetchImpl?: typeof fetch; timeoutMs?: 
       return { status: res.status, contentType: res.headers.get('content-type') ?? '', body: await res.text() };
     },
   };
+}
+
+/** Read once from a file, or polled from a feed — decided by the connector alone. */
+export function calendarSource(connector: ConnectorRecord): IcsCalendarSource {
+  if (configString(connector, 'mode') === 'file') {
+    const ref = configString(connector, 'file');
+    if (!ref) throw new Error('An imported calendar has no stored file.');
+    // The host wrote this name; a connector record that carries a path instead
+    // is either corrupt or hand-edited, and either way is not followed.
+    if (!IMPORT_REF.test(ref)) throw new Error('An imported calendar reference must be a plain file name.');
+    return { kind: 'imported', ref, name: configString(connector, 'fileName') ?? ref };
+  }
+  return { kind: 'url', url: feedUrl(connector) };
 }
 
 function feedUrl(connector: ConnectorRecord): string {
@@ -152,7 +218,10 @@ function redactFeedUrl(url: string): string {
 }
 
 function feedFingerprint(connector: ConnectorRecord): string {
-  return createHash('sha256').update(String(connector.config.url ?? connector.id)).digest('hex').slice(0, 16);
+  const identity = connector.config.mode === 'file'
+    ? `file:${String(connector.config.file ?? connector.id)}`
+    : String(connector.config.url ?? connector.id);
+  return createHash('sha256').update(identity).digest('hex').slice(0, 16);
 }
 
 function configString(connector: ConnectorRecord, key: string): string | undefined {
