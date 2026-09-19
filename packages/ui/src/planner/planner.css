@@ -40,7 +40,10 @@
   --br-ui-text-muted: var(--text-faint, var(--text-muted, var(--br-color-text-muted)));
   --br-ui-text-secondary: var(--text-dim, var(--text-secondary, var(--br-color-text-secondary)));
 }
-[data-theme="light"] .br-planner .br-planner-source,
+/* The sync button sits on the header, where faint reads as quiet. The source
+   chip sits on a ROW, and a row lights up on hover and focus — faint over that
+   wash measured 3.8:1 in light, under the 4.5 the gate requires. It takes the
+   chip vocabulary's secondary instead, which is 8.5:1 on the same wash. */
 [data-theme="light"] .br-planner .br-planner-sync > button {
   color: var(--text-faint, var(--text-muted, #646a73));
 }
@@ -446,7 +449,10 @@
 .br-planner .br-planner-cell > .br-planner-chip > .br-planner-due,
 .br-planner .br-planner-cell > .br-planner-chip > .br-planner-estimate { width: 100%; }
 .br-planner .br-planner-chip { width: 100%; justify-content: flex-end; }
-.br-planner time.br-planner-due { color: var(--br-ui-text-muted); border-style: dotted; }
+/* A day that cannot be edited is marked by its DOTTED border, not by being
+   fainter: faint measured 3.8:1 on a lit row in light, and these chips are
+   exactly the ones mirrored rows carry. */
+.br-planner time.br-planner-due { border-style: dotted; }
 .br-planner .br-planner-source[data-stale="true"] { border-style: dashed; }
 .br-planner .br-planner-cell > .br-planner-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 22px; }
 .br-planner-due { cursor: default; }
