@@ -245,7 +245,7 @@ import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PL
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
-import { isSequenceGuardExempt, buildSequenceSignature } from './guards/repeatGuard.js';
+import { isSequenceGuardExempt, buildSequenceSignature, createUnchangedResultStore } from './guards/repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -1053,6 +1053,13 @@ export class Agent implements IAgent {
     undefined,
     new SpillStore(path.join(os.tmpdir(), 'brainrouter-offload')),
   );
+  /**
+   * Per-SESSION digests of what each (tool, args) call last returned, so a call
+   * that returns byte-identical text can say so across turn boundaries — where
+   * the per-turn repeat window cannot see. Content, not a counter: a file the
+   * person edited between turns returns something different and says nothing.
+   */
+  public readonly unchangedResults = createUnchangedResultStore();
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   public triedModelFallback = false;
   /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
