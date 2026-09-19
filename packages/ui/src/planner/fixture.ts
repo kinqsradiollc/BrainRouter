@@ -62,6 +62,34 @@ export function createPlannerFixture(today = '2026-08-11'): PlannerFixture {
     ...over,
   });
 
+  /**
+   * A meeting mirrored from a calendar (ADR-060). Its hour belongs to the feed,
+   * so the calendar tab must refuse to drag it and say which calendar it came
+   * from — neither of which the GitHub items above can rehearse.
+   */
+  const meeting = (
+    id: string,
+    title: string,
+    calendar: string,
+    color: string,
+    over: Partial<PlannerItemView> = {},
+  ): PlannerItemView => owned(id, title, {
+    origin: 'mirrored',
+    provenance: {
+      source: calendar,
+      kind: 'connector:cal_work',
+      documentKind: 'event',
+      color,
+      externalId: `${id}@calendar`,
+      fetchedAt: dateAt(today, 0, 7),
+    },
+    source: calendar,
+    sourceKind: 'event',
+    capabilities: { editTitle: false, complete: true, delete: false },
+    sourceFreshness: { label: 'Refreshed 2 hours ago', fetchedAt: dateAt(today, 0, 7), stale: false },
+    ...over,
+  });
+
   const items: PlannerItemView[] = [
     connected('github:1382', 'Make planner sync failures actionable', '1382', { dueDate: dateAt(today, -1), priority: 1 }),
     owned('itm_release', 'Prepare the 0.4.20 release notes', { dueDate: today, priority: 1, estimateMinutes: 60 }),
@@ -87,6 +115,10 @@ export function createPlannerFixture(today = '2026-08-11'): PlannerFixture {
     owned('itm_done_2', 'Audit the planner wire contract', { completed: true }),
     connected('github:1324', 'Confirm release branch target', '1324', { completed: true }),
     owned('itm_done_4', 'Define the canonical density fixture', { completed: true }),
+    meeting('cal_standup', 'Release standup', 'Work · Google', '#1a73e8', { dueDate: today }),
+    // On TODAY, not a later day: the visual gate runs on whatever day it is, and
+    // a holiday two days out leaves the displayed week on a Friday.
+    meeting('cal_holiday', 'Public holiday', 'Family · iCloud', '#cc73e1', { dueDate: today }),
   ];
 
   const blocks: PlannerBlockView[] = [
@@ -99,6 +131,9 @@ export function createPlannerFixture(today = '2026-08-11'): PlannerFixture {
     { id: 'blk_review', itemId: 'itm_review', scheduledFor: dateAt(today, 2, 13), estimateMinutes: 30, carriedOver: 0 },
     { id: 'blk_done_1', itemId: 'itm_done_1', estimateMinutes: 20, actualMinutes: 18, carriedOver: 0, completedAt: dateAt(today, -1, 8) },
     { id: 'blk_done_2', itemId: 'itm_done_2', estimateMinutes: 60, actualMinutes: 75, carriedOver: 0, completedAt: dateAt(today, -1, 10) },
+    // The meeting's block. `cal_holiday` deliberately has none: an all-day event
+    // has a day and no hour, and the calendar shows it in the all-day lane.
+    { id: 'blk_standup', itemId: 'cal_standup', scheduledFor: dateAt(today, 0, 8), estimateMinutes: 60, carriedOver: 0 },
   ];
 
   const pending = [items[0]!, items[1]!, items[4]!, items[8]!];

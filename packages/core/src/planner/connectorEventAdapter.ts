@@ -143,6 +143,7 @@ export function connectorEventToProjection(
       // What makes the tick possible: `sourceOwnsCompletion` reads this to
       // decide that a calendar has no opinion about whether the person went.
       documentKind: 'event',
+      ...(hexColor(document.metadata.calendarColor) ? { color: hexColor(document.metadata.calendarColor)! } : {}),
     },
     title: { value: title, at },
     ...(notes ? { notes: { value: notes, at } } : {}),
@@ -170,6 +171,19 @@ export function connectorEventToProjection(
 }
 
 /** Every usable projection in a run, in document order. */
+/**
+ * A feed's colour, only if it is a plain `#rrggbb`.
+ *
+ * `X-APPLE-CALENDAR-COLOR` arrives as `#RRGGBBAA` and Google's as `#rrggbb`;
+ * anything else reaches a `style` attribute on a surface, so it is dropped
+ * rather than passed through.
+ */
+function hexColor(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(value.trim());
+  return match ? `#${match[1]!.toLowerCase()}` : undefined;
+}
+
 export function projectConnectorEvents(input: ConnectorEventProjectionInput): ProjectedEvent[] {
   return input.documents
     .map((document) => connectorEventToProjection(input, document))

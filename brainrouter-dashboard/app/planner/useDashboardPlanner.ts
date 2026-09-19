@@ -416,6 +416,7 @@ export function useDashboardPlanner(): DashboardPlannerState {
               source: provenance.sourceLabel,
               kind: provenance.sourceId,
               documentKind: provenance.documentKind,
+              color: provenance.color,
               externalId: provenance.externalId,
               url: provenance.sourceUrl,
               fetchedAt: provenance.fetchedAt,

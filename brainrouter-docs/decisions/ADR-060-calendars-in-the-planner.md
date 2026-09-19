@@ -147,6 +147,15 @@ not reimplement it.
   records: a meeting reads *"Mark Standup as attended"*, not *"Complete Standup"*.
 - Freshness: a subscription that has not answered for longer than its cadence ×2 shows in
   `staleSources` exactly as GitHub does today ("Family calendar last refreshed 3 hours ago").
+  C4b needed no wording for this — `describeFreshness` already names whichever source it is
+  given, and a calendar row carries `sourceFreshness` like any other mirrored row. **The
+  page-level `staleSources` banner is empty on the desktop for every source**, calendars
+  included: nothing passes `freshness` to `todayView` there. That is a pre-existing gap, not a
+  calendar one, and it is C4c's to close along with the connector list the control opens.
+- A meeting's *hour* is the calendar's, which the generic rule does not say: `scheduledFor` is
+  in `PLANNER_OWNED_FIELDS`, so without `whyBlockTimeIsLocked` the surface would have offered a
+  drag that the next poll undoes. The block refuses, and the tooltip says which calendar to
+  move it in.
 
 ### D6 · Parity and boundaries
 
@@ -179,7 +188,7 @@ not reimplement it.
 | C3 | Event projection | ✅ `connectorEventAdapter.ts` + the server sink `refreshConnectedEventDocuments`, hook renamed and routing on `kind`, cancelled → tombstone incl. its block, the person's measured time and completion on a block survive a re-read | D3 |
 | C3b | Vanished events | An event that leaves the feed *inside the window* without a CANCELLED marker is still projected until it is cancelled or the calendar is removed; tombstoning it needs the run's window threaded to the sink | D3 |
 | C4a | Attendance | ✅ `documentKind` on the wire, `sourceOwnsCompletion` in Core, one rule for both hosts and the server guard, tick wording | D5 (completion) |
-| C4b | Calendar surface | provenance chip + colour hairline, all-day banner, drag refusal, `staleSources` wording | D5 |
+| C4b | Calendar surface | ✅ the calendar named under the meeting + a hairline in the feed's colour, an all-day lane, drag refused with the reason, the canonical fixture grew a calendar | D5 |
 | C4c | Add calendar… | the control on the Calendar tab, file import on desktop (dialog) and dashboard (upload) | D4 |
 | C5 | `google-calendar` source | scope on the server's Google OAuth, calendar list for the picker, events runner, desktop OAuth allowlist | D1 |
 | C6 | Docs + catalog | configuration.md, connectors guide, STATUS row | — |

@@ -95,6 +95,37 @@ export function isCalendarEvent(item: PlannerItemView): boolean {
 }
 
 /**
+ * Why this block cannot be dragged, or null if it can.
+ *
+ * `scheduledFor` is in `PLANNER_OWNED_FIELDS`, so the generic rule would let a
+ * meeting be dragged to another hour — and the next poll would put it back
+ * where the calendar says it is. A mirrored event's time is the event, not
+ * planner metadata about it.
+ */
+export function whyBlockTimeIsLocked(item: PlannerItemView | undefined): string | null {
+  if (!item || !isCalendarEvent(item)) return null;
+  const calendar = item.provenance?.source ?? item.source ?? 'the calendar';
+  return `This time comes from ${calendar}. Move the meeting there — moving it here would be undone by the next refresh.`;
+}
+
+/**
+ * Meetings on a given day that have no hour: an all-day event has a day and no
+ * time (ADR-060 D3), so it has no block and would otherwise be invisible on the
+ * one surface whose job is the day.
+ */
+export function allDayEventsOn(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  date: string,
+): PlannerItemView[] {
+  const blocked = new Set(blocks.map((block) => block.itemId));
+  return items.filter((item) =>
+    isCalendarEvent(item)
+    && !blocked.has(item.id)
+    && (item.dueDate ?? '').slice(0, 10) === date);
+}
+
+/**
  * What ticking this row means.
  *
  * "Complete Standup" is wrong about a meeting in a way that matters: the person
