@@ -44,6 +44,45 @@ export function shouldHandoff(text: string, threshold = RESULT_HANDOFF_THRESHOLD
   return typeof text === "string" && text.length >= threshold;
 }
 
+/**
+ * Truncate a result that CANNOT be expanded, and say so.
+ *
+ * A handoff is only a handoff when the model can call `extract_result`. When
+ * the workspace tool profile denies that tool, parking the text behind a
+ * `resultRef` hides it permanently and — worse — the notice tells the model to
+ * call a tool that will be refused. Seen live: a 37 KB `docs/architecture.md`
+ * became an 800-char preview plus a dead ref, `extract_result` was denied by
+ * the profile, and the model re-read the same three files fifteen times.
+ *
+ * So: keep the head AND the tail (a file's ending is usually where its status
+ * lives), state plainly that the middle is gone and cannot be fetched, and say
+ * what to do instead. A model that is told to narrow its read does; a model
+ * handed a dead reference retries it.
+ */
+export function formatUnexpandableTruncation(
+  full: string,
+  limit: number,
+  opts?: { label?: string },
+): string {
+  if (full.length <= limit) return full;
+  const label = opts?.label ? `${opts.label} ` : "";
+  // Two thirds head, one third tail: the head carries the shape of the
+  // content, the tail carries conclusions and status sections.
+  const headChars = Math.max(1, Math.floor(limit * 0.67));
+  const tailChars = Math.max(0, limit - headChars);
+  const head = full.slice(0, headChars);
+  const tail = tailChars > 0 ? full.slice(-tailChars) : "";
+  const omitted = full.length - head.length - tail.length;
+  return [
+    head,
+    `\n\n[${label}output truncated — ${omitted} of ${full.length} characters omitted from the middle. ` +
+    "This output CANNOT be expanded in this workspace (`extract_result` is not available here), " +
+    "so re-running the same call will return this same truncated text. " +
+    "Read a narrower range, search for the specific text you need, or work from the head and tail below.]\n\n",
+    tail,
+  ].join("");
+}
+
 let refCounter = 0;
 function defaultRef(): string {
   // Monotonic + a cheap suffix; uniqueness only needs to hold within a

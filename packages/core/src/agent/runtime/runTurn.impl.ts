@@ -50,11 +50,14 @@ import { extensionToolOwner, phaseHookContributions } from '../../extension/regi
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
-import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
+import { makeResultHandoff, formatHandoffForModel, formatUnexpandableTruncation, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { NoTTYError } from '../support/prompter.js';
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
-import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatGuard.js';
+import {
+  isSequenceGuardExempt, buildSequenceSignature,
+  countRepeatsInWindow, pruneRepeatWindow, type RepeatWindowEntry,
+} from '../guards/repeatGuard.js';
 import {
   parseArgumentsOrError, suggestSimilarToolName,
 } from '../guards/toolCallRecovery.js';
@@ -840,8 +843,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // Repeat-loop guard: when the model calls the same tool with identical
     // args over and over, the result is by definition the same. Track recent
     // signatures so we can interrupt the loop with corrective feedback.
-    const recentToolSignatures: string[] = [];
+    const recentToolSignatures: RepeatWindowEntry[] = [];
     const REPEAT_GUARD_LIMIT = Math.max(2, getCliKnobs().repeatLoopLimit);
+    // The window is measured in BATCHES (see `repeatGuard.ts`), not calls: a
+    // wide parallel batch used to evict the evidence of its own repeat.
+    let toolBatchIndex = 0;
     // This class of failure is a "doom loop": the same tool
     // pattern repeats even if the arguments keep changing. Keep BrainRouter's
     // threshold higher than a strict identical-input approval guard so
@@ -1261,6 +1267,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const sequenceSignature = buildSequenceSignature(
         toolCalls.map((tc: any, idx: number) => ({ name: normalizedNames[idx], args: tc.function?.arguments })),
       );
+      toolBatchIndex += 1;
       const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
       recentToolSequences.push(sequenceSignature);
       if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
@@ -1482,7 +1489,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // (name, args) call REPEAT_GUARD_LIMIT times in this turn, short-
         // circuit with corrective feedback instead of executing again.
         const signature = `${name}::${(() => { try { return JSON.stringify(args); } catch { return String(args); } })()}`;
-        const repeatCount = recentToolSignatures.filter((s) => s === signature).length;
+        const repeatCount = countRepeatsInWindow(recentToolSignatures, signature);
         if (repeatCount >= REPEAT_GUARD_LIMIT) {
           isError = true;
           resultText = [
@@ -1507,10 +1514,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
         }
-        recentToolSignatures.push(signature);
-        // Keep the window small so the guard only blocks tight loops, not
-        // legitimate revisits separated by other tool calls.
-        if (recentToolSignatures.length > 12) recentToolSignatures.shift();
+        recentToolSignatures.push({ signature, batch: toolBatchIndex });
+        pruneRepeatWindow(recentToolSignatures, toolBatchIndex);
 
         // Lifecycle: pre-tool hook. Non-zero exit (or {decision:deny}) blocks the
         // call — BLOCKING, so it runs for unattended agents too (enforcement).
@@ -1940,21 +1945,34 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         if (compaction.omittedChars > 0) {
           this.memoryMetrics.compactedToolCharsAvoided += compaction.omittedChars;
         }
-        const llmVisibleResult = compaction.requiresResultHandoff
+        // A handoff is only a handoff when the model can call `extract_result`.
+        // That tool is gated by the workspace tool profile, and when the
+        // profile denies it a `resultRef` is a key to a locked door: the text
+        // sits in the cache, the model is TOLD to call a tool that will be
+        // refused, and it re-reads the same file instead. That is the loop.
+        const canExpandResults = resultExpansionTool !== undefined;
+        const llmVisibleResult = compaction.requiresResultHandoff && canExpandResults
           ? attachCompactedResultHandoff(this.resultCache, resultText, compaction.inlineText, { label: name }).content
           : compaction.inlineText;
         const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
         let clampedContent = llmVisibleResult;
         if (llmVisibleResult.length > MAX_TOOL_RESULT_CHARS) {
-          // MAS-P5-T2: progressive result handoff. Rather than hard-
-          // truncating (and losing the tail), park the full result in the
-          // session cache and show the model a preview + resultRef it can
-          // expand on demand via extract_result. Full text still lands in
-          // the transcript via recordTranscript below.
-          const { handoff, full } = makeResultHandoff(llmVisibleResult, { previewChars: MAX_TOOL_RESULT_CHARS });
-          this.resultCache.put(handoff.resultRef, full);
-          this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
-          clampedContent = formatHandoffForModel(handoff, { label: name });
+          if (canExpandResults) {
+            // MAS-P5-T2: progressive result handoff. Rather than hard-
+            // truncating (and losing the tail), park the full result in the
+            // session cache and show the model a preview + resultRef it can
+            // expand on demand via extract_result. Full text still lands in
+            // the transcript via recordTranscript below.
+            const { handoff, full } = makeResultHandoff(llmVisibleResult, { previewChars: MAX_TOOL_RESULT_CHARS });
+            this.resultCache.put(handoff.resultRef, full);
+            this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
+            clampedContent = formatHandoffForModel(handoff, { label: name });
+          } else {
+            // Nothing to hand off TO. Keep the head and the tail, say the
+            // middle is gone and cannot be fetched, and say what to do instead.
+            clampedContent = formatUnexpandableTruncation(llmVisibleResult, MAX_TOOL_RESULT_CHARS, { label: name });
+            this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, llmVisibleResult.length - clampedContent.length);
+          }
         }
         refreshResultExpansionTool();
         const toolMsg = {
