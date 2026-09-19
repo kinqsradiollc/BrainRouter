@@ -221,7 +221,7 @@ export interface UpdateItemInput {
  * same refusal the store enforces instead of interpreting a null return.
  */
 export function canUpdateItemLocally(
-  item: Pick<PlannerItem, 'origin' | 'source'>,
+  item: Pick<PlannerItem, 'origin' | 'source' | 'provenance'>,
   input: UpdateItemInput,
 ): { allowed: boolean; reason?: string } {
   for (const field of Object.keys(input)) {

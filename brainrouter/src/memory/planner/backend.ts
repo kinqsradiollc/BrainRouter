@@ -19,7 +19,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ConnectorDocumentRecord, ConnectorSource } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../engine.js";
 import {
-  causalValue, createConnectorIssueSourceAdapter, projectConnectorEvents, mergeOwnedItem, refreshMirrored, compareHlc, validatePlannerOperation,
+  causalValue, createConnectorIssueSourceAdapter, projectConnectorEvents, mergeOwnedItem, plannerItemFieldIsLocal, refreshMirrored, compareHlc, validatePlannerOperation,
   type PlannerItem, type Hlc, type TimeBlock,
   type PlannerProjectionSummary,
   type PlannerPushOperation, type PlannerPushOutcome,
@@ -222,8 +222,11 @@ async function applyItemOperation(
     return "This connected item already exists; refresh it from its source instead of recreating it locally.";
   }
   if (existing?.payload.origin === "mirrored" && op.kind === "update") {
-    const plannerOwnedFields = new Set(["priority", "estimateMinutes"]);
-    const sourceOwnedFields = Object.keys(op.payload).filter((field) => !plannerOwnedFields.has(field));
+    // Core's rule, not a third copy of it: the fields a mirrored ITEM may be
+    // given locally, plus `completed` when the source has no completion of its
+    // own to state — a calendar says a meeting exists, never that you attended.
+    const sourceOwnedFields = Object.keys(op.payload)
+      .filter((field) => !plannerItemFieldIsLocal(existing.payload, field));
     if (sourceOwnedFields.length > 0) {
       return `The connected source owns ${sourceOwnedFields.join(", ")}; no local change was applied.`;
     }
@@ -237,6 +240,10 @@ async function applyItemOperation(
     // update cannot replace the source title with an empty placeholder.
     next = refreshMirrored(existing.payload, incoming, incoming.fetchedAt ?? nowIso);
     if (op.payload.priority !== undefined) next.priority = incoming.priority;
+    // Permitted above only for a record whose source states no completion, so
+    // this writes attendance and nothing else — including an un-tick, which
+    // carries its own stamp and must survive the next poll like any other.
+    if (op.payload.completed !== undefined) next.completed = incoming.completed;
     if (op.payload.estimateMinutes !== undefined) {
       next.estimateMinutes = incoming.estimateMinutes;
       next.estimateUpdatedAt = incoming.estimateUpdatedAt;

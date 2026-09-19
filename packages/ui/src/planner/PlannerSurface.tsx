@@ -28,6 +28,7 @@ import {
   QUICK_ESTIMATES,
   addDays,
   canEdit,
+  completionLabel,
   carriedForItem,
   conflictBanner,
   dayLabel,
@@ -602,7 +603,7 @@ function ItemRow({ item, blocks, today, ops }: {
         checked={item.completed}
         disabled={!ops.toggleComplete || !canEdit(item, 'completed')}
         title={whyReadOnly(item, 'completed') ?? undefined}
-        aria-label={`${item.completed ? 'Reopen' : 'Complete'} ${item.title}`}
+        aria-label={completionLabel(item)}
         onChange={(event) => ops.toggleComplete?.(item.id, event.target.checked)}
       />
       <span className="br-planner-title" title={titleLocked ?? undefined}>{item.title}</span>

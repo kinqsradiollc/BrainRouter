@@ -13,7 +13,9 @@ import {
   shortDayLabel,
   weekStrip,
   canEdit,
+  completionLabel,
   conflictBanner,
+  isCalendarEvent,
   emptyMessage,
   estimateForItem,
   formatMinutes,
@@ -79,6 +81,21 @@ test('ADR-038 keeps source-owned fields read-only and planner metadata editable'
     origin: 'mirrored',
     capabilities: { complete: true },
   }), 'completed'), true);
+});
+
+test('ADR-060 C4 — a meeting can be ticked without a host capability, because attending is nobody else\'s fact', () => {
+  const meeting = item({
+    id: 'evt', title: 'Team standup', origin: 'mirrored', source: 'Family',
+    provenance: { source: 'Family', kind: 'connector:cal_1', documentKind: 'event' },
+  });
+  assert.equal(isCalendarEvent(meeting), true);
+  assert.equal(canEdit(meeting, 'completed'), true);
+  assert.equal(canEdit(meeting, 'title'), false, 'the calendar still owns the meeting itself');
+  assert.equal(canEdit(meeting, 'delete'), false, 'un-inviting yourself is not a planner action');
+  assert.equal(isCalendarEvent(item({ id: 'issue', origin: 'mirrored', source: 'GitHub' })), false);
+  assert.equal(completionLabel(meeting), 'Mark Team standup as attended');
+  assert.equal(completionLabel({ ...meeting, completed: true }), 'Clear attended on Team standup');
+  assert.equal(completionLabel(item({ id: 'own', title: 'Team standup' })), 'Complete Team standup');
 });
 
 test('ADR-038 calendar groups local dates and lays overlapping blocks into lanes', () => {

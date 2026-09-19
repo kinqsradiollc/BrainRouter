@@ -75,18 +75,37 @@ export function sortForToday(
 // The merge rule itself, not a second copy of it. Core decides what survives a
 // refresh; a surface that duplicated the list would eventually offer an edit the
 // next sync undoes — which is the projection drift ADR-038's audit found.
-import { PLANNER_OWNED_FIELDS } from '@kinqs/brainrouter-core/planner/presentation';
+import { plannerFieldIsLocal } from '@kinqs/brainrouter-core/planner/presentation';
 
 export function canEdit(item: PlannerItemView, field: string): boolean {
   if (field === 'title' && item.capabilities?.editTitle !== undefined) return item.capabilities.editTitle;
   if (field === 'completed' && item.capabilities?.complete !== undefined) return item.capabilities.complete;
   if (field === 'delete' && item.capabilities?.delete !== undefined) return item.capabilities.delete;
-  return item.origin === 'owned' || PLANNER_OWNED_FIELDS.has(field);
+  return plannerFieldIsLocal(item, field);
 }
 
 export function whyReadOnly(item: PlannerItemView, field: string): string | null {
   if (canEdit(item, field)) return null;
   return `"${field}" belongs to ${item.source ?? 'the source'}. Editing it here would be undone by the next refresh.`;
+}
+
+/** Did this row come from a calendar? The surface treats a meeting differently. */
+export function isCalendarEvent(item: PlannerItemView): boolean {
+  return item.origin === 'mirrored' && item.provenance?.documentKind === 'event';
+}
+
+/**
+ * What ticking this row means.
+ *
+ * "Complete Standup" is wrong about a meeting in a way that matters: the person
+ * did not finish it, they went to it, and the calendar will keep saying it
+ * happened either way. The tick records attendance, so it says so.
+ */
+export function completionLabel(item: PlannerItemView): string {
+  if (isCalendarEvent(item)) {
+    return item.completed ? `Clear attended on ${item.title}` : `Mark ${item.title} as attended`;
+  }
+  return `${item.completed ? 'Reopen' : 'Complete'} ${item.title}`;
 }
 
 export interface CalendarDay {

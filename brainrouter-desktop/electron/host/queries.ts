@@ -184,7 +184,7 @@ import {
   scheduleBlock as plannerSchedule, resolveConflict as plannerResolveConflict,
   listItems as plannerListItems, listBlocks as plannerListBlocks,
   readPlanner, todayView, summarizeDrift, plannerOutboxDetails,
-  retryPlannerOperation, describeFreshness, isStale,
+  retryPlannerOperation, describeFreshness, isStale, plannerFieldIsLocal,
 } from '@kinqs/brainrouter-core/planner';
 // BROWSER — story prompt/validation helpers + the driver step types the
 // browser:* handlers below use. The host instance itself arrives via ctx.browser.
@@ -2860,6 +2860,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
                   provenance: {
                     source: i.provenance.sourceLabel,
                     kind: i.provenance.sourceId,
+                    documentKind: i.provenance.documentKind,
                     externalId: i.provenance.externalId,
                     url: i.provenance.sourceUrl,
                     fetchedAt: i.provenance.fetchedAt,
@@ -2883,7 +2884,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             blockedReason: i.blockedReason?.value ?? undefined,
             capabilities: {
               editTitle: i.origin === 'owned',
-              complete: i.origin === 'owned',
+              // Attending a meeting is the person's own act, and Core keeps the
+              // tick across the next poll — so the tick is offered. Anything
+              // whose source states its own done-ness still is not.
+              complete: plannerFieldIsLocal(i, 'completed'),
               delete: i.origin === 'owned',
             },
             conflictFields: Object.keys(i.conflicts ?? {}),

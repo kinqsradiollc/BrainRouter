@@ -426,6 +426,39 @@ describe("planner push contract", () => {
       expect(fake.blocks.size).toBe(0);
     });
 
+    it("the person can tick a meeting they attended, and the next poll leaves the tick alone", async () => {
+      await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument()]));
+      const itemId = [...fake.items.values()][0]!.id;
+
+      const ticked = await planner.pushUntrustedOperations(ORG, USER, [itemOperation({
+        idempotencyKey: "item:attended", itemId, kind: "update", at: at(9_000),
+        payload: { completed: true },
+      })], "2026-08-11T02:00:00.000Z");
+
+      expect(ticked.rejected).toEqual([]);
+      expect([...fake.items.values()][0]!.payload.completed?.value).toBe(true);
+
+      // The feed says the meeting exists; it has never said whether anyone went.
+      await planner.refreshConnectedEventDocuments(ORG, USER, scope([eventDocument(
+        { updatedAt: "2026-08-11T09:00:00.000Z" },
+        { startAt: "2026-08-13T00:00:00.000Z", endAt: "2026-08-13T01:00:00.000Z" },
+      )]));
+      const after = [...fake.items.values()][0]!.payload;
+      expect(after.completed?.value).toBe(true);
+      expect(after.dueDate?.value).toBe("2026-08-13");
+
+      // And an issue is still GitHub's to close.
+      await planner.pushUntrustedOperations(ORG, USER, [itemOperation({
+        idempotencyKey: "issue:create", itemId: "gh-1", kind: "create", at: at(10_000),
+        payload: { origin: "mirrored", source: "github", title: "Connected issue" },
+      })], "2026-08-11T02:00:01.000Z");
+      const refused = await planner.pushUntrustedOperations(ORG, USER, [itemOperation({
+        idempotencyKey: "issue:tick", itemId: "gh-1", kind: "update", at: at(11_000),
+        payload: { completed: true },
+      })], "2026-08-11T02:00:02.000Z");
+      expect(refused.rejected[0]?.reason).toMatch(/connected source owns completed/i);
+    });
+
     it("refuses to overwrite an item the person owns, and counts what it could not map", async () => {
       await planner.pushUntrustedOperations(ORG, USER, [itemOperation({
         payload: { origin: "owned", title: "Mine" },

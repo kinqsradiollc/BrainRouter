@@ -140,6 +140,9 @@ export function connectorEventToProjection(
       externalId: document.id,
       ...(document.url ? { sourceUrl: document.url } : {}),
       fetchedAt,
+      // What makes the tick possible: `sourceOwnsCompletion` reads this to
+      // decide that a calendar has no opinion about whether the person went.
+      documentKind: 'event',
     },
     title: { value: title, at },
     ...(notes ? { notes: { value: notes, at } } : {}),
