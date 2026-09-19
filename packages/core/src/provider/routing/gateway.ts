@@ -133,6 +133,37 @@ function catalogPrefix(value: string | null): CatalogPrefixMode {
 }
 
 /** Extract the OpenAI sampling params + tool_choice a client sent, for the transport. */
+/**
+ * A client's tools, in the shape the transport actually takes.
+ *
+ * The gateway speaks OpenAI on the wire, so a client sends
+ * `{ type: 'function', function: { name, description, parameters } }`. The
+ * transport takes its own INTERNAL shape — `{ name, description, inputSchema }`
+ * — and re-wraps it for whichever provider it is talking to. Forwarding the
+ * client's shape verbatim does not throw: `buildChatToolSpecs` reads `t.name`
+ * and `t.inputSchema`, finds neither, and sends a NAMELESS tool whose
+ * parameters default to `{}`. Every tool definition a client sent is silently
+ * destroyed, and the upstream model is offered a tool it cannot name or fill.
+ *
+ * Tools with no usable name are dropped rather than forwarded blank, because a
+ * blank one is exactly the bug this function exists to prevent.
+ */
+function clientToolsToInternal(tools: unknown): any[] {
+  if (!Array.isArray(tools)) return [];
+  const out: any[] = [];
+  for (const tool of tools) {
+    const fn = (tool as any)?.function ?? tool;
+    const name = typeof fn?.name === 'string' ? fn.name.trim() : '';
+    if (!name) continue;
+    out.push({
+      name,
+      description: typeof fn?.description === 'string' ? fn.description : '',
+      inputSchema: fn?.parameters ?? fn?.inputSchema ?? { type: 'object', properties: {} },
+    });
+  }
+  return out;
+}
+
 function transportOptions(body: any): BuildPayloadOptions {
   const opts: BuildPayloadOptions = { passthrough: body };
   const tc = body.tool_choice;
@@ -180,7 +211,7 @@ async function executeRoutedChat(
     policy,
     maxAttempts: opts.maxAttempts,
     onReceipt: opts.onRecoveryReceipt,
-    execute: (route) => transport(route.llm, body.messages ?? [], body.tools ?? [], options),
+    execute: (route) => transport(route.llm, body.messages ?? [], clientToolsToInternal(body.tools), options),
   });
 }
 
@@ -218,7 +249,7 @@ async function streamRoutedChat(
           // chunk carries the assembled result. Reasoning deltas are ignored, exactly
           // as the former onTextDelta-only handler ignored them — byte-neutral.
           let result: ProviderStreamResult | undefined;
-          for await (const chunk of stream(route.llm, body.messages ?? [], body.tools ?? [], options)) {
+          for await (const chunk of stream(route.llm, body.messages ?? [], clientToolsToInternal(body.tools), options)) {
             if (chunk.type === 'text') {
               const text = chunk.delta;
               if (!text) continue;
