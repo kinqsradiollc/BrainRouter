@@ -120,7 +120,6 @@ async function runDashboard(sharedFixture, destination) {
     const page = browser.pageSession;
     await installObservation(page, consoleErrors, networkErrors);
     await api.attach(page);
-    await page.request('Page.addScriptToEvaluateOnNewDocument', { source: OBSERVATION_SCRIPT });
     // Chrome can expose the initial restricted about:blank target briefly even
     // when it was launched with an HTTP URL. Establish the Dashboard origin
     // explicitly before touching localStorage so the combined gate is as
@@ -329,7 +328,34 @@ async function runElectron(sharedFixture, destination) {
     );
     gates.push(gate('electron.startup.no-blocking-dialog', true));
     await pageProgram(page, openDesktopPlanner);
-    await waitForPlanner(page, 22);
+    try {
+      await waitForPlanner(page, 22, electron.processHandle);
+    } catch (error) {
+      // An empty planner has two very different causes — the host never read
+      // the fixture, or it read it and wrote an empty store back over it — and
+      // a row count cannot tell them apart. Say what is on disk.
+      // Lead with the DIAGNOSIS, not the symptom. An empty planner has three
+      // causes that look identical from a row count, and the difference between
+      // them is the difference between minutes and an afternoon:
+      //   · the host is not answering at all (it died at startup — Electron
+      //     stays up and renders an empty planner over a host that is gone),
+      //   · the host answered and had nothing (wrong store, failed migration),
+      //   · the host answered with items the surface did not render.
+      const answer = await pageProgram(page, askHostForPlanner).catch((probe) => ({ error: String(probe) }));
+      const symptom = error instanceof Error ? error.message : String(error);
+      const headline = answer?.ok !== true
+        ? `The desktop host is not answering planner-read (${answer?.error ?? 'no answer'}) — the planner is empty because nothing filled it`
+        : answer.items === 0
+          ? 'The desktop host answered planner-read with 0 items — it read a different store, or an empty one'
+          : `The desktop host holds ${answer.items} items but the surface rendered none`;
+      throw new Error([
+        headline,
+        symptom,
+        `fixture=${describeFixtureOnDisk(plannerStatePath)}`,
+        `host=${JSON.stringify(answer)}`,
+        electron.processHandle.logs(),
+      ].join('; '));
+    }
     await setViewport(page, 1280, 840);
 
     const baseline = await auditPlanner(page);
@@ -467,9 +493,32 @@ async function runElectron(sharedFixture, destination) {
   return { runtime: electron?.version?.Browser ?? null, screenshots, gates };
 }
 
+/**
+ * Collect everything that counts as "something went wrong on the page".
+ *
+ * Two halves, and the Electron lane only ever had one. CDP gives console and
+ * network failures on a page that is already loaded; window `error` and
+ * `unhandledrejection` need a listener INSIDE the page, and
+ * `addScriptToEvaluateOnNewDocument` only applies to documents that have not
+ * loaded yet. The Electron lane attaches to a window that is already up, so its
+ * `readObservedErrors()` read an array nothing had ever created and returned
+ * `[]` — `electron.no-unexplained-errors` could not fail for the one class of
+ * failure a renderer crash actually produces.
+ *
+ * Injecting for future documents AND evaluating once for the current one makes
+ * both lanes observe the same things.
+ */
 async function installObservation(session, consoleErrors, networkErrors) {
   await session.request('Runtime.enable');
   await session.request('Network.enable');
+  await session.request('Page.enable');
+  await session.request('Page.addScriptToEvaluateOnNewDocument', { source: OBSERVATION_SCRIPT });
+  // The document that is already open. Chrome's initial about:blank target can
+  // refuse this; the Dashboard lane navigates immediately afterwards and the
+  // injection above covers that document, and when it does NOT work the dump
+  // says `errors: not collected` instead of an empty list that looks clean.
+  await session.request('Runtime.evaluate', { expression: OBSERVATION_SCRIPT, awaitPromise: false })
+    .catch(() => {});
   session.on('Runtime.consoleAPICalled', (event) => {
     if (event?.type !== 'error') return;
     consoleErrors.push((event.args ?? []).map((arg) => arg.value ?? arg.description ?? '').join(' '));
@@ -572,18 +621,74 @@ function resetPlannerScroll() {
   };
 }
 
-async function waitForPlanner(session, count) {
+/**
+ * Ask the HOST what it thinks the planner holds.
+ *
+ * The container swallows a failed read on purpose — "a failed read leaves the
+ * last good snapshot on screen" — so a host that is throwing on every
+ * `planner-read` renders exactly like a planner with nothing in it. Without
+ * this, the two are indistinguishable from the page.
+ */
+function askHostForPlanner() {
+  return new Promise((resolve) => {
+    const id = `gate-planner-read-${Date.now()}`;
+    const timer = setTimeout(() => { off(); resolve({ error: 'host did not answer in 5s' }); }, 5_000);
+    const off = window.brainrouter.onEvent((message) => {
+      const event = (message && message.event) || message;
+      if (!event || event.kind !== 'query-result' || event.id !== id) return;
+      clearTimeout(timer);
+      off();
+      const result = event.result || {};
+      resolve({
+        ok: event.ok === true,
+        error: event.error ?? null,
+        items: Array.isArray(result.items) ? result.items.length : null,
+        blocks: Array.isArray(result.blocks) ? result.blocks.length : null,
+        today: result.today ?? null,
+      });
+    });
+    window.brainrouter.send({ kind: 'query', id, name: 'planner-read', args: {} });
+  });
+}
+
+/** What the fixture file looks like NOW, for a failure that says the planner is empty. */
+function describeFixtureOnDisk(filePath) {
+  if (!filePath) return 'no path';
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return JSON.stringify({
+      path: filePath,
+      bytes: raw.length,
+      items: Object.keys(parsed.items ?? {}).length,
+      blocks: Object.keys(parsed.blocks ?? {}).length,
+      schemaVersion: parsed.schemaVersion,
+      siblings: fs.readdirSync(path.dirname(filePath)).slice(0, 20),
+    });
+  } catch (error) {
+    return `unreadable (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
+async function waitForPlanner(session, count, processHandle) {
   try {
     await waitForEvaluation(session, (expectedCount) => {
       const root = document.querySelector('.br-planner');
       return Boolean(root) && root.querySelectorAll('.br-planner-row').length === expectedCount;
     }, `Planner with ${count} rows`, WAIT_MS, count);
   } catch (error) {
+    // Only catches the Electron process itself dying. The HOST is a child of
+    // it, and when the host dies Electron stays up with a rendered, empty
+    // planner — which is why the caller asks the host directly below.
+    processHandle?.assertRunning();
     const state = await pageProgram(session, () => ({
       href: location.href,
       rows: document.querySelectorAll('.br-planner-row').length,
+      // Whether the surface is even mounted: an empty planner and an unmounted
+      // one look identical in a row count, and they have different causes.
+      mounted: Boolean(document.querySelector('.br-planner')),
       text: document.body.textContent?.replace(/\s+/g, ' ').trim().slice(0, 600),
-      errors: globalThis.__adr038Errors,
+      errors: globalThis.__adr038Errors ?? 'not collected',
     })).catch(() => null);
     throw new Error(`${error instanceof Error ? error.message : String(error)}; page=${JSON.stringify(state)}`);
   }
