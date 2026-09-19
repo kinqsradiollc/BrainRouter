@@ -1009,7 +1009,7 @@ export interface CliKnobs {
    * workspace and every payload is redacted and size-bounded first (D4).
    */
   decisions?: {
-    provider?: 'rules' | 'jev' | 'local';
+    provider?: 'rules' | 'local';
     /** Hard cap on one decision's state payload, in characters. */
     maxStateChars?: number;
     /** Wall-clock ceiling for one `ask`, after which the rules floor stands in. */
@@ -1030,6 +1030,13 @@ export interface CliKnobs {
      * them; this bounds only what a provider is shown.
      */
     route?: { maxCandidates?: number };
+    /**
+     * The model that answers decisions (D6). A route request like
+     * `groq/llama-3.1-8b`, resolved the way any other model request is, with
+     * NO fallback chain behind it: a decision goes to the declared model or
+     * falls back to the rule floor. Unset means the tier cannot run.
+     */
+    local?: { model?: string };
   };
   autoClassifyShell?: 'off' | 'on' | 'strict';
   /**
@@ -1532,12 +1539,13 @@ export interface ResolvedCliKnobs {
   jobSecretAllowlist: string[];
   commandAllowlist: string[];
   decisions: {
-    provider: 'rules' | 'jev' | 'local';
+    provider: 'rules' | 'local';
     maxStateChars: number;
     timeoutMs: number;
     shell: { low: number; high: number };
     recall: { threshold: number };
     route: { maxCandidates: number };
+    local: { model: string };
   };
   autoClassifyShell: 'off' | 'on' | 'strict';
   autoClassifyShellEnforceWhenSilent: boolean;
