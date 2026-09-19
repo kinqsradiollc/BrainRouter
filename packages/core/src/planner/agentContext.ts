@@ -118,15 +118,31 @@ export const PLANNER_CONTEXT_TAG = 'planner-context';
  */
 export function sourceFreshnessFromItems(
   items: readonly PlannerItem[],
+  /**
+   * How long each source may go unanswered before it is worth saying so —
+   * twice its own refresh cadence (ADR-060 D5). Only a host can answer this,
+   * because only a connector knows how often it is supposed to run.
+   *
+   * Returning `undefined` LEAVES THE SOURCE OUT: a source that does not
+   * refresh itself is exactly as current as the last time someone asked it to
+   * run, and calling that "6 hours old" is an alarm about the person's own
+   * choice. Omitting the lookup keeps every source, judged against the shared
+   * default — which is what a turn's context wants, where nothing polls.
+   */
+  staleAfterMsFor?: (sourceId: string) => number | undefined,
 ): SourceFreshness[] {
   const bySource = new Map<string, SourceFreshness>();
   for (const item of items) {
     const sourceId = item.provenance?.sourceId ?? item.source;
     if (!sourceId) continue;
     const fetchedAt = item.provenance?.fetchedAt ?? item.fetchedAt ?? null;
+    // What a person reads. `connector:conn_1a2b3c4d` identifies the source
+    // correctly and names it to nobody — and this string is printed, both in a
+    // banner and into a model's context.
+    const label = item.provenance?.sourceLabel ?? item.source ?? sourceId;
     const seen = bySource.get(sourceId);
     if (!seen) {
-      bySource.set(sourceId, { sourceId, lastFetchedAt: fetchedAt, itemCount: 1 });
+      bySource.set(sourceId, { sourceId, label, lastFetchedAt: fetchedAt, itemCount: 1 });
       continue;
     }
     seen.itemCount += 1;
@@ -137,7 +153,14 @@ export function sourceFreshnessFromItems(
       seen.lastFetchedAt = fetchedAt;
     }
   }
-  return [...bySource.values()];
+  if (!staleAfterMsFor) return [...bySource.values()];
+  const out: SourceFreshness[] = [];
+  for (const freshness of bySource.values()) {
+    const staleAfterMs = staleAfterMsFor(freshness.sourceId);
+    if (staleAfterMs === undefined) continue;
+    out.push({ ...freshness, staleAfterMs });
+  }
+  return out;
 }
 
 export interface PlannerContextInput {

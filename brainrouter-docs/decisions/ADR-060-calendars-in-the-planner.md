@@ -162,10 +162,16 @@ not reimplement it.
 - Freshness: a subscription that has not answered for longer than its cadence ×2 shows in
   `staleSources` exactly as GitHub does today ("Family calendar last refreshed 3 hours ago").
   C4b needed no wording for this — `describeFreshness` already names whichever source it is
-  given, and a calendar row carries `sourceFreshness` like any other mirrored row. **The
-  page-level `staleSources` banner is empty on the desktop for every source**, calendars
-  included: nothing passes `freshness` to `todayView` there. That is a pre-existing gap, not a
-  calendar one, and it is still open — the freshness list has no producer on the desktop.
+  given, and a calendar row carries `sourceFreshness` like any other mirrored row. The
+  page-level banner was empty on the desktop for **every** source — `todayView`'s `freshness`
+  option had no caller anywhere — and is now filled from the items on screen, against the bar
+  this bullet asks for: **twice the source's own cadence**, which only a connector knows, so
+  the desktop supplies it. A source with no cadence is left out rather than called stale — it
+  is exactly as current as the last time someone asked it to run, and an alarm about that is an
+  alarm about the person's own choice.
+  The agent's turn context shares the derivation but passes no cadence, so it still judges
+  every source against the shared 15-minute default. Worth closing; named here rather than left
+  to be found.
 - A meeting's *hour* is the calendar's, which the generic rule does not say: `scheduledFor` is
   in `PLANNER_OWNED_FIELDS`, so without `whyBlockTimeIsLocked` the surface would have offered a
   drag that the next poll undoes. The block refuses, and the tooltip says which calendar to

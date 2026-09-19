@@ -185,6 +185,7 @@ import {
   listItems as plannerListItems, listBlocks as plannerListBlocks,
   readPlanner, todayView, summarizeDrift, plannerOutboxDetails,
   retryPlannerOperation, describeFreshness, isStale, plannerFieldIsLocal,
+  sourceFreshnessFromItems,
 } from '@kinqs/brainrouter-core/planner';
 // BROWSER — story prompt/validation helpers + the driver step types the
 // browser:* handlers below use. The host instance itself arrives via ctx.browser.
@@ -2885,7 +2886,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           String(localNow.getMonth() + 1).padStart(2, '0'),
           String(localNow.getDate()).padStart(2, '0'),
         ].join('-');
-        const view = todayView(plannerScope, { date: today, nowMs });
+        // ADR-028 D7 — which sources have gone quiet. Only a source that
+        // refreshes ITSELF can go quiet: one that runs when asked is exactly as
+        // current as the last time it was asked, and calling that stale would
+        // be an alarm about the person's own choice. The bar is twice the
+        // source's own cadence (ADR-060 D5), which only the connector knows.
+        const pollCadenceMs = new Map<string, number>();
+        for (const connector of listConnectors(workspaceRoot, { status: 'active' })) {
+          const raw = connector.config?.pollMinutes;
+          const minutes = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0;
+          if (Number.isFinite(minutes) && minutes > 0) {
+            pollCadenceMs.set(`connector:${connector.id}`, Math.max(1, Math.floor(minutes)) * 2 * 60_000);
+          }
+        }
+        const view = todayView(plannerScope, {
+          date: today,
+          nowMs,
+          freshness: sourceFreshnessFromItems(items, (sourceId) => pollCadenceMs.get(sourceId)),
+        });
         const drift = summarizeDrift(blocks);
         const lastSync = readPlanner(plannerScope).lastSync as (PlannerSyncOutcome & { since?: string }) | undefined;
         const itemTitle = new Map(items.map((item) => [item.id, item.title.value]));
