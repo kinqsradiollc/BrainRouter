@@ -356,6 +356,33 @@ API wrappers, Tavily, SerpAPI proxies, etc.
 
 ---
 
+## The decision tier (`cli.decisions`)
+
+The fast, typed rung between a hand-written rule and asking the expensive model
+— shell risk, which model takes an `auto` turn, whether a turn needs memory,
+whether a window made progress. **Off by default**: `provider: "rules"` answers
+with the rule your agent already computes and calls nothing.
+
+```jsonc
+{ "cli": { "decisions": {
+  "provider": "rules",        // "rules" (default) | "local"
+  "timeoutMs": 2000,          // after this, the rule floor answers
+  "maxStateChars": 8000,      // hard cap on what any one question sends
+  "local":  { "model": "" },  // required for "local" — a small, fast model you already have
+  "shell":  { "low": 0.3, "high": 0.8 },
+  "recall": { "threshold": 0.6 },
+  "route":  { "maxCandidates": 12 }
+} } }
+```
+
+The classifier is ours and runs on your model: no decision vendor, no second
+API key. A `local` provider that cannot be built never silently does nothing —
+the rule floor answers and the recorded reason names the fix.
+
+Read what it decided with `/recent-decisions`, and whether to believe it with
+`/decision-calibration`. Full guide:
+[The decision tier](guides/the-decision-tier.md).
+
 ## Full env reference
 
 Each section header tags which file the vars belong in.

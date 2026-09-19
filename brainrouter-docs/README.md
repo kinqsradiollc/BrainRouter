@@ -50,6 +50,10 @@ deep dives.
   current package/host owners, public entrypoints, mixed-responsibility module
   triage, migration order, and boundary-guard backlog for the accepted
   whole-platform modernization.
+- **[The decision tier](guides/the-decision-tier.md)** — the fast, calibrated
+  rung between "a rule said so" and "ask the expensive model": what it decides,
+  how to turn it on, how to check whether it is any good, and what it will never
+  do.
 - **[Calendars in the planner](guides/calendars-in-the-planner.md)** — getting a
   Google, iCloud, Outlook or published calendar into the planner, importing an
   `.ics` file, and which parts of a meeting are yours to change.

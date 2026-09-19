@@ -1,6 +1,10 @@
 # ADR-061 — A System One tier for the loop
 
-**Status:** Proposed (2026-09-19). Nothing in this ADR is built. Delivery board in §5.
+**Status:** Accepted and built (2026-09-20). All eight slices of §5 are merged into
+`release/0.4.22`. Two decisions changed during the build and are recorded in place rather
+than in a postscript: S1 and S2 shipped as one PR (the inert-value sweep makes a port with
+no consumer a build break), and the hosted classifier of the original D6 was dropped for
+one of our own — see D6.
 
 **Depends on:** ADR-041 (plug-and-play runtime — registries, ports, the D8 handler
 pipeline), ADR-059 (the turn path — runtime-emitted steps a surface can show), the tool
@@ -311,6 +315,12 @@ The combined slice still changes nothing for anyone. S3 is a day and retires ano
 this repository has been bitten by. S4 is the first slice that sends a byte anywhere.
 Each slice is its own PR into the release branch with the focused checks; S2 additionally runs
 the destructive-command and approval-guard suites, because it sits beneath them.
+
+**As built.** Eight slices, seven PRs: S1+S2 (#1729), S3 (#1730), S6 (#1731), S5 (#1732),
+S4 (#1733), S7, S8. The order is not the board's, because S4 stopped being a dependency the
+moment it stopped being an HTTP client — with the port in place, the three consumers landed
+against the rules floor and the classifier arrived behind them without any of them changing.
+That is the property the port was bought for, tested by accident.
 
 ## 6. How this will be judged
 
