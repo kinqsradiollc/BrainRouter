@@ -370,9 +370,67 @@
 .br-planner-block-details input { min-height: 30px; border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-control, 7px); background: var(--br-ui-surface); color: var(--br-ui-text); }
 .br-planner-block-details form > div { display: flex; justify-content: flex-end; gap: var(--br-space-2, 8px); }
 .br-planner-block-details button { min-height: 30px; padding: 0 var(--br-space-2, 8px); border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-control, 7px); cursor: pointer; }
-.br-planner-calendar-event > span { max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.br-planner-calendar-event > small { color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: 9px; white-space: nowrap; }
+/* The title is the one line that must survive. A half-hour block is 26px tall
+   and column-flex shrinks every child to fit, so the title used to collapse to
+   zero height and the block showed only "6pm · 30m" — the time of something
+   unnamed. The title no longer shrinks; the secondary lines are clipped by the
+   block's own `overflow: hidden` instead. */
+.br-planner-calendar-event > span { flex: 0 0 auto; max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.br-planner-calendar-event > small { flex: 0 1 auto; color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: 9px; white-space: nowrap; }
 .br-planner-calendar-event.is-done { opacity: .55; }
+/* A meeting reads as its calendar's: a hairline in the feed's own colour, and
+   the calendar named under the time. Not draggable — its hour is the event,
+   so the grab cursor above must not apply, and the rule sits here rather than
+   in the block's own declaration because `draggable` is what changed. */
+.br-planner-calendar-event.is-source {
+  border-left: 3px solid var(--br-planner-source-color, var(--br-ui-accent)) !important;
+  cursor: default;
+}
+.br-planner-calendar-event > em {
+  flex: 0 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  /* Secondary, not muted. The muted token is `--text-faint`, which over a
+     block's raised background in the dark theme is 3.67:1 — under the bar at
+     any size, and this is 9px. The calendar's name is the one thing on a
+     mirrored block that says whose it is; it has to be readable. */
+  color: var(--br-ui-text-secondary);
+  font-size: 9px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* All-day events have a day and no hour (ADR-060 D3), so they get a lane above
+   the grid rather than an invented 9am that would count against the day. */
+.br-planner-calendar-allday {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 700px;
+  padding: 0 var(--br-space-4, 16px) 4px;
+  border-bottom: 1px solid var(--br-ui-border);
+}
+.br-planner-calendar-allday > div {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 4px;
+}
+.br-planner-calendar-allday > div.is-today { background: color-mix(in srgb, var(--br-ui-accent) 4%, transparent); }
+.br-planner-calendar-banner {
+  overflow: hidden;
+  min-height: 18px;
+  padding: 2px 6px;
+  border-left: 3px solid var(--br-planner-source-color, var(--br-ui-accent));
+  border-radius: var(--br-radius-chip, 5px);
+  background: var(--br-ui-raised);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.br-planner-calendar-banner.is-done { opacity: .55; text-decoration: line-through; }
 .br-planner-calendar-now { position: absolute; left: 0; right: 0; z-index: 4; height: 1px; background: var(--br-ui-accent); pointer-events: none; }
 .br-planner-calendar-now::before { position: absolute; top: -3px; left: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--br-ui-accent); content: ''; }
 .br-planner-calendar-empty { margin: 0 var(--br-space-4, 16px); }

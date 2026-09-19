@@ -80,7 +80,7 @@ export function PlannerSurface({
   const scheduledIds = useMemo(() => scheduledTodayIds(blocks, today), [blocks, today]);
   const open = useMemo(() => sortForToday(items.filter((item) => !item.completed), today, scheduledIds), [items, scheduledIds, today]);
   const done = useMemo(() => items.filter((item) => item.completed), [items]);
-  const titleFor = useMemo(() => Object.fromEntries(items.map((item) => [item.id, item.title])), [items]);
+  const itemById = useMemo(() => Object.fromEntries(items.map((item) => [item.id, item])), [items]);
   const banner = conflictBanner(items);
 
   const selectTab = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
@@ -159,7 +159,7 @@ export function PlannerSurface({
           <PlannerCalendar
             blocks={blocks}
             today={today}
-            titleFor={titleFor}
+            itemById={itemById}
             weekOf={weekOf}
             onWeek={setWeekOf}
             onCreateAt={ops.blockTimeAt}

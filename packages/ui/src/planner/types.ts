@@ -52,6 +52,8 @@ export interface PlannerProvenanceView {
   kind?: string;
   /** Which kind of record the source handed over — an event may be ticked. */
   documentKind?: string;
+  /** The source's own colour (`#rrggbb`), when it declares one. */
+  color?: string;
   externalId?: string;
   url?: string;
   fetchedAt?: string;

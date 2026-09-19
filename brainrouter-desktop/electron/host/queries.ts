@@ -2861,6 +2861,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
                     source: i.provenance.sourceLabel,
                     kind: i.provenance.sourceId,
                     documentKind: i.provenance.documentKind,
+                    color: i.provenance.color,
                     externalId: i.provenance.externalId,
                     url: i.provenance.sourceUrl,
                     fetchedAt: i.provenance.fetchedAt,

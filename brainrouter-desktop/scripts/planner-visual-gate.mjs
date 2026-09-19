@@ -140,7 +140,7 @@ async function runDashboard(sharedFixture, destination) {
       outbox: dashboardOutbox(sharedFixture),
     });
     await navigateChrome(page, `${origin}/planner`);
-    await waitForPlanner(page, 20);
+    await waitForPlanner(page, 22);
     await waitFor(() => api.pushCount >= 1, 'Dashboard automatic outbox attempt');
 
     await setViewport(page, 1440, 900);
@@ -170,12 +170,24 @@ async function runDashboard(sharedFixture, destination) {
     gates.push(gate('dashboard.calendar.keyboard-move', moved.changed, `${moved.before} -> ${moved.after}`));
     const actual = await exerciseActualTime(page, 'blk_qa', 37);
     gates.push(gate('dashboard.calendar.actual-time', actual.persisted, JSON.stringify(actual)));
+    const calendarSource = await auditCalendarEvents(page);
+    gates.push(
+      gate('dashboard.calendar.event-time-is-the-sources',
+        calendarSource.sourceLocked && calendarSource.mineMovable && calendarSource.saysWhy,
+        JSON.stringify(calendarSource)),
+      gate('dashboard.calendar.event-names-its-calendar',
+        calendarSource.namesCalendar && calendarSource.hairline === '3px',
+        `${calendarSource.hairline} | ${calendarSource.namesCalendar}`),
+      gate('dashboard.calendar.all-day-has-a-lane',
+        calendarSource.allDay.includes('Public holiday'),
+        JSON.stringify(calendarSource.allDay)),
+    );
     screenshots.push(await screenshot(page, destination, 'dashboard-calendar-moved.png'));
 
     for (const [width, height] of [[768, 900], [390, 844]]) {
       await setViewport(page, width, height);
       await navigateChrome(page, `${origin}/planner`);
-      await waitForPlanner(page, 21);
+      await waitForPlanner(page, 23);
       const reset = await pageProgram(page, resetPlannerScroll);
       await delay(100);
       const audit = await auditPlanner(page);
@@ -317,7 +329,7 @@ async function runElectron(sharedFixture, destination) {
     );
     gates.push(gate('electron.startup.no-blocking-dialog', true));
     await pageProgram(page, openDesktopPlanner);
-    await waitForPlanner(page, 20);
+    await waitForPlanner(page, 22);
     await setViewport(page, 1280, 840);
 
     const baseline = await auditPlanner(page);
@@ -357,6 +369,18 @@ async function runElectron(sharedFixture, destination) {
     gates.push(gate('electron.calendar.keyboard-move', moved.changed, `${moved.before} -> ${moved.after}`));
     const actual = await exerciseActualTime(page, 'blk_qa', 37, { expectHostAck: true });
     gates.push(gate('electron.calendar.actual-time', actual.persisted, JSON.stringify(actual)));
+    const calendarSource = await auditCalendarEvents(page);
+    gates.push(
+      gate('electron.calendar.event-time-is-the-sources',
+        calendarSource.sourceLocked && calendarSource.mineMovable && calendarSource.saysWhy,
+        JSON.stringify(calendarSource)),
+      gate('electron.calendar.event-names-its-calendar',
+        calendarSource.namesCalendar && calendarSource.hairline === '3px',
+        `${calendarSource.hairline} | ${calendarSource.namesCalendar}`),
+      gate('electron.calendar.all-day-has-a-lane',
+        calendarSource.allDay.includes('Public holiday'),
+        JSON.stringify(calendarSource.allDay)),
+    );
     screenshots.push(await screenshot(page, destination, `electron-${process.platform}-calendar-moved.png`));
     await selectPlannerTab(page, 'today');
 
@@ -988,6 +1012,39 @@ async function exerciseCalendarMove(session) {
   return { before: before.label, after, changed: before.label !== after };
 }
 
+/**
+ * ADR-060 D5 — a meeting's hour belongs to its calendar.
+ *
+ * `scheduledFor` is planner-owned for every other mirrored record, so without
+ * this the surface would offer a drag that the next poll silently undoes.
+ */
+async function auditCalendarEvents(session) {
+  await selectPlannerTab(session, 'calendar');
+  await waitForEvaluation(
+    session,
+    () => Boolean(document.querySelector('.br-planner-calendar-event[data-block-id="blk_standup"]')),
+    'mirrored calendar block',
+  );
+  return pageProgram(session, () => {
+    const meeting = document.querySelector('.br-planner-calendar-event[data-block-id="blk_standup"]');
+    // NOT `blk_qa`: the actual-time step above closes it, and a completed block
+    // is correctly not draggable — the comparison would have proved nothing.
+    const mine = document.querySelector('.br-planner-calendar-event[data-block-id="blk_release"]');
+    const banners = [...document.querySelectorAll('.br-planner-calendar-banner')];
+    const hairline = meeting instanceof HTMLElement
+      ? getComputedStyle(meeting).borderLeftWidth
+      : '';
+    return {
+      sourceLocked: meeting instanceof HTMLElement && meeting.getAttribute('draggable') !== 'true',
+      mineMovable: mine instanceof HTMLElement && mine.getAttribute('draggable') === 'true',
+      namesCalendar: (meeting?.textContent ?? '').includes('Work'),
+      saysWhy: /comes from/.test(meeting?.getAttribute('title') ?? ''),
+      hairline,
+      allDay: banners.map((banner) => banner.textContent?.trim() ?? ''),
+    };
+  });
+}
+
 async function exerciseActualTime(session, blockId, minutes, { expectHostAck = false } = {}) {
   await selectPlannerTab(session, 'calendar');
   await pageProgram(session, ({ id }) => {
@@ -1153,14 +1210,28 @@ function writePlannerFixture(filePath, state) {
   fs.renameSync(temporary, filePath);
 }
 
-function stampedItem(id, title, at, item) {
-  const provenance = item.provenance ? {
+/**
+ * The fixture's view-shaped provenance as the WIRE shape both hosts read.
+ *
+ * One builder, because there were two: the Electron lane's and the Dashboard
+ * lane's, identical until `documentKind` was added to one of them and the
+ * Dashboard quietly stopped seeing calendars as calendars.
+ */
+function wireProvenance(item, at) {
+  if (!item.provenance) return undefined;
+  return {
     sourceId: item.provenance.kind ?? item.sourceKind ?? item.source ?? 'connected',
     sourceLabel: item.provenance.source,
     ...(item.provenance.externalId ? { externalId: item.provenance.externalId } : {}),
     ...(item.provenance.url ? { sourceUrl: item.provenance.url } : {}),
+    ...(item.provenance.documentKind ? { documentKind: item.provenance.documentKind } : {}),
+    ...(item.provenance.color ? { color: item.provenance.color } : {}),
     fetchedAt: item.provenance.fetchedAt ?? new Date(at.physical).toISOString(),
-  } : undefined;
+  };
+}
+
+function stampedItem(id, title, at, item) {
+  const provenance = wireProvenance(item, at);
   return {
     id,
     origin: item.origin ?? 'owned',
@@ -1315,13 +1386,7 @@ function createPlannerApi(sharedFixture) {
 
 function dashboardItem(item, index) {
   const at = { physical: Date.now() - 10_000 + index, logical: 0, deviceId: 'server-visual' };
-  const provenance = item.provenance ? {
-    sourceId: item.provenance.kind ?? item.sourceKind ?? item.source ?? 'connected',
-    sourceLabel: item.provenance.source,
-    ...(item.provenance.externalId ? { externalId: item.provenance.externalId } : {}),
-    ...(item.provenance.url ? { sourceUrl: item.provenance.url } : {}),
-    fetchedAt: item.provenance.fetchedAt ?? new Date(at.physical).toISOString(),
-  } : undefined;
+  const provenance = wireProvenance(item, at);
   return {
     id: item.id,
     origin: item.origin,

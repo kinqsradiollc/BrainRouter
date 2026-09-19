@@ -4,12 +4,13 @@
  * complete without making the rest of the page take 98 presses to reach.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DragEvent, FormEvent, KeyboardEvent, ReactElement } from 'react';
+import type { CSSProperties, DragEvent, FormEvent, KeyboardEvent, ReactElement } from 'react';
 
-import type { PlannerBlockView } from './types.js';
+import type { PlannerBlockView, PlannerItemView } from './types.js';
 import {
   DAY_END_HOUR,
   DAY_START_HOUR,
+  allDayEventsOn,
   dayHeading,
   hourLabels,
   keyboardBlockTime,
@@ -19,6 +20,7 @@ import {
   unscheduledBlocks,
   weekStart,
   weekView,
+  whyBlockTimeIsLocked,
 } from './viewModel.js';
 
 const HOURS = hourLabels();
@@ -27,7 +29,14 @@ const SLOT_HOURS = HOURS.slice(0, -1);
 export interface PlannerCalendarProps {
   blocks: PlannerBlockView[];
   today: string;
-  titleFor: Record<string, string>;
+  /**
+   * Every item the surface holds, by id.
+   *
+   * A title alone was enough while every block was the person's own. A block
+   * that mirrors a meeting also needs to say which calendar it came from, and
+   * to refuse to be dragged — both of which are facts about the ITEM.
+   */
+  itemById: Record<string, PlannerItemView>;
   weekOf: string;
   onWeek: (startDate: string) => void;
   onCreateAt?: (iso: string) => void;
@@ -40,7 +49,7 @@ const BLOCK_DRAG_TYPE = 'application/x-brainrouter-planner-block';
 export function PlannerCalendar({
   blocks,
   today,
-  titleFor,
+  itemById,
   weekOf,
   onWeek,
   onCreateAt,
@@ -48,6 +57,8 @@ export function PlannerCalendar({
   onRecordActual,
 }: PlannerCalendarProps): ReactElement {
   const days = useMemo(() => weekView(blocks, weekOf, today), [blocks, weekOf, today]);
+  const items = useMemo(() => Object.values(itemById), [itemById]);
+  const titleOf = (itemId: string): string => itemById[itemId]?.title ?? itemId;
   const loose = useMemo(() => unscheduledBlocks(blocks), [blocks]);
   const nowPct = nowMarkerPct(new Date());
   const [activeSlot, setActiveSlot] = useState(0);
@@ -125,7 +136,7 @@ export function PlannerCalendar({
                 draggable={Boolean(onRescheduleBlock)}
                 onDragStart={(event) => startDrag(event, block.id)}
               >
-                {titleFor[block.itemId] ?? block.itemId}
+                {titleOf(block.itemId)}
                 <span>{block.estimateMinutes}m</span>
                 {block.carriedOver > 2 ? <span>moved {block.carriedOver}×</span> : null}
               </button>
@@ -147,6 +158,26 @@ export function PlannerCalendar({
           );
         })}
       </div>
+
+      {days.some((day) => allDayEventsOn(items, blocks, day.date).length > 0) ? (
+        <div className="br-planner-calendar-allday">
+          <span className="br-planner-calendar-gutter-label">All day</span>
+          {days.map((day) => (
+            <div key={day.date} className={day.isToday ? 'is-today' : ''}>
+              {allDayEventsOn(items, blocks, day.date).map((event) => (
+                <span
+                  key={event.id}
+                  className={`br-planner-calendar-banner${event.completed ? ' is-done' : ''}`}
+                  style={event.provenance?.color ? { '--br-planner-source-color': event.provenance.color } as CSSProperties : undefined}
+                  title={`${event.title}${event.provenance?.source ? ` · ${event.provenance.source}` : ''}`}
+                >
+                  {event.title}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="br-planner-calendar-grid">
         <div className="br-planner-calendar-gutter">
@@ -177,30 +208,38 @@ export function PlannerCalendar({
                 />
               );
             })}
-            {layOutDay(day.blocks).map(({ block, topPct, heightPct, lane, lanes }) => (
-              <button
-                type="button"
-                key={block.id}
-                data-block-id={block.id}
-                className={`br-planner-calendar-event${block.completedAt ? ' is-done' : ''}`}
-                style={{
-                  top: `${topPct}%`,
-                  height: `${heightPct}%`,
-                  left: `${(lane / lanes) * 100}%`,
-                  width: `${(1 / lanes) * 100}%`,
-                }}
-                onClick={() => setSelectedBlockId(block.id)}
-                draggable={Boolean(onRescheduleBlock && !block.completedAt)}
-                onDragStart={(event) => startDrag(event, block.id)}
-                onKeyDown={(event) => moveBlock(event, block)}
-                aria-keyshortcuts={onRescheduleBlock ? 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight' : undefined}
-                aria-label={`${titleFor[block.itemId] ?? block.itemId}, ${clockOf(block.scheduledFor!)} for ${block.estimateMinutes} minutes${onRescheduleBlock ? '. Hold Alt and use arrow keys to move by an hour or a day.' : ''}`}
-                title={`${titleFor[block.itemId] ?? block.itemId}${onRescheduleBlock ? ' · Drag to move; Alt+arrow keys also move it' : ''}`}
-              >
-                <span>{titleFor[block.itemId] ?? block.itemId}</span>
-                <small>{clockOf(block.scheduledFor!)} · {block.estimateMinutes}m</small>
-              </button>
-            ))}
+            {layOutDay(day.blocks).map(({ block, topPct, heightPct, lane, lanes }) => {
+              const owner = itemById[block.itemId];
+              const locked = whyBlockTimeIsLocked(owner);
+              const calendar = locked ? owner?.provenance?.source : undefined;
+              const movable = Boolean(onRescheduleBlock) && !block.completedAt && !locked;
+              return (
+                <button
+                  type="button"
+                  key={block.id}
+                  data-block-id={block.id}
+                  className={`br-planner-calendar-event${block.completedAt ? ' is-done' : ''}${locked ? ' is-source' : ''}`}
+                  style={{
+                    top: `${topPct}%`,
+                    height: `${heightPct}%`,
+                    left: `${(lane / lanes) * 100}%`,
+                    width: `${(1 / lanes) * 100}%`,
+                    ...(owner?.provenance?.color ? { '--br-planner-source-color': owner.provenance.color } as CSSProperties : {}),
+                  }}
+                  onClick={() => setSelectedBlockId(block.id)}
+                  draggable={movable}
+                  onDragStart={(event) => startDrag(event, block.id)}
+                  onKeyDown={(event) => { if (movable) moveBlock(event, block); }}
+                  aria-keyshortcuts={movable ? 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight' : undefined}
+                  aria-label={`${titleOf(block.itemId)}, ${clockOf(block.scheduledFor!)} for ${block.estimateMinutes} minutes${calendar ? `, from ${calendar}` : ''}${movable ? '. Hold Alt and use arrow keys to move by an hour or a day.' : ''}`}
+                  title={locked ?? `${titleOf(block.itemId)}${movable ? ' · Drag to move; Alt+arrow keys also move it' : ''}`}
+                >
+                  <span>{titleOf(block.itemId)}</span>
+                  <small>{clockOf(block.scheduledFor!)} · {block.estimateMinutes}m</small>
+                  {calendar ? <em>{calendar}</em> : null}
+                </button>
+              );
+            })}
             {day.isToday && nowPct !== null ? <div className="br-planner-calendar-now" style={{ top: `${nowPct}%` }} /> : null}
           </div>
         ))}
@@ -216,7 +255,7 @@ export function PlannerCalendar({
         <BlockDetails
           key={selectedBlockId}
           block={blocks.find((block) => block.id === selectedBlockId)}
-          title={titleFor[blocks.find((block) => block.id === selectedBlockId)?.itemId ?? '']}
+          title={itemById[blocks.find((block) => block.id === selectedBlockId)?.itemId ?? '']?.title}
           onClose={() => setSelectedBlockId(null)}
           onRecordActual={onRecordActual}
         />

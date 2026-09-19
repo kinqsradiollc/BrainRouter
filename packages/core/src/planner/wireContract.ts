@@ -173,6 +173,8 @@ function parseProvenance(value: unknown): PlannerProvenance | null {
     }
   }
   if (value.documentKind !== undefined && !DOCUMENT_KINDS.has(value.documentKind as string)) return null;
+  // A colour reaches a `style` attribute, so only a plain hex triplet passes.
+  if (value.color !== undefined && !(typeof value.color === 'string' && /^#[0-9a-f]{6}$/i.test(value.color))) return null;
   return {
     sourceId: value.sourceId,
     sourceLabel: value.sourceLabel,
@@ -184,6 +186,7 @@ function parseProvenance(value: unknown): PlannerProvenance | null {
     ...(value.documentKind !== undefined
       ? { documentKind: value.documentKind as PlannerProvenanceDocumentKind }
       : {}),
+    ...(typeof value.color === 'string' ? { color: value.color } : {}),
   };
 }
 

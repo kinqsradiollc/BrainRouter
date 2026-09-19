@@ -40,6 +40,12 @@ export interface PlannerProvenance {
    * the feed says a meeting exists at 10:00, never that anyone attended it.
    */
   documentKind?: PlannerProvenanceDocumentKind;
+  /**
+   * The colour the source paints this record with (`#rrggbb`), when it declares
+   * one — a calendar's own colour, so a week of meetings from three feeds reads
+   * as three calendars rather than one undifferentiated wall.
+   */
+  color?: string;
 }
 
 /** Mirrors `ConnectorDocumentKind`; kept here so the planner wire owns its own vocabulary. */
