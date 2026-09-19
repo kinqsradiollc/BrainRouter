@@ -43,10 +43,14 @@ ask."*
 
 The consequences are on record in this repository:
 
-- The shell classifier stops `rm -rf` and `curl | sh` because somebody wrote them down. It
-  passes `find . -delete`, `npm publish`, and `terraform apply -auto-approve` until somebody
-  writes each of those down too. The three-way outcome exists; the middle is unreachable
-  except by rule.
+- The shell classifier is good at DESTRUCTION and blind to PUBLICATION. **This bullet was
+  wrong when this ADR was written and is corrected here rather than quietly fixed:** it
+  claimed `find . -delete` slipped through. It does not — that and `aws s3 rm --recursive`
+  are both caught by the dangerous heuristic, as a test in the S1/S2 slice now asserts. What
+  the wordlist has no entry for is the other kind of irreversible: `npm publish`,
+  `terraform apply -auto-approve` and `gh release create` are all classified safe, and so
+  will the next deploy verb nobody wrote down be. The three-way outcome exists; the middle is
+  unreachable except by a rule hit.
 - The recall gate scored *"tell me about the current state of Orbyn"* at one proper noun,
   under its threshold of two. The question it is a proxy for — *would recalled memory help
   here?* — was never asked.
@@ -225,8 +229,7 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 
 | # | Slice | Scope | Proves |
 |---|---|---|---|
-| S1 | The port and the floor | `packages/core/src/decision/` — types, `DecisionPort`, the `rules` provider, `recent-decisions.json` recorder, the ADR-059 `decision` step. No consumer wired. | D1, D2, D5 |
-| S2 | Shell risk | `shellClassifier.ts` consumes the port after its rule floor; `cli.decisions.shell.{low,high}`; equivalence tests with the port on `rules`; silent sessions stay fail-closed | D3.1 |
+| S1+S2 | The port, the floor, and the shell gate | `packages/core/src/decision/` — types, `DecisionPort`, the `rules` provider, `recent-decisions.json` + `/recent-decisions`, the ADR-059 `decision` step — **plus** the shell consumer above the lexical floor, `cli.decisions.shell.{low,high}`, and the equivalence test that pins byte-for-byte behaviour on `rules`. | D1, D2, D3.1, D5 |
 | S3 | Recall gate | `briefingTriggers.ts` consumes the port; entity count becomes the `rules` answer | D3.2 |
 | S4 | The `jev` provider | HTTP client through the credential path; redaction + size bound on every state; fallback to `rules` recorded | D4, D6 |
 | S5 | Route choice | `resolve.ts` picks the chain's starting route by `choice` when `auto`; explicit picks untouched | D3.3 |
@@ -234,8 +237,15 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 | S7 | Calibration | held-out eval from recorded decisions and outcomes; advisory demotion | D7 |
 | S8 | Docs | configuration.md `cli.decisions`, a guide, STATUS row | — |
 
-S1 lands with nothing changed for anyone. S2 and S3 are each a day and each retire a heuristic
-this repository has already been bitten by. S4 is the first slice that sends a byte anywhere.
+**S1 and S2 merged into one slice during the build, and the reason belongs here:** the
+repository's own inert-value sweep fails a module with no non-test importer, so a port with
+"no consumer wired" is not a shippable PR in this codebase — it is a build break. Shipping the
+port *with* its first consumer satisfies the sweep and costs nothing, because the consumer on
+the `rules` provider is a no-op. The same rule is why `/recent-decisions` ships in the first
+slice rather than later: a recorder nobody reads is a dead export.
+
+The combined slice still changes nothing for anyone. S3 is a day and retires another heuristic
+this repository has been bitten by. S4 is the first slice that sends a byte anywhere.
 Each slice is its own PR into the release branch with the focused checks; S2 additionally runs
 the destructive-command and approval-guard suites, because it sits beneath them.
 
@@ -246,8 +256,9 @@ the destructive-command and approval-guard suites, because it sits beneath them.
 
 - With `rules`, every gate produces exactly what `release/0.4.22` produced, and
   `recent-decisions.json` says so at confidence 1.0.
-- With a provider: `find . -delete` in a workspace the user asked to *audit* is **asked**, not
-  run; `git status` is not. *"Tell me about the current state of Orbyn"* fires recall. A
+- With a provider: `npm publish` during a turn the user asked to *fix a typo* is **asked**,
+  not run; `git status` is not, and `rm -rf /` is still refused by the floor before the tier
+  is consulted at all. *"Tell me about the current state of Orbyn"* fires recall. A
   lookup goes to the cheapest route that supports tools; a root-cause question does not. And
   the turn checkpoint says **no progress** by the second window, with the denied
   `extract_result` in the corrective prompt — the sentence that would have ended that session

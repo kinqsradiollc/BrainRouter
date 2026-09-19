@@ -1001,6 +1001,25 @@ export interface CliKnobs {
    * human is watching, `'on'`/`'strict'` may relax to advisory; when nobody is,
    * the classification is enforced.
    */
+  /**
+   * ADR-061 — the System One decision tier. `provider: 'rules'` (the default)
+   * answers every question with the deterministic rule the caller already
+   * computes, so the loop behaves exactly as it did with the tier absent.
+   * Anything else may send state off this machine, so it is opt-in per
+   * workspace and every payload is redacted and size-bounded first (D4).
+   */
+  decisions?: {
+    provider?: 'rules' | 'jev' | 'local';
+    /** Hard cap on one decision's state payload, in characters. */
+    maxStateChars?: number;
+    /** Wall-clock ceiling for one `ask`, after which the rules floor stands in. */
+    timeoutMs?: number;
+    /**
+     * Shell-risk bands (D3.1). Below `low` runs; at or above `high` is refused;
+     * between them a human is asked — the band the lexical rules cannot reach.
+     */
+    shell?: { low?: number; high?: number };
+  };
   autoClassifyShell?: 'off' | 'on' | 'strict';
   /**
    * CC-SAFETY-B1 — enforce `autoClassifyShell` even in a silent/unattended
@@ -1501,6 +1520,12 @@ export interface ResolvedCliKnobs {
   jobSecretScoping: boolean;
   jobSecretAllowlist: string[];
   commandAllowlist: string[];
+  decisions: {
+    provider: 'rules' | 'jev' | 'local';
+    maxStateChars: number;
+    timeoutMs: number;
+    shell: { low: number; high: number };
+  };
   autoClassifyShell: 'off' | 'on' | 'strict';
   autoClassifyShellEnforceWhenSilent: boolean;
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';

@@ -13,6 +13,10 @@ import { evaluateDestructiveCommand } from '../../../exec/guard/destructiveComma
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../../exec/guard/dangerousCommand.js';
 import { resolveSandboxConfig, runShell } from '../../../exec/runtime/sandbox.js';
 import { recordDenial } from '../../../exec/runtime/recentDenials.js';
+import { decideShellRisk } from '../../../exec/policy/shellDecision.js';
+import { decisionPortForSession } from '../../../decision/fromKnobs.js';
+import { decisionEntry, recordDecision } from '../../../decision/recentDecisions.js';
+import { redactText } from '../../../session/transcript/sessionStore.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../../review/pentestSandbox.js';
 import { gitHeadSha } from '../../../git/workspaceGit.js';
 import { readGoal } from '../../../goal/store/goalStore.js';
@@ -103,6 +107,51 @@ export const execHandlers: Record<string, BuiltinToolHandler> = {
               : await host.prompter.askYesNo(`${verdict.reason}\nRun it anyway? (y/N) `, false);
             if (!approved) { recordBlocked(); return `Command blocked (${verdict.rule}): ${verdict.reason}`; }
             destructiveOverride = true; // user explicitly authorized — skip the redundant approval below
+          }
+        }
+        // ADR-061 D3.1 — above the rule floor. The lexical rules have now had
+        // their say; everything reaching here is a command they ALLOWED. Ask
+        // the System One tier whether that was right, and route the band the
+        // rules cannot express — "no pattern matched it, but it still looks
+        // like a deploy" — to the same confirm the destructive guard uses.
+        // With the default `rules` provider the probability is 0 and this is a
+        // no-op, which is what makes the tier landable.
+        if (!destructiveOverride) {
+          const { port, maxStateChars } = decisionPortForSession();
+          const shellBands = getCliKnobs().decisions.shell;
+          const risk = await decideShellRisk(port, {
+            // D4 — redacted before it can reach any provider that leaves this
+            // machine. The same redaction a transcript gets.
+            command: redactText(cmd),
+            userIntent: host.lastUserPrompt ? redactText(host.lastUserPrompt) : undefined,
+            ...(cwdOverride ? { cwd: cwdOverride } : {}),
+          }, { thresholds: shellBands, maxStateChars });
+          if (risk.decision !== 'allow') {
+            const recordRisk = (outcome: string) => {
+              try {
+                recordDecision(host.workspaceRoot, host.sessionKey, decisionEntry(
+                  'shell', 'risky', risk.answer, { outcome, threshold: risk.threshold },
+                ));
+              } catch { /* best-effort */ }
+              try { recordDenial(host.workspaceRoot, host.sessionKey, 'run_command', risk.reason); } catch { /* best-effort */ }
+            };
+            const cannotAsk = host.silent || (!host.interactionPort && !host.prompter);
+            if (risk.decision === 'deny' || cannotAsk) {
+              recordRisk(risk.decision === 'deny' ? 'deny' : 'deny (cannot ask)');
+              return `Command blocked (safety classifier): ${risk.reason}`;
+            }
+            const approved = host.interactionPort
+              ? await host.interactionPort.confirm({ title: 'Run this command?', detail: `${cmd}\n\n${risk.reason}`, dangerous: true, tool: 'run_command' })
+              : await host.prompter.askYesNo(`${risk.reason}\nRun it anyway? (y/N) `, false);
+            if (!approved) {
+              recordRisk('declined');
+              return `Command blocked (safety classifier): ${risk.reason}`;
+            }
+            try {
+              recordDecision(host.workspaceRoot, host.sessionKey, decisionEntry(
+                'shell', 'risky', risk.answer, { outcome: 'approved', threshold: risk.threshold },
+              ));
+            } catch { /* best-effort */ }
           }
         }
         // Approval gating routes through the pure resolver in
