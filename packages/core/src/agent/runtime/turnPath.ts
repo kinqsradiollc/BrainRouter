@@ -4,12 +4,16 @@
  * re-prompts, provider-side activity, and why the turn ended. Tool calls travel
  * on their own events (`tool-start`/`tool-end`) and hosts interleave them.
  *
+ * ADR-061 D5 adds `decision`: a System One answer the loop acted on, so a
+ * person can see WHY a command asked, a model was chosen, or memory was
+ * skipped — with the probability that produced it.
+ *
  * Pure: no I/O. Emission is one call (`emitTurnStep`) that both records the
  * step on the agent for the end-of-turn transcript record and forwards it to
  * the host through `onTurnStep`.
  */
 
-export type TurnStepType = 'model' | 'provider' | 'guard' | 'end';
+export type TurnStepType = 'model' | 'provider' | 'guard' | 'decision' | 'end';
 
 export interface TurnStep {
   /** Epoch ms. */
@@ -74,7 +78,7 @@ export function turnEndLabel(input: { exitedCleanly: boolean; answered: boolean;
   return input.answered ? 'answered' : 'ended without an answer';
 }
 
-const TYPE_MARK: Record<TurnStepType, string> = { model: 'model', provider: 'provider', guard: 'guard', end: 'end' };
+const TYPE_MARK: Record<TurnStepType, string> = { model: 'model', provider: 'provider', guard: 'guard', decision: 'decision', end: 'end' };
 
 /** The path as plain text — the transcript record's `content`, exports, search. */
 export function renderTurnPath(steps: readonly TurnStep[]): string {

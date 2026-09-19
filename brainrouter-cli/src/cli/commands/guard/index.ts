@@ -12,6 +12,7 @@ import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/hooks';
 import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { listRecentDenials } from '@kinqs/brainrouter-core/exec';
+import { describeDecision, listRecentDecisions } from '@kinqs/brainrouter-core/decision/recent';
 import type { CommandContext } from '../_context.js';
 
 
@@ -60,6 +61,27 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(`    ${chalk.yellow(d.reason)}`);
       }
       console.log(chalk.gray(`\n  Showing the last ${denials.length} (use /recent-denials <n> for more).\n`));
+      return true;
+    }
+    case '/recent-decisions':
+    {
+      // ADR-061 D5 — the System One tier's answers for THIS session: what was
+      // asked, who answered, the probability, and what the gate did with it.
+      // The companion to /recent-denials: that one says a call was blocked,
+      // this one says why the runtime thought so and how sure it was.
+      const nArg = Number.parseInt(args[0] ?? '', 10);
+      const limit = Number.isFinite(nArg) && nArg > 0 ? nArg : 20;
+      const decisions = listRecentDecisions(agent.workspaceRoot, agent.sessionKey, limit);
+      console.log(chalk.bold('\nRecent decisions'));
+      if (decisions.length === 0) {
+        console.log(chalk.green('  (none — nothing has asked the decision tier this session)\n'));
+        return true;
+      }
+      for (const d of decisions) {
+        const when = new Date(d.ts).toLocaleString();
+        console.log(`  ${chalk.gray(when)}  ${chalk.cyan(describeDecision(d))}`);
+      }
+      console.log(chalk.gray(`\n  Showing the last ${decisions.length} (use /recent-decisions <n> for more).\n`));
       return true;
     }
     case '/hooks':

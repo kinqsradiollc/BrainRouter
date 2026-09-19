@@ -50,6 +50,11 @@ function configFile(): string {
   return path.join(configDir(), 'config.json');
 }
 
+/** ADR-061 — a probability band from config: in [0,1] or the documented default. */
+function band(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
 export function getConfigPath(): string {
   return configFile();
 }
@@ -977,6 +982,19 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
     // CC-SAFETY-B1 — classify-all-shell posture. Default 'off' (back-compat).
+    decisions: {
+      // OFF by default in the only sense that matters: `rules` sends nothing
+      // anywhere and reproduces the pre-tier outcome exactly (ADR-061 D2/D4).
+      provider: c.decisions?.provider === 'jev' || c.decisions?.provider === 'local' ? c.decisions.provider : 'rules',
+      maxStateChars: typeof c.decisions?.maxStateChars === 'number' && c.decisions.maxStateChars > 0
+        ? Math.floor(c.decisions.maxStateChars) : 8_000,
+      timeoutMs: typeof c.decisions?.timeoutMs === 'number' && c.decisions.timeoutMs > 0
+        ? Math.floor(c.decisions.timeoutMs) : 2_000,
+      shell: {
+        low: band(c.decisions?.shell?.low, 0.3),
+        high: band(c.decisions?.shell?.high, 0.8),
+      },
+    },
     autoClassifyShell: c.autoClassifyShell === 'on' || c.autoClassifyShell === 'strict' ? c.autoClassifyShell : 'off',
     autoClassifyShellEnforceWhenSilent: c.autoClassifyShellEnforceWhenSilent !== false,
     childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',

@@ -59,6 +59,14 @@
       "types": "./dist/context/index.d.ts",
       "default": "./dist/context/index.js"
     },
+    "./decision": {
+      "types": "./dist/decision/index.d.ts",
+      "default": "./dist/decision/index.js"
+    },
+    "./decision/recent": {
+      "types": "./dist/decision/recentDecisions.d.ts",
+      "default": "./dist/decision/recentDecisions.js"
+    },
     "./diagram": {
       "types": "./dist/diagram/index.d.ts",
       "default": "./dist/diagram/index.js"
