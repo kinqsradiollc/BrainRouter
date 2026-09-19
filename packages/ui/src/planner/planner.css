@@ -390,7 +390,11 @@
   flex: 0 1 auto;
   max-width: 100%;
   overflow: hidden;
-  color: var(--br-ui-text-muted);
+  /* Secondary, not muted. The muted token is `--text-faint`, which over a
+     block's raised background in the dark theme is 3.67:1 — under the bar at
+     any size, and this is 9px. The calendar's name is the one thing on a
+     mirrored block that says whose it is; it has to be readable. */
+  color: var(--br-ui-text-secondary);
   font-size: 9px;
   font-style: normal;
   text-overflow: ellipsis;
