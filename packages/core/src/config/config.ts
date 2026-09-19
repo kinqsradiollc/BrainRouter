@@ -995,6 +995,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
         high: band(c.decisions?.shell?.high, 0.8),
       },
       recall: { threshold: band(c.decisions?.recall?.threshold, 0.6) },
+      route: { maxCandidates: clampInt(c.decisions?.route?.maxCandidates, 1, 255, 12) },
     },
     autoClassifyShell: c.autoClassifyShell === 'on' || c.autoClassifyShell === 'strict' ? c.autoClassifyShell : 'off',
     autoClassifyShellEnforceWhenSilent: c.autoClassifyShellEnforceWhenSilent !== false,

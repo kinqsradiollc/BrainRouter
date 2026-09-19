@@ -263,3 +263,78 @@ test('router gateway is keyless when no serveKey is configured', async () => {
     assert.equal(body.object, 'list');
   } finally { await handle.close(); }
 });
+
+// ---------------------------------------------------------------------------
+// ADR-061 D3.3 — the route choice, at the only place `auto` is a live request.
+// ---------------------------------------------------------------------------
+
+test('auto on the default rules provider starts on the configured head, and decides nothing', async () => {
+  const seen: string[] = [];
+  const decisions: unknown[] = [];
+  const handle = await startRouterGateway({
+    config,
+    host: '127.0.0.1',
+    port: 0,
+    transport: async (llm) => { seen.push(`${llm.provider}/${llm.model}`); return { content: 'ok' }; },
+    onRouteDecision: (entry) => { decisions.push(entry); },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(seen, ['groq/shared-model'], 'the chain head, exactly as before the tier existed');
+    assert.deepEqual(decisions, [], 'on `rules` the head IS the answer; a line per request would say nothing');
+  } finally { await handle.close(); }
+});
+
+test('a configured provider this build does not carry keeps the chain and says why', async () => {
+  // The knobs come from the gateway's OWN config, not the ambient session's —
+  // a decision that disagreed with the router it decides for would be worse
+  // than no decision at all.
+  const seen: string[] = [];
+  const decisions: any[] = [];
+  const handle = await startRouterGateway({
+    config: { ...config, cli: { ...config.cli, decisions: { provider: 'jev' } } },
+    host: '127.0.0.1',
+    port: 0,
+    transport: async (llm) => { seen.push(`${llm.provider}/${llm.model}`); return { content: 'ok' }; },
+    onRouteDecision: (entry) => { decisions.push(entry); },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(seen, ['groq/shared-model'], 'a tier that is down must not change which model answers');
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0].consumer, 'route');
+    assert.equal(decisions[0].value, 'groq/shared-model');
+    assert.equal(decisions[0].outcome, 'kept the configured head');
+    assert.match(decisions[0].fellBack, /not available in this build/);
+  } finally { await handle.close(); }
+});
+
+test('an explicit model never reaches the route choice', async () => {
+  const decisions: unknown[] = [];
+  const handle = await startRouterGateway({
+    config: { ...config, cli: { ...config.cli, decisions: { provider: 'jev' } } },
+    host: '127.0.0.1',
+    port: 0,
+    transport: async () => ({ content: 'ok' }),
+    onRouteDecision: (entry) => { decisions.push(entry); },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'groq/shared-model', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(decisions, [], "an explicit pick is the caller's, and ADR-041's contract stands");
+  } finally { await handle.close(); }
+});

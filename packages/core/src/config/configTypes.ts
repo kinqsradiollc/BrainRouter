@@ -1024,6 +1024,12 @@ export interface CliKnobs {
      * gets a briefing. The rules' own cues are untouched and always fire.
      */
     recall?: { threshold?: number };
+    /**
+     * Route choice (D3.3). How many of the resolved chain's routes are offered
+     * as candidates to START on. The chain still falls back through all of
+     * them; this bounds only what a provider is shown.
+     */
+    route?: { maxCandidates?: number };
   };
   autoClassifyShell?: 'off' | 'on' | 'strict';
   /**
@@ -1531,6 +1537,7 @@ export interface ResolvedCliKnobs {
     timeoutMs: number;
     shell: { low: number; high: number };
     recall: { threshold: number };
+    route: { maxCandidates: number };
   };
   autoClassifyShell: 'off' | 'on' | 'strict';
   autoClassifyShellEnforceWhenSilent: boolean;

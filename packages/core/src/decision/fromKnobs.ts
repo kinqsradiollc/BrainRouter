@@ -12,13 +12,20 @@
  * 30-minute calendar cadence and applied nothing (#1721).
  */
 
-import { getCliKnobs } from '../config/config.js';
+import { getCliKnobs, type ResolvedCliKnobs } from '../config/config.js';
 import { createDecisionPort, rulesProvider, type DecisionProvider } from './port.js';
 import type { DecisionPort } from './types.js';
 
 export interface SessionDecisionPortOptions {
   /** Providers beyond `rules` that this build carries, by name. */
   providers?: Record<string, DecisionProvider>;
+  /**
+   * The knobs to read, when the caller was handed a config rather than running
+   * inside the session's own. The gateway is the case: it serves whichever
+   * `Config` it was started with, and reading the ambient one instead would
+   * let a decision disagree with the router it is deciding for.
+   */
+  knobs?: ResolvedCliKnobs['decisions'];
 }
 
 /** What one consumer needs: the port, plus the bound its state must respect. */
@@ -38,7 +45,7 @@ function unavailable(name: string): DecisionProvider {
 }
 
 export function decisionPortForSession(options: SessionDecisionPortOptions = {}): SessionDecisionPort {
-  const knobs = getCliKnobs().decisions;
+  const knobs = options.knobs ?? getCliKnobs().decisions;
   const configured = knobs.provider;
   const provider = configured === 'rules'
     ? rulesProvider
