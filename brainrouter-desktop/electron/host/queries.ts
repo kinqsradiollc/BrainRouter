@@ -437,6 +437,7 @@ import {
   updateConnector,
 } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
+import { calendarImportDir, importedCalendarRef, planCalendarImport } from '@kinqs/brainrouter-core/connectors';
 import {
   // Per-source checkpoint runtimes + token/client factories now live behind
   // core's shared `buildCheckpointRunner` (the host's switch delegates to it).
@@ -1158,6 +1159,57 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       'action:connector-validate': async (args) => validateGithubConnector(typeof args.id === 'string' ? args.id : ''),
       'action:connector-run': async (args) => runConnector(typeof args.id === 'string' ? args.id : ''),
+      /**
+       * ADR-060 D4 — "Import an .ics file" is a subscription that ran once.
+       *
+       * The dialog (main) only picks a path; everything that makes it a
+       * connector happens here, so an imported calendar is the same record,
+       * with the same removal, as one subscribed to a feed. `pollMinutes: 0`
+       * is what "never polls" means — the scheduler already obeys it.
+       */
+      'action:calendar-import': async (args) => {
+        const filePath = typeof args.path === 'string' ? args.path : '';
+        if (!filePath) return { ok: false, error: 'Choose a calendar file to import.' };
+        let contents: string;
+        try {
+          contents = await fs.promises.readFile(filePath, 'utf8');
+        } catch (err) {
+          return { ok: false, error: `That file could not be read: ${err instanceof Error ? err.message : String(err)}` };
+        }
+        const planned = planCalendarImport({ fileName: filePath, contents });
+        if (!planned.ok) return { ok: false, error: planned.error };
+        let connector;
+        try {
+          connector = createConnector(workspaceRoot, {
+            source: 'ics-calendar',
+            name: planned.plan.label,
+            description: `Imported from ${planned.plan.fileName}`,
+            config: { mode: 'file', label: planned.plan.label, fileName: planned.plan.fileName, pollMinutes: 0 },
+            credential: { mode: 'none' },
+            flows: ['checkpoint'],
+          });
+          const ref = importedCalendarRef(connector.id);
+          const dir = calendarImportDir(workspaceRoot);
+          await fs.promises.mkdir(dir, { recursive: true });
+          await fs.promises.writeFile(path.join(dir, ref), contents, { mode: 0o600 });
+          connector = updateConnector(workspaceRoot, connector.id, {
+            config: { ...connector.config, file: ref },
+          }) ?? connector;
+        } catch (err) {
+          // Nothing half-made is left behind: a connector with no stored file
+          // would show up in Settings and fail every run.
+          if (connector) deleteConnector(workspaceRoot, connector.id);
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        const run = await runConnector(connector.id);
+        return {
+          ok: run.ok !== false,
+          connector: getConnector(workspaceRoot, connector.id) ?? connector,
+          label: planned.plan.label,
+          fileName: planned.plan.fileName,
+          ...(run.ok === false ? { error: run.error ?? 'The calendar was imported but could not be read.' } : {}),
+        };
+      },
       'action:connector-index-memory': async (args) => indexConnectorMemory(typeof args.id === 'string' ? args.id : ''),
       'action:connector-sync-permissions': async (args) => syncConnectorPermissions(typeof args.id === 'string' ? args.id : ''),
       // ADR-015 P3 — "Index this repo into memory": walk the git-aware file list

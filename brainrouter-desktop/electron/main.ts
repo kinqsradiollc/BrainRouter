@@ -808,6 +808,20 @@ app.whenReady().then(() => {
     if (res.canceled || res.filePaths.length === 0) return { opened: false };
     return { opened: false, workspaceRoot: res.filePaths[0] };
   });
+  // ADR-060 D4 — picking a calendar file is a main-process dialog, like adding
+  // a project folder. It only PICKS: reading, validating and storing the file
+  // is the host's, so a chosen path still passes through the same checks as a
+  // connector created any other way.
+  ipcMain.handle('calendar:pick-file', async (event) => {
+    const wp = wins.get(event.sender.id);
+    const res = await dialog.showOpenDialog(wp?.win ?? BrowserWindow.getFocusedWindow()!, {
+      title: 'Import a calendar',
+      properties: ['openFile'],
+      filters: [{ name: 'Calendar', extensions: ['ics', 'ical', 'ifb'] }],
+    });
+    if (res.canceled || res.filePaths.length === 0) return { canceled: true };
+    return { canceled: false, path: res.filePaths[0] };
+  });
   ipcMain.handle('workspace:recents', (event) => {
     const wp = wins.get(event.sender.id);
     return { current: wp?.pool.activeRoot ?? null, recents: readRecents() };
