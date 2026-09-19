@@ -105,33 +105,69 @@ export function resolveAgentLlm(
   return resolved;
 }
 
+/**
+ * Resolve one named model request against the router, on top of `baseLlm`.
+ *
+ * The critic and the decision tier both want the same thing — *"this exact
+ * model, resolved the way the router resolves anything"* — and were about to
+ * grow a third copy of the registry build. `withFallbacks` is the one real
+ * difference: a critic may fall through the chain, a decision may not (ADR-061
+ * D6 — a System One question never costs a System Two call).
+ */
+function resolveRequestedLlm(
+  config: Pick<Config, 'providers' | 'agentModels' | 'cli'>,
+  baseLlm: LLMConfig,
+  request: string,
+  opts: { role: string; withFallbacks: boolean },
+): LLMConfig | undefined {
+  const knobs = resolveCliKnobs(config as Config);
+  if (!knobs.router.enabled) return undefined;
+  const baseName = config.providers?.base ? 'base-config' : 'base';
+  const registry = buildModelRegistry(
+    { ...(config.providers ?? {}), [baseName]: baseLlm },
+    {
+      aliases: knobs.router.aliases,
+      chain: [...knobs.router.chain, ...knobs.fallbackModels, `${baseName}/${baseLlm.model}`],
+      order: knobs.router.order,
+      strategy: knobs.router.strategy,
+      passThrough: knobs.router.passThrough,
+      availableModels: knobs.availableModels,
+      enforceAvailableModels: knobs.enforceAvailableModels,
+    },
+  );
+  const route = resolveRoutes(registry, request, { withFallbacks: opts.withFallbacks, role: opts.role })[0];
+  return route ? { ...route.llm } : undefined;
+}
+
 export function resolveCriticLlm(
   config: Pick<Config, 'providers' | 'agentModels' | 'cli'>,
   baseLlm: LLMConfig,
 ): LLMConfig {
   const criticRole = config.agentModels?.critic ? 'critic' : 'reviewer';
   const roleLlm = resolveAgentLlm(config, baseLlm, criticRole);
-  const knobs = resolveCliKnobs(config as Config);
-  const request = knobs.critic.model;
+  const request = resolveCliKnobs(config as Config).critic.model;
   if (!request) return roleLlm;
-  if (knobs.router.enabled) {
-    const baseName = config.providers?.base ? 'base-config' : 'base';
-    const registry = buildModelRegistry(
-      { ...(config.providers ?? {}), [baseName]: roleLlm },
-      {
-        aliases: knobs.router.aliases,
-        chain: [...knobs.router.chain, ...knobs.fallbackModels, `${baseName}/${roleLlm.model}`],
-        order: knobs.router.order,
-        strategy: knobs.router.strategy,
-        passThrough: knobs.router.passThrough,
-        availableModels: knobs.availableModels,
-        enforceAvailableModels: knobs.enforceAvailableModels,
-      },
-    );
-    const route = resolveRoutes(registry, request, { withFallbacks: true, role: 'critic' })[0];
-    if (route) return { ...route.llm };
-  }
-  return { ...roleLlm, model: request };
+  return resolveRequestedLlm(config, roleLlm, request, { role: 'critic', withFallbacks: true })
+    ?? { ...roleLlm, model: request };
+}
+
+/**
+ * ADR-061 D6 — the model that answers decisions.
+ *
+ * `withFallbacks: false` is the point: a decision goes to the DECLARED model or
+ * nowhere. If it cannot be placed, the caller gets `undefined` and the tier
+ * falls back to the rule floor with a recorded reason — never to whatever the
+ * primary chain happens to start with, which would quietly bill a frontier
+ * model for a question worth a fraction of a cent.
+ */
+export function resolveDecisionLlm(
+  config: Pick<Config, 'providers' | 'agentModels' | 'cli'>,
+  baseLlm: LLMConfig,
+  request: string,
+): LLMConfig | undefined {
+  const trimmed = request.trim();
+  if (!trimmed) return undefined;
+  return resolveRequestedLlm(config, baseLlm, trimmed, { role: 'decision', withFallbacks: false });
 }
 
 /**

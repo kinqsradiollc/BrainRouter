@@ -290,14 +290,14 @@ test('auto on the default rules provider starts on the configured head, and deci
   } finally { await handle.close(); }
 });
 
-test('a configured provider this build does not carry keeps the chain and says why', async () => {
+test('a configured provider that cannot be built keeps the chain and says why', async () => {
   // The knobs come from the gateway's OWN config, not the ambient session's —
   // a decision that disagreed with the router it decides for would be worse
   // than no decision at all.
   const seen: string[] = [];
   const decisions: any[] = [];
   const handle = await startRouterGateway({
-    config: { ...config, cli: { ...config.cli, decisions: { provider: 'jev' } } },
+    config: { ...config, cli: { ...config.cli, decisions: { provider: 'local' } } },
     host: '127.0.0.1',
     port: 0,
     transport: async (llm) => { seen.push(`${llm.provider}/${llm.model}`); return { content: 'ok' }; },
@@ -315,14 +315,14 @@ test('a configured provider this build does not carry keeps the chain and says w
     assert.equal(decisions[0].consumer, 'route');
     assert.equal(decisions[0].value, 'groq/shared-model');
     assert.equal(decisions[0].outcome, 'kept the configured head');
-    assert.match(decisions[0].fellBack, /not available in this build/);
+    assert.match(decisions[0].fellBack, /cli\.decisions\.local\.model/);
   } finally { await handle.close(); }
 });
 
 test('an explicit model never reaches the route choice', async () => {
   const decisions: unknown[] = [];
   const handle = await startRouterGateway({
-    config: { ...config, cli: { ...config.cli, decisions: { provider: 'jev' } } },
+    config: { ...config, cli: { ...config.cli, decisions: { provider: 'local' } } },
     host: '127.0.0.1',
     port: 0,
     transport: async () => ({ content: 'ok' }),

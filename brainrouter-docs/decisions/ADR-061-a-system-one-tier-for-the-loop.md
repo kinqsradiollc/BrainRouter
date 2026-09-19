@@ -61,15 +61,18 @@ The consequences are on record in this repository:
   *name*, and it is used to clamp loop caps, not to choose. "Use the cheapest model that can do
   this" is a sentence our configuration cannot express.
 
-The reference point is LangChain's harness around TypeSafe's **Jev**, a *System One* model:
-it never generates text; it answers named, typed questions — `noul` (a probability that a
-statement is true), `choice` (a distribution over ≤255 options plus a confidence), `score`
-(ordered levels) — over a `state` payload, every question in a request evaluated in parallel,
-in 70–500 ms, trained so that higher stated confidence corresponds to higher accuracy. Their
-integration is two middlewares: a `choice` before the model call to pick the model, a `noul`
-around each tool call to block risky ones. The pattern their documentation is really
-recommending is quieter than either: classify once, early, cheaply; write the answer into
-agent state; let everything downstream read it.
+The shape to borrow is the *System One* classifier: something that never generates text and
+instead answers named, typed questions — `noul` (a probability that a statement is true),
+`choice` (one of at most 255 keyed options, with a distribution and a confidence), `score`
+(ordered levels) — over a `state` payload, with every question in a request answered together.
+Published harnesses built on this pattern reach for it twice: a `choice` before the model call
+to pick the model, a `noul` around each tool call to block risky ones. The quieter lesson is
+the better one: classify once, early, cheaply; write the answer into agent state; let
+everything downstream read it.
+
+We take the shape and build the tier ourselves (D6). BrainRouter already owns a router, a
+provider registry and a redaction chokepoint; what was missing was the question type, not the
+infrastructure to answer it.
 
 We have the plumbing that pattern plugs into and they do not — approval prompts, a fail-closed
 mode for unattended sessions, denial recording, repeat and unchanged-result guards, result
@@ -104,13 +107,13 @@ interface DecisionAnswer {
   value: number | string;            // probability, chosen key, or level
   probabilities?: Record<string, number>;
   confidence?: number;               // absent when the provider cannot state one
-  provider: string;                  // 'rules' | 'jev' | 'local' | …
+  provider: string;                  // 'rules' | 'local'
   latencyMs: number;
 }
 ```
 
 `DecisionState` is text, structured data, or a bounded slice of the turn's messages — the same
-three shapes the reference accepts. The port **cannot return a string it was not handed**: a
+three shapes a typed decision ever takes. The port **cannot return a string it was not handed**: a
 `choice` returns one of the keys it was given, a `score` one of the levels. This is the property
 that makes the tier safe to wire into gates — it can be wrong, but it cannot be creative.
 
@@ -162,15 +165,21 @@ questions with deterministic answers; a probability adds nothing to "did a build
 
 ### D4 · What leaves the machine, and when
 
-A provider that is not local sends state to a third party. Three rules, none optional:
+**Nothing, to anyone we do not already talk to.** This was an open question while the tier was
+first drafted, and it is now closed: the classifier is ours, and it runs on a model the
+workspace is already configured to use. There is no decision vendor, no second API key, and no
+new destination for a shell command or a user's prompt.
+
+The three rules below were written for a remote provider and are kept anyway, because they are
+what makes the tier safe to point at a *model* at all — the one a workspace configures may
+itself be hosted:
 
 - Every `DecisionState` passes the existing redaction chokepoint before any provider sees it.
-  Tool arguments are the sharpest case — the reference's own docs say *"don't pass secrets in
-  tool arguments unless transmission is acceptable"* — so the shell consumer sends the command
-  with the same redaction a transcript gets, never raw.
+  Tool arguments are the sharpest case — a command line is where secrets get pasted — so the
+  shell consumer sends the command with the same redaction a transcript gets, never raw.
 - State is bounded per call (`cli.decisions.maxStateChars`, default 8 KB). A question about a
   tool call does not need the session.
-- The port is **off by default**; enabling a remote provider is a per-workspace opt-in in
+- The port is **off by default**; enabling the classifier is a per-workspace opt-in in
   `config.json` under `cli.decisions`, never an environment variable
   ([`brainrouter-rules/` on knobs](../../brainrouter-rules/README.md)). Managed installs can pin
   it off.
@@ -186,11 +195,28 @@ diagnosable from the session directory rather than from a pasted trace.
 
 ### D6 · Providers are providers
 
-`rules` (default), `jev` (TypeSafe's HTTP API, through the existing provider-credential path),
-and `local` (a small classifier-capable model already in the registry, asked with a strict
-schema). A decision call never enters the LLM fallback chain: if the configured provider fails,
-the answer is the `rules` answer with `provider: 'rules'` and a recorded fallback, not a retry
-against a frontier model. A System One question must never cost a System Two call.
+Two: `rules` (the default floor) and `local` (**ours** — a small, fast model the workspace
+already routes to, asked with a closed schema).
+
+The draft of this ADR listed a third: a hosted classifier reached over HTTP. That is dropped,
+and the reason is worth keeping. A decision is asked about a shell command, a user's prompt, or
+a window of tool results — the most sensitive material the loop touches — and the answer comes
+back as a single number. Renting that is a standing dependency and a standing egress for a
+capability we can build: the question already carries its own answer set, so a model can be
+handed a schema with no room to answer wrongly, and that is most of what a purpose-trained
+classifier buys. What it does not buy is calibration, which D7 measures locally either way.
+
+So `local` asks one model, once, with one tool it must call, whose parameters are exactly the
+question: a `noul` is a `number` bounded to [0,1], a `choice` is a `string` whose `enum` is the
+option keys, a `score` is a `string` whose `enum` is the ordered levels. That is D1's "cannot be
+creative" property moved one step earlier — the model is not asked to be disciplined, it is
+handed a shape with no alternative — and `validateAnswer` still checks the way back.
+
+The declared model is resolved with **`withFallbacks: false`**: a decision goes to the model
+named in `cli.decisions.local.model` or nowhere. A decision call never enters the LLM fallback
+chain; if it fails, the answer is the `rules` answer with `provider: 'rules'` and a recorded
+fallback, not a retry against a frontier model. A System One question must never cost a System
+Two call, and must never quietly bill one.
 
 ### D7 · Calibration is verified, not trusted
 
@@ -218,7 +244,7 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 
 - It does not replace approval. A human "ask" remains the resolution for the uncertain band;
   the port makes that band reachable, it does not remove it.
-- It does not route per model call, or mid-turn. Once per turn, like the reference.
+- It does not route per model call, or mid-turn. Once per turn.
 - It does not send memory content to a third party by default, and never unredacted.
 - It does not generate anything. A port that can return free text is a different design and
   is out of scope by construction (D1).
@@ -231,7 +257,7 @@ measured property of a provider in *this* deployment, not a claim on a vendor's 
 |---|---|---|---|
 | S1+S2 | The port, the floor, and the shell gate | `packages/core/src/decision/` — types, `DecisionPort`, the `rules` provider, `recent-decisions.json` + `/recent-decisions`, the ADR-059 `decision` step — **plus** the shell consumer above the lexical floor, `cli.decisions.shell.{low,high}`, and the equivalence test that pins byte-for-byte behaviour on `rules`. | D1, D2, D3.1, D5 |
 | S3 | Recall gate | `briefingTriggers.ts` consumes the port; entity count becomes the `rules` answer | D3.2 |
-| S4 | The `jev` provider | HTTP client through the credential path; redaction + size bound on every state; fallback to `rules` recorded | D4, D6 |
+| S4 | The `local` provider | our own classifier: closed schema over a declared small model, `withFallbacks: false`, size bound on every state; failure to `rules` recorded with a reason that names the fix | D4, D6 |
 | S5 | Route choice | one `choice` re-heads the chain an `auto` request resolved to; explicit picks untouched, `resolve.ts` untouched | D3.3 |
 | S6 | Turn checkpoint | `turnBudget.ts` scores progress by the port and attaches recorded denials to the corrective prompt | D3.4 |
 | S7 | Calibration | held-out eval from recorded decisions and outcomes; advisory demotion | D7 |

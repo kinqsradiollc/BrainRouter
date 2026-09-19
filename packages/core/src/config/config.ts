@@ -985,7 +985,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     decisions: {
       // OFF by default in the only sense that matters: `rules` sends nothing
       // anywhere and reproduces the pre-tier outcome exactly (ADR-061 D2/D4).
-      provider: c.decisions?.provider === 'jev' || c.decisions?.provider === 'local' ? c.decisions.provider : 'rules',
+      provider: c.decisions?.provider === 'local' ? 'local' : 'rules',
       maxStateChars: typeof c.decisions?.maxStateChars === 'number' && c.decisions.maxStateChars > 0
         ? Math.floor(c.decisions.maxStateChars) : 8_000,
       timeoutMs: typeof c.decisions?.timeoutMs === 'number' && c.decisions.timeoutMs > 0
@@ -996,6 +996,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       },
       recall: { threshold: band(c.decisions?.recall?.threshold, 0.6) },
       route: { maxCandidates: clampInt(c.decisions?.route?.maxCandidates, 1, 255, 12) },
+      local: { model: typeof c.decisions?.local?.model === 'string' ? c.decisions.local.model.trim() : '' },
     },
     autoClassifyShell: c.autoClassifyShell === 'on' || c.autoClassifyShell === 'strict' ? c.autoClassifyShell : 'off',
     autoClassifyShellEnforceWhenSilent: c.autoClassifyShellEnforceWhenSilent !== false,

@@ -289,7 +289,7 @@ async function startingRoutes(
   const knobs = resolveCliKnobs(options.config).decisions;
   if (knobs.provider === 'rules') return resolved;
   try {
-    const { port, maxStateChars } = decisionPortForSession({ knobs });
+    const { port, maxStateChars } = decisionPortForSession({ knobs, config: options.config });
     const messages: any[] = Array.isArray(body.messages) ? body.messages : [];
     const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
     const verdict = await chooseStartingRoute(
