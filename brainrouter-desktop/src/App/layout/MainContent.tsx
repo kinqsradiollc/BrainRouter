@@ -317,7 +317,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
             <PlannerModeContainer
               onOpenNotes={() => setMode('notes')}
               onOpenRef={openWorkspaceRef}
-              onAddCalendar={() => openSettings('data-connectors')} />
+              onSubscribeCalendar={() => openSettings('data-connectors')} />
           </Suspense>
         </div>
       ) : mode === 'study' ? (

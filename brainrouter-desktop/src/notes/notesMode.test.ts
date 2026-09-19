@@ -215,7 +215,10 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   assert.match(blockRow, /<RefChip key=\{uri\}/, 'notes stopped using the shared chip');
   assert.match(
     source('../App/layout/MainContent.tsx'),
-    /<PlannerModeContainer[^\n]*onOpenRef=\{openWorkspaceRef\}/,
+    // Bounded `[\s\S]` rather than `[^\n]` or `[^>]`: the assertion is that THIS
+    // element is given the prop, which stays true when the element grows enough
+    // props to wrap — and an arrow function in a sibling prop contains a `>`.
+    /<PlannerModeContainer[\s\S]{0,300}?onOpenRef=\{openWorkspaceRef\}/,
     'a planner chip has nowhere to open to',
   );
 

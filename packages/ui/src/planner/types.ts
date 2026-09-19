@@ -139,12 +139,13 @@ export interface PlannerOps {
   openRef?: (uri: string) => void;
   openSource?: (url: string) => void;
   /**
-   * Open the host's connector flow at the calendar sources (ADR-060 D4).
-   *
-   * Omitted by a host with nowhere useful to send the person — the control then
-   * does not appear at all, rather than appearing and going nowhere.
+   * Open the host's connector flow, where a calendar feed is subscribed to
+   * (ADR-060 D4). Omitted by a host with nowhere useful to send the person —
+   * the route then does not appear at all, rather than going nowhere.
    */
-  addCalendar?: () => void;
+  subscribeCalendar?: () => void;
+  /** Import a one-off `.ics` export — the host picks the file and stores it. */
+  importCalendar?: () => void;
 }
 
 export interface PlannerSurfaceProps {
@@ -153,6 +154,12 @@ export interface PlannerSurfaceProps {
   today: string;
   sync: PlannerSyncView;
   staleSources?: string[];
+  /**
+   * What just happened, in one line — "Semester 2 imported.", or why it did
+   * not. Something the person set off has to answer them; the alternative is a
+   * click that appears to do nothing.
+   */
+  notice?: string | null;
   driftNote?: string | null;
   refLabels?: Record<string, string>;
   ops: PlannerOps;

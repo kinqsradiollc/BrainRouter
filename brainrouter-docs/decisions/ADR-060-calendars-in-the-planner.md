@@ -117,8 +117,10 @@ The person's completion and their own notes survive refreshes (`PLANNER_OWNED_FI
 ### D4 · Import is a subscription that ran once
 
 "Import an `.ics` file" creates an `ics-calendar` connector with `mode: 'file'`, stores the
-file's contents once (desktop: the app data dir; dashboard: the server's connector store),
-runs the checkpoint once, and never polls. It appears in Settings → Connectors like any other
+file's contents once (**as built: `calendars/` inside the workspace's own state directory,
+beside `connectors.json` — the same lifetime and scope as the connector that reads it**;
+dashboard: the server's connector store, when it has one), runs the checkpoint once, and never
+polls — which needed no scheduler change, because `pollMinutes: 0` already means exactly that. It appears in Settings → Connectors like any other
 source, so it can be removed — removing it removes its events, which is what "un-import"
 means. A second import of the same file replaces, because ids are `uid`-stable.
 
@@ -126,16 +128,17 @@ The planner's Calendar tab gains one control: **Add calendar…** → *Subscribe
 *Sign in with Google* / *Import an .ics file*. The control opens the connector flow; it does
 not reimplement it.
 
-> **As built (C4c), it is one control and no menu.** A menu of three routes where two do not
-> exist yet would be a menu that mostly apologises; the control opens the host's connector flow,
-> where the *Calendar subscription (iCal)* card already stands, and it grows a menu when C4d and
-> C5 give it something to choose between.
+> **As built (C4c + C4d), the control offers the two routes that exist.** *Subscribe to a feed…*
+> opens the host's connector flow, where the *Calendar subscription (iCal)* card already stands;
+> *Import an .ics file…* picks a file and does the rest. Google sign-in joins them in C5. The
+> control renders each route only when the host provides it, and with one route it is a plain
+> button rather than a menu of one — a menu that wastes a click is not a menu.
 >
-> **The desktop gets it; the dashboard does not.** `PlannerOps.addCalendar` is optional and the
-> control renders only when a host supplies it. The dashboard's connector surface is org-admin
+> **The desktop gets it; the dashboard does not.** Both ops are optional and the control renders
+> only when a host supplies one. The dashboard's connector surface is org-admin
 > (`triggers:manage`), so offering every planner user a button that lands them on a page they
-> cannot act on is worse than not offering it. It becomes the dashboard's when there is a
-> per-user connector surface to open.
+> cannot act on is worse than not offering it, and it has nowhere to put an uploaded file that
+> the server's connector store does not yet hold. Both become the dashboard's together.
 
 ### D5 · The surface shows where an event came from, and what it cannot edit
 
@@ -162,7 +165,7 @@ not reimplement it.
   given, and a calendar row carries `sourceFreshness` like any other mirrored row. **The
   page-level `staleSources` banner is empty on the desktop for every source**, calendars
   included: nothing passes `freshness` to `todayView` there. That is a pre-existing gap, not a
-  calendar one, and it is C4c's to close along with the connector list the control opens.
+  calendar one, and it is still open — the freshness list has no producer on the desktop.
 - A meeting's *hour* is the calendar's, which the generic rule does not say: `scheduledFor` is
   in `PLANNER_OWNED_FIELDS`, so without `whyBlockTimeIsLocked` the surface would have offered a
   drag that the next poll undoes. The block refuses, and the tooltip says which calendar to
@@ -200,13 +203,13 @@ not reimplement it.
 | C3b | Vanished events | An event that leaves the feed *inside the window* without a CANCELLED marker is still projected until it is cancelled or the calendar is removed; tombstoning it needs the run's window threaded to the sink | D3 |
 | C4a | Attendance | ✅ `documentKind` on the wire, `sourceOwnsCompletion` in Core, one rule for both hosts and the server guard, tick wording | D5 (completion) |
 | C4b | Calendar surface | ✅ the calendar named under the meeting + a hairline in the feed's colour, an all-day lane, drag refused with the reason, the canonical fixture grew a calendar | D5 |
-| C4c | Add calendar… | ✅ the control on the Calendar tab, opening the host's connector flow (desktop: Settings → Data connectors) | D4 |
-| C4d | Import an .ics file | `mode: 'file'` on `ics-calendar` — stored once, run once, never polled — with the desktop file dialog and a dashboard upload | D4 |
+| C4c | Add calendar… | ✅ the control on the Calendar tab, offering the routes the host has | D4 |
+| C4d | Import an .ics file | ✅ `mode: 'file'` on `ics-calendar` — stored beside the connector, run once, never polled — with the desktop's file dialog. The dashboard's upload waits with its connector surface. | D4 |
 | C5 | `google-calendar` source | scope on the server's Google OAuth, calendar list for the picker, events runner, desktop OAuth allowlist | D1 |
 | C6 | Docs + catalog | configuration.md, connectors guide, STATUS row | — |
 
 C1–C2 are Core-only and shipped first; C3 adds the server sink; C4a settles who owns a meeting's
-completion, C4b and C4c make it visible; C5 is the OAuth path. Each slice is
+completion, C4b makes it visible and C4c/C4d let a person add one; C5 is the OAuth path. Each slice is
 its own PR into the release branch with the focused checks plus the planner visual gate where
 the surface changes.
 

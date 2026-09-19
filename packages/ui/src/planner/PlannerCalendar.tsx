@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent, FormEvent, KeyboardEvent, ReactElement } from 'react';
 
+import { ChipPopover } from './ChipPopover.js';
 import type { PlannerBlockView, PlannerItemView } from './types.js';
 import {
   DAY_END_HOUR,
@@ -40,8 +41,10 @@ export interface PlannerCalendarProps {
   weekOf: string;
   onWeek: (startDate: string) => void;
   onCreateAt?: (iso: string) => void;
-  /** Subscribe to a calendar — the host owns the flow, this only opens it. */
-  onAddCalendar?: () => void;
+  /** Subscribe to a calendar feed — the host owns the flow, this only opens it. */
+  onSubscribeCalendar?: () => void;
+  /** Import a one-off `.ics` export — the host picks the file and stores it. */
+  onImportCalendar?: () => void;
   onRescheduleBlock?: (blockId: string, scheduledFor: string) => void;
   onRecordActual?: (blockId: string, actualMinutes: number) => void;
 }
@@ -55,7 +58,8 @@ export function PlannerCalendar({
   weekOf,
   onWeek,
   onCreateAt,
-  onAddCalendar,
+  onSubscribeCalendar,
+  onImportCalendar,
   onRescheduleBlock,
   onRecordActual,
 }: PlannerCalendarProps): ReactElement {
@@ -125,11 +129,7 @@ export function PlannerCalendar({
           <button type="button" aria-label="Next week" onClick={() => onWeek(shiftWeek(weekOf, 1))}>›</button>
         </div>
         <span className="br-planner-calendar-range">{monthLabel(days[0]!.date, days[6]!.date)}</span>
-        {onAddCalendar ? (
-          <button type="button" className="br-planner-add-calendar" onClick={onAddCalendar}>
-            Add calendar…
-          </button>
-        ) : null}
+        <AddCalendar onSubscribe={onSubscribeCalendar} onImport={onImportCalendar} />
       </header>
 
       {loose.length > 0 ? (
@@ -257,8 +257,8 @@ export function PlannerCalendar({
         <div className="br-planner-empty br-planner-calendar-empty">
           <strong>No time blocked this week</strong>
           <span>Choose an hour to make room for work; estimates become useful once actual time is recorded.</span>
-          {onAddCalendar ? (
-            <span>Subscribe to a calendar and the meetings you already have will be here too.</span>
+          {onSubscribeCalendar || onImportCalendar ? (
+            <span>Add a calendar and the meetings you already have will be here too.</span>
           ) : null}
         </div>
       ) : null}
@@ -272,6 +272,67 @@ export function PlannerCalendar({
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * "Add calendar…" — one control over however many routes the host offers.
+ *
+ * With one route it is a plain button, because a menu of one is a menu that
+ * wastes a click; with two it opens them as a choice. A host that offers
+ * neither gets nothing at all rather than a button that goes nowhere.
+ */
+function AddCalendar({ onSubscribe, onImport }: {
+  onSubscribe?: (() => void) | undefined;
+  onImport?: (() => void) | undefined;
+}): ReactElement | null {
+  const [open, setOpen] = useState(false);
+  const routes = [
+    onSubscribe ? {
+      key: 'subscribe',
+      title: 'Subscribe to a feed…',
+      detail: 'Google, iCloud or Outlook — any .ics or webcal address. Stays up to date.',
+      run: onSubscribe,
+    } : null,
+    onImport ? {
+      key: 'import',
+      title: 'Import an .ics file…',
+      detail: 'A one-off export, such as a term timetable. Read once, never polled.',
+      run: onImport,
+    } : null,
+  ].filter((route): route is { key: string; title: string; detail: string; run: () => void } => route !== null);
+  if (routes.length === 0) return null;
+  if (routes.length === 1) {
+    return (
+      <button type="button" className="br-planner-add-calendar" onClick={routes[0]!.run}>
+        Add calendar…
+      </button>
+    );
+  }
+  return (
+    <ChipPopover
+      open={open}
+      onOpen={setOpen}
+      className="br-planner-calendar-menu"
+      label={(
+        <button
+          type="button"
+          className="br-planner-add-calendar"
+          aria-expanded={open}
+          aria-haspopup="menu"
+          onClick={() => setOpen(!open)}
+        >
+          Add calendar…
+        </button>
+      )}
+    >
+      {routes.map((route) => (
+        <button key={route.key} type="button" onClick={() => { setOpen(false); route.run(); }}>
+          <strong>{route.title}</strong>
+          <small>{route.detail}</small>
+        </button>
+      ))}
+    </ChipPopover>
   );
 }
 
