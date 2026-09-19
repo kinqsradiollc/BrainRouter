@@ -17,6 +17,7 @@ export * from './itemMerge.js';
 export * from './timetable.js';
 export * from './sourceAdapter.js';
 export * from './connectorIssueAdapter.js';
+export * from './connectorEventAdapter.js';
 export * from './agentContext.js';
 export * from './plannerStore.js';
 export * from './plannerService.js';
