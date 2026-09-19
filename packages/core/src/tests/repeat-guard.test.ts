@@ -79,3 +79,71 @@ test('buildSequenceSignature: parsed object, raw JSON string, and undefined/malf
     ]),
   );
 });
+
+/* ---------- the window is measured in batches, not calls ---------- */
+
+import {
+  REPEAT_GUARD_WINDOW_BATCHES, countRepeatsInWindow, pruneRepeatWindow,
+  type RepeatWindowEntry,
+} from '../agent/guards/repeatGuard.js';
+
+/** Replay the guard exactly as the turn loop drives it. */
+function replay(batches: string[][], limit = 3): { trippedOn: string | null; calls: number } {
+  const window: RepeatWindowEntry[] = [];
+  let batch = 0;
+  let calls = 0;
+  for (const names of batches) {
+    batch += 1;
+    for (const signature of names) {
+      calls += 1;
+      if (countRepeatsInWindow(window, signature) >= limit) return { trippedOn: signature, calls };
+      window.push({ signature, batch });
+      pruneRepeatWindow(window, batch);
+    }
+  }
+  return { trippedOn: null, calls };
+}
+
+test('a wide parallel batch no longer evicts the evidence of its own repeat', () => {
+  // The live failure: the same three files re-read forever, each batch padded
+  // with other calls so the old 12-CALL window rolled the repeats out.
+  const spin = [
+    ['read_file:AGENT.md', 'read_file:README.md', 'read_file:docs/architecture.md'],
+    ['glob_files:a', 'glob_files:b', 'glob_files:c', 'glob_files:d', 'glob_files:e'],
+    ['read_file:AGENT.md', 'read_file:README.md', 'read_file:package.json', 'read_file:docs/architecture.md'],
+    ['glob_files:f', 'glob_files:g', 'glob_files:h', 'glob_files:i', 'glob_files:j'],
+    ['read_file:AGENT.md', 'read_file:README.md', 'read_file:docs/architecture.md'],
+    ['read_file:AGENT.md', 'read_file:README.md'],
+  ];
+  assert.equal(replay(spin).trippedOn, 'read_file:AGENT.md', 'the third identical read is caught');
+
+  // The old behaviour, for contrast: a 12-ENTRY ring drops the first AGENT.md
+  // after two padded batches, so the count never reaches the limit.
+  const ring: string[] = [];
+  let tripped = false;
+  for (const names of spin) {
+    for (const signature of names) {
+      if (ring.filter((s) => s === signature).length >= 3) tripped = true;
+      ring.push(signature);
+      if (ring.length > 12) ring.shift();
+    }
+  }
+  assert.equal(tripped, false, 'this is the bug the batch window fixes');
+});
+
+test('a genuine revisit outside the window is still free work, not a loop', () => {
+  const batches: string[][] = [['read_file:a.ts']];
+  for (let i = 0; i < REPEAT_GUARD_WINDOW_BATCHES; i += 1) batches.push([`edit_file:file${i}.ts`]);
+  batches.push(['read_file:a.ts'], ['read_file:a.ts']);
+  assert.equal(replay(batches).trippedOn, null, 'coming back to a file later is normal');
+});
+
+test('pruning keeps the window bounded and never drops the current batch', () => {
+  const window: RepeatWindowEntry[] = [];
+  for (let batch = 1; batch <= 50; batch += 1) {
+    for (let i = 0; i < 7; i += 1) window.push({ signature: `t${i}`, batch });
+    pruneRepeatWindow(window, batch);
+    assert.ok(window.length <= 7 * (REPEAT_GUARD_WINDOW_BATCHES + 1), `bounded at batch ${batch}`);
+    assert.equal(window.filter((e) => e.batch === batch).length, 7, 'the current batch survives');
+  }
+});
