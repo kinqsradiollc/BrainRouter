@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
 import { CONNECTOR_SOURCES, isConnectorSource } from '@kinqs/brainrouter-types';
-import { CONNECTOR_CATALOG } from '../connectors/catalog.js';
+import { CONNECTOR_CATALOG, connectorPollMinutes } from '../connectors/catalog.js';
 import { icsFeedClient, runIcsCalendarConnectorCheckpoint } from '../connectors/sources/icsCalendarConnector.js';
 
 const NOW = '2026-09-14T04:00:00.000Z';
@@ -159,4 +159,26 @@ test('a stored reference is a plain file name — a path is refused rather than 
   }
   // And the client refuses independently of the runner, for a host that calls it directly.
   await assert.rejects(() => icsFeedClient({ importedRoot: '/tmp' }).readImported!('../x'), /plain file name/);
+});
+
+/* ---------------------------------------- a subscription refreshes itself */
+
+test('a calendar left on the default cadence still refreshes; the person\'s own setting always wins', () => {
+  const entry = CONNECTOR_CATALOG.find((e) => e.source === 'ics-calendar')!;
+  assert.equal(entry.defaultPollMinutes, 30);
+  const help = entry.configFields.find((f) => f.key === 'pollMinutes')!.description ?? '';
+  assert.match(help, /Defaults to 30/, 'the help text and the declared default cannot drift apart');
+
+  // Blank: what the field's help text has always promised, and nothing applied.
+  assert.equal(connectorPollMinutes({ source: 'ics-calendar', config: {} }), 30);
+  assert.equal(connectorPollMinutes({ source: 'ics-calendar', config: { pollMinutes: '' } }), 30);
+  // Set: theirs, including an explicit "only when I ask".
+  assert.equal(connectorPollMinutes({ source: 'ics-calendar', config: { pollMinutes: 5 } }), 5);
+  assert.equal(connectorPollMinutes({ source: 'ics-calendar', config: { pollMinutes: '15' } }), 15);
+  assert.equal(connectorPollMinutes({ source: 'ics-calendar', config: { pollMinutes: 0 } }), 0);
+  // An imported file is read once; nothing to poll.
+  assert.equal(connectorPollMinutes({ source: 'ics-calendar', config: { mode: 'file', pollMinutes: 0 } }), 0);
+  // Every other source keeps "only when asked" as its blank.
+  assert.equal(connectorPollMinutes({ source: 'github', config: {} }), 0);
+  assert.equal(connectorPollMinutes({ config: {} }), 0);
 });

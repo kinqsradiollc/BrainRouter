@@ -102,6 +102,11 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     // own secret, so there is no credential. Events become planner items.
     source: 'ics-calendar',
     title: 'Calendar subscription (iCal)',
+    // The one source that exists to stay current: a calendar left on "never
+    // refresh" is a calendar that silently stops being true. The field's own
+    // help text has promised this default since the source shipped; nothing
+    // applied it, so an empty box meant the feed was read once and never again.
+    defaultPollMinutes: 30,
     description: 'Subscribe to a calendar feed URL (.ics or webcal://) from Google, Apple iCloud, Outlook or any calendar. Events appear in the planner as mirrored, time-blocked items and refresh on a cadence.',
     flows: ['checkpoint'],
     credentialModes: ['none'],
@@ -465,6 +470,31 @@ export function listConnectorCatalog(): ConnectorCatalogEntry[] {
 export function getConnectorCatalogEntry(source: ConnectorSource): ConnectorCatalogEntry | undefined {
   const entry = CATALOG_BY_SOURCE.get(source);
   return entry ? cloneCatalogEntry(entry) : undefined;
+}
+
+/**
+ * How often this connector should refresh itself, in minutes — 0 for never.
+ *
+ * Here rather than inside a host's scheduler because the rule has two halves
+ * and only one of them is the host's: the person's setting always wins,
+ * including an explicit 0 meaning "only when I ask"; an ABSENT setting falls
+ * back to whatever the source declares. An `ics-calendar` left blank used to
+ * mean "read the feed once and never again", which is the one thing a calendar
+ * subscription must not do.
+ */
+export function connectorPollMinutes(connector: {
+  source?: string;
+  config?: Record<string, unknown> | undefined;
+}): number {
+  const raw = connector.config?.pollMinutes;
+  if (raw !== undefined && raw !== null && raw !== '') {
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : 0;
+  }
+  const declared = connector.source
+    ? CATALOG_BY_SOURCE.get(connector.source as ConnectorSource)?.defaultPollMinutes
+    : undefined;
+  return declared && declared > 0 ? Math.max(1, Math.floor(declared)) : 0;
 }
 
 export function connectorSupportsFlow(source: ConnectorSource, flow: ConnectorFlow): boolean {
