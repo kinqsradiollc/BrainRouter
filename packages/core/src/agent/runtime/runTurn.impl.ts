@@ -1032,7 +1032,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     while (loopCount < maxLoops) {
       loopCount++;
       assertReviewedTurnCurrent();
-      const interruptedAnswer = lifecycleCoordinator.beginLoop(loopCount);
+      const interruptedAnswer = await lifecycleCoordinator.beginLoop(loopCount);
       if (interruptedAnswer) return interruptedAnswer;
 
       const invocation = await invokeModelPhase(this, callbacks, allTools);
