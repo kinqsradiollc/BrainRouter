@@ -149,13 +149,15 @@ export function createLocalDecisionProvider(options: LocalDecisionProviderOption
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: `STATE:\n${serializeState(state, maxStateChars)}` },
         ],
+        // The transport's INTERNAL tool shape — it wraps this into the wire
+        // format itself. Handing it a pre-wrapped OpenAI spec puts a nameless
+        // tool with an empty schema on the wire, which is not a loud failure:
+        // the model is simply free to answer anything, and the whole "cannot be
+        // creative" property is quietly gone. Pinned by a wire-level test.
         [{
-          type: 'function',
-          function: {
-            name: ANSWER_TOOL_NAME,
-            description: 'Answer every question about the state.',
-            parameters: schema,
-          },
+          name: ANSWER_TOOL_NAME,
+          description: 'Answer every question about the state.',
+          inputSchema: schema,
         }],
         {
           signal,
