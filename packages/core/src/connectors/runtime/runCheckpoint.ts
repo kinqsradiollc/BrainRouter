@@ -59,6 +59,7 @@ import {
   type McpConnectorClient,
 } from '../index.js';
 import { finishConnectorRun, getConnector, recordConnectorRun } from '../store/connectorStore.js';
+import { calendarImportDir } from '../sources/calendarImport.js';
 import { upsertConnectorDocuments } from '../store/documentStore.js';
 import type { ConnectorRuntimeHost } from './host/contracts.js';
 import { nodeConnectorRuntimeHost } from './host/nodeConnectorRuntimeHost.js';
@@ -81,6 +82,17 @@ export type EnvTokenResolver = (
 export interface CheckpointRunnerDeps {
   /** Process context. Defaults to the local Node host. */
   runtimeHost?: ConnectorRuntimeHost;
+  /**
+   * Where this host keeps calendars the person imported (ADR-060 D4).
+   *
+   * Defaults to `calendars/` inside the workspace's own state directory — the
+   * same place the connector record itself lives, so an import has the same
+   * lifetime and scope as the connector that reads it. A host with a different
+   * store (the server's database) passes its own; a host with neither gets a
+   * connector that says it cannot read imported files rather than one that
+   * appears to have read an empty calendar.
+   */
+  calendarImportRoot?: string;
   /**
    * GitHub connector client. The host passes its keychain/gh-CLI-aware client;
    * the agent passes a static/dynamic-token REST client. When absent, a github
@@ -249,8 +261,14 @@ export function buildCheckpointRunner(
         );
       case 'gmail':
         return await runGmailConnectorCheckpoint(connector, gmailTokenClient(requireStaticToken(connector, 'Gmail').token));
-      case 'ics-calendar':
-        return await runIcsCalendarConnectorCheckpoint(connector, icsFeedClient());
+      case 'ics-calendar': {
+        const importedRoot = deps.calendarImportRoot
+          ?? (deps.workspaceRoot ? calendarImportDir(deps.workspaceRoot) : undefined);
+        return await runIcsCalendarConnectorCheckpoint(
+          connector,
+          icsFeedClient(importedRoot ? { importedRoot } : undefined),
+        );
+      }
       default:
         throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
     }

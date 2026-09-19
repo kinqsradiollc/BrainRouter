@@ -333,7 +333,29 @@
 .br-planner-calendar-nav button { min-width: 30px; min-height: 30px; padding: 0 var(--br-space-2, 8px); border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-control, 7px); cursor: pointer; }
 .br-planner-calendar-nav button:hover:not(:disabled) { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
 .br-planner-calendar-nav button:disabled { opacity: .45; cursor: default; }
-.br-planner-calendar-range { font-size: var(--br-type-body, 13px); }
+/* One line: the control beside it takes the slack, and a wrapped date range
+   pushed the whole bar taller for no gain. */
+.br-planner-calendar-range { font-size: var(--br-type-body, 13px); white-space: nowrap; }
+/* The control and its routes. `.br-planner-chip` positions the popover, so the
+   auto margin belongs on the wrapper the calendar bar actually lays out. */
+.br-planner-calendar-bar > .br-planner-chip { margin-left: auto; }
+.br-planner-calendar-menu { min-width: 300px; }
+.br-planner-calendar-menu > button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border) !important;
+  border-radius: var(--br-radius-chip, 5px);
+  background: var(--br-ui-surface) !important;
+  text-align: left;
+  cursor: pointer;
+}
+.br-planner-calendar-menu > button:hover { border-color: var(--br-ui-border-strong) !important; background: var(--br-ui-accent-soft) !important; }
+.br-planner-calendar-menu > button > strong { color: var(--br-ui-text); font-size: var(--br-type-body-small, 12px); font-weight: 600; }
+.br-planner-calendar-menu > button > small { color: var(--br-ui-text-secondary); font-size: var(--br-type-meta, 11px); }
+.br-planner-add-calendar { margin-left: auto; min-height: 30px; padding: 0 var(--br-space-3, 12px); border: 1px solid var(--br-ui-border) !important; border-radius: var(--br-radius-control, 7px); color: var(--br-ui-text-secondary); cursor: pointer; font-size: var(--br-type-meta, 11px); }
+.br-planner-add-calendar:hover { border-color: var(--br-ui-border-strong) !important; background: var(--br-ui-accent-soft) !important; color: var(--br-ui-text); }
 .br-planner-unscheduled { display: flex; flex: 0 0 auto; gap: var(--br-space-2, 8px); padding: 0 var(--br-space-4, 16px) var(--br-space-2, 8px); border-bottom: 1px solid var(--br-ui-border); }
 .br-planner-calendar-gutter-label { flex: 0 0 52px; padding-top: 7px; color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: var(--br-type-label, 10px); text-transform: uppercase; }
 .br-planner-unscheduled-items { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: var(--br-space-1, 4px); }

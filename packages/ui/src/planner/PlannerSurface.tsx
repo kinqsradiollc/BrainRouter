@@ -14,6 +14,7 @@ import {
 import type { FocusEvent, KeyboardEvent, ReactElement, ReactNode } from 'react';
 
 import { PlannerCalendar } from './PlannerCalendar.js';
+import { ChipPopover } from './ChipPopover.js';
 import type {
   PlannerItemView,
   PlannerOps,
@@ -62,6 +63,7 @@ export function PlannerSurface({
   today,
   sync,
   staleSources = [],
+  notice,
   driftNote = null,
   refLabels = {},
   ops,
@@ -129,6 +131,7 @@ export function PlannerSurface({
 
       {banner ? <div className="br-planner-banner" role="status">{banner}</div> : null}
       {staleSources.map((line) => <div key={line} className="br-planner-stale" role="status">{line}</div>)}
+      {notice ? <div className="br-planner-stale" role="status">{notice}</div> : null}
 
       <div
         id={`br-planner-panel-${view}`}
@@ -163,6 +166,8 @@ export function PlannerSurface({
             weekOf={weekOf}
             onWeek={setWeekOf}
             onCreateAt={ops.blockTimeAt}
+            onSubscribeCalendar={ops.subscribeCalendar}
+            onImportCalendar={ops.importCalendar}
             onRescheduleBlock={ops.rescheduleBlock}
             onRecordActual={ops.recordActual}
           />
@@ -454,30 +459,6 @@ function TodayView({
  * it, so the keyboard path is: Tab to the chip, Enter, Tab through the picks,
  * Escape back. Non-modal: the gate treats a modal dialog as a blocked surface.
  */
-function ChipPopover({ label, open, onOpen, className, children }: {
-  label: ReactNode;
-  open: boolean;
-  onOpen: (open: boolean) => void;
-  className: string;
-  children: ReactNode;
-}): ReactElement {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const leave = (event: FocusEvent<HTMLDivElement>): void => {
-    if (!rootRef.current?.contains(event.relatedTarget as Node | null)) onOpen(false);
-  };
-  return (
-    <div
-      ref={rootRef}
-      className={`br-planner-chip${open ? ' is-open' : ''}`}
-      onBlur={leave}
-      onKeyDown={(event) => { if (event.key === 'Escape' && open) { event.preventDefault(); onOpen(false); } }}
-    >
-      {label}
-      {open ? <div className={`br-planner-popover ${className}`} role="group">{children}</div> : null}
-    </div>
-  );
-}
-
 /** "When" — the day an item belongs to, set from the row in two clicks. */
 function WhenChip({ item, today, ops }: { item: PlannerItemView; today: string; ops: PlannerOps }): ReactElement | null {
   const [open, setOpen] = useState(false);
