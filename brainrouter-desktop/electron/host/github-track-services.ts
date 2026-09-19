@@ -19,6 +19,9 @@ import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import { loadConfig } from '@kinqs/brainrouter-core/config';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
+// The cadence rule is Core's: the person's setting wins, an absent one falls
+// back to what the source declares (a calendar refreshes itself; most do not).
+import { connectorPollMinutes } from '@kinqs/brainrouter-core/connectors';
 import type { AgentLike } from '../hostCore.js';
 import { mergeGithubCliEnv, normalizeGithubCliError } from '../ghCli.js';
 import { brainRouterAccountHeaders, resolveBrainRouterAccountContext } from '../accountIntegration.js';
@@ -518,11 +521,6 @@ export function buildGithubTrackServices(deps: GithubTrackDeps) {
   };
 
   const connectorRunsInFlight = new Set<string>();
-  const connectorPollMinutes = (connector: { config?: Record<string, unknown> }): number => {
-    const raw = connector.config?.pollMinutes;
-    const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0;
-    return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : 0;
-  };
   const connectorDueForScheduledRun = (connector: ReturnType<typeof listConnectors>[number], now: number): boolean => {
     if (connector.status !== 'active') return false;
     if (!connector.flows.includes('checkpoint')) return false;
