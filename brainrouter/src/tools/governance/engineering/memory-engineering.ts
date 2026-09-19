@@ -14,6 +14,63 @@ function toolResult(value: unknown) {
 
 const stringList = z.array(z.string()).optional().default([]);
 
+/**
+ * Where the caller is asking FROM. Optional, because a caller that cannot say
+ * still gets answers — but one that can say gets its own repo first.
+ */
+const callerScope = {
+  workspaceTag: z.string().optional(),
+  sessionKey: z.string().optional(),
+};
+
+/**
+ * Rank by provenance: this session, then this workspace, then records that
+ * never carried a workspace, then everything else.
+ *
+ * PREFER, never hide. These reads used to be a plain user-wide search, so a
+ * `handover_note` written in a personal session — "submitted resignation,
+ * update LinkedIn" — could outrank the repository the question was about and
+ * be injected as authoritative context into a codebase session. Filtering it
+ * out entirely would also lose the cross-repo lesson that is occasionally
+ * exactly what you want; ordering it last, and marking where it came from,
+ * loses neither.
+ */
+export type ScopeMatch = "session" | "workspace" | "untagged" | "other-workspace";
+
+/** The two shapes these reads return: FTS rows are snake_case, records camelCase. */
+function provenanceOf(hit: unknown): { workspaceTag?: string | null; sessionKey?: string | null } {
+  const row = (hit ?? {}) as Record<string, unknown>;
+  const pick = (a: string, b: string): string | null | undefined => {
+    const value = row[a] ?? row[b];
+    return typeof value === "string" || value === null ? value : undefined;
+  };
+  return { workspaceTag: pick("workspaceTag", "workspace_tag"), sessionKey: pick("sessionKey", "session_key") };
+}
+
+export function scopeMatchOf(hit: unknown, scope: { workspaceTag?: string; sessionKey?: string }): ScopeMatch {
+  const { workspaceTag, sessionKey } = provenanceOf(hit);
+  if (scope.sessionKey && sessionKey === scope.sessionKey) return "session";
+  if (scope.workspaceTag && workspaceTag === scope.workspaceTag) return "workspace";
+  // A record with no workspace predates tagging (or was captured without a
+  // workspace); it belongs to everywhere, so it sits above another repo's.
+  if (!workspaceTag) return "untagged";
+  return "other-workspace";
+}
+
+const SCOPE_ORDER: Record<ScopeMatch, number> = {
+  session: 0, workspace: 1, untagged: 2, "other-workspace": 3,
+};
+
+export function preferCallerScope<T>(
+  hits: readonly T[],
+  scope: { workspaceTag?: string; sessionKey?: string },
+): Array<T & { scopeMatch: ScopeMatch }> {
+  return hits
+    .map((hit) => ({ ...hit, scopeMatch: scopeMatchOf(hit, scope) }))
+    // Stable within a rank: the search's own relevance order is preserved.
+    .sort((a, b) => SCOPE_ORDER[a.scopeMatch] - SCOPE_ORDER[b.scopeMatch]);
+}
+
 export const memoryEngineeringToolSchemas = [
   {
     name: "memory_debug_trace_save",
@@ -66,10 +123,20 @@ export const memoryEngineeringToolSchemas = [
   },
   {
     name: "memory_task_state",
-    description: "Read current task or handover state for a repo/session.",
+    description:
+      "Read current task or handover state. Pass workspaceTag and sessionKey to put THIS repo's and " +
+      "THIS session's records first — without them the search spans every workspace you have, and a " +
+      "handover note from an unrelated session can outrank the one you meant. Nothing is ever hidden: " +
+      "each hit carries scopeMatch (session | workspace | untagged | other-workspace).",
     inputSchema: {
       type: "object",
-      properties: { userId: { type: "string" }, query: { type: "string" }, limit: { type: "number" } },
+      properties: {
+        userId: { type: "string" },
+        query: { type: "string" },
+        limit: { type: "number" },
+        workspaceTag: { type: "string", description: "16-char hash from workspaceTagFromPath — rank this workspace's records first." },
+        sessionKey: { type: "string", description: "Rank this session's own task state above every other." },
+      },
     },
   },
   {
@@ -92,10 +159,15 @@ export const memoryEngineeringToolSchemas = [
   },
   {
     name: "memory_handover",
-    description: "Generate a compact continuation note from current task memories.",
+    description:
+      "Generate a compact continuation note from current task memories. Pass workspaceTag/sessionKey to " +
+      "rank this repo's and this session's records first (nothing is hidden; see scopeMatch).",
     inputSchema: {
       type: "object",
-      properties: { userId: { type: "string" }, query: { type: "string" }, limit: { type: "number" } },
+      properties: {
+        userId: { type: "string" }, query: { type: "string" }, limit: { type: "number" },
+        workspaceTag: { type: "string" }, sessionKey: { type: "string" },
+      },
     },
   },
   {
@@ -211,20 +283,23 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
       return toolResult(hits);
     }
     case "memory_failed_attempts": {
-      const params = z.object({ ...baseUser, query: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
+      const params = z.object({ ...baseUser, ...callerScope, query: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
       const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
         .filter((hit) => hit.type === "failed_attempt");
-      return toolResult(hits);
+      return toolResult(preferCallerScope(hits, params));
     }
     case "memory_file_history": {
-      const params = z.object({ ...baseUser, filePath: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
-      return toolResult(await memoryEngine.getMemoriesByFilePath(effectiveUserId(params.userId, options?.defaultUserId), params.filePath, params.limit));
+      // A bare path is ambiguous across repos — every repository has an
+      // AGENT.md — so this one especially needs to know where it was asked.
+      const params = z.object({ ...baseUser, ...callerScope, filePath: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
+      const hits = await memoryEngine.getMemoriesByFilePath(effectiveUserId(params.userId, options?.defaultUserId), params.filePath, params.limit);
+      return toolResult(preferCallerScope(hits, params));
     }
     case "memory_task_state": {
-      const params = z.object({ ...baseUser, query: z.string().optional().default("task state handover blocked next actions"), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args ?? {});
+      const params = z.object({ ...baseUser, ...callerScope, query: z.string().optional().default("task state handover blocked next actions"), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args ?? {});
       const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
         .filter((hit) => ["task_state", "handover_note", "blocked_reason"].includes(hit.type));
-      return toolResult(hits);
+      return toolResult(preferCallerScope(hits, params));
     }
     case "memory_task_update": {
       const params = z.object({
@@ -260,11 +335,18 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
       return toolResult(record);
     }
     case "memory_handover": {
-      const params = z.object({ ...baseUser, query: z.string().optional().default("handover task state next actions"), limit: z.number().int().min(1).max(50).optional().default(10) }).parse(args ?? {});
-      const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
-        .filter((hit) => ["task_state", "handover_note", "blocked_reason", "fix_summary", "verification_result"].includes(hit.type));
+      const params = z.object({ ...baseUser, ...callerScope, query: z.string().optional().default("handover task state next actions"), limit: z.number().int().min(1).max(50).optional().default(10) }).parse(args ?? {});
+      const hits = preferCallerScope(
+        (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
+          .filter((hit) => ["task_state", "handover_note", "blocked_reason", "fix_summary", "verification_result"].includes(hit.type)),
+        params,
+      );
       return toolResult({
-        handover: hits.map((hit) => `- [${hit.type}] ${hit.content}`).join("\n"),
+        // A continuation note that silently mixes in another repo's handover is
+        // worse than one that says which repo each line came from.
+        handover: hits
+          .map((hit) => `- [${hit.type}]${hit.scopeMatch === "other-workspace" ? " (another workspace)" : ""} ${hit.content}`)
+          .join("\n"),
         records: hits,
       });
     }
