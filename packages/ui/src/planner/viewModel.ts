@@ -306,6 +306,139 @@ export function provenanceFor(item: PlannerItemView): {
   };
 }
 
+/* ------------------------------------------------------------------------ *
+ * The week around the day, and the day's own score.
+ *
+ * A day planner that shows only a flat list gives no sense of the week the day
+ * sits in and no sense of how the day is going — the two glances a person
+ * takes first each morning. These are pure projections over the same items and
+ * blocks the Today list uses, so the strip, the header and the list can never
+ * disagree about a date.
+ * ------------------------------------------------------------------------ */
+
+export function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  return new Date(value.getTime() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+const WEEKDAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "Monday 14 Sep" — the day named the way a person says it. */
+export function dayLabel(date: string): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  return `${WEEKDAY_LONG[value.getUTCDay()]} ${value.getUTCDate()} ${MONTH_SHORT[value.getUTCMonth()]}`;
+}
+
+/** The relative name for a date next to today: "Today", "Tomorrow", "Yesterday", else the day label. */
+export function relativeDayLabel(date: string, today: string): string {
+  const delta = daysBetween(today, date);
+  if (delta === 0) return 'Today';
+  if (delta === 1) return 'Tomorrow';
+  if (delta === -1) return 'Yesterday';
+  return dayLabel(date);
+}
+
+/** The chip-sized form: "Today" / "Tomorrow" / "Yesterday", else "Wed 16" (with the month once the date leaves this month). */
+export function shortDayLabel(date: string, today: string): string {
+  const delta = daysBetween(today, date);
+  if (delta === 0) return 'Today';
+  if (delta === 1) return 'Tomorrow';
+  if (delta === -1) return 'Yesterday';
+  const value = new Date(`${date}T00:00:00.000Z`);
+  const heading = dayHeading(date);
+  const sameMonth = date.slice(0, 7) === today.slice(0, 7);
+  return sameMonth ? `${heading.weekday} ${heading.day}` : `${heading.weekday} ${heading.day} ${MONTH_SHORT[value.getUTCMonth()]}`;
+}
+
+export interface WeekDayStrip {
+  date: string;
+  weekday: string;
+  day: string;
+  isToday: boolean;
+  isPast: boolean;
+  /** Open items that belong to this day: due that day, or blocked out that day. */
+  open: number;
+  /** Items finished on this day: completed with that due date, or a block closed that day. */
+  done: number;
+  /** Overdue work that lands on today because it is still open. */
+  carried: number;
+}
+
+/** What an item's day is: its due date, else the day of its earliest open block. */
+export function dayOfItem(item: PlannerItemView, blocks: readonly PlannerBlockView[]): string | null {
+  if (item.dueDate) return item.dueDate.slice(0, 10);
+  const scheduled = blocks
+    .filter((block) => block.itemId === item.id && block.scheduledFor && !block.completedAt)
+    .map((block) => localDateOf(block.scheduledFor!))
+    .sort();
+  return scheduled[0] ?? null;
+}
+
+/** The items that belong to one day, in the order the Today list would show them. */
+export function itemsForDay(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  date: string,
+): PlannerItemView[] {
+  return items.filter((item) => dayOfItem(item, blocks) === date);
+}
+
+export function weekStrip(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  weekOf: string,
+  today: string,
+): WeekDayStrip[] {
+  const overdueOpen = items.filter((item) => !item.completed && item.dueDate && item.dueDate.slice(0, 10) < today).length;
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = addDays(weekOf, index);
+    const heading = dayHeading(date);
+    const ofDay = itemsForDay(items, blocks, date);
+    const closedBlocks = blocks.filter((block) => block.completedAt && localDateOf(block.completedAt) === date)
+      .map((block) => block.itemId);
+    const done = new Set([...ofDay.filter((item) => item.completed).map((item) => item.id), ...closedBlocks]).size;
+    return {
+      date,
+      weekday: heading.weekday,
+      day: heading.day,
+      isToday: date === today,
+      isPast: date < today,
+      open: ofDay.filter((item) => !item.completed).length,
+      done,
+      carried: date === today ? overdueOpen : 0,
+    };
+  });
+}
+
+export interface DayProgress {
+  /** Everything the day is asking for: open NOW work plus what was already finished today. */
+  total: number;
+  done: number;
+  /** 0–100, rounded; 0 when there is nothing to do. */
+  percent: number;
+}
+
+/** How today is going: the Now groups (carried over, due today, scheduled today) plus what was finished today. */
+export function dayProgress(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  today: string,
+): DayProgress {
+  const scheduled = scheduledTodayIds(blocks, today);
+  const open = items.filter((item) => !item.completed && groupFor(item, today, scheduled) !== 'next' && groupFor(item, today, scheduled) !== 'anytime').length;
+  const closedToday = new Set(blocks.filter((block) => block.completedAt && localDateOf(block.completedAt) === today).map((block) => block.itemId));
+  const done = new Set([
+    ...items.filter((item) => item.completed && item.dueDate?.slice(0, 10) === today).map((item) => item.id),
+    ...closedToday,
+  ]).size;
+  const total = open + done;
+  return { total, done, percent: total ? Math.round((done / total) * 100) : 0 };
+}
+
+/** Quick estimate picks, in minutes — the sizes a day is actually planned in. */
+export const QUICK_ESTIMATES: readonly number[] = [15, 30, 45, 60, 90, 120];
+
 export function carriedForItem(itemId: string, blocks: readonly PlannerBlockView[]): number {
   return Math.max(0, ...blocks.filter((block) => block.itemId === itemId).map((block) => block.carriedOver));
 }

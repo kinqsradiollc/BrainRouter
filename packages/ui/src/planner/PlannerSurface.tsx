@@ -6,11 +6,12 @@
  */
 import {
   Fragment,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import type { KeyboardEvent, ReactElement } from 'react';
+import type { FocusEvent, KeyboardEvent, ReactElement, ReactNode } from 'react';
 
 import { PlannerCalendar } from './PlannerCalendar.js';
 import type {
@@ -24,17 +25,26 @@ import type {
 } from './types.js';
 import {
   GROUP_LABEL,
+  QUICK_ESTIMATES,
+  addDays,
   canEdit,
   carriedForItem,
   conflictBanner,
+  dayLabel,
+  dayProgress,
   emptyMessage,
   formatMinutes,
   groupFor,
+  itemsForDay,
   noteList,
   provenanceFor,
+  relativeDayLabel,
+  shiftWeek,
+  shortDayLabel,
   sortForToday,
   visibleEstimate,
   weekStart,
+  weekStrip,
   scheduledTodayIds,
   whyReadOnly,
 } from './viewModel.js';
@@ -60,6 +70,11 @@ export function PlannerSurface({
   const [view, setView] = useState<PlannerView>(initialView);
   const [draft, setDraft] = useState('');
   const [weekOf, setWeekOf] = useState(() => weekStart(today));
+  // The day the Today panel is looking at. Today by default; any day of the
+  // week strip can be focused to see what it holds, and "Today" brings it back.
+  const [focusDate, setFocusDate] = useState(today);
+  const [stripWeekOf, setStripWeekOf] = useState(() => weekStart(today));
+  useEffect(() => { setFocusDate(today); setStripWeekOf(weekStart(today)); }, [today]);
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
   const scheduledIds = useMemo(() => scheduledTodayIds(blocks, today), [blocks, today]);
   const open = useMemo(() => sortForToday(items.filter((item) => !item.completed), today, scheduledIds), [items, scheduledIds, today]);
@@ -122,16 +137,22 @@ export function PlannerSurface({
       >
         {view === 'today' ? (
           <TodayView
+            allItems={items}
             items={open}
             completed={done}
             blocks={blocks}
             today={today}
+            focusDate={focusDate}
+            onFocusDate={(date) => { setFocusDate(date); setStripWeekOf(weekStart(date)); }}
+            stripWeekOf={stripWeekOf}
+            onStripWeek={setStripWeekOf}
             scheduledIds={scheduledIds}
             draft={draft}
             onDraft={setDraft}
             onSubmit={submit}
             driftNote={driftNote}
             ops={ops}
+            onOpenCalendar={() => setView('calendar')}
           />
         ) : view === 'calendar' ? (
           <PlannerCalendar
@@ -243,75 +264,329 @@ function SyncControl({ sync }: { sync: PlannerSyncView }): ReactElement {
 }
 
 function TodayView({
+  allItems,
   items,
   completed,
   blocks,
   today,
+  focusDate,
+  onFocusDate,
+  stripWeekOf,
+  onStripWeek,
   scheduledIds,
   draft,
   onDraft,
   onSubmit,
   driftNote,
   ops,
+  onOpenCalendar,
 }: {
+  allItems: PlannerItemView[];
   items: PlannerItemView[];
   completed: PlannerItemView[];
   blocks: PlannerSurfaceProps['blocks'];
   today: string;
+  focusDate: string;
+  onFocusDate: (date: string) => void;
+  stripWeekOf: string;
+  onStripWeek: (weekOf: string) => void;
   scheduledIds: ReadonlySet<string>;
   draft: string;
   onDraft: (value: string) => void;
   onSubmit: () => void;
   driftNote: string | null;
   ops: PlannerOps;
+  onOpenCalendar: () => void;
 }): ReactElement {
   const empty = emptyMessage('today');
+  const captureRef = useRef<HTMLInputElement | null>(null);
+  const focusingToday = focusDate === today;
+  const progress = useMemo(() => dayProgress(allItems, blocks, today), [allItems, blocks, today]);
+  const strip = useMemo(() => weekStrip(allItems, blocks, stripWeekOf, today), [allItems, blocks, stripWeekOf, today]);
+  // A focused day other than today is a plain look at what that day holds.
+  const dayItems = useMemo(() => (focusingToday ? [] : itemsForDay(allItems, blocks, focusDate)), [allItems, blocks, focusDate, focusingToday]);
+  const dayOpen = dayItems.filter((item) => !item.completed);
+  const dayDone = dayItems.filter((item) => item.completed);
+  const nothingAtAll = allItems.length === 0;
   let lastGroup: TodayGroup | null = null;
+
+  const overdueOwned = items.filter((item) => groupFor(item, today, scheduledIds) === 'overdue' && canEdit(item, 'dueDate'));
+  const moveOverdueToToday = (): void => {
+    for (const item of overdueOwned) ops.setDueDate?.(item.id, today);
+  };
+
   return (
     <div className="br-planner-scroll">
-      {ops.addItem ? (
+      <div className="br-planner-day">
+        <div className="br-planner-day-title">
+          <strong>{relativeDayLabel(focusDate, today)}</strong>
+          <span>{focusingToday ? dayLabel(today) : `${dayOpen.length} open · ${dayDone.length} done`}</span>
+          {!focusingToday ? (
+            <button type="button" className="br-planner-day-back" onClick={() => onFocusDate(today)}>Back to today</button>
+          ) : null}
+        </div>
+        {focusingToday && progress.total > 0 ? (
+          <div className="br-planner-day-score" aria-label={`${progress.done} of ${progress.total} done today`}>
+            <span>{progress.done} of {progress.total} done</span>
+            <div className="br-planner-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-label="Today's progress">
+              <div style={{ width: `${progress.percent}%` }} />
+            </div>
+            <span className="br-planner-day-pct">{progress.percent}%</span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="br-planner-week" role="group" aria-label="This week">
+        <button type="button" className="br-planner-week-nav" aria-label="Previous week" onClick={() => onStripWeek(shiftWeek(stripWeekOf, -1))}>‹</button>
+        {strip.map((day) => {
+          const count = day.open + day.carried;
+          const state = day.done + count === 0 ? 'nothing' : count === 0 ? 'done' : 'open';
+          return (
+            <button
+              type="button"
+              key={day.date}
+              className={`br-planner-week-day${day.isToday ? ' is-today' : ''}${day.date === focusDate ? ' is-focused' : ''}${day.isPast ? ' is-past' : ''} is-${state}`}
+              aria-pressed={day.date === focusDate}
+              aria-label={`${day.weekday} ${day.day}: ${count} open, ${day.done} done`}
+              onClick={() => onFocusDate(day.date)}
+            >
+              <span>{day.weekday}</span>
+              <strong>{day.day}</strong>
+              <small>{count > 0 ? count : day.done > 0 ? '✓' : '·'}</small>
+            </button>
+          );
+        })}
+        <button type="button" className="br-planner-week-nav" aria-label="Next week" onClick={() => onStripWeek(shiftWeek(stripWeekOf, 1))}>›</button>
+        {stripWeekOf !== weekStart(today) || !focusingToday ? (
+          <button type="button" className="br-planner-week-today" onClick={() => onFocusDate(today)}>Today</button>
+        ) : null}
+      </div>
+
+      {ops.addItem && focusingToday ? (
         <div className="br-planner-capture">
           <input
+            ref={captureRef}
             value={draft}
             onChange={(event) => onDraft(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') onSubmit(); }}
-            placeholder="What do you intend to do?"
+            placeholder="What do you intend to do? Press Enter to add"
             aria-label="New planner item"
           />
           <button type="button" onClick={onSubmit} disabled={!draft.trim()}>Add</button>
         </div>
       ) : null}
-      {driftNote ? <div className="br-planner-drift">{driftNote}</div> : null}
-      {items.length === 0 && completed.length === 0 ? (
+      {driftNote && focusingToday ? <div className="br-planner-drift">{driftNote}</div> : null}
+
+      {!focusingToday ? (
+        <>
+          {dayItems.length === 0 ? (
+            <div className="br-planner-empty">
+              <strong>Nothing on {relativeDayLabel(focusDate, today)}</strong>
+              <span>Give an item this day from its row, or block time for it in the calendar.</span>
+            </div>
+          ) : null}
+          {dayOpen.map((item) => <ItemRow key={item.id} item={item} blocks={blocks} today={today} ops={ops} />)}
+          {dayDone.length ? (
+            <details className="br-planner-completed" open>
+              <summary>Completed <span>{dayDone.length}</span></summary>
+              {dayDone.map((item) => <ItemRow key={item.id} item={item} blocks={blocks} today={today} ops={ops} />)}
+            </details>
+          ) : null}
+        </>
+      ) : nothingAtAll ? (
+        <div className="br-planner-empty br-planner-starters">
+          <strong>{empty.title}</strong>
+          <span>Three ways to start the day:</span>
+          <div className="br-planner-starter-list">
+            {ops.addItem ? (
+              <button type="button" onClick={() => captureRef.current?.focus()}>
+                <strong>Capture an intention</strong>
+                <span>Type it above and press Enter. It lands under Anytime until you give it a day.</span>
+              </button>
+            ) : null}
+            <button type="button" onClick={onOpenCalendar}>
+              <strong>Block an hour</strong>
+              <span>Open the calendar and pick a slot; estimates start meaning something once time is real.</span>
+            </button>
+            <div>
+              <strong>Bring in connected issues</strong>
+              <span>Issues from a linked source appear here with their own chip, ready to schedule.</span>
+            </div>
+          </div>
+        </div>
+      ) : items.length === 0 && completed.length === 0 ? (
         <div className="br-planner-empty"><strong>{empty.title}</strong><span>{empty.note}</span></div>
       ) : null}
-      {items.map((item) => {
+
+      {focusingToday ? items.map((item) => {
         const group = groupFor(item, today, scheduledIds);
         const heading = group === lastGroup ? null : GROUP_LABEL[group];
         lastGroup = group;
         return (
           <Fragment key={item.id}>
-            {heading ? <h2 className="br-planner-group">{heading}</h2> : null}
-            <ItemRow item={item} blocks={blocks} ops={ops} />
+            {heading ? (
+              <div className="br-planner-group-row">
+                <h2 className="br-planner-group">{heading}</h2>
+                {group === 'overdue' && ops.setDueDate && overdueOwned.length ? (
+                  <button type="button" className="br-planner-group-action" onClick={moveOverdueToToday}>
+                    Move {overdueOwned.length === 1 ? 'it' : `all ${overdueOwned.length}`} to today
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <ItemRow item={item} blocks={blocks} today={today} ops={ops} />
           </Fragment>
         );
-      })}
-      {completed.length ? (
+      }) : null}
+      {focusingToday && completed.length ? (
         <details className="br-planner-completed" open>
           <summary>Completed <span>{completed.length}</span></summary>
-          {completed.map((item) => <ItemRow key={item.id} item={item} blocks={blocks} ops={ops} />)}
+          {completed.map((item) => <ItemRow key={item.id} item={item} blocks={blocks} today={today} ops={ops} />)}
         </details>
       ) : null}
     </div>
   );
 }
 
-function ItemRow({ item, blocks, ops }: {
+/**
+ * A small popover anchored to a chip. Closes on Escape and when focus leaves
+ * it, so the keyboard path is: Tab to the chip, Enter, Tab through the picks,
+ * Escape back. Non-modal: the gate treats a modal dialog as a blocked surface.
+ */
+function ChipPopover({ label, open, onOpen, className, children }: {
+  label: ReactNode;
+  open: boolean;
+  onOpen: (open: boolean) => void;
+  className: string;
+  children: ReactNode;
+}): ReactElement {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const leave = (event: FocusEvent<HTMLDivElement>): void => {
+    if (!rootRef.current?.contains(event.relatedTarget as Node | null)) onOpen(false);
+  };
+  return (
+    <div
+      ref={rootRef}
+      className={`br-planner-chip${open ? ' is-open' : ''}`}
+      onBlur={leave}
+      onKeyDown={(event) => { if (event.key === 'Escape' && open) { event.preventDefault(); onOpen(false); } }}
+    >
+      {label}
+      {open ? <div className={`br-planner-popover ${className}`} role="group">{children}</div> : null}
+    </div>
+  );
+}
+
+/** "When" — the day an item belongs to, set from the row in two clicks. */
+function WhenChip({ item, today, ops }: { item: PlannerItemView; today: string; ops: PlannerOps }): ReactElement | null {
+  const [open, setOpen] = useState(false);
+  const due = item.dueDate?.slice(0, 10) ?? null;
+  const editable = Boolean(ops.setDueDate) && canEdit(item, 'dueDate');
+  const set = (date: string | null): void => { ops.setDueDate?.(item.id, date); setOpen(false); };
+  if (!editable) {
+    return due ? (
+      <time className="br-planner-due" dateTime={item.dueDate} title={`${dayLabel(due)} · ${whyReadOnly(item, 'dueDate') ?? ''}`}>
+        {shortDayLabel(due, today)}
+      </time>
+    ) : null;
+  }
+  const week = weekStart(today);
+  const days = Array.from({ length: 7 }, (_, index) => addDays(week, index));
+  return (
+    <ChipPopover
+      open={open}
+      onOpen={setOpen}
+      className="br-planner-when-popover"
+      label={(
+        <button
+          type="button"
+          className={`br-planner-due${due ? '' : ' is-unset'}${due && due < today ? ' is-late' : ''}`}
+          aria-label={`Due date for ${item.title}`}
+          aria-expanded={open}
+          title={due ? dayLabel(due) : 'Give this item a day'}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {due ? shortDayLabel(due, today) : 'Set day'}
+        </button>
+      )}
+    >
+      <div className="br-planner-popover-row">
+        <button type="button" onClick={() => set(today)}>Today</button>
+        <button type="button" onClick={() => set(addDays(today, 1))}>Tomorrow</button>
+        <button type="button" onClick={() => set(addDays(today, 7))}>Next week</button>
+      </div>
+      <div className="br-planner-popover-days" role="group" aria-label="This week">
+        {days.map((date) => {
+          const d = new Date(`${date}T00:00:00.000Z`);
+          return (
+            <button
+              type="button"
+              key={date}
+              className={`${date === due ? 'is-selected' : ''}${date === today ? ' is-today' : ''}${date < today ? ' is-past' : ''}`}
+              aria-label={`${dayLabel(date)}`}
+              aria-pressed={date === due}
+              onClick={() => set(date)}
+            >
+              <span>{['S', 'M', 'T', 'W', 'T', 'F', 'S'][d.getUTCDay()]}</span>
+              <strong>{d.getUTCDate()}</strong>
+            </button>
+          );
+        })}
+      </div>
+      <div className="br-planner-popover-row">
+        <input
+          type="date"
+          value={due ?? ''}
+          aria-label={`Pick a date for ${item.title}`}
+          onChange={(event) => ops.setDueDate?.(item.id, event.target.value || null)}
+        />
+        {due ? <button type="button" onClick={() => set(null)}>Clear</button> : null}
+      </div>
+    </ChipPopover>
+  );
+}
+
+/** The estimate — shown when known, settable in one click when the host can hold a block. */
+function EstimateChip({ item, blocks, ops }: { item: PlannerItemView; blocks: PlannerSurfaceProps['blocks']; ops: PlannerOps }): ReactElement | null {
+  const [open, setOpen] = useState(false);
+  const estimate = visibleEstimate(item, blocks);
+  const editable = Boolean(ops.scheduleBlock) && !item.completed;
+  if (!editable) return estimate ? <span className="br-planner-badge" title="Estimated time">{formatMinutes(estimate)}</span> : null;
+  return (
+    <ChipPopover
+      open={open}
+      onOpen={setOpen}
+      className="br-planner-estimate-popover"
+      label={(
+        <button
+          type="button"
+          className={`br-planner-badge br-planner-estimate${estimate ? '' : ' is-unset'}`}
+          aria-label={`Estimate for ${item.title}`}
+          aria-expanded={open}
+          title={estimate ? 'Estimated time' : 'Add an estimate'}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {estimate ? formatMinutes(estimate) : '＋ est'}
+        </button>
+      )}
+    >
+      <div className="br-planner-popover-row">
+        {QUICK_ESTIMATES.map((minutes) => (
+          <button type="button" key={minutes} className={estimate === minutes ? 'is-selected' : ''} onClick={() => { ops.scheduleBlock?.(item.id, minutes); setOpen(false); }}>
+            {formatMinutes(minutes)}
+          </button>
+        ))}
+      </div>
+    </ChipPopover>
+  );
+}
+
+function ItemRow({ item, blocks, today, ops }: {
   item: PlannerItemView;
   blocks: PlannerSurfaceProps['blocks'];
+  today: string;
   ops: PlannerOps;
 }): ReactElement {
-  const estimate = visibleEstimate(item, blocks);
   const carried = carriedForItem(item.id, blocks);
   const titleLocked = whyReadOnly(item, 'title');
   const provenance = provenanceFor(item);
@@ -331,47 +606,38 @@ function ItemRow({ item, blocks, ops }: {
         onChange={(event) => ops.toggleComplete?.(item.id, event.target.checked)}
       />
       <span className="br-planner-title" title={titleLocked ?? undefined}>{item.title}</span>
-      {item.blockedReason ? <span className="br-planner-badge is-blocked" title={item.blockedReason}>Blocked</span> : null}
-      {carried > 2 ? <span className="br-planner-badge" title={`Moved forward ${carried} times`}>Moved {carried}×</span> : null}
-      {estimate ? <span className="br-planner-badge" title="Estimated time">{formatMinutes(estimate)}</span> : null}
-      {provenance ? (
-        <button
-          type="button"
-          className="br-planner-source"
-          title={`${provenance.kind ? `${provenance.kind} from ` : 'Open '}${provenance.source}${provenance.externalId ? ` ${provenance.externalId}` : ''}${provenance.freshness?.label ? ` · ${provenance.freshness.label}` : ''}`}
-          data-stale={provenance.freshness?.stale ? 'true' : undefined}
-          disabled={!provenance.url || !ops.openSource}
-          onClick={() => { if (provenance.url) ops.openSource?.(provenance.url); }}
-        >
-          {provenance.source}{provenance.externalId ? ` ${provenance.externalId}` : ''}
-        </button>
-      ) : null}
-      {/*
-        D3 — the field that SORTS the day, editable from the surface whose job is
-        the day. `groupFor` reads `dueDate` to decide overdue / due today / next
-        / anytime, and until now nothing on either host could set it: `setDueDate`
-        was declared on the contract and implemented by the desktop, and no
-        component called it. `/planner due` worked from the terminal, so the CLI
-        could move work the GUI could not — the inverse of D5.
-
-        Owned-only, and honestly so: `dueDate` is not in Core's
-        PLANNER_OWNED_FIELDS, so a due date set on a mirrored issue would be
-        undone by the next refresh. `whyReadOnly` already says exactly that, and
-        it is the tooltip rather than a disabled control with no explanation.
-      */}
-      {ops.setDueDate && canEdit(item, 'dueDate') ? (
-        <input
-          type="date"
-          className="br-planner-due"
-          value={item.dueDate?.slice(0, 10) ?? ''}
-          aria-label={`Due date for ${item.title}`}
-          onChange={(event) => ops.setDueDate?.(item.id, event.target.value || null)}
-        />
-      ) : item.dueDate ? (
-        <time className="br-planner-due" dateTime={item.dueDate} title={whyReadOnly(item, 'dueDate') ?? undefined}>
-          {item.dueDate.slice(0, 10)}
-        </time>
-      ) : null}
+      {/* Four fixed cells — flags · source · estimate · day — so every row's
+          chips sit in the same columns and the eye reads DOWN a column instead
+          of hunting across a ragged edge. Empty cells stay in the grid. */}
+      <span className="br-planner-meta">
+        <span className="br-planner-cell br-planner-flags">
+          {item.blockedReason ? <span className="br-planner-badge is-blocked" title={item.blockedReason}>Blocked</span> : null}
+          {carried > 2 ? <span className="br-planner-badge" title={`Moved forward ${carried} times`}>Moved {carried}×</span> : null}
+        </span>
+        <span className="br-planner-cell">
+          {provenance ? (
+            <button
+              type="button"
+              className="br-planner-source"
+              title={`${provenance.kind ? `${provenance.kind} from ` : 'Open '}${provenance.source}${provenance.externalId ? ` ${provenance.externalId}` : ''}${provenance.freshness?.label ? ` · ${provenance.freshness.label}` : ''}`}
+              data-stale={provenance.freshness?.stale ? 'true' : undefined}
+              disabled={!provenance.url || !ops.openSource}
+              onClick={() => { if (provenance.url) ops.openSource?.(provenance.url); }}
+            >
+              {provenance.source}{provenance.externalId ? ` ${provenance.externalId}` : ''}
+            </button>
+          ) : null}
+        </span>
+        <span className="br-planner-cell"><EstimateChip item={item} blocks={blocks} ops={ops} /></span>
+        {/*
+          D3 — the field that SORTS the day, editable from the surface whose job is
+          the day. `groupFor` reads `dueDate` to decide overdue / due today / next
+          / anytime. Owned-only, and honestly so: `dueDate` is not in Core's
+          PLANNER_OWNED_FIELDS, so a due date set on a mirrored issue would be
+          undone by the next refresh; `whyReadOnly` says exactly that as the tooltip.
+        */}
+        <span className="br-planner-cell"><WhenChip item={item} today={today} ops={ops} /></span>
+      </span>
       {conflicts.map((conflict) => (
         <span key={conflict.field} className="br-planner-conflict">
           <span>{conflict.field} differs</span>
@@ -387,7 +653,7 @@ function ItemRow({ item, blocks, ops }: {
       ))}
       {canEdit(item, 'delete') && ops.deleteItem ? (
         <button type="button" className="br-planner-delete" aria-label={`Delete ${item.title}`} onClick={() => ops.deleteItem?.(item.id)}>×</button>
-      ) : null}
+      ) : <span className="br-planner-delete-slot" aria-hidden="true" />}
     </div>
   );
 }
