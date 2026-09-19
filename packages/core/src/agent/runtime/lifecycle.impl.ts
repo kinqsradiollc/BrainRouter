@@ -14,6 +14,9 @@ import { callMcpTool } from '../../mcp/mcpUtils.js';
 import { decideAnchorAction, hashBriefingContent, wrapMidSessionRefresh } from '../../memory/anchorPin.js';
 import { worktreeFeatureMap } from '../../worktree/concurrentWorktrees.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan } from '../../memory/briefing.js';
+import { decideRecallWithPort } from '../../memory/recallDecision.js';
+import { decisionPortForSession } from '../../decision/fromKnobs.js';
+import { decisionEntry, recordDecision } from '../../decision/recentDecisions.js';
 import { countEntityTokens as countEntityTokensFromText, decideMemoryBriefing, resolveRecallMode as resolveRecallModeFromEnv, type BriefingDecision } from '../../memory/briefingTriggers.js';
 import { emitAgentEvent } from '../../memory/memoryEvents.js';
 import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary } from '../../prompt/systemPrompt.js';
@@ -606,7 +609,7 @@ export async function injectRecallContext(this: Agent, prompt: string, mcpTools:
       personaAnchorPreference: personaPref,
     });
     const sourcesPlannedNames = describeSourcePlan(sourcePlan);
-    const decision = decideMemoryBriefing({
+    const ruleDecision = decideMemoryBriefing({
       prompt,
       recallMode,
       recallHasFiredThisSession: this.recallHasFiredThisSession,
@@ -615,6 +618,28 @@ export async function injectRecallContext(this: Agent, prompt: string, mcpTools:
       recentToolFailure: this.recentToolFailure,
       turnsSinceLastFullBriefing: this.turnsSinceLastFullBriefing,
     });
+
+    // ADR-061 D3.2 — the band the cues cannot reach. `hint-only` means no rule
+    // matched and the turn was not obviously social; ask whether memory would
+    // help anyway. On the default `rules` provider this returns the decision
+    // unchanged, so the gate behaves exactly as it did before.
+    let decision = ruleDecision;
+    if (ruleDecision.action === 'hint-only') {
+      const { port, maxStateChars } = decisionPortForSession();
+      const recalled = await decideRecallWithPort(port, ruleDecision, {
+        threshold: getCliKnobs().decisions.recall.threshold,
+        maxStateChars,
+      });
+      decision = recalled.decision;
+      if (recalled.answer) {
+        try {
+          recordDecision(this.workspaceRoot, this.sessionKey, decisionEntry(
+            'recall', 'helpful', recalled.answer,
+            { outcome: decision.action, ...(recalled.threshold ? { threshold: recalled.threshold } : {}) },
+          ));
+        } catch { /* best-effort */ }
+      }
+    }
 
     if (recallMode === 'gated') {
       if (decision.action !== 'fire') {

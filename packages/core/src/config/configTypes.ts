@@ -1019,6 +1019,11 @@ export interface CliKnobs {
      * between them a human is asked — the band the lexical rules cannot reach.
      */
     shell?: { low?: number; high?: number };
+    /**
+     * Recall threshold (D3.2). At or above this, a turn no cue matched still
+     * gets a briefing. The rules' own cues are untouched and always fire.
+     */
+    recall?: { threshold?: number };
   };
   autoClassifyShell?: 'off' | 'on' | 'strict';
   /**
@@ -1525,6 +1530,7 @@ export interface ResolvedCliKnobs {
     maxStateChars: number;
     timeoutMs: number;
     shell: { low: number; high: number };
+    recall: { threshold: number };
   };
   autoClassifyShell: 'off' | 'on' | 'strict';
   autoClassifyShellEnforceWhenSilent: boolean;
