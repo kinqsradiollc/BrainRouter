@@ -48,6 +48,12 @@ export interface DecisionPortOptions {
   timeoutMs?: number;
   /** Called once per answered question. Best-effort; a throw here is swallowed. */
   onDecision?: (id: string, answer: DecisionAnswer, question: DecisionQuestion) => void;
+  /**
+   * D7 — demote this provider to advisory, for the reason given. It is still
+   * asked and its answer is still recorded (on `advised`), but the rules
+   * decide. One place, so no consumer has to remember to honour it.
+   */
+  advisory?: string;
   now?: () => number;
 }
 
@@ -133,11 +139,25 @@ export function createDecisionPort(options: DecisionPortOptions = {}): DecisionP
           out[id] = settle(id, question, { ...rulesAnswerFor(question, elapsed), fellBack: `${provider.name} answered invalidly — ${invalid}` });
           continue;
         }
+        const confidence = typeof candidate.confidence === 'number' ? clamp01(candidate.confidence) : undefined;
+        if (options.advisory) {
+          // Recorded and shown; not acted on.
+          out[id] = settle(id, question, {
+            ...rulesAnswerFor(question, elapsed),
+            fellBack: options.advisory,
+            advised: {
+              value: candidate.value,
+              ...(confidence !== undefined ? { confidence } : {}),
+              provider: provider.name,
+            },
+          });
+          continue;
+        }
         out[id] = settle(id, question, {
           kind: question.kind,
           value: candidate.value,
           ...(candidate.probabilities ? { probabilities: candidate.probabilities } : {}),
-          ...(typeof candidate.confidence === 'number' ? { confidence: clamp01(candidate.confidence) } : {}),
+          ...(confidence !== undefined ? { confidence } : {}),
           provider: provider.name,
           latencyMs: elapsed,
         });

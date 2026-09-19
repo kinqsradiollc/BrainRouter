@@ -5,7 +5,7 @@
 
 # BrainRouter command catalog
 
-143 slash commands across 7 help categories.
+144 slash commands across 7 help categories.
 
 ## Session & State
 
@@ -152,6 +152,7 @@
 | /permissions [read\|write\|shell] | View or set agent access mode |
 | /recent-denials [n] | List the last N tool denials (tool + reason + time) this session |
 | /recent-decisions [n] | List the last N decision-tier answers (what was asked, the probability, what the gate did) |
+| /decision-calibration [provider] | Does the decision tier's stated probability track what actually happened |
 | /mode [planning\|fast] | Session execution stance (planning asks, fast skips per-call y/N for safe commands) |
 | /review-policy [request\|proceed] | How the agent treats multi-file approval gates |
 | /yolo [on\|off] | Alias for `/mode fast` + `/review-policy proceed` |
