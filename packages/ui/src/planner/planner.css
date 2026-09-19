@@ -554,7 +554,6 @@ button.br-planner-estimate.is-unset[aria-expanded="true"] { opacity: 1; }
   .br-planner-capture { position: sticky; top: 0; z-index: 3; padding-block: var(--br-space-1, 4px); background: var(--br-ui-canvas); }
   .br-planner-row { gap: var(--br-space-1, 4px); }
   .br-planner-meta { margin-left: 28px; }
-  .br-planner-week-nav { min-width: 22px; }
   .br-planner-progress { width: 80px; }
   .br-planner-calendar-bar { position: sticky; left: 0; width: calc(100vw - 16px); }
 }
