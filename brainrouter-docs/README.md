@@ -50,6 +50,9 @@ deep dives.
   current package/host owners, public entrypoints, mixed-responsibility module
   triage, migration order, and boundary-guard backlog for the accepted
   whole-platform modernization.
+- **[Calendars in the planner](guides/calendars-in-the-planner.md)** — getting a
+  Google, iCloud, Outlook or published calendar into the planner, importing an
+  `.ics` file, and which parts of a meeting are yours to change.
 - **[Notes editing host contract](guides/notes-editing-host-contract.md)** — the
   authenticated mutation envelope, exact idempotent replay, lease-gated
   editing, conflict clocks, reconciliation rules, and honest remote capability
