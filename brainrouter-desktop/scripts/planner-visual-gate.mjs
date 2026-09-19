@@ -1027,7 +1027,9 @@ async function auditCalendarEvents(session) {
   );
   return pageProgram(session, () => {
     const meeting = document.querySelector('.br-planner-calendar-event[data-block-id="blk_standup"]');
-    const mine = document.querySelector('.br-planner-calendar-event[data-block-id="blk_qa"]');
+    // NOT `blk_qa`: the actual-time step above closes it, and a completed block
+    // is correctly not draggable — the comparison would have proved nothing.
+    const mine = document.querySelector('.br-planner-calendar-event[data-block-id="blk_release"]');
     const banners = [...document.querySelectorAll('.br-planner-calendar-banner')];
     const hairline = meeting instanceof HTMLElement
       ? getComputedStyle(meeting).borderLeftWidth
@@ -1208,8 +1210,16 @@ function writePlannerFixture(filePath, state) {
   fs.renameSync(temporary, filePath);
 }
 
-function stampedItem(id, title, at, item) {
-  const provenance = item.provenance ? {
+/**
+ * The fixture's view-shaped provenance as the WIRE shape both hosts read.
+ *
+ * One builder, because there were two: the Electron lane's and the Dashboard
+ * lane's, identical until `documentKind` was added to one of them and the
+ * Dashboard quietly stopped seeing calendars as calendars.
+ */
+function wireProvenance(item, at) {
+  if (!item.provenance) return undefined;
+  return {
     sourceId: item.provenance.kind ?? item.sourceKind ?? item.source ?? 'connected',
     sourceLabel: item.provenance.source,
     ...(item.provenance.externalId ? { externalId: item.provenance.externalId } : {}),
@@ -1217,7 +1227,11 @@ function stampedItem(id, title, at, item) {
     ...(item.provenance.documentKind ? { documentKind: item.provenance.documentKind } : {}),
     ...(item.provenance.color ? { color: item.provenance.color } : {}),
     fetchedAt: item.provenance.fetchedAt ?? new Date(at.physical).toISOString(),
-  } : undefined;
+  };
+}
+
+function stampedItem(id, title, at, item) {
+  const provenance = wireProvenance(item, at);
   return {
     id,
     origin: item.origin ?? 'owned',
@@ -1372,13 +1386,7 @@ function createPlannerApi(sharedFixture) {
 
 function dashboardItem(item, index) {
   const at = { physical: Date.now() - 10_000 + index, logical: 0, deviceId: 'server-visual' };
-  const provenance = item.provenance ? {
-    sourceId: item.provenance.kind ?? item.sourceKind ?? item.source ?? 'connected',
-    sourceLabel: item.provenance.source,
-    ...(item.provenance.externalId ? { externalId: item.provenance.externalId } : {}),
-    ...(item.provenance.url ? { sourceUrl: item.provenance.url } : {}),
-    fetchedAt: item.provenance.fetchedAt ?? new Date(at.physical).toISOString(),
-  } : undefined;
+  const provenance = wireProvenance(item, at);
   return {
     id: item.id,
     origin: item.origin,
