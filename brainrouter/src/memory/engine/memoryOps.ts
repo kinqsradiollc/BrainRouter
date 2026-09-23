@@ -525,8 +525,24 @@ export async function markCited(engine: MemoryEngine, userId: string, citedRecor
   };
 }
 
-export async function searchAsOf(engine: MemoryEngine, userId: string, query: string, asOf: string, limit = 10, orgId?: string): Promise<{
-  memories: Array<{ recordId: string; content: string; type: string; score: number }>;
+export async function searchAsOf(
+  engine: MemoryEngine,
+  userId: string,
+  query: string,
+  asOf: string,
+  limit = 10,
+  orgId?: string,
+  /** Attach each hit's workspace and session, so a caller can rank by them. */
+  options: { includeProvenance?: boolean } = {},
+): Promise<{
+  memories: Array<{
+    recordId: string;
+    content: string;
+    type: string;
+    score: number;
+    workspaceTag?: string | null;
+    sessionKey?: string;
+  }>;
   asOf: string;
   count: number;
 }> {
@@ -536,12 +552,23 @@ export async function searchAsOf(engine: MemoryEngine, userId: string, query: st
   }
 
   const results = await engine.store.searchCognitiveFtsAsOf(userId, query, limit, asOf, orgId);
+  // The FTS row rarely carries the workspace tag, so the same one batched
+  // lookup the live recall uses fills it in — only when asked.
+  const tagLookup = options.includeProvenance && results.length > 0
+    ? await engine.store.getWorkspaceTagsByRecordIds(userId, results.map((r) => r.record_id))
+    : undefined;
   return {
     memories: results.map(r => ({
       recordId: r.record_id,
       content: r.content,
       type: r.type,
       score: r.score,
+      ...(options.includeProvenance
+        ? {
+          workspaceTag: r.workspace_tag ?? tagLookup?.get(r.record_id) ?? null,
+          ...(typeof r.session_key === "string" ? { sessionKey: r.session_key } : {}),
+        }
+        : {}),
     })),
     asOf,
     count: results.length,

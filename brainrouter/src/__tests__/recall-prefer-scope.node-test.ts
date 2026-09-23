@@ -108,3 +108,26 @@ test("without a caller scope the real recall is unchanged — no labels, no prov
     await cleanup();
   }
 });
+
+test("a real point-in-time search can say where each hit came from", async () => {
+  const { engine, cleanup } = await createTestEngine();
+  try {
+    const store = (engine as unknown as { store: { upsertCognitive(r: unknown): Promise<unknown> } }).store;
+    await store.upsertCognitive(record("rec-repo", REPO, "sk-a"));
+    await store.upsertCognitive(record("rec-none", undefined, "sk-b"));
+
+    const asked = await engine.searchAsOf("u1", "widget ledger", "2026-09-20T00:00:00Z", 10, undefined, { includeProvenance: true });
+    const byId = new Map(asked.memories.map((m) => [m.recordId, m]));
+    assert.ok(byId.size > 0, "otherwise the checks below prove nothing");
+    assert.equal(byId.get("rec-repo")?.workspaceTag, REPO);
+    assert.equal(byId.get("rec-repo")?.sessionKey, "sk-a");
+    assert.equal(byId.get("rec-none")?.workspaceTag, null, "captured with no workspace — belongs everywhere");
+
+    // Not asked: the old shape, nothing extra.
+    const plain = await engine.searchAsOf("u1", "widget ledger", "2026-09-20T00:00:00Z", 10);
+    assert.ok(plain.memories.length > 0);
+    for (const memory of plain.memories) assert.equal("workspaceTag" in memory, false);
+  } finally {
+    await cleanup();
+  }
+});
