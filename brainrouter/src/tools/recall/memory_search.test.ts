@@ -39,9 +39,11 @@ describe("memory_search tenant binding", () => {
       },
       { defaultUserId: "user-a", defaultOrgId: "org-active" },
     );
-    expect(mocks.searchAsOf).toHaveBeenCalledWith(
-      "user-a", "focused checks", "2026-08-09T00:00:00.000Z", 4, "org-active",
-    );
+    const [user, query, asOf, pool, org, opts] = mocks.searchAsOf.mock.calls[0]!;
+    expect([user, query, asOf, org]).toEqual(["user-a", "focused checks", "2026-08-09T00:00:00.000Z", "org-active"]);
+    // A wider pool than the 4 shown, so this workspace's records can take the slots.
+    expect(pool).toBeGreaterThanOrEqual(4);
+    expect(opts).toEqual({ includeProvenance: true });
     expect(JSON.parse(String((result as any).content[0].text))).toMatchObject({ count: 0, memories: [] });
   });
 });
@@ -137,5 +139,31 @@ describe("memory_search scope, limit and size", () => {
     const content = out.recalledCognitiveMemories[0].content as string;
     expect(content.length).toBeLessThan(1_300);
     expect(content).toMatch(/\[truncated, 50000 chars\]$/);
+  });
+});
+
+describe("point-in-time search", () => {
+  it("prefers this workspace too, keeps its shape, and stops at the limit", async () => {
+    mocks.searchAsOf.mockResolvedValue({
+      asOf: "2026-08-09T00:00:00.000Z",
+      count: 4,
+      memories: [
+        hit("then-elsewhere", { workspaceTag: "ws_other_repo_00" }),
+        hit("then-ingested", { workspaceTag: REPO_TAG }),
+        hit("then-here", { workspaceTag: PATH_TAG }),
+        hit("then-legacy", { workspaceTag: null }),
+      ],
+    });
+    const out = parse(await handleMemorySearch({
+      query: "q", asOf: "2026-08-09T00:00:00.000Z", limit: 3, workspaceTags: [PATH_TAG, REPO_TAG],
+    }));
+    expect(out.asOf).toBe("2026-08-09T00:00:00.000Z");
+    expect(out.count).toBe(3);
+    expect(out.memories.map((m: any) => [m.recordId, m.scopeMatch])).toEqual([
+      ["then-ingested", "workspace"],
+      ["then-here", "workspace"],
+      ["then-legacy", "untagged"],
+    ]);
+    expect(out.memories[0]).not.toHaveProperty("workspaceTag");
   });
 });

@@ -1236,12 +1236,15 @@ export class MemoryEngine {
   // Point-in-Time Search (asOf)
   // ============================
 
-  public searchAsOf(userId: string, query: string, asOf: string, limit = 10, orgId?: string): Promise<{
-    memories: Array<{ recordId: string; content: string; type: string; score: number }>;
-    asOf: string;
-    count: number;
-  }> {
-    return memoryOps.searchAsOf(this, userId, query, asOf, limit, orgId);
+  public searchAsOf(
+    userId: string,
+    query: string,
+    asOf: string,
+    limit = 10,
+    orgId?: string,
+    options: { includeProvenance?: boolean } = {},
+  ): ReturnType<typeof memoryOps.searchAsOf> {
+    return memoryOps.searchAsOf(this, userId, query, asOf, limit, orgId, options);
   }
 }
 

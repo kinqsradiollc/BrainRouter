@@ -91,16 +91,41 @@ export async function handleMemorySearch(args: unknown, options?: { defaultUserI
 
   try {
     // Point-in-time search path
+    const limit = Math.min(MEMORY_SEARCH_MAX_LIMIT, Math.max(1, params.limit ?? MEMORY_SEARCH_DEFAULT_LIMIT));
+    // Ranking by scope reorders what the search returned; it cannot promote a
+    // record the search never surfaced. So ask for a wider pool than we will
+    // show, then let this workspace's records take the slots.
+    const pool = Math.min(MEMORY_SEARCH_MAX_LIMIT, Math.max(limit * 3, 15));
+    const callerScope = {
+      sessionKey: params.sessionKey,
+      workspaceTag: params.workspaceTag,
+      workspaceTags: params.workspaceTags,
+    };
+
+    // Point-in-time search. The same preference as the live path — a
+    // historical question about THIS repository should not be answered first
+    // by another one — in the shape this path has always returned.
     if (params.asOf) {
       const result = await memoryEngine.searchAsOf(
         effectiveUserId,
         params.query,
         params.asOf,
-        params.limit ?? 10,
+        pool,
         options?.defaultOrgId,
+        { includeProvenance: true },
       );
+      const ranked = preferCallerScope(result.memories, callerScope).slice(0, limit);
+      const compact = compactSearchResult(params.query, undefined, ranked);
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            asOf: result.asOf,
+            count: compact.results,
+            scope: compact.scope,
+            memories: compact.recalledCognitiveMemories,
+          }, null, 2),
+        }],
       };
     }
 
@@ -110,11 +135,6 @@ export async function handleMemorySearch(args: unknown, options?: { defaultUserI
       ? { ...(params.filters ?? {}), orgId: options.defaultOrgId }
       : params.filters;
 
-    const limit = Math.min(MEMORY_SEARCH_MAX_LIMIT, Math.max(1, params.limit ?? MEMORY_SEARCH_DEFAULT_LIMIT));
-    // Ranking by scope reorders what recall returned; it cannot promote a
-    // record recall never surfaced. So ask for a wider pool than we will show,
-    // then let this workspace's records take the slots.
-    const pool = Math.min(MEMORY_SEARCH_MAX_LIMIT, Math.max(limit * 3, 15));
     const result = await memoryEngine.recall({
       userId: effectiveUserId,
       sessionKey: params.sessionKey ?? '',
@@ -123,22 +143,14 @@ export async function handleMemorySearch(args: unknown, options?: { defaultUserI
       filters,
       includeProvenance: true,
       // Order inside the pipeline too, so the pool is already scope-first.
-      preferScope: {
-        sessionKey: params.sessionKey,
-        workspaceTag: params.workspaceTag,
-        workspaceTags: params.workspaceTags,
-      },
+      preferScope: callerScope,
       // How many to RETURN is this tool's contract; how much to RETRIEVE is
       // not. `ftsLimit`/`vecLimit` are left to the per-org recall settings, so
       // an admin's retrieval cap is never lifted by a search.
       limitsOverride: { topResults: pool, rerankPool: pool },
     });
 
-    const ranked = preferCallerScope(result.recalledCognitiveMemories ?? [], {
-      sessionKey: params.sessionKey,
-      workspaceTag: params.workspaceTag,
-      workspaceTags: params.workspaceTags,
-    }).slice(0, limit);
+    const ranked = preferCallerScope(result.recalledCognitiveMemories ?? [], callerScope).slice(0, limit);
 
     return {
       content: [{ type: 'text', text: JSON.stringify(compactSearchResult(params.query, result.recallStrategy, ranked), null, 2) }],
