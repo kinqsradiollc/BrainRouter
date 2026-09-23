@@ -31,6 +31,42 @@ Switching the active Team header switches which pool recall draws from. Nothing 
 Sharing a record with a Team is a `visibility` change (`private → org`) — gated by the plan's
 `sharedMemory` feature (team+). Free/pro (solo) plans have no shared pool.
 
+## Workspaces (inside your own memory)
+
+Tenancy is a wall. Workspace is not — it is an **ordering**. Within the memory you are allowed to
+see, recall ranks by where a record came from and never drops it for having come from somewhere
+else:
+
+| Tier | Meaning |
+|---|---|
+| `session` | captured in this conversation |
+| `workspace` | captured in this checkout, under any of its identities |
+| `untagged` | captured with no workspace at all (older records) — it belongs everywhere |
+| `other-workspace` | captured in a different repository — ranked last and labelled, **never hidden** |
+
+Every hit carries its tier as `scopeMatch`, and a foreign line in the rendered context is marked
+*(another workspace)*. A lesson from another repository is sometimes exactly what you need; the
+reader just has to be told it is from somewhere else, so it reads as context rather than as
+instructions about this one.
+
+**A checkout has more than one identity.** Chat turns are tagged with a hash of the folder path;
+an ingested repository is tagged with a hash of its git remote, so it survives a moved folder or a
+second clone (ADR-015). The client sends **both** (`workspaceTags`), and recall treats either as
+`workspace`. Sending only one is how a repository's own ingested files used to be labelled as
+another repository's.
+
+The client fills this in — the model cannot know its session key or its workspace's hashes. The
+dispatcher adds them to every `memory_search` and `memory_recall` sent to BrainRouter's own brain
+(never to a third-party server's tool of the same name), and the per-turn briefing sends them too.
+
+Two mechanisms, deliberately separate:
+
+- **Preference** — `workspaceTags` on `memory_search` / `memory_recall`. Orders and labels.
+  Implemented once, in `memory/scope.ts`, and applied inside the recall pipeline.
+- **Hard filter** — `filters.workspaceTag` / `filters.workspaceTags` on `memory_recall`. Drops
+  another workspace's records (untagged ones still surface). Opt-in, for a caller that truly wants
+  one repository only.
+
 ## Persona
 
 Persona follows the same partition, in two layers:

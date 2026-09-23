@@ -29,6 +29,13 @@ export interface RecallFilters {
    */
   workspaceTag?: string;
   /**
+   * Every identity of the caller's workspace, merged with {@link workspaceTag}.
+   * A checkout's chat turns carry its folder-path hash while its ingested files
+   * carry its git-remote hash (ADR-015), so filtering on one alone drops the
+   * other half of the same repository. Same NULL-tolerant semantics.
+   */
+  workspaceTags?: string[];
+  /**
    * AUG-A1 (0.4.1) — restrict to records captured under this Project tag
    * (a `.brainrouter/project.json` name, hashed via `projectTagFromName`).
    * Same NULL-tolerant semantics as `workspaceTag`: untagged records and a
@@ -102,6 +109,16 @@ function metadataKind(metadataJson?: string): string | undefined {
   }
 }
 
+/** The workspace identities a HARD filter admits; empty means "not filtering". */
+export function hardWorkspaceTags(filters?: RecallFilters): Set<string> {
+  const tags = new Set<string>();
+  for (const tag of [filters?.workspaceTag, ...(filters?.workspaceTags ?? [])]) {
+    const trimmed = typeof tag === "string" ? tag.trim() : "";
+    if (trimmed) tags.add(trimmed);
+  }
+  return tags;
+}
+
 export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
   records: T[],
   filters?: RecallFilters,
@@ -113,6 +130,7 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
   const beforeMs = filters?.capturedBefore ? new Date(filters.capturedBefore).getTime() : undefined;
   const types = filters?.types && filters.types.length > 0 ? new Set(filters.types) : undefined;
   const scenes = filters?.scenes && filters.scenes.length > 0 ? new Set(filters.scenes) : undefined;
+  const wanted = hardWorkspaceTags(filters);
   return records.filter((r) => {
     // ARTIFACT-LINK / ANNOTATION-LINK — session-scoped records (artifacts +
     // annotations captured into the cognitive graph) are PRIVATE to the chat
@@ -146,7 +164,7 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
       if (afterMs !== undefined && created < afterMs) return false;
       if (beforeMs !== undefined && created > beforeMs) return false;
     }
-    if (filters.workspaceTag) {
+    if (wanted.size > 0) {
       // NULL-tolerant on both sides — a record with no captured tag
       // (legacy / pre-migration) surfaces in every workspace, and a
       // missing filter (handled above by `!filters`) likewise surfaces
@@ -157,7 +175,7 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
         (r as { workspace_tag?: string | null }).workspace_tag ??
         workspaceTagLookup?.get(r.record_id) ??
         null;
-      if (tag !== null && tag !== filters.workspaceTag) return false;
+      if (tag !== null && !wanted.has(tag)) return false;
     }
     if (filters.scope === "project" && filters.projectTag) {
       // Same NULL-tolerant rule as workspaceTag: untagged records surface
