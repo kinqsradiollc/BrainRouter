@@ -59,6 +59,13 @@ The client fills this in — the model cannot know its session key or its worksp
 dispatcher adds them to every `memory_search` and `memory_recall` sent to BrainRouter's own brain
 (never to a third-party server's tool of the same name), and the per-turn briefing sends them too.
 
+**Other coding agents** reach the brain as an ordinary MCP server and send no scope of their own.
+For those, the brain asks the client for its declared workspace folders (MCP `roots`) — once per
+connection, with a short timeout, refreshed when the client reports its roots changed — and applies
+them as the same preference. A client that declares no roots, or does not answer, simply gets
+today's unscoped ranking. A remote brain cannot read the client's git remote, so this gives the
+folder identity only; that is the one a CLI session in the same checkout also carries.
+
 Two mechanisms, deliberately separate:
 
 - **Preference** — `workspaceTags` on `memory_search` / `memory_recall`. Orders and labels.
