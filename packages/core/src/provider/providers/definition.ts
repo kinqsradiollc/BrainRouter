@@ -52,10 +52,14 @@ export interface ProviderDefinition {
    *  - 'chat-completions'  — POST /chat/completions with layered messages.
    *  - 'anthropic-messages'— POST /messages, native Anthropic Messages API.
    *  - 'gemini-generate'   — POST /models/{model}:generateContent, native Gemini.
+   *  - 'external-agent'    — ADR-047 D2: no HTTP at all. The turn is driven by an
+   *                          installed coding-agent CLI (subprocess), and the
+   *                          "model" id is the hosted-agent name. A terminal pick —
+   *                          the router never fails over to or from it.
    * Omitted ⇒ 'chat-completions'. The native formats are normally reached via
    * `cli.providerRequestFormat` opt-in rather than declared as a built-in.
    */
-  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat' | 'external-agent';
 
   /**
    * How this provider handles reasoning depth over `/v1/chat/completions`:
@@ -120,6 +124,39 @@ export interface ProviderDefinition {
    * (OpenAI/gateways error on those). Omitted ⇒ 'any'.
    */
   effortModelGate?: 'reasoning-only' | 'any';
+
+  /**
+   * Request-shaping LIMITS the provider's endpoint enforces on a single call.
+   * The transport shapes the outgoing request to fit — rather than letting a
+   * full agent turn (a 20k+ char system prompt, a hundred tools) be rejected
+   * outright. Omitted ⇒ no shaping (the provider takes whatever we send).
+   *  - `maxBodyBytes`   — the largest serialized request body the endpoint
+   *                       accepts. The tool list is fitted to what remains after
+   *                       the messages, keeping the most task-relevant tools (the
+   *                       same ranking the MCP tool budget uses) — never a blind
+   *                       prefix cut. Measured, not guessed: Matilda answers
+   *                       65 537 bytes with 403 `{"error":"forbidden"}` and
+   *                       65 536 with 200 — a 64 KiB body limit that its edge
+   *                       enforces BEFORE any validation (why an oversized agent
+   *                       turn only ever surfaced a 403).
+   *  - `maxMessageChars`— the longest `content` string any ONE message may
+   *                       carry (applies to every role); longer content is cut
+   *                       from the tail (instructions are front-loaded) with a
+   *                       visible marker so the total stays under the limit
+   *                       (Matilda: 16 000 — 16 001 returns a 400).
+   */
+  limits?: { maxBodyBytes?: number; maxMessageChars?: number };
+
+  /**
+   * ADR-058 — the model writes tool calls INTO ITS TEXT as markup instead of
+   * (or as well as) emitting wire-level `tool_calls`. `'dsml'` is Matilda's
+   * `<｜DSML｜tool_call>…</｜DSML｜tool_call>` block. When set, every wire the
+   * provider is reached over — the native adapter and the OpenAI-compatible
+   * chat-completions path alike — lifts those blocks out of the visible text
+   * into `toolCalls`, so a call never leaks as prose and ends the turn.
+   * Undefined for every other provider: their text is never inspected.
+   */
+  toolCallMarkup?: 'dsml';
 
   /**
    * Fallback API key injected when the user set NO key (and no env key) — for

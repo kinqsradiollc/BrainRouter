@@ -75,18 +75,68 @@ export function sortForToday(
 // The merge rule itself, not a second copy of it. Core decides what survives a
 // refresh; a surface that duplicated the list would eventually offer an edit the
 // next sync undoes — which is the projection drift ADR-038's audit found.
-import { PLANNER_OWNED_FIELDS } from '@kinqs/brainrouter-core/planner/presentation';
+import { plannerFieldIsLocal } from '@kinqs/brainrouter-core/planner/presentation';
 
 export function canEdit(item: PlannerItemView, field: string): boolean {
   if (field === 'title' && item.capabilities?.editTitle !== undefined) return item.capabilities.editTitle;
   if (field === 'completed' && item.capabilities?.complete !== undefined) return item.capabilities.complete;
   if (field === 'delete' && item.capabilities?.delete !== undefined) return item.capabilities.delete;
-  return item.origin === 'owned' || PLANNER_OWNED_FIELDS.has(field);
+  return plannerFieldIsLocal(item, field);
 }
 
 export function whyReadOnly(item: PlannerItemView, field: string): string | null {
   if (canEdit(item, field)) return null;
   return `"${field}" belongs to ${item.source ?? 'the source'}. Editing it here would be undone by the next refresh.`;
+}
+
+/** Did this row come from a calendar? The surface treats a meeting differently. */
+export function isCalendarEvent(item: PlannerItemView): boolean {
+  return item.origin === 'mirrored' && item.provenance?.documentKind === 'event';
+}
+
+/**
+ * Why this block cannot be dragged, or null if it can.
+ *
+ * `scheduledFor` is in `PLANNER_OWNED_FIELDS`, so the generic rule would let a
+ * meeting be dragged to another hour — and the next poll would put it back
+ * where the calendar says it is. A mirrored event's time is the event, not
+ * planner metadata about it.
+ */
+export function whyBlockTimeIsLocked(item: PlannerItemView | undefined): string | null {
+  if (!item || !isCalendarEvent(item)) return null;
+  const calendar = item.provenance?.source ?? item.source ?? 'the calendar';
+  return `This time comes from ${calendar}. Move the meeting there — moving it here would be undone by the next refresh.`;
+}
+
+/**
+ * Meetings on a given day that have no hour: an all-day event has a day and no
+ * time (ADR-060 D3), so it has no block and would otherwise be invisible on the
+ * one surface whose job is the day.
+ */
+export function allDayEventsOn(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  date: string,
+): PlannerItemView[] {
+  const blocked = new Set(blocks.map((block) => block.itemId));
+  return items.filter((item) =>
+    isCalendarEvent(item)
+    && !blocked.has(item.id)
+    && (item.dueDate ?? '').slice(0, 10) === date);
+}
+
+/**
+ * What ticking this row means.
+ *
+ * "Complete Standup" is wrong about a meeting in a way that matters: the person
+ * did not finish it, they went to it, and the calendar will keep saying it
+ * happened either way. The tick records attendance, so it says so.
+ */
+export function completionLabel(item: PlannerItemView): string {
+  if (isCalendarEvent(item)) {
+    return item.completed ? `Clear attended on ${item.title}` : `Mark ${item.title} as attended`;
+  }
+  return `${item.completed ? 'Reopen' : 'Complete'} ${item.title}`;
 }
 
 export interface CalendarDay {
@@ -305,6 +355,139 @@ export function provenanceFor(item: PlannerItemView): {
     ...(item.sourceFreshness ? { freshness: item.sourceFreshness } : {}),
   };
 }
+
+/* ------------------------------------------------------------------------ *
+ * The week around the day, and the day's own score.
+ *
+ * A day planner that shows only a flat list gives no sense of the week the day
+ * sits in and no sense of how the day is going — the two glances a person
+ * takes first each morning. These are pure projections over the same items and
+ * blocks the Today list uses, so the strip, the header and the list can never
+ * disagree about a date.
+ * ------------------------------------------------------------------------ */
+
+export function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  return new Date(value.getTime() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+const WEEKDAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "Monday 14 Sep" — the day named the way a person says it. */
+export function dayLabel(date: string): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  return `${WEEKDAY_LONG[value.getUTCDay()]} ${value.getUTCDate()} ${MONTH_SHORT[value.getUTCMonth()]}`;
+}
+
+/** The relative name for a date next to today: "Today", "Tomorrow", "Yesterday", else the day label. */
+export function relativeDayLabel(date: string, today: string): string {
+  const delta = daysBetween(today, date);
+  if (delta === 0) return 'Today';
+  if (delta === 1) return 'Tomorrow';
+  if (delta === -1) return 'Yesterday';
+  return dayLabel(date);
+}
+
+/** The chip-sized form: "Today" / "Tomorrow" / "Yesterday", else "Wed 16" (with the month once the date leaves this month). */
+export function shortDayLabel(date: string, today: string): string {
+  const delta = daysBetween(today, date);
+  if (delta === 0) return 'Today';
+  if (delta === 1) return 'Tomorrow';
+  if (delta === -1) return 'Yesterday';
+  const value = new Date(`${date}T00:00:00.000Z`);
+  const heading = dayHeading(date);
+  const sameMonth = date.slice(0, 7) === today.slice(0, 7);
+  return sameMonth ? `${heading.weekday} ${heading.day}` : `${heading.weekday} ${heading.day} ${MONTH_SHORT[value.getUTCMonth()]}`;
+}
+
+export interface WeekDayStrip {
+  date: string;
+  weekday: string;
+  day: string;
+  isToday: boolean;
+  isPast: boolean;
+  /** Open items that belong to this day: due that day, or blocked out that day. */
+  open: number;
+  /** Items finished on this day: completed with that due date, or a block closed that day. */
+  done: number;
+  /** Overdue work that lands on today because it is still open. */
+  carried: number;
+}
+
+/** What an item's day is: its due date, else the day of its earliest open block. */
+export function dayOfItem(item: PlannerItemView, blocks: readonly PlannerBlockView[]): string | null {
+  if (item.dueDate) return item.dueDate.slice(0, 10);
+  const scheduled = blocks
+    .filter((block) => block.itemId === item.id && block.scheduledFor && !block.completedAt)
+    .map((block) => localDateOf(block.scheduledFor!))
+    .sort();
+  return scheduled[0] ?? null;
+}
+
+/** The items that belong to one day, in the order the Today list would show them. */
+export function itemsForDay(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  date: string,
+): PlannerItemView[] {
+  return items.filter((item) => dayOfItem(item, blocks) === date);
+}
+
+export function weekStrip(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  weekOf: string,
+  today: string,
+): WeekDayStrip[] {
+  const overdueOpen = items.filter((item) => !item.completed && item.dueDate && item.dueDate.slice(0, 10) < today).length;
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = addDays(weekOf, index);
+    const heading = dayHeading(date);
+    const ofDay = itemsForDay(items, blocks, date);
+    const closedBlocks = blocks.filter((block) => block.completedAt && localDateOf(block.completedAt) === date)
+      .map((block) => block.itemId);
+    const done = new Set([...ofDay.filter((item) => item.completed).map((item) => item.id), ...closedBlocks]).size;
+    return {
+      date,
+      weekday: heading.weekday,
+      day: heading.day,
+      isToday: date === today,
+      isPast: date < today,
+      open: ofDay.filter((item) => !item.completed).length,
+      done,
+      carried: date === today ? overdueOpen : 0,
+    };
+  });
+}
+
+export interface DayProgress {
+  /** Everything the day is asking for: open NOW work plus what was already finished today. */
+  total: number;
+  done: number;
+  /** 0–100, rounded; 0 when there is nothing to do. */
+  percent: number;
+}
+
+/** How today is going: the Now groups (carried over, due today, scheduled today) plus what was finished today. */
+export function dayProgress(
+  items: readonly PlannerItemView[],
+  blocks: readonly PlannerBlockView[],
+  today: string,
+): DayProgress {
+  const scheduled = scheduledTodayIds(blocks, today);
+  const open = items.filter((item) => !item.completed && groupFor(item, today, scheduled) !== 'next' && groupFor(item, today, scheduled) !== 'anytime').length;
+  const closedToday = new Set(blocks.filter((block) => block.completedAt && localDateOf(block.completedAt) === today).map((block) => block.itemId));
+  const done = new Set([
+    ...items.filter((item) => item.completed && item.dueDate?.slice(0, 10) === today).map((item) => item.id),
+    ...closedToday,
+  ]).size;
+  const total = open + done;
+  return { total, done, percent: total ? Math.round((done / total) * 100) : 0 };
+}
+
+/** Quick estimate picks, in minutes — the sizes a day is actually planned in. */
+export const QUICK_ESTIMATES: readonly number[] = [15, 30, 45, 60, 90, 120];
 
 export function carriedForItem(itemId: string, blocks: readonly PlannerBlockView[]): number {
   return Math.max(0, ...blocks.filter((block) => block.itemId === itemId).map((block) => block.carriedOver));

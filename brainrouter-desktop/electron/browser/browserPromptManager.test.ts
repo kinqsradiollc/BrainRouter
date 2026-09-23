@@ -89,8 +89,11 @@ test('browser permission prompting preserves select, event, and state order', ()
   assert.equal(events[0], 'select:tab-one');
   assert.deepEqual(events[1], { type: 'permission', prompt });
   assert.equal(events[2], 'state');
-  assert.deepEqual(events[3], { type: 'permission', prompt: null });
-  assert.equal(events[4], 'state');
+  // ADR-055 P10 — a remembered decision now persists for EVERY promptable
+  // permission (per-site memory), not just geolocation, so the block is saved.
+  assert.equal(events[3], 'persist');
+  assert.deepEqual(events[4], { type: 'permission', prompt: null });
+  assert.equal(events[5], 'state');
   manager.dispose();
 });
 
@@ -173,5 +176,37 @@ test('browser dialogs fail closed when their bounded timeout expires', async () 
 
   assert.deepEqual(responses, [false]);
   assert.equal(manager.getDialogPrompt(), null);
+  manager.dispose();
+});
+
+// ADR-055 P10 — a remembered per-site decision survives a restart for ANY
+// promptable permission, restoring the grants Chromium actually checks.
+test('P10 per-site permission memory round-trips beyond geolocation', () => {
+  const { host } = harness();
+  const manager = new BrowserPromptManager(host, 'window');
+  manager.restorePermissions([
+    { origin: 'https://cam.test', permission: 'camera', decision: 'allow' },
+    { origin: 'https://geo.test', permission: 'geolocation', decision: 'allow' },
+    { origin: 'https://mic.test', permission: 'microphone', decision: 'block' },
+    // Unsupported / malformed rows are ignored.
+    { origin: 'https://x.test', permission: 'usb', decision: 'allow' },
+    { origin: 'not-a-url', permission: 'camera', decision: 'allow' },
+    { origin: 'file:///etc', permission: 'camera', decision: 'allow' },
+  ]);
+
+  // "allow camera" restored the real grant, not the prompt label.
+  assert.equal(manager.hasPermission('https://cam.test', ['media:video']), true);
+  assert.equal(manager.hasPermission('https://cam.test', ['media:audio']), false, 'camera does not grant the microphone');
+  assert.equal(manager.hasPermission('https://geo.test', ['geolocation']), true);
+  // A blocked decision grants nothing, and an unsupported permission is dropped.
+  assert.equal(manager.hasPermission('https://mic.test', ['media:audio']), false);
+  assert.equal(manager.hasPermission('https://x.test', ['usb']), false);
+
+  // Persisting keeps each permission's own name (no longer hardcoded).
+  const persisted = manager.persistedPermissions();
+  const byOrigin = new Map(persisted.map((row) => [row.origin, row]));
+  assert.equal(byOrigin.get('https://cam.test')?.permission, 'camera');
+  assert.equal(byOrigin.get('https://geo.test')?.permission, 'geolocation');
+  assert.equal(byOrigin.get('https://mic.test')?.decision, 'block');
   manager.dispose();
 });

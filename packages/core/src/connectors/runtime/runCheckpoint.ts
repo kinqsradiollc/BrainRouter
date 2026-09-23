@@ -59,10 +59,12 @@ import {
   type McpConnectorClient,
 } from '../index.js';
 import { finishConnectorRun, getConnector, recordConnectorRun } from '../store/connectorStore.js';
+import { calendarImportDir } from '../sources/calendarImport.js';
 import { upsertConnectorDocuments } from '../store/documentStore.js';
 import type { ConnectorRuntimeHost } from './host/contracts.js';
 import { nodeConnectorRuntimeHost } from './host/nodeConnectorRuntimeHost.js';
-import type { PlannerIssueProjection } from '../../planner/connectorIssueAdapter.js';
+import type { PlannerDocumentProjection } from '../../planner/connectorIssueAdapter.js';
+import { icsFeedClient, runIcsCalendarConnectorCheckpoint } from '../sources/icsCalendarConnector.js';
 
 /** The shared checkpoint result shape every `run<Source>ConnectorCheckpoint` returns. */
 export interface CheckpointResult {
@@ -80,6 +82,17 @@ export type EnvTokenResolver = (
 export interface CheckpointRunnerDeps {
   /** Process context. Defaults to the local Node host. */
   runtimeHost?: ConnectorRuntimeHost;
+  /**
+   * Where this host keeps calendars the person imported (ADR-060 D4).
+   *
+   * Defaults to `calendars/` inside the workspace's own state directory — the
+   * same place the connector record itself lives, so an import has the same
+   * lifetime and scope as the connector that reads it. A host with a different
+   * store (the server's database) passes its own; a host with neither gets a
+   * connector that says it cannot read imported files rather than one that
+   * appears to have read an empty calendar.
+   */
+  calendarImportRoot?: string;
   /**
    * GitHub connector client. The host passes its keychain/gh-CLI-aware client;
    * the agent passes a static/dynamic-token REST client. When absent, a github
@@ -107,7 +120,7 @@ export interface CheckpointRunnerDeps {
    * this shared runtime cannot guess which personal planner owns server or
    * multi-user connector data.
    */
-  projectPlannerIssues?: PlannerIssueProjection;
+  projectPlannerDocuments?: PlannerDocumentProjection;
 }
 
 const OAUTH_KEYCHAIN_GUIDANCE =
@@ -248,6 +261,14 @@ export function buildCheckpointRunner(
         );
       case 'gmail':
         return await runGmailConnectorCheckpoint(connector, gmailTokenClient(requireStaticToken(connector, 'Gmail').token));
+      case 'ics-calendar': {
+        const importedRoot = deps.calendarImportRoot
+          ?? (deps.workspaceRoot ? calendarImportDir(deps.workspaceRoot) : undefined);
+        return await runIcsCalendarConnectorCheckpoint(
+          connector,
+          icsFeedClient(importedRoot ? { importedRoot } : undefined),
+        );
+      }
       default:
         throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
     }
@@ -294,8 +315,8 @@ export async function runConnectorCheckpointCore(
   try {
     const result = await runCheckpoint(connector);
     const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
-    const plannerItemsProjected = result.failures.length === 0 && deps.projectPlannerIssues
-      ? await deps.projectPlannerIssues({ connector, documents: persisted })
+    const plannerItemsProjected = result.failures.length === 0 && deps.projectPlannerDocuments
+      ? await deps.projectPlannerDocuments({ connector, documents: persisted })
       : 0;
     const run =
       finishConnectorRun(workspaceRoot, connector.id, running.id, {

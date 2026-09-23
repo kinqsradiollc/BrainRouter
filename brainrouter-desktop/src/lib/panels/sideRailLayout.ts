@@ -13,7 +13,7 @@ export function clampSideRailWidth(width: number): number {
 /** Comfortable minimum width to open certain panels at — the Browser panel
  *  needs room for its icon rail + URL bar + webview. Panels not listed keep the
  *  current width. */
-const OPEN_WIDTH: Partial<Record<PanelId, number>> = { browser: 500 };
+const OPEN_WIDTH: Partial<Record<PanelId, number>> = { browser: 500, diagrams: 560 }; // ADR-056 D-A5 — a map needs room to read
 
 /** The side width to use when a panel is opened: at least its comfortable
  *  default (if it has one), but never shrinking the user's current width. */

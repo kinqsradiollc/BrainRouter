@@ -35,7 +35,11 @@ export type ConnectorSource =
   | "gmail"
   | "s3"
   | "gong"
-  | "fireflies";
+  | "fireflies"
+  // ADR-060 — a calendar is a source. Any iCalendar feed URL (Google's secret
+  // iCal address, iCloud's shared link, Outlook's published calendar) or an
+  // imported .ics file.
+  | "ics-calendar";
 
 export const CONNECTOR_SOURCES: readonly ConnectorSource[] = [
   "github",
@@ -66,6 +70,7 @@ export const CONNECTOR_SOURCES: readonly ConnectorSource[] = [
   "s3",
   "gong",
   "fireflies",
+  "ics-calendar",
 ];
 
 export type ConnectorFlow =
@@ -94,7 +99,7 @@ export type ConnectorRunStatus = "queued" | "running" | "succeeded" | "failed" |
 export type ConnectorConfigValue = string | number | boolean | null | string[];
 export type ConnectorConfig = Record<string, ConnectorConfigValue>;
 export type ConnectorCheckpoint = Record<string, unknown>;
-export type ConnectorDocumentKind = "issue" | "pull-request" | "file";
+export type ConnectorDocumentKind = "issue" | "pull-request" | "file" | "event";
 export type ConnectorPrincipalKind = "user" | "team" | "group" | "service-account" | "unknown";
 
 export interface ConnectorFieldSpec {
@@ -114,6 +119,16 @@ export interface ConnectorCatalogEntry {
   credentialModes: ConnectorCredentialMode[];
   configFields: ConnectorFieldSpec[];
   credentialFields: ConnectorFieldSpec[];
+  /**
+   * How often this source refreshes itself when the person has not said
+   * otherwise, in minutes.
+   *
+   * Most sources have none: they run when asked, and a background cadence is
+   * something the person opts into per connector. A source whose whole point is
+   * to stay current — a calendar subscription — declares one here, so "leave it
+   * blank" means "the sensible cadence" rather than "never".
+   */
+  defaultPollMinutes?: number;
 }
 
 export interface ConnectorCredentialRef {

@@ -99,6 +99,15 @@ export interface AssuranceSourceToSinkPath {
   source: AssuranceSourceLocation;
   sink: AssuranceSourceLocation;
   evidenceRefs: string[];
+  /**
+   * ADR-039 D6 (S4) — the ordered intermediate hops from source to sink, as the
+   * analyzer reported them (SARIF `codeFlows[].threadFlows[].locations`). Includes
+   * source (first) and sink (last) so a renderer can walk the whole chain, and the
+   * D2 verifier can name each hop it must refute. Absent/empty for a point finding
+   * or a legacy packet that predates hop capture — consumers fall back to
+   * source→sink.
+   */
+  hops?: AssuranceSourceLocation[];
 }
 
 /**

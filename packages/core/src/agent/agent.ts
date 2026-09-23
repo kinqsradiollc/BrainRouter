@@ -135,7 +135,7 @@ import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
 import { normalizeToolName } from '../tool/specs/names.js';
-import { registryAllowedTools, registryEntry } from '../tool/registry/registry.js';
+import { registryAllowedTools, registryEntry, registryNetworkToolNames, registryBrowserToolNames } from '../tool/registry/registry.js';
 import { resolveMcpCatalogTool, searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
@@ -245,7 +245,7 @@ import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PL
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
-import { isSequenceGuardExempt, buildSequenceSignature } from './guards/repeatGuard.js';
+import { isSequenceGuardExempt, buildSequenceSignature, createUnchangedResultStore } from './guards/repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -354,6 +354,7 @@ import { emptySessionProvenance, type SessionProvenance } from './runtime/conten
 import type { LearnedTenant } from '../learning/index.js';
 import type { SteeringReceipt } from '../task/workContract.js';
 import { ReviewProviderRequestBudgetExceededError } from './runtime/modelRequestBudget.js';
+import type { TurnStep } from './runtime/turnPath.js';
 import {
   proposeSessionTitleWithModel,
   type SessionTitleModelCall,
@@ -379,6 +380,9 @@ export interface RunTurnCallbacks {
   onSessionTitle?: (event: { title: string; source: 'derived' | 'agent' }) => void;
   /** Fired once after a bounded provider recovery campaign completes. */
   onProviderRecovery?: (receipt: ProviderRecoveryReceipt) => void;
+  /** ADR-059 — one step of the turn path (model call, provider activity,
+   *  guardrail re-prompt, turn end), in order, for the host to show. */
+  onTurnStep?: (step: TurnStep) => void;
   // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
   // result with its OWN start row; parallel same-name calls no longer collide on a
   // name-keyed map. Optional → existing callers are unaffected.
@@ -1049,6 +1053,13 @@ export class Agent implements IAgent {
     undefined,
     new SpillStore(path.join(os.tmpdir(), 'brainrouter-offload')),
   );
+  /**
+   * Per-SESSION digests of what each (tool, args) call last returned, so a call
+   * that returns byte-identical text can say so across turn boundaries — where
+   * the per-turn repeat window cannot see. Content, not a counter: a file the
+   * person edited between turns returns something different and says nothing.
+   */
+  public readonly unchangedResults = createUnchangedResultStore();
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   public triedModelFallback = false;
   /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
@@ -1198,13 +1209,19 @@ export class Agent implements IAgent {
   /** Read-only saved-profile plan resolved for the current root turn. */
   public activeTurnOrchestration?: ActiveTurnOrchestrationResolution;
   #accessMode: AccessMode | undefined;
+  /** ADR-052 D3 — a restricted session (untrusted repo / CI seat). Read-tier
+   *  tools only, no network, and posture escalation is refused. */
+  public readonly restricted: boolean = getCliKnobs().restricted;
   public get accessMode(): AccessMode {
     return this.#accessMode ?? 'shell';
   }
   public set accessMode(value: AccessMode) {
-    if (value === this.#accessMode) return;
+    // ADR-052 D3 — a restricted session can never leave read tier, so an attempt
+    // to escalate (to write/shell) is clamped rather than honoured.
+    const clamped: AccessMode = this.restricted ? 'read' : value;
+    if (clamped === this.#accessMode) return;
     if (this.#accessMode !== undefined) this.invalidateExecutionIntentAuthority();
-    this.#accessMode = value;
+    this.#accessMode = clamped;
   }
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   public policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
@@ -2596,7 +2613,16 @@ export class Agent implements IAgent {
     // class of bug REVIEW-FIX fixed). Read-tier tools (incl. lifecycle +
     // orchestration observers) are always available; write/shell add their
     // tiers on top.
-    return registryAllowedTools(this.accessMode);
+    const allowed = registryAllowedTools(this.accessMode);
+    // ADR-052 D3 — a restricted session also drops network/web tools, so an
+    // untrusted repo cannot reach out even though they sit at read tier.
+    if (this.restricted) {
+      for (const name of registryNetworkToolNames()) allowed.delete(name);
+      // ADR-055 P11 — also drop the whole embedded browser (observation too),
+      // so a restricted seat advertises no browser_* tool at all.
+      for (const name of registryBrowserToolNames()) allowed.delete(name);
+    }
+    return allowed;
   }
 
   async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: RunTurnOptions): Promise<string> {
@@ -2789,6 +2815,19 @@ export class Agent implements IAgent {
    * memory transport without turning an unbounded LLM call into a slow exit.
    */
   public endSession(timeoutMs = 2_500): Promise<void> {
+    // ADR-048 S1 — fire `session-end` shell hooks (advisory, bounded) at the
+    // same moment ADR-032 anchors the session-end learning checkpoint, so a
+    // host that awaits endSession() before shutdown observes both. A throwing
+    // or slow hook never delays the learning drain beyond its own timeout.
+    if (!this.silent && !this.reviewSourceSafety && this.hookNotifyActive()) {
+      try {
+        this.runExecutionHooks(
+          'session-end',
+          { payload: { sessionKey: this.sessionKey } },
+          Math.max(500, Math.min(2_000, timeoutMs)),
+        );
+      } catch { /* session-end hooks are advisory */ }
+    }
     return finishLearningSession(this, timeoutMs);
   }
 
@@ -3168,6 +3207,12 @@ export class Agent implements IAgent {
   /** Count of tool calls executed during the most recent runTurn. The goal */
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
+  /** ADR-059 — the current turn's path; reset by runTurn, persisted at its end. */
+  public turnPathSteps: TurnStep[] = [];
+
+  /** ADR-048 S5 — paths this turn's write tools touched (reset each turn); the
+   *  turn-end blast-radius tap maps them onto the Atlas graph. */
+  public turnWrittenFiles = new Set<string>();
 
   /**
    * ADR-032 D7 — this session's content provenance, tallied per tool call.

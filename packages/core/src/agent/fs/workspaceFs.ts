@@ -203,21 +203,59 @@ export function matchGlob(pattern: string, filePath: string): boolean {
   return false;
 }
 
+/**
+ * A directory entry the walk can stand on, or null when it cannot: a dangling
+ * symlink (`realpath` throws ENOENT), a permission error, a path that escapes the
+ * workspace. One unreadable entry must never abort a whole glob/grep — a single
+ * broken link inside a vendored peer project once failed EVERY `glob_files` call
+ * in the workspace, whatever the pattern.
+ */
+function walkableEntry(wsRoot: string, fullPath: string): fs.Stats | null {
+  try {
+    if (!isPathInside(wsRoot, fs.realpathSync(fullPath))) return null;
+    return fs.statSync(fullPath);
+  } catch {
+    return null;
+  }
+}
+
+/** The leading path segments of a glob that carry no wildcard — where the walk
+ *  can start instead of at the workspace root. `src/**\/goal*` → `src`; `**\/*` → ''. */
+export function globLiteralPrefix(pattern: string): string {
+  const segments = pattern.replace(/\\/g, '/').split('/');
+  const literal: string[] = [];
+  for (const seg of segments.slice(0, -1)) {
+    if (!seg || seg === '.' || /[*?[\]{}]/.test(seg)) break;
+    literal.push(seg);
+  }
+  return literal.join('/');
+}
+
 export function globFiles(pattern: string, workspaceRoot?: string, dir?: string): string[] {
   const wsRoot = fs.realpathSync(workspaceRoot ?? process.cwd());
-  const startDir = dir ?? wsRoot;
+  let startDir = dir ?? wsRoot;
+  if (dir === undefined) {
+    // Walk only the subtree the pattern can match: a pattern rooted at a literal
+    // directory never needs the rest of the workspace crawled.
+    const prefix = globLiteralPrefix(pattern);
+    if (prefix) {
+      const candidate = path.join(wsRoot, prefix);
+      const stat = walkableEntry(wsRoot, candidate);
+      if (!stat) return [];
+      startDir = stat.isDirectory() ? candidate : path.dirname(candidate);
+    }
+  }
   const safeDir = resolveWorkspacePath(wsRoot, path.relative(wsRoot, startDir) || '.');
   const results: string[] = [];
-  const items = fs.readdirSync(safeDir);
+  let items: string[];
+  try { items = fs.readdirSync(safeDir); } catch { return results; }
   for (const item of items) {
     if (IGNORED_DIRS.has(item)) {
       continue;
     }
     const fullPath = path.join(safeDir, item);
-    if (!isPathInside(wsRoot, fs.realpathSync(fullPath))) {
-      continue;
-    }
-    const stat = fs.statSync(fullPath);
+    const stat = walkableEntry(wsRoot, fullPath);
+    if (!stat) continue;
     if (stat.isDirectory()) {
       results.push(...globFiles(pattern, wsRoot, fullPath));
     } else if (stat.isFile()) {
@@ -301,12 +339,14 @@ export function grepSearch(
   };
   const search = (dir: string): void => {
     if (results.length >= max || overBudget()) return;
-    for (const file of fs.readdirSync(dir)) {
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const file of entries) {
       if (IGNORED_DIRS.has(file)) continue;
       if (file.endsWith('.map')) continue; // source maps are one giant line — never useful, always slow
       const full = path.join(dir, file);
-      if (!isPathInside(wsRoot, fs.realpathSync(full))) continue;
-      const stat = fs.statSync(full);
+      const stat = walkableEntry(wsRoot, full);
+      if (!stat) continue; // dangling symlink / unreadable / outside the workspace
       if (stat.isDirectory()) search(full);
       else if (stat.isFile()) { scanFile(full); if (results.length >= max) return; }
       if (overBudget()) { truncatedReason ||= 'scan stopped at the 4 s time budget'; return; }

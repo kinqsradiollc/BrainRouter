@@ -8,9 +8,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertSafeReviewerFilesystemPath, isSafeReviewerFilesystemPath, redactReviewSourceText } from '../../../review/sourceSafety.js';
 import { truncateFullRead } from '../../../agent/fs/readTruncation.js';
+import { renderNotebookDigest } from '../../../agent/fs/notebookRead.js';
 import { waitUntilCondition } from '../../../util/agentloop/waitUntil.js';
 import { getCliKnobs } from '../../../config/config.js';
 import { grepSearch, globFiles } from '../../../agent/fs/workspaceFs.js';
+
+/**
+ * How many paths a glob may return before the list stops being an answer.
+ *
+ * Generous enough for "every TypeScript file in a large package", far below the
+ * point where the result is handed off, truncated, or simply unreadable.
+ */
+export const GLOB_MAX_MATCHES = 1000;
 import type { BuiltinToolHandler } from './registry.js';
 
 export const fsReadHandlers: Record<string, BuiltinToolHandler> = {
@@ -37,6 +46,25 @@ export const fsReadHandlers: Record<string, BuiltinToolHandler> = {
     const visibleContent = host.reviewSourceSafety ? redactReviewSourceText(content) : content;
     const startLine = args.startLine ? Number(args.startLine) : 1;
     const endLine = args.endLine ? Number(args.endLine) : undefined;
+
+    // ADR-051 D1 — a Jupyter notebook reads as a CELL-INDEXED DIGEST by default:
+    // cells named by the same 0-based index `notebook_edit` takes, outputs kept
+    // as text but images NAMED not inlined. `raw: true` (and any parse failure)
+    // falls back to the raw JSON read below — the digest is a rendering, never a
+    // gate. A line range slices the digest like any other file.
+    if (/\.ipynb$/i.test(resolved) && !args.raw) {
+      try {
+        let digest = renderNotebookDigest(content, { label: String(args.path) });
+        if (host.reviewSourceSafety) digest = redactReviewSourceText(digest);
+        if (startLine === 1 && endLine === undefined) return digest;
+        const dLines = digest.split('\n');
+        const dEnd = endLine !== undefined ? Math.min(endLine, dLines.length) : dLines.length;
+        const dStart = Math.max(1, Math.min(startLine, dLines.length));
+        return dStart > dEnd ? '' : dLines.slice(dStart - 1, dEnd).join('\n');
+      } catch {
+        // Not a valid notebook — fall through to the raw read.
+      }
+    }
 
     if (startLine === 1 && endLine === undefined) {
       // CC-P7.3 — cap an unbounded full-file read so a huge file can't blow
@@ -113,6 +141,26 @@ export const fsReadHandlers: Record<string, BuiltinToolHandler> = {
       !host.reviewSourceSafety
       || isSafeReviewerFilesystemPath(reviewRoot, path.resolve(reviewRoot, candidate))
     ));
+    // An unanchored pattern matches at every depth — `*` is tested against each
+    // basename, so it returns the entire tree. Seen live: `glob_files("*")` on a
+    // 19,217-file workspace returned 2.2 MB of paths, seventeen times in one
+    // session, for 37 MB of tool output that no context window could hold and
+    // no model could use. A list of ten thousand paths answers no question; the
+    // count plus a nudge to narrow the pattern does.
+    if (matches.length > GLOB_MAX_MATCHES) {
+      return JSON.stringify({
+        matches: matches.slice(0, GLOB_MAX_MATCHES),
+        truncated: {
+          shown: GLOB_MAX_MATCHES,
+          total: matches.length,
+          pattern,
+          advice: `"${pattern}" matched ${matches.length} files — too many to be an answer. `
+            + 'Narrow it (a directory prefix like "src/**/*.ts", or a specific extension), '
+            + 'or use grep_search to find the content you actually need. '
+            + 'Re-running this same pattern returns this same truncated list.',
+        },
+      }, null, 2);
+    }
     return JSON.stringify(matches, null, 2);
   },
 

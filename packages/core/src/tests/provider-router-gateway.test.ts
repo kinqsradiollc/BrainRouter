@@ -1,3 +1,4 @@
+import http from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Config } from '../config/config.js';
@@ -262,4 +263,188 @@ test('router gateway is keyless when no serveKey is configured', async () => {
     const body = await res.json() as any;
     assert.equal(body.object, 'list');
   } finally { await handle.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// ADR-061 D3.3 — the route choice, at the only place `auto` is a live request.
+// ---------------------------------------------------------------------------
+
+test('auto on the default rules provider starts on the configured head, and decides nothing', async () => {
+  const seen: string[] = [];
+  const decisions: unknown[] = [];
+  const handle = await startRouterGateway({
+    config,
+    host: '127.0.0.1',
+    port: 0,
+    transport: async (llm) => { seen.push(`${llm.provider}/${llm.model}`); return { content: 'ok' }; },
+    onRouteDecision: (entry) => { decisions.push(entry); },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(seen, ['groq/shared-model'], 'the chain head, exactly as before the tier existed');
+    assert.deepEqual(decisions, [], 'on `rules` the head IS the answer; a line per request would say nothing');
+  } finally { await handle.close(); }
+});
+
+test('a configured provider that cannot be built keeps the chain and says why', async () => {
+  // The knobs come from the gateway's OWN config, not the ambient session's —
+  // a decision that disagreed with the router it decides for would be worse
+  // than no decision at all.
+  const seen: string[] = [];
+  const decisions: any[] = [];
+  const handle = await startRouterGateway({
+    config: { ...config, cli: { ...config.cli, decisions: { provider: 'local' } } },
+    host: '127.0.0.1',
+    port: 0,
+    transport: async (llm) => { seen.push(`${llm.provider}/${llm.model}`); return { content: 'ok' }; },
+    onRouteDecision: (entry) => { decisions.push(entry); },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(seen, ['groq/shared-model'], 'a tier that is down must not change which model answers');
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0].consumer, 'route');
+    assert.equal(decisions[0].value, 'groq/shared-model');
+    assert.equal(decisions[0].outcome, 'kept the configured head');
+    assert.match(decisions[0].fellBack, /cli\.decisions\.local\.model/);
+  } finally { await handle.close(); }
+});
+
+test('an explicit model never reaches the route choice', async () => {
+  const decisions: unknown[] = [];
+  const handle = await startRouterGateway({
+    config: { ...config, cli: { ...config.cli, decisions: { provider: 'local' } } },
+    host: '127.0.0.1',
+    port: 0,
+    transport: async () => ({ content: 'ok' }),
+    onRouteDecision: (entry) => { decisions.push(entry); },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'groq/shared-model', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(decisions, [], "an explicit pick is the caller's, and ADR-041's contract stands");
+  } finally { await handle.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// Every test above injects `transport`, which is precisely why none of them
+// could see that the gateway was destroying client tool definitions. The
+// conversion bug lives BETWEEN the gateway and `callOpenAI`, so the only test
+// that can catch it is one that uses the real transport and reads the bytes an
+// upstream provider actually receives.
+// ---------------------------------------------------------------------------
+
+async function withUpstream(fn: (baseUrl: string, seen: () => any) => Promise<void>) {
+  let received: any;
+  const origin = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      received = JSON.parse(raw);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'x', object: 'chat.completion', created: 1, model: 'm',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => origin.listen(0, '127.0.0.1', () => resolve()));
+  const upstreamPort = (origin.address() as { port: number }).port;
+  const endpoint = `http://127.0.0.1:${upstreamPort}/v1`;
+  // No `transport` override: this must go through the real callOpenAI.
+  const handle = await startRouterGateway({
+    config: {
+      activeServer: 's', servers: {},
+      llm: { provider: 'openai', apiKey: 'k', model: 'm', endpoint },
+      providers: { up: { provider: 'openai', apiKey: 'k', model: 'm', endpoint, cachedModels: ['m'] } },
+      cli: { router: { enabled: true, chain: ['up/m'], serve: true } },
+    } as unknown as Config,
+    host: '127.0.0.1',
+    port: 0,
+  });
+  try {
+    await fn(`http://${handle.host}:${handle.port}`, () => received);
+  } finally {
+    await handle.close();
+    await new Promise<void>((resolve) => origin.close(() => resolve()));
+  }
+}
+
+test('a client\'s tool definitions reach the upstream intact', async () => {
+  await withUpstream(async (baseUrl, seen) => {
+    const parameters = {
+      type: 'object',
+      properties: { city: { type: 'string' }, unit: { type: 'string', enum: ['c', 'f'] } },
+      required: ['city'],
+    };
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'weather?' }],
+        tools: [{ type: 'function', function: { name: 'get_weather', description: 'Look up the weather', parameters } }],
+        tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      }),
+    });
+    assert.equal(res.status, 200);
+    const sent = seen();
+    // The whole point: a NAME (or `tool_choice` names a tool that isn't there)
+    // and the SCHEMA (or the model is asked to fill `{}`).
+    assert.equal(sent.tools[0].function.name, 'get_weather');
+    assert.equal(sent.tools[0].function.description, 'Look up the weather');
+    assert.deepEqual(sent.tools[0].function.parameters, parameters);
+    assert.deepEqual(sent.tool_choice, { type: 'function', function: { name: 'get_weather' } });
+  });
+});
+
+test('a malformed tool is dropped rather than forwarded blank', async () => {
+  await withUpstream(async (baseUrl, seen) => {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [
+          { type: 'function', function: { description: 'no name at all' } },
+          { type: 'function', function: { name: '   ' } },
+          null,
+          { type: 'function', function: { name: 'real_one' } },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    const sent = seen();
+    assert.equal(sent.tools.length, 1, 'a blank tool IS the bug; forwarding one would reintroduce it');
+    assert.equal(sent.tools[0].function.name, 'real_one');
+    assert.deepEqual(sent.tools[0].function.parameters, { type: 'object', properties: {} },
+      'a tool with no parameters still gets a valid empty schema');
+  });
+});
+
+test('a request with no tools sends no tools key at all', async () => {
+  await withUpstream(async (baseUrl, seen) => {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seen().tools, undefined, 'an empty tools array must not become `tools: []`');
+  });
 });

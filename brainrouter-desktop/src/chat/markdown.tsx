@@ -13,6 +13,13 @@ export const Markdown = ReactMarkdown as unknown as React.ComponentType<{ remark
 
 /** Fenced code blocks render through the same highlighter as the File view. */
 export const MD_COMPONENTS: Record<string, unknown> = {
+  // A GFM table renders full-width so a narrow table (few columns) fills the
+  // message column instead of leaving dead space to its right; the wrapper is the
+  // horizontal-scroll container so a WIDE table still scrolls rather than
+  // overflowing. (The border/radius live on the wrapper — see `.md-table-wrap`.)
+  table(props: { children?: React.ReactNode }) {
+    return <div className="md-table-wrap"><table>{props.children}</table></div>;
+  },
   // HOTFIX — links were dead: react-markdown emitted a plain <a href>, but the
   // renderer can't navigate away (will-navigate denies it) and target=_blank is
   // blocked, so clicking a PR/CI link did nothing. Route the URL to the host to

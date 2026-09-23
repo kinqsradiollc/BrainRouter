@@ -209,7 +209,7 @@ export function makeCriticCompletion(llm: LLMConfig): CriticCompletion {
   return async (req) => {
     const rawEndpoint = llm.endpoint || 'https://api.openai.com/v1';
     const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
-    const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase());
+    const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase(), llm.sessionKey); // ADR-041 A41-9 session-scoped BYOK provider (undefined ⇒ global path)
     let apiKey = llm.apiKey || '';
     const isLocal = (providerDef?.local ?? false) || isLoopbackEndpoint(endpoint);
     if (!apiKey && !isLocal && providerDef?.defaultApiKey) apiKey = providerDef.defaultApiKey;

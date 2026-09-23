@@ -48,6 +48,9 @@ export interface BrowserNativeViewEventHandlers {
   updateTitle(title: string): void;
   updateFavicons(favicons: string[]): void;
   mediaStarted(): void;
+  /** ADR-055 P10 — HTML5 fullscreen (a video going full-window). */
+  enterHtmlFullScreen(): void;
+  leaveHtmlFullScreen(): void;
   mediaPaused(): void;
   renderProcessGone(reason: string): void;
   loadFailed(
@@ -159,6 +162,8 @@ export class BrowserNativeViewManager {
       handlers.updateFavicons(favicons);
     });
     contents.on('media-started-playing', handlers.mediaStarted);
+    contents.on('enter-html-full-screen', handlers.enterHtmlFullScreen);
+    contents.on('leave-html-full-screen', handlers.leaveHtmlFullScreen);
     contents.on('media-paused', handlers.mediaPaused);
     contents.on('render-process-gone', (_event, details) => {
       handlers.renderProcessGone(details.reason);

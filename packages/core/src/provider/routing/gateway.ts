@@ -11,6 +11,10 @@ import { callOpenAI, type BuildPayloadOptions } from '../../agent/transport/llmT
 import { callProviderStream, type StreamChunk, type ProviderStreamResult } from '../../agent/transport/providerStream.js';
 import { aggregateCatalog, buildModelRegistry } from './registry.js';
 import { resolveRoutes } from './resolve.js';
+import { chooseStartingRoute } from './routeDecision.js';
+import { decisionPortForSession } from '../../decision/fromKnobs.js';
+import { decisionEntry, type DecisionEntry } from '../../decision/recentDecisions.js';
+import { redactText } from '../../session/transcript/sessionStore.js';
 import { classifyRouterFailure, getRouterPolicy } from './policy.js';
 import { executeWithProviderRecovery } from './recovery.js';
 import type { CatalogPrefixMode, ModelRegistryEntry } from './types.js';
@@ -43,6 +47,14 @@ export interface RouterGatewayOptions {
   maxAttempts?: number;
   /** Receives one secret-free final receipt for each completed routed call. */
   onRecoveryReceipt?: (receipt: ProviderRecoveryReceipt) => void;
+  /**
+   * ADR-061 D3.3/D5 — receives the route choice for each `auto` request that
+   * the decision tier actually decided. A gateway is not a session, so it has
+   * no `recent-decisions.json` to append to; its host logs this instead. Never
+   * called while `cli.decisions.provider` is `rules`, because then the chain
+   * head IS the answer and a line per request would say nothing.
+   */
+  onRouteDecision?: (entry: DecisionEntry) => void;
 }
 
 const CORS_HEADERS = {
@@ -121,6 +133,37 @@ function catalogPrefix(value: string | null): CatalogPrefixMode {
 }
 
 /** Extract the OpenAI sampling params + tool_choice a client sent, for the transport. */
+/**
+ * A client's tools, in the shape the transport actually takes.
+ *
+ * The gateway speaks OpenAI on the wire, so a client sends
+ * `{ type: 'function', function: { name, description, parameters } }`. The
+ * transport takes its own INTERNAL shape — `{ name, description, inputSchema }`
+ * — and re-wraps it for whichever provider it is talking to. Forwarding the
+ * client's shape verbatim does not throw: `buildChatToolSpecs` reads `t.name`
+ * and `t.inputSchema`, finds neither, and sends a NAMELESS tool whose
+ * parameters default to `{}`. Every tool definition a client sent is silently
+ * destroyed, and the upstream model is offered a tool it cannot name or fill.
+ *
+ * Tools with no usable name are dropped rather than forwarded blank, because a
+ * blank one is exactly the bug this function exists to prevent.
+ */
+function clientToolsToInternal(tools: unknown): any[] {
+  if (!Array.isArray(tools)) return [];
+  const out: any[] = [];
+  for (const tool of tools) {
+    const fn = (tool as any)?.function ?? tool;
+    const name = typeof fn?.name === 'string' ? fn.name.trim() : '';
+    if (!name) continue;
+    out.push({
+      name,
+      description: typeof fn?.description === 'string' ? fn.description : '',
+      inputSchema: fn?.parameters ?? fn?.inputSchema ?? { type: 'object', properties: {} },
+    });
+  }
+  return out;
+}
+
 function transportOptions(body: any): BuildPayloadOptions {
   const opts: BuildPayloadOptions = { passthrough: body };
   const tc = body.tool_choice;
@@ -168,7 +211,7 @@ async function executeRoutedChat(
     policy,
     maxAttempts: opts.maxAttempts,
     onReceipt: opts.onRecoveryReceipt,
-    execute: (route) => transport(route.llm, body.messages ?? [], body.tools ?? [], options),
+    execute: (route) => transport(route.llm, body.messages ?? [], clientToolsToInternal(body.tools), options),
   });
 }
 
@@ -206,7 +249,7 @@ async function streamRoutedChat(
           // chunk carries the assembled result. Reasoning deltas are ignored, exactly
           // as the former onTextDelta-only handler ignored them — byte-neutral.
           let result: ProviderStreamResult | undefined;
-          for await (const chunk of stream(route.llm, body.messages ?? [], body.tools ?? [], options)) {
+          for await (const chunk of stream(route.llm, body.messages ?? [], clientToolsToInternal(body.tools), options)) {
             if (chunk.type === 'text') {
               const text = chunk.delta;
               if (!text) continue;
@@ -262,6 +305,60 @@ async function streamRoutedChat(
   }
 }
 
+/**
+ * ADR-061 D3.3 — re-head the chain for an `auto` request.
+ *
+ * Returns the resolved chain untouched on the default `rules` provider, before
+ * spending a single character on redaction: the floor's answer is the chain's
+ * own head, so asking would cost work to learn what we already have.
+ */
+async function startingRoutes(
+  resolved: ModelRegistryEntry[],
+  body: any,
+  options: RouterGatewayOptions,
+): Promise<ModelRegistryEntry[]> {
+  const knobs = resolveCliKnobs(options.config).decisions;
+  if (knobs.provider === 'rules') return resolved;
+  try {
+    const { port, maxStateChars } = decisionPortForSession({ knobs, config: options.config });
+    const messages: any[] = Array.isArray(body.messages) ? body.messages : [];
+    const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
+    const verdict = await chooseStartingRoute(
+      port,
+      resolved,
+      {
+        // D4 — the same redaction a transcript gets, before anything that can
+        // leave this machine sees a caller's prompt.
+        ...(typeof lastUser?.content === 'string' ? { task: redactText(lastUser.content) } : {}),
+        approxPromptChars: messages.reduce((n, m) => n + messageChars(m), 0),
+        ...(Array.isArray(body.tools) && body.tools.length > 0 ? { requiresTools: true } : {}),
+      },
+      { maxCandidates: knobs.route.maxCandidates, maxStateChars },
+    );
+    if (verdict.answer) {
+      try {
+        options.onRouteDecision?.(decisionEntry('route', 'start', verdict.answer, {
+          outcome: verdict.changed ? `started on ${verdict.promoted}` : 'kept the configured head',
+        }));
+      } catch { /* reporting is best-effort */ }
+    }
+    return verdict.routes;
+  } catch {
+    // A decision must never cost a request. The configured chain still works.
+    return resolved;
+  }
+}
+
+/** How much text one message carries — the context-window signal, cheaply. */
+function messageChars(message: any): number {
+  const content = message?.content;
+  if (typeof content === 'string') return content.length;
+  if (Array.isArray(content)) {
+    return content.reduce((n: number, part: any) => n + (typeof part?.text === 'string' ? part.text.length : 0), 0);
+  }
+  return 0;
+}
+
 export function createRouterGatewayHandler(options: RouterGatewayOptions) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -292,10 +389,15 @@ export function createRouterGatewayHandler(options: RouterGatewayOptions) {
         try { body = await readBody(req); } catch (err) { return apiError(res, 400, err instanceof Error ? err.message : 'Invalid body.', 'invalid_request_error', 'invalid_json'); }
         if (!Array.isArray(body.messages)) return apiError(res, 400, 'Missing required parameter: messages.', 'invalid_request_error', 'invalid_value', 'messages');
         const request = body.model === 'auto' || body.model == null ? '' : String(body.model);
-        const routes = resolveRoutes(registry, request, { withFallbacks: true });
-        if (routes.length === 0) {
+        const resolved = resolveRoutes(registry, request, { withFallbacks: true });
+        if (resolved.length === 0) {
           return apiError(res, 404, `The model \`${body.model ?? 'auto'}\` does not exist or is not routable.`, 'not_found_error', 'model_not_found', 'model');
         }
+        // ADR-061 D3.3 — `auto` means "you pick", so the tier picks where to
+        // START. An explicit model is the caller's own pick and never reaches
+        // here. The chain itself is unchanged: same routes, same fallback
+        // order behind whichever one is promoted.
+        const routes = request === '' ? await startingRoutes(resolved, body, options) : resolved;
         if (body.stream === true) {
           return streamRoutedChat(res, routes, body, options);
         }

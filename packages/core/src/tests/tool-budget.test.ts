@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rankAndCapTools, applyToolScope, toolNameMatchesAny, toolRelevanceScore } from '../tool/policy/toolBudget.js';
+import { rankAndCapTools, applyToolScope, pinnedToolNames, toolNameMatchesAny, toolRelevanceScore } from '../tool/policy/toolBudget.js';
 
 const T = (name: string, description = '') => ({ name, description });
 
@@ -63,4 +63,37 @@ test('toolNameMatchesAny permits exact and namespaced MCP matches without wideni
   assert.equal(toolNameMatchesAny('grep_search', ['search']), false);
   assert.equal(toolNameMatchesAny('mcp_docs_delete', ['search']), false);
   assert.equal(toolNameMatchesAny('read_file', []), false);
+});
+
+test('rankAndCapTools keeps pinned tools ahead of relevance (runtime-mandated + named verbatim in the task)', () => {
+  const tools = [
+    T('profile_stage', 'begin or complete a compiled stage'),
+    T('mcp_gh_create_issue', 'open a github issue'),
+    T('mcp_slack_post', 'post a slack message'),
+    T('mcp_gh_list_prs', 'list github pull requests'),
+  ];
+  const task = 'open a github pull request for the issue, then call mcp_slack_post with the link';
+  const pinned = pinnedToolNames(task, tools.map((t) => t.name));
+  assert.deepEqual([...pinned].sort(), ['mcp_slack_post', 'profile_stage']);
+  const { kept, hidden } = rankAndCapTools(tools, task, 2, { pinned });
+  assert.deepEqual(kept.map((t) => t.name), ['profile_stage', 'mcp_slack_post']);
+  assert.equal(hidden.length, 2);
+  // Relevance alone would have picked the two github tools — the pin is what changes the outcome.
+  const plain = rankAndCapTools(tools, task, 2).kept.map((t) => t.name);
+  assert.ok(plain.includes('mcp_gh_create_issue') && plain.includes('mcp_gh_list_prs'));
+});
+
+test('pinnedToolNames matches whole tool names only, and pins nothing from empty text beyond the mandated set', () => {
+  assert.deepEqual([...pinnedToolNames('use scan_repo_lines here', ['scan_repo', 'scan_repo_lines'])], ['scan_repo_lines']);
+  // Workspace essentials are pinned whenever offered, with no mention at all.
+  assert.deepEqual([...pinnedToolNames('', ['anything', 'list_dir', 'read_file'])], ['list_dir', 'read_file']);
+  assert.deepEqual([...pinnedToolNames('', ['anything', 'goal_blocked'])], ['goal_blocked']);
+  assert.equal(pinnedToolNames('', ['anything']).size, 0);
+});
+
+test('reconcile_steer is runtime-mandated: pinned through a cut even with zero relevance', () => {
+  const tools = [T('a', 'alpha work'), T('b', 'beta work'), T('reconcile_steer', 'classify a pending steer receipt'), T('c', 'gamma work')];
+  const { kept } = rankAndCapTools(tools, 'do alpha and beta work', 2, { pinned: pinnedToolNames('do alpha and beta work', tools.map((t) => t.name)) });
+  assert.ok(kept.some((t) => t.name === 'reconcile_steer'));
+  assert.equal(kept.length, 2);
 });

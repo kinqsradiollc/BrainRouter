@@ -40,4 +40,4 @@ export type { OutboxOperation, OutboxState, SyncWording } from '../sync/outbox.j
  * survives a refresh. A surface that offered an edit this set does not permit
  * would be offering an edit the next sync silently undoes.
  */
-export { PLANNER_OWNED_FIELDS } from './itemMerge.js';
+export { PLANNER_OWNED_FIELDS, plannerFieldIsLocal, sourceOwnsCompletion } from './itemMerge.js';

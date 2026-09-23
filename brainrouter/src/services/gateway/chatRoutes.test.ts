@@ -155,6 +155,21 @@ describe('hosted Chat Completions data plane', () => {
     expect(JSON.stringify(body)).not.toMatch(/internal-gpt|secret-disabled|api.?key/i);
   });
 
+  it('advertises the org context-window cap as context_window when one is set (ADR-045 M3)', async () => {
+    const getContextCapTokens = vi.fn(async () => 32_000);
+    const { response, body } = await jsonRequest(service({ getContextCapTokens }), '/v1/models');
+
+    expect(response.status).toBe(200);
+    expect(getContextCapTokens).toHaveBeenCalledWith(auth.orgId);
+    expect(body.data[0]).toMatchObject({ id: 'gpt-5.6-sol', context_window: 32_000 });
+  });
+
+  it('omits context_window entirely for an org with no cap (byte-neutral)', async () => {
+    const getContextCapTokens = vi.fn(async () => undefined);
+    const { body } = await jsonRequest(service({ getContextCapTokens }), '/v1/models');
+    expect(body.data[0]).not.toHaveProperty('context_window');
+  });
+
   it('proxies non-streaming tools and usage while applying the exact selected effort', async () => {
     const fetchImpl = vi.fn(async (_url: URL, _init: UpstreamFetchInit) => new Response(JSON.stringify({
       id: 'chatcmpl-upstream',

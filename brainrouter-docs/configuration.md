@@ -337,9 +337,14 @@ and return `{ results: [{ index, relevance_score }] }`.
 ## Web search backend
 
 In Desktop, `web_search` uses the workspace's persistent browser session and
-Google results. Headless CLI use defaults to Google Programmable Search and
-requires `cli.webSearch.google.apiKey` plus `cli.webSearch.google.cx`. You may
-instead point at a custom backend:
+Google results — no API key involved, and `fetch_url` renders pages through the
+same built-in browser. An HTTP search provider is strictly opt-in: with nothing
+configured under `cli.webSearch`, a headless context (server, CLI, background
+agent) or a browser search that found no parseable results reports exactly that
+instead of demanding a key. To enable headless search, set
+`cli.webSearch.provider` (`google_pse` needs `cli.webSearch.google.apiKey` plus
+`cli.webSearch.google.cx`; `serper`, `brave`, `searxng`, `custom_http` take
+their own credentials), or point at a custom backend:
 
 ```env
 BRAINROUTER_WEB_SEARCH_ENDPOINT=http://your-search-proxy.example.com/search
@@ -350,6 +355,33 @@ The endpoint must accept `POST { query, maxResults }` and return
 API wrappers, Tavily, SerpAPI proxies, etc.
 
 ---
+
+## The decision tier (`cli.decisions`)
+
+The fast, typed rung between a hand-written rule and asking the expensive model
+— shell risk, which model takes an `auto` turn, whether a turn needs memory,
+whether a window made progress. **Off by default**: `provider: "rules"` answers
+with the rule your agent already computes and calls nothing.
+
+```jsonc
+{ "cli": { "decisions": {
+  "provider": "rules",        // "rules" (default) | "local"
+  "timeoutMs": 2000,          // after this, the rule floor answers
+  "maxStateChars": 8000,      // hard cap on what any one question sends
+  "local":  { "model": "" },  // required for "local" — a small, fast model you already have
+  "shell":  { "low": 0.3, "high": 0.8 },
+  "recall": { "threshold": 0.6 },
+  "route":  { "maxCandidates": 12 }
+} } }
+```
+
+The classifier is ours and runs on your model: no decision vendor, no second
+API key. A `local` provider that cannot be built never silently does nothing —
+the rule floor answers and the recorded reason names the fix.
+
+Read what it decided with `/recent-decisions`, and whether to believe it with
+`/decision-calibration`. Full guide:
+[The decision tier](guides/the-decision-tier.md).
 
 ## Full env reference
 

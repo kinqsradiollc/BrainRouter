@@ -173,7 +173,7 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Build | [incremental-skill](../../lifecycle/incremental-skill/SKILL.md) | Thin vertical slices, test each before expanding |
 | Build | [source-driven-skill](../source-driven-skill/SKILL.md) | Verify against official docs before implementing |
 | Build | [doubt-driven-skill](../doubt-driven-skill/SKILL.md) | Adversarial fresh-context review of every non-trivial decision |
-| Build | [taste-skill](../../design/taste-skill/SKILL.md) | Production-quality UI with accessibility |
+| Build | [hallmark](../../design/hallmark/SKILL.md) | Production-quality UI with accessibility; `/design <verb>` routes here |
 | Build | [api-skill](../../api/api-skill/SKILL.md) | Stable interfaces with clear contracts |
 | Verify | [testing-skill](../../api/testing-skill/SKILL.md) | Failing test first, then make it pass |
 | Verify | [browser-testing-skill](../../qa/browser-testing-skill/SKILL.md) | Chrome DevTools MCP for runtime verification |

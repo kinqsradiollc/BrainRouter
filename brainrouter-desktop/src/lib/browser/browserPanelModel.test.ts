@@ -6,8 +6,7 @@ import {
   browserViewRect,
   browserZoomLabel,
   nextBrowserOpenGeneration,
-  normalizeBrowserInput,
-} from './browserPanelModel.js';
+  normalizeBrowserInput, cycledTabIndex, shortcutTargetIsEditable } from './browserPanelModel.js';
 
 test('normalizes URLs, loopback addresses, hostnames, and searches', () => {
   assert.equal(normalizeBrowserInput(' https://example.com/a '), 'https://example.com/a');
@@ -64,4 +63,23 @@ test('browser open generations advance monotonically and ignore stale forwards',
   assert.equal(nextBrowserOpenGeneration(5, 4), 5);
   assert.equal(nextBrowserOpenGeneration(5, Number.NaN), 5);
   assert.equal(nextBrowserOpenGeneration(undefined, 0), undefined);
+});
+
+// ADR-055 P10b leftovers — tab cycling, Esc = stop, ⌘⇧J downloads; editable targets keep Esc.
+test('browserShortcut: ⌘⇧[ ] cycle tabs on both bracket and brace keys, ⌘⇧J opens downloads, Esc stops', () => {
+  assert.deepEqual(browserShortcut({ key: '[', metaKey: true, shiftKey: true }), { command: 'cycle-tab', delta: -1 });
+  assert.deepEqual(browserShortcut({ key: '{', ctrlKey: true, shiftKey: true }), { command: 'cycle-tab', delta: -1 });
+  assert.deepEqual(browserShortcut({ key: ']', metaKey: true, shiftKey: true }), { command: 'cycle-tab', delta: 1 });
+  assert.deepEqual(browserShortcut({ key: '}', metaKey: true, shiftKey: true }), { command: 'cycle-tab', delta: 1 });
+  assert.deepEqual(browserShortcut({ key: 'J', metaKey: true, shiftKey: true }), { command: 'downloads' });
+  assert.deepEqual(browserShortcut({ key: 'Escape' }), { command: 'stop' });
+  assert.equal(browserShortcut({ key: 'Escape', metaKey: true }), null);
+  assert.equal(browserShortcut({ key: '[', metaKey: true }), null, 'without shift the bracket is not a tab shortcut');
+});
+
+test('cycledTabIndex wraps both ways and shortcutTargetIsEditable spots inputs and contenteditable', () => {
+  assert.equal(cycledTabIndex(0, 3, -1), 2); assert.equal(cycledTabIndex(2, 3, 1), 0); assert.equal(cycledTabIndex(1, 3, 1), 2);
+  assert.equal(cycledTabIndex(-1, 3, 1), 1); assert.equal(cycledTabIndex(0, 0, 1), -1);
+  assert.equal(shortcutTargetIsEditable({ tagName: 'input' }), true); assert.equal(shortcutTargetIsEditable({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(shortcutTargetIsEditable({ tagName: 'DIV' }), false); assert.equal(shortcutTargetIsEditable(null), false);
 });

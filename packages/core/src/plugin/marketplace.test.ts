@@ -183,7 +183,7 @@ test('fetchMarketplace + readMarketplaceManifestAt: reads a local marketplace', 
   assert.equal(parsed.manifest?.plugins[0].name, 'acme-devkit');
 });
 
-test('MC-E3 alternate manifest names are accepted for marketplace and plugin imports only when configured', (t) => {
+test('MC-E3 alternate manifest names are accepted for marketplace and plugin imports only when configured', async (t) => {
   const home = mkTmp('br-plug-home-');
   const market = mkTmp('br-market-');
   const priorHome = process.env.BRAINROUTER_HOME;
@@ -204,11 +204,11 @@ test('MC-E3 alternate manifest names are accepted for marketplace and plugin imp
   assert.equal(parsed.manifest?.plugins[0].name, 'acme-devkit');
 
   const cfg = baseCfg([{ name: 'acme-market', sourceType: 'local', source: market }], { altManifestNames: [manifestName] });
-  const resolved = resolvePluginByName('acme-devkit', cfg);
+  const resolved = await resolvePluginByName('acme-devkit', cfg);
   assert.equal(resolved.ok, true);
   if (resolved.ok) resolved.resolved.fetched.cleanup?.();
 
-  const installed = installPluginByName('acme-devkit', { scope: 'user', config: cfg });
+  const installed = await installPluginByName('acme-devkit', { scope: 'user', config: cfg });
   assert.equal(installed.ok, true);
   const installedTo = installed.result?.ok ? installed.result.installedTo : '';
   assert.ok(fs.existsSync(path.join(installedTo, '.brainrouter-plugin', manifestName)));
@@ -223,13 +223,13 @@ test('MC-E3 resolveCliKnobs keeps alternate manifest imports opt-in and filename
   assert.deepEqual(resolveCliKnobs(baseCfg()).plugins.altManifestNames, []);
 });
 
-test('resolvePluginByName + resolvePluginInstallSpec: resolves a bundled plugin to a local source', (t) => {
+test('resolvePluginByName + resolvePluginInstallSpec: resolves a bundled plugin to a local source', async (t) => {
   const market = mkTmp('br-market-');
   t.after(() => fs.rmSync(market, { recursive: true, force: true }));
   writeLocalMarketplace(market, 'acme-market', 'acme-devkit');
   const cfg = baseCfg([{ name: 'acme-market', sourceType: 'local', source: market }]);
 
-  const r = resolvePluginByName('acme-devkit', cfg);
+  const r = await resolvePluginByName('acme-devkit', cfg);
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.equal(r.resolved.marketplace, 'acme-market');
@@ -241,13 +241,13 @@ test('resolvePluginByName + resolvePluginInstallSpec: resolves a bundled plugin 
   r.resolved.fetched.cleanup?.();
 });
 
-test('resolvePluginByName: unknown plugin / no marketplaces → error', () => {
-  assert.equal(resolvePluginByName('nope', baseCfg()).ok, false);
+test('resolvePluginByName: unknown plugin / no marketplaces → error', async () => {
+  assert.equal((await resolvePluginByName('nope', baseCfg())).ok, false);
   const market = baseCfg([{ name: 'm', sourceType: 'local', source: '/does/not/exist' }]);
-  assert.equal(resolvePluginByName('nope', market).ok, false);
+  assert.equal((await resolvePluginByName('nope', market)).ok, false);
 });
 
-test('installPluginByName: installs a bundled plugin from a LOCAL marketplace', (t) => {
+test('installPluginByName: installs a bundled plugin from a LOCAL marketplace', async (t) => {
   const home = mkTmp('br-plug-home-');
   const market = mkTmp('br-market-');
   const priorHome = process.env.BRAINROUTER_HOME;
@@ -262,7 +262,7 @@ test('installPluginByName: installs a bundled plugin from a LOCAL marketplace', 
   writeLocalMarketplace(market, 'acme-market', 'acme-devkit', '1.0.0');
   const cfg = baseCfg([{ name: 'acme-market', sourceType: 'local', source: market }]);
 
-  const r = installPluginByName('acme-devkit', { scope: 'user', config: cfg });
+  const r = await installPluginByName('acme-devkit', { scope: 'user', config: cfg });
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.equal(r.marketplace, 'acme-market');
@@ -280,7 +280,7 @@ test('installPluginByName: installs a bundled plugin from a LOCAL marketplace', 
   assert.deepEqual(leftovers, []);
 });
 
-test('installPluginByName: a failing install leaves the prior version intact (atomic)', (t) => {
+test('installPluginByName: a failing install leaves the prior version intact (atomic)', async (t) => {
   const home = mkTmp('br-plug-home-');
   const market = mkTmp('br-market-');
   const priorHome = process.env.BRAINROUTER_HOME;
@@ -295,7 +295,7 @@ test('installPluginByName: a failing install leaves the prior version intact (at
   // Install a good v1 by name.
   writeLocalMarketplace(market, 'acme-market', 'acme-devkit', '1.0.0');
   const cfg = baseCfg([{ name: 'acme-market', sourceType: 'local', source: market }]);
-  const first = installPluginByName('acme-devkit', { scope: 'user', config: cfg });
+  const first = await installPluginByName('acme-devkit', { scope: 'user', config: cfg });
   assert.equal(first.ok, true);
   if (!first.ok) return;
   const installedTo = first.result!.ok ? first.result!.installedTo : '';
@@ -308,7 +308,7 @@ test('installPluginByName: a failing install leaves the prior version intact (at
     path.join(market, 'plugins', 'acme-devkit', '.brainrouter-plugin', 'plugin.json'),
     '{ "name": "Not Kebab" }',
   );
-  const second = installPluginByName('acme-devkit', { scope: 'user', force: true, config: cfg });
+  const second = await installPluginByName('acme-devkit', { scope: 'user', force: true, config: cfg });
   assert.equal(second.ok, false);
 
   // The live v1 copy is untouched.
@@ -318,18 +318,18 @@ test('installPluginByName: a failing install leaves the prior version intact (at
   assert.deepEqual(leftovers, []);
 });
 
-test('updateMarketplaceIn: re-reads a local marketplace + records lastUpdated', (t) => {
+test('updateMarketplaceIn: re-reads a local marketplace + records lastUpdated', async (t) => {
   const market = mkTmp('br-market-');
   t.after(() => fs.rmSync(market, { recursive: true, force: true }));
   writeLocalMarketplace(market, 'acme-market', 'acme-devkit');
   const cfg = baseCfg([{ name: 'acme-market', sourceType: 'local', source: market }]);
 
-  const r = updateMarketplaceIn(cfg, 'acme-market');
+  const r = await updateMarketplaceIn(cfg, 'acme-market');
   assert.equal(r.ok, true);
   assert.equal(r.plugins, 1);
   const updated = r.config!.cli!.plugins!.marketplaces![0];
   assert.ok(updated.lastUpdated);
 
   // Unknown marketplace → error.
-  assert.equal(updateMarketplaceIn(cfg, 'nope').ok, false);
+  assert.equal((await updateMarketplaceIn(cfg, 'nope')).ok, false);
 });

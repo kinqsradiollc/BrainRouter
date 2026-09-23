@@ -1,7 +1,7 @@
 {
   "name": "dashboard",
   "private": true,
-  "version": "0.4.21",
+  "version": "0.4.22",
   "type": "module",
   "scripts": {
     "predev": "npm --prefix .. run build:packages:dashboard",
@@ -15,18 +15,18 @@
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },
   "dependencies": {
-    "@kinqs/brainrouter-core": "^0.4.21",
-    "@kinqs/brainrouter-hooks": "^0.4.21",
-    "@kinqs/brainrouter-sdk": "^0.4.21",
-    "@kinqs/brainrouter-types": "^0.4.21",
-    "@kinqs/brainrouter-ui": "^0.4.21",
+    "@kinqs/brainrouter-core": "^0.4.22",
+    "@kinqs/brainrouter-hooks": "^0.4.22",
+    "@kinqs/brainrouter-sdk": "^0.4.22",
+    "@kinqs/brainrouter-types": "^0.4.22",
+    "@kinqs/brainrouter-ui": "^0.4.22",
     "@opennextjs/cloudflare": "^1.20.1",
     "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.42.2",
     "geist": "^1.7.2",
     "katex": "^0.17.0",
     "mermaid": "^11.16.0",
-    "next": "15.5.20",
+    "next": "15.5.25",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
@@ -42,6 +42,6 @@
     "esbuild": "^0.25.12",
     "tsx": "^4.7.0",
     "typescript": "^5.5.4",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.131.0"
   }
 }

@@ -15,6 +15,7 @@ import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../.
 import { contextWindowFor } from '@kinqs/brainrouter-core/context';
 import { readPreferences, readTranscriptEntries, recordMessageFeedback, messageFeedbackTally } from '@kinqs/brainrouter-core/session';
 import { getStateFile } from '@kinqs/brainrouter-core/storage';
+import { readAutomationUsage } from '@kinqs/brainrouter-core/usage';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
 import { formatTranscriptContent } from '../_helpers.js';
@@ -170,6 +171,16 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         if (children.length > 5) console.log(chalk.gray(`    …and ${children.length - 5} more (see /agents --json)`));
       }
       console.log(`  Total this session: ${chalk.bold.cyan(totalSpent.toLocaleString())} tokens`);
+
+      // ADR-052 D2 — durable per-automation attribution (across sessions), so a
+      // runaway loop / fleet job is identifiable by name, not lost in one total.
+      const automations = readAutomationUsage(30, Date.now());
+      if (automations.length > 0) {
+        console.log(chalk.bold('\nBy automation — last 30 days'));
+        for (const a of automations.slice(0, 6)) {
+          console.log(chalk.gray(`  ${a.automation}: ${(a.promptTokens + a.completionTokens).toLocaleString()} tokens  (${a.turns} turn${a.turns === 1 ? '' : 's'}, ${a.calls} call${a.calls === 1 ? '' : 's'})`));
+        }
+      }
 
       console.log(chalk.bold('\nMemory'));
       console.log(`  Briefing tokens injected: ${chalk.gray(metrics.briefingTokensInjected.toLocaleString())}  ${chalk.gray(`(${metrics.recallRecordsConsulted} records consulted — already included in parent ↑)`)}`);

@@ -95,6 +95,37 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     credentialFields: [secretField('botToken', 'Bot token', 'Slack bot token with channel read scopes.')],
   },
   {
+    // ADR-060 D1 — one source covers every calendar product, because every
+    // product publishes iCalendar: Google's "secret address in iCal format",
+    // iCloud's shared-calendar link (webcal://), Outlook's published calendar,
+    // Fastmail, Proton, Nextcloud, any CalDAV export. The feed URL carries its
+    // own secret, so there is no credential. Events become planner items.
+    source: 'ics-calendar',
+    title: 'Calendar subscription (iCal)',
+    // The one source that exists to stay current: a calendar left on "never
+    // refresh" is a calendar that silently stops being true. The field's own
+    // help text has promised this default since the source shipped; nothing
+    // applied it, so an empty box meant the feed was read once and never again.
+    defaultPollMinutes: 30,
+    description: 'Subscribe to a calendar feed URL (.ics or webcal://) from Google, Apple iCloud, Outlook or any calendar. Events appear in the planner as mirrored, time-blocked items and refresh on a cadence.',
+    flows: ['checkpoint'],
+    credentialModes: ['none'],
+    configFields: [
+      {
+        key: 'url',
+        label: 'Feed URL',
+        type: 'string',
+        required: true,
+        description: 'The calendar\'s .ics address or webcal:// link. Google: calendar settings → "Secret address in iCal format". iCloud: share the calendar and copy the link.',
+      },
+      textField('label', 'Calendar name', 'Shown on each event. Defaults to the name inside the feed.'),
+      numberField('pollMinutes', 'Auto run minutes', 'Background refresh cadence in minutes. Defaults to 30; empty disables scheduled runs.'),
+      numberField('windowDaysBack', 'Days back', 'How far into the past to keep events. Defaults to 7.'),
+      numberField('windowDaysAhead', 'Days ahead', 'How far into the future to read events. Defaults to 60.'),
+    ],
+    credentialFields: [],
+  },
+  {
     source: 'google-drive',
     title: 'Google Drive',
     description: 'Index Drive folders, shared docs, and sheets for workspace knowledge.',
@@ -439,6 +470,31 @@ export function listConnectorCatalog(): ConnectorCatalogEntry[] {
 export function getConnectorCatalogEntry(source: ConnectorSource): ConnectorCatalogEntry | undefined {
   const entry = CATALOG_BY_SOURCE.get(source);
   return entry ? cloneCatalogEntry(entry) : undefined;
+}
+
+/**
+ * How often this connector should refresh itself, in minutes — 0 for never.
+ *
+ * Here rather than inside a host's scheduler because the rule has two halves
+ * and only one of them is the host's: the person's setting always wins,
+ * including an explicit 0 meaning "only when I ask"; an ABSENT setting falls
+ * back to whatever the source declares. An `ics-calendar` left blank used to
+ * mean "read the feed once and never again", which is the one thing a calendar
+ * subscription must not do.
+ */
+export function connectorPollMinutes(connector: {
+  source?: string;
+  config?: Record<string, unknown> | undefined;
+}): number {
+  const raw = connector.config?.pollMinutes;
+  if (raw !== undefined && raw !== null && raw !== '') {
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : 0;
+  }
+  const declared = connector.source
+    ? CATALOG_BY_SOURCE.get(connector.source as ConnectorSource)?.defaultPollMinutes
+    : undefined;
+  return declared && declared > 0 ? Math.max(1, Math.floor(declared)) : 0;
 }
 
 export function connectorSupportsFlow(source: ConnectorSource, flow: ConnectorFlow): boolean {

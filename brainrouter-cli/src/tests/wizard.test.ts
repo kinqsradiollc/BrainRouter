@@ -105,8 +105,9 @@ test('PROVIDER_CATALOG = the picker-visible built-in providers (code modules)', 
   // Built-in providers live as code modules under provider/providers/. The Onyx
   // Models-panel redesign re-introduced branded per-vendor providers
   // (anthropic, gemini, openrouter, groq, azure, zenmux) as first-class
-  // picker-visible entries alongside the OpenAI-compatible/local ones.
-  assert.deepEqual(ids.sort(), ['anthropic', 'azure', 'gemini', 'groq', 'lmstudio', 'ollama', 'openai', 'openai-compatible', 'opencode', 'openrouter', 'zenmux']);
+  // picker-visible entries alongside the OpenAI-compatible/local ones; ADR-058
+  // added matilda (Maincode) as another branded cloud.
+  assert.deepEqual(ids.sort(), ['anthropic', 'azure', 'gemini', 'groq', 'lmstudio', 'matilda', 'ollama', 'openai', 'openai-compatible', 'opencode', 'openrouter', 'zenmux']);
   // deepseek is DEFINED (for its tier ladder) but pickerVisible:false → hidden;
   // the old anthropic-via-gateway alias stays gone from the picker.
   for (const removed of ['deepseek', 'anthropic-via-gateway']) {

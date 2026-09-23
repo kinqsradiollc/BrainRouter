@@ -40,7 +40,10 @@
   --br-ui-text-muted: var(--text-faint, var(--text-muted, var(--br-color-text-muted)));
   --br-ui-text-secondary: var(--text-dim, var(--text-secondary, var(--br-color-text-secondary)));
 }
-[data-theme="light"] .br-planner .br-planner-source,
+/* The sync button sits on the header, where faint reads as quiet. The source
+   chip sits on a ROW, and a row lights up on hover and focus — faint over that
+   wash measured 3.8:1 in light, under the 4.5 the gate requires. It takes the
+   chip vocabulary's secondary instead, which is 8.5:1 on the same wash. */
 [data-theme="light"] .br-planner .br-planner-sync > button {
   color: var(--text-faint, var(--text-muted, #646a73));
 }
@@ -126,6 +129,10 @@
   box-shadow: var(--br-elevation-overlay, 0 18px 50px rgba(0, 0, 0, 0.36));
 }
 .br-planner-sync-summary { display: flex; flex-direction: column; gap: 2px; }
+.br-planner-sync-blocker { margin: var(--br-space-2, 8px) 0 0; padding: var(--br-space-2, 8px) var(--br-space-3, 12px); border: 1px solid color-mix(in srgb, var(--br-ui-warning) 45%, transparent); border-radius: var(--br-radius-control, 7px); color: var(--br-ui-text); font-size: var(--br-type-body-small, 12px); line-height: 1.45; }
+.br-planner-sync-blocker.is-local-only { border-color: var(--br-ui-border); color: var(--br-ui-text-muted); }
+.br-planner-sync-blocker.is-error, .br-planner-sync-blocker.is-unreachable { border-color: color-mix(in srgb, var(--br-ui-danger) 40%, transparent); }
+.br-planner-sync-blocker small { color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: var(--br-type-meta, 11px); }
 .br-planner-sync-summary strong { font-size: 13px; }
 .br-planner-sync-summary span { color: var(--br-ui-text-muted); font-size: var(--br-type-meta, 11px); }
 .br-planner-sync-popover ul { display: flex; flex-direction: column; gap: 0; margin: var(--br-space-3, 12px) 0; padding: 0; list-style: none; }
@@ -175,7 +182,7 @@
   padding: var(--br-space-3, 12px) var(--br-space-4, 16px) var(--br-space-6, 24px);
   scrollbar-gutter: stable;
 }
-.br-planner-capture { display: flex; gap: var(--br-space-2, 8px); margin-bottom: var(--br-space-3, 12px); }
+.br-planner-capture { display: flex; gap: var(--br-space-2, 8px); margin-bottom: var(--br-space-2, 8px); }
 .br-planner-capture input {
   flex: 1 1 auto;
   min-width: 0;
@@ -199,9 +206,9 @@
   font-weight: 650;
 }
 .br-planner-capture > button:disabled { opacity: .45; cursor: default; }
-.br-planner-drift { margin-bottom: var(--br-space-3, 12px); color: var(--br-ui-text-muted); font-size: var(--br-type-meta, 11px); line-height: 1.45; }
+.br-planner-drift { margin-bottom: var(--br-space-2, 8px); color: var(--br-ui-text-muted); font-size: var(--br-type-meta, 11px); line-height: 1.45; }
 .br-planner-group {
-  margin: var(--br-space-4, 16px) var(--br-space-2, 8px) var(--br-space-1, 4px);
+  margin: var(--br-space-3, 12px) var(--br-space-2, 8px) 2px;
   color: var(--br-ui-text-muted);
   font-size: var(--br-type-label, 10px);
   font-weight: 650;
@@ -241,20 +248,36 @@
   white-space: nowrap;
 }
 .br-planner-row.is-complete .br-planner-title { color: var(--br-ui-text-muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+/* One chip vocabulary for every fact on a row — same face, same size, whether
+   it is a button (editable) or a plain reading (mirrored). Geometry sits on the
+   bare class: nothing competes for it, and it is the contract the desktop's CSS
+   test reads. */
 .br-planner-badge,
 .br-planner-due,
 .br-planner-source {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   min-height: 24px;
-  padding: 2px var(--br-space-2, 8px);
+  padding: 0 var(--br-space-2, 8px);
   border: 1px solid var(--br-ui-border);
   border-radius: var(--br-radius-chip, 5px);
   background: transparent;
-  color: var(--br-ui-text-muted);
-  font-family: var(--br-ui-mono);
-  font-size: var(--br-type-label, 10px);
-  line-height: 16px;
   white-space: nowrap;
+}
+/* Type and colour have to out-specify `.br-planner button { font: inherit }` and
+   `{ color: inherit }`, or an editable chip drops to body type. It sits HERE,
+   ahead of the modifiers below, because it ties with them on specificity — one
+   line further down and it would quietly repaint the blocked badge's warning. */
+.br-planner .br-planner-badge,
+.br-planner .br-planner-due,
+.br-planner .br-planner-source,
+.br-planner time.br-planner-due {
+  color: var(--br-ui-text-secondary);
+  font-family: var(--br-ui-mono);
+  font-size: var(--br-type-meta, 11px);
+  line-height: 1;
 }
 .br-planner-source { cursor: pointer; }
 .br-planner-source:disabled { cursor: default; }
@@ -274,6 +297,8 @@
   font-size: 10px;
 }
 .br-planner-delete { border-color: transparent; opacity: 0; font-size: 18px; line-height: 1; }
+/* A row that cannot be deleted keeps the delete button's width, so the meta columns align across every row. */
+.br-planner-delete-slot { flex: 0 0 28px; width: 28px; min-height: 28px; }
 .br-planner-row:hover .br-planner-delete,
 .br-planner-row:focus-within .br-planner-delete,
 .br-planner-delete:focus-visible { opacity: 1; }
@@ -308,7 +333,29 @@
 .br-planner-calendar-nav button { min-width: 30px; min-height: 30px; padding: 0 var(--br-space-2, 8px); border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-control, 7px); cursor: pointer; }
 .br-planner-calendar-nav button:hover:not(:disabled) { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
 .br-planner-calendar-nav button:disabled { opacity: .45; cursor: default; }
-.br-planner-calendar-range { font-size: var(--br-type-body, 13px); }
+/* One line: the control beside it takes the slack, and a wrapped date range
+   pushed the whole bar taller for no gain. */
+.br-planner-calendar-range { font-size: var(--br-type-body, 13px); white-space: nowrap; }
+/* The control and its routes. `.br-planner-chip` positions the popover, so the
+   auto margin belongs on the wrapper the calendar bar actually lays out. */
+.br-planner-calendar-bar > .br-planner-chip { margin-left: auto; }
+.br-planner-calendar-menu { min-width: 300px; }
+.br-planner-calendar-menu > button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border) !important;
+  border-radius: var(--br-radius-chip, 5px);
+  background: var(--br-ui-surface) !important;
+  text-align: left;
+  cursor: pointer;
+}
+.br-planner-calendar-menu > button:hover { border-color: var(--br-ui-border-strong) !important; background: var(--br-ui-accent-soft) !important; }
+.br-planner-calendar-menu > button > strong { color: var(--br-ui-text); font-size: var(--br-type-body-small, 12px); font-weight: 600; }
+.br-planner-calendar-menu > button > small { color: var(--br-ui-text-secondary); font-size: var(--br-type-meta, 11px); }
+.br-planner-add-calendar { margin-left: auto; min-height: 30px; padding: 0 var(--br-space-3, 12px); border: 1px solid var(--br-ui-border) !important; border-radius: var(--br-radius-control, 7px); color: var(--br-ui-text-secondary); cursor: pointer; font-size: var(--br-type-meta, 11px); }
+.br-planner-add-calendar:hover { border-color: var(--br-ui-border-strong) !important; background: var(--br-ui-accent-soft) !important; color: var(--br-ui-text); }
 .br-planner-unscheduled { display: flex; flex: 0 0 auto; gap: var(--br-space-2, 8px); padding: 0 var(--br-space-4, 16px) var(--br-space-2, 8px); border-bottom: 1px solid var(--br-ui-border); }
 .br-planner-calendar-gutter-label { flex: 0 0 52px; padding-top: 7px; color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: var(--br-type-label, 10px); text-transform: uppercase; }
 .br-planner-unscheduled-items { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: var(--br-space-1, 4px); }
@@ -345,20 +392,247 @@
 .br-planner-block-details input { min-height: 30px; border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-control, 7px); background: var(--br-ui-surface); color: var(--br-ui-text); }
 .br-planner-block-details form > div { display: flex; justify-content: flex-end; gap: var(--br-space-2, 8px); }
 .br-planner-block-details button { min-height: 30px; padding: 0 var(--br-space-2, 8px); border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-control, 7px); cursor: pointer; }
-.br-planner-calendar-event > span { max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.br-planner-calendar-event > small { color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: 9px; white-space: nowrap; }
+/* The title is the one line that must survive. A half-hour block is 26px tall
+   and column-flex shrinks every child to fit, so the title used to collapse to
+   zero height and the block showed only "6pm · 30m" — the time of something
+   unnamed. The title no longer shrinks; the secondary lines are clipped by the
+   block's own `overflow: hidden` instead. */
+.br-planner-calendar-event > span { flex: 0 0 auto; max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.br-planner-calendar-event > small { flex: 0 1 auto; color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: 9px; white-space: nowrap; }
 .br-planner-calendar-event.is-done { opacity: .55; }
+/* A meeting reads as its calendar's: a hairline in the feed's own colour, and
+   the calendar named under the time. Not draggable — its hour is the event,
+   so the grab cursor above must not apply, and the rule sits here rather than
+   in the block's own declaration because `draggable` is what changed. */
+.br-planner-calendar-event.is-source {
+  border-left: 3px solid var(--br-planner-source-color, var(--br-ui-accent)) !important;
+  cursor: default;
+}
+.br-planner-calendar-event > em {
+  flex: 0 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  /* Secondary, not muted. The muted token is `--text-faint`, which over a
+     block's raised background in the dark theme is 3.67:1 — under the bar at
+     any size, and this is 9px. The calendar's name is the one thing on a
+     mirrored block that says whose it is; it has to be readable. */
+  color: var(--br-ui-text-secondary);
+  font-size: 9px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* All-day events have a day and no hour (ADR-060 D3), so they get a lane above
+   the grid rather than an invented 9am that would count against the day. */
+.br-planner-calendar-allday {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 700px;
+  padding: 0 var(--br-space-4, 16px) 4px;
+  border-bottom: 1px solid var(--br-ui-border);
+}
+.br-planner-calendar-allday > div {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 4px;
+}
+.br-planner-calendar-allday > div.is-today { background: color-mix(in srgb, var(--br-ui-accent) 4%, transparent); }
+.br-planner-calendar-banner {
+  overflow: hidden;
+  min-height: 18px;
+  padding: 2px 6px;
+  border-left: 3px solid var(--br-planner-source-color, var(--br-ui-accent));
+  border-radius: var(--br-radius-chip, 5px);
+  background: var(--br-ui-raised);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.br-planner-calendar-banner.is-done { opacity: .55; text-decoration: line-through; }
 .br-planner-calendar-now { position: absolute; left: 0; right: 0; z-index: 4; height: 1px; background: var(--br-ui-accent); pointer-events: none; }
 .br-planner-calendar-now::before { position: absolute; top: -3px; left: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--br-ui-accent); content: ''; }
 .br-planner-calendar-empty { margin: 0 var(--br-space-4, 16px); }
+
+/* ---- The day header: what day this is and how it is going ---- */
+.br-planner-day { display: flex; align-items: baseline; justify-content: space-between; gap: var(--br-space-3, 12px); min-height: 22px; margin-bottom: 6px; }
+.br-planner-day-title { display: flex; align-items: baseline; gap: var(--br-space-2, 8px); min-width: 0; }
+.br-planner-day-title strong { font-size: 16px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; }
+.br-planner-day-title > span { color: var(--br-ui-text-muted); font-size: var(--br-type-body-small, 12px); white-space: nowrap; }
+.br-planner-day-back,
+.br-planner-week-today,
+.br-planner-group-action {
+  min-height: 24px;
+  padding: 0 var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-chip, 5px);
+  background: transparent;
+  color: var(--br-ui-text-secondary);
+  cursor: pointer;
+  font-size: var(--br-type-meta, 11px);
+}
+.br-planner-day-back:hover, .br-planner-week-today:hover, .br-planner-group-action:hover { border-color: var(--br-ui-border-strong); color: var(--br-ui-text); background: var(--br-ui-accent-soft); }
+.br-planner-day-score { display: flex; align-items: center; gap: var(--br-space-2, 8px); color: var(--br-ui-text-muted); font-family: var(--br-ui-mono); font-size: var(--br-type-meta, 11px); white-space: nowrap; }
+.br-planner-progress { width: 120px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--br-ui-border); }
+.br-planner-progress > div { height: 100%; border-radius: 3px; background: var(--br-ui-ok); transition: width .25s ease; }
+.br-planner-day-pct { min-width: 3ch; text-align: right; color: var(--br-ui-text); }
+
+/* ---- The week strip: seven days, each carrying what it holds ---- */
+.br-planner-week { display: flex; align-items: stretch; gap: var(--br-space-1, 4px); margin-bottom: var(--br-space-2, 8px); }
+.br-planner-week-nav { flex: 0 0 auto; min-width: 26px; min-height: 38px; border: 1px solid transparent; border-radius: var(--br-radius-control, 7px); background: transparent; color: var(--br-ui-text-muted); cursor: pointer; }
+.br-planner-week-nav:hover { border-color: var(--br-ui-border); color: var(--br-ui-text); }
+.br-planner-week-day {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 2px 2px;
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-control, 7px);
+  background: var(--br-ui-surface);
+  color: var(--br-ui-text-secondary);
+  cursor: pointer;
+  line-height: 1.1;
+}
+.br-planner-week-day > span { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--br-ui-text-muted); }
+.br-planner-week-day > strong { font-size: 12px; font-weight: 650; color: var(--br-ui-text); }
+.br-planner-week-day > small { font-family: var(--br-ui-mono); font-size: 9px; color: var(--br-ui-text-muted); }
+.br-planner-week-day.is-open > small { color: var(--br-ui-text); }
+.br-planner-week-day.is-done > small { color: var(--br-ui-ok); }
+.br-planner-week-day.is-past { opacity: .72; }
+.br-planner-week-day:hover { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
+.br-planner-week-day.is-today > span, .br-planner-week-day.is-today > strong { color: var(--br-ui-accent); }
+.br-planner-week-day.is-focused { border-color: var(--br-ui-accent); background: color-mix(in srgb, var(--br-ui-accent) 10%, transparent); }
+.br-planner-week-today { align-self: center; }
+
+/* ---- Group headings can carry one action ---- */
+.br-planner-group-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--br-space-2, 8px); }
+.br-planner-group-row .br-planner-group { flex: 1 1 auto; }
+.br-planner-group-row .br-planner-group-action { margin-top: var(--br-space-2, 8px); margin-right: var(--br-space-2, 8px); }
+
+/* ---- Row meta: chips right-aligned in one column so titles line up ---- */
+.br-planner-meta {
+  display: grid;
+  /* flags · source · estimate · day — fixed tracks so the columns align ACROSS rows. */
+  grid-template-columns: 72px 108px 58px 94px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-items: end;
+  gap: var(--br-space-1, 4px);
+  margin-left: auto;
+}
+.br-planner-cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.br-planner-cell:empty { display: block; }
+.br-planner .br-planner-cell > .br-planner-due,
+.br-planner .br-planner-cell > .br-planner-estimate,
+.br-planner .br-planner-cell > .br-planner-chip { width: 100%; }
+.br-planner .br-planner-cell > .br-planner-chip > .br-planner-due,
+.br-planner .br-planner-cell > .br-planner-chip > .br-planner-estimate { width: 100%; }
+.br-planner .br-planner-chip { width: 100%; justify-content: flex-end; }
+/* A day that cannot be edited is marked by its DOTTED border, not by being
+   fainter: faint measured 3.8:1 on a lit row in light, and these chips are
+   exactly the ones mirrored rows carry. */
+.br-planner time.br-planner-due { border-style: dotted; }
+.br-planner .br-planner-source[data-stale="true"] { border-style: dashed; }
+.br-planner .br-planner-cell > .br-planner-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 22px; }
+.br-planner-due { cursor: default; }
+button.br-planner-due { cursor: pointer; }
+button.br-planner-due:hover, button.br-planner-due[aria-expanded="true"] { border-color: var(--br-ui-border-strong); color: var(--br-ui-text); }
+button.br-planner-due.is-unset { border-style: dashed; opacity: 0; }
+.br-planner-row:hover button.br-planner-due.is-unset,
+.br-planner-row:focus-within button.br-planner-due.is-unset,
+button.br-planner-due.is-unset:focus-visible,
+button.br-planner-due.is-unset[aria-expanded="true"] { opacity: 1; }
+button.br-planner-due.is-late { border-color: color-mix(in srgb, var(--br-ui-warning) 45%, transparent); color: var(--br-ui-warning); }
+button.br-planner-estimate { cursor: pointer; }
+button.br-planner-estimate:hover, button.br-planner-estimate[aria-expanded="true"] { border-color: var(--br-ui-border-strong); color: var(--br-ui-text); }
+button.br-planner-estimate.is-unset { border-style: dashed; opacity: 0; }
+.br-planner-row:hover button.br-planner-estimate.is-unset,
+.br-planner-row:focus-within button.br-planner-estimate.is-unset,
+button.br-planner-estimate.is-unset:focus-visible,
+button.br-planner-estimate.is-unset[aria-expanded="true"] { opacity: 1; }
+
+/* ---- Chip popovers (When, Estimate): anchored, non-modal, keyboard-closable ---- */
+.br-planner-chip { position: relative; display: inline-flex; }
+.br-planner-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--br-space-2, 8px);
+  min-width: 240px;
+  padding: var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border-strong);
+  border-radius: var(--br-radius-card, 10px);
+  background: var(--br-ui-raised);
+  box-shadow: var(--br-elevation-overlay, 0 18px 50px rgba(0, 0, 0, 0.36));
+  font-family: var(--br-ui-font);
+  white-space: normal;
+}
+.br-planner-popover-row { display: flex; flex-wrap: wrap; gap: var(--br-space-1, 4px); }
+.br-planner-popover-row > button,
+.br-planner-popover-days > button {
+  min-height: 28px;
+  padding: 0 var(--br-space-2, 8px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-chip, 5px);
+  background: var(--br-ui-surface);
+  color: var(--br-ui-text);
+  cursor: pointer;
+  font-size: var(--br-type-body-small, 12px);
+}
+.br-planner-popover-row > button:hover, .br-planner-popover-days > button:hover { border-color: var(--br-ui-border-strong); background: var(--br-ui-accent-soft); }
+.br-planner-popover-row > button.is-selected, .br-planner-popover-days > button.is-selected { border-color: var(--br-ui-accent); background: color-mix(in srgb, var(--br-ui-accent) 14%, transparent); }
+.br-planner-popover-row > input[type="date"] { flex: 1 1 auto; min-height: 28px; padding: 0 var(--br-space-2, 8px); border: 1px solid var(--br-ui-border); border-radius: var(--br-radius-chip, 5px); background: var(--br-ui-input); color: var(--br-ui-text); font-size: var(--br-type-body-small, 12px); }
+.br-planner-popover-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.br-planner-popover-days > button { display: flex; flex-direction: column; align-items: center; gap: 0; min-width: 0; padding: 3px 0; line-height: 1.1; }
+.br-planner-popover-days > button > span { font-size: 9px; color: var(--br-ui-text-muted); }
+.br-planner-popover-days > button > strong { font-size: 12px; font-weight: 600; }
+.br-planner-popover-days > button.is-today > strong { color: var(--br-ui-accent); }
+.br-planner-popover-days > button.is-past { opacity: .6; }
+.br-planner-estimate-popover { min-width: 200px; }
+
+/* ---- The empty day is a starting point ---- */
+.br-planner-starters { padding-top: var(--br-space-5, 20px); }
+.br-planner-starter-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--br-space-2, 8px); margin-top: var(--br-space-2, 8px); }
+.br-planner-starter-list > button,
+.br-planner-starter-list > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 72px;
+  padding: var(--br-space-3, 12px);
+  border: 1px solid var(--br-ui-border);
+  border-radius: var(--br-radius-card, 10px);
+  background: var(--br-ui-surface);
+  color: var(--br-ui-text-muted);
+  text-align: left;
+  font-size: var(--br-type-body-small, 12px);
+  line-height: 1.45;
+}
+.br-planner-starter-list > button { cursor: pointer; }
+.br-planner-starter-list > button:hover { border-color: var(--br-ui-accent); background: var(--br-ui-accent-soft); }
+.br-planner-starter-list strong { color: var(--br-ui-text); font-size: var(--br-type-body, 13px); }
 
 @media (max-width: 900px) {
   .br-planner-header { padding-right: calc(var(--br-space-3, 12px) + var(--topbar-right-clearance, 0px)); }
   .br-planner-sync > button { max-width: 210px; }
   .br-planner-row { flex-wrap: wrap; }
   .br-planner-title { flex-basis: calc(100% - 40px); }
-  .br-planner-badge:first-of-type,
-  .br-planner-source { margin-left: 32px; }
+  .br-planner-meta { grid-template-columns: repeat(4, max-content); justify-items: start; flex-basis: 100%; margin-left: 32px; }
+  .br-planner-cell:empty { display: none; }
+  .br-planner-row:not(:focus-within) .br-planner-meta .is-unset { display: none; }
+  .br-planner-popover { right: auto; left: 0; }
+  .br-planner-day { flex-wrap: wrap; }
   .br-planner-calendar { overflow-x: auto; overscroll-behavior-inline: contain; }
 }
 
@@ -372,9 +646,8 @@
   .br-planner-scroll { padding-inline: var(--br-space-2, 8px); }
   .br-planner-capture { position: sticky; top: 0; z-index: 3; padding-block: var(--br-space-1, 4px); background: var(--br-ui-canvas); }
   .br-planner-row { gap: var(--br-space-1, 4px); }
-  .br-planner-badge:first-of-type,
-  .br-planner-source { margin-left: 28px; }
-  .br-planner-due { margin-left: 28px; }
+  .br-planner-meta { margin-left: 28px; }
+  .br-planner-progress { width: 80px; }
   .br-planner-calendar-bar { position: sticky; left: 0; width: calc(100vw - 16px); }
 }
 

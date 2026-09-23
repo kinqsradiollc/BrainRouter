@@ -18,6 +18,7 @@ import {
 } from '../sync/hybridClock.js';
 import {
   causalValue, mergeField, mergeText, mergeCompletion, mergeOwnedItem, refreshMirrored, canEditLocally,
+  plannerItemFieldIsLocal, sourceOwnsCompletion,
   type PlannerItem, type Stamped,
 } from '../planner/itemMerge.js';
 
@@ -310,4 +311,56 @@ test('planner metadata on a mirrored item is editable; source fields are not', (
 
 test('every field of an owned item is editable', () => {
   assert.equal(canEditLocally({ origin: 'owned' }, 'title').allowed, true);
+});
+
+/* --------------------------------------------- attending is not a source fact */
+
+const CALENDAR = {
+  sourceId: 'connector:cal_1', sourceLabel: 'Family', fetchedAt: '2026-09-19T08:00:00.000Z',
+  documentKind: 'event' as const,
+};
+const GITHUB = {
+  sourceId: 'github', sourceLabel: 'GitHub', fetchedAt: '2026-09-19T08:00:00.000Z',
+  documentKind: 'issue' as const,
+};
+
+test('a meeting the person ticked stays ticked through the next poll; an issue does not', () => {
+  const attended: PlannerItem = {
+    id: 'evt', origin: 'mirrored', provenance: CALENDAR,
+    title: s('Standup', at(1, 0, 'remote')),
+    completed: s(true, at(900, 0, A)),
+  };
+  // The calendar projection carries no `completed` — it never has one to carry.
+  const polled = refreshMirrored(
+    attended,
+    { title: s('Standup', at(2, 0, 'remote')), provenance: CALENDAR },
+    '2026-09-19T09:00:00.000Z',
+  );
+  assert.equal(polled.completed?.value, true, 'the tick was the person\'s, so the poll leaves it alone');
+
+  const issue: PlannerItem = { ...attended, id: 'gh-1', provenance: GITHUB };
+  const reread = refreshMirrored(
+    issue,
+    { title: s('Fix it', at(2, 0, 'remote')), provenance: GITHUB },
+    '2026-09-19T09:00:00.000Z',
+  );
+  assert.equal(reread.completed, undefined, 'GitHub says whether an issue is closed; our cache does not');
+});
+
+test('completion is editable on a calendar event and refused everywhere else', () => {
+  assert.equal(canEditLocally({ origin: 'mirrored', provenance: CALENDAR }, 'completed').allowed, true);
+  assert.equal(sourceOwnsCompletion({ provenance: CALENDAR }), false);
+  const denied = canEditLocally({ origin: 'mirrored', source: 'github', provenance: GITHUB }, 'completed');
+  assert.equal(denied.allowed, false);
+  assert.match(denied.reason!, /reverted by the next refresh/);
+  // A mirrored record whose source never said what kind it is keeps the old rule.
+  assert.equal(canEditLocally({ origin: 'mirrored', source: 'github' }, 'completed').allowed, false);
+  // The item-field rule is the same rule over the fields an item actually has.
+  assert.equal(plannerItemFieldIsLocal({ origin: 'mirrored', provenance: CALENDAR }, 'completed'), true);
+  assert.equal(plannerItemFieldIsLocal({ origin: 'mirrored', provenance: CALENDAR }, 'title'), false);
+  assert.equal(
+    plannerItemFieldIsLocal({ origin: 'mirrored', provenance: CALENDAR }, 'scheduledFor'),
+    false,
+    'a block field on an item update would be accepted and then change nothing',
+  );
 });

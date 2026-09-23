@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchHtmlViaInAppBrowser, fetchViaInAppBrowser } from '../websearch/inAppBrowser.js';
+import { fetchHtmlViaInAppBrowser, fetchViaInAppBrowser, looksLikeConsentWall } from '../websearch/inAppBrowser.js';
 
 function stubPort(handlers: Record<string, (cmd: any) => any>) {
   const calls: string[] = [];
@@ -45,10 +45,47 @@ test('falls back to the semantic snapshot when page.text is empty', async () => 
     'page.snapshot': () => ({ ok: true, data: { url: 'https://x.test', title: 'Snap', nodes: [{ name: 'First' }, { value: 'Second' }] } }),
     'tabs.close': () => ({ ok: true }),
   });
-  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000);
+  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000, undefined, { readinessPollMs: 0 });
   assert.ok(out);
   assert.equal(out!.text, 'First\nSecond');
   assert.equal(out!.title, 'Snap');
+});
+
+test('ADR-044 M2 — an empty first render is RE-READ, and the fuller render is kept', async () => {
+  // page.text returns nothing on load (JS still rendering), then the article.
+  let reads = 0;
+  const port = stubPort({
+    'tabs.open': () => ({ ok: true, tabId: 'tab_r' }),
+    'page.wait': () => ({ ok: true }),
+    'page.text': () => ({ ok: true, data: { url: 'https://x.test', title: 'Doc', text: (reads++ === 0 ? '' : 'The article rendered after load.') } }),
+    'tabs.close': () => ({ ok: true }),
+  });
+  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000, undefined, { readinessPollMs: 0 });
+  assert.ok(out);
+  assert.equal(out!.text, 'The article rendered after load.', 'the re-read content is kept');
+  assert.ok(!port.calls.includes('page.snapshot'), 'a successful re-read never needs the snapshot');
+  assert.ok(port.calls.filter((c) => c === 'page.text').length >= 2, 'it re-read after the empty first render');
+});
+
+test('ADR-044 M2 — a consent wall is NOT re-read (waiting does not dismiss it)', async () => {
+  let reads = 0;
+  const port = stubPort({
+    'tabs.open': () => ({ ok: true, tabId: 'tab_c' }),
+    'page.wait': () => ({ ok: true }),
+    'page.text': () => { reads++; return ({ ok: true, data: { text: 'We use cookies. Accept all cookies to continue.' } }); },
+    'tabs.close': () => ({ ok: true }),
+  });
+  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000, undefined, { readinessPollMs: 0 });
+  // The consent text is still returned (better than nothing), but it was read ONCE — no wasted re-reads.
+  assert.ok(out && /cookies/i.test(out.text));
+  assert.equal(reads, 1, 'a consent wall short-circuits the readiness loop');
+});
+
+test('ADR-044 M2 — looksLikeConsentWall flags short consent text, not long articles', () => {
+  assert.equal(looksLikeConsentWall('We use cookies — accept all cookies?'), true);
+  assert.equal(looksLikeConsentWall('Manage your preferences'), true);
+  assert.equal(looksLikeConsentWall('A normal short sentence about otters.'), false);
+  assert.equal(looksLikeConsentWall('consent '.repeat(200)), false, 'a long page is never a wall');
 });
 
 test('returns null when the tab fails to open (→ crawler fallback), no read attempted', async () => {
@@ -66,7 +103,7 @@ test('returns null and STILL closes the tab when both reads fail', async () => {
     'page.snapshot': () => ({ ok: false }),
     'tabs.close': () => ({ ok: true }),
   });
-  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000);
+  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000, undefined, { readinessPollMs: 0 });
   assert.equal(out, null);
   assert.ok(port.calls.includes('tabs.close'), 'tab is closed even on failure');
 });

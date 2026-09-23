@@ -48,7 +48,12 @@ export interface PlannerItemCapabilities {
 
 export interface PlannerProvenanceView {
   source: string;
+  /** The source's id, as the host projected it (`connector:cal_1`, `github`). */
   kind?: string;
+  /** Which kind of record the source handed over — an event may be ticked. */
+  documentKind?: string;
+  /** The source's own colour (`#rrggbb`), when it declares one. */
+  color?: string;
   externalId?: string;
   url?: string;
   fetchedAt?: string;
@@ -97,10 +102,21 @@ export interface PlannerSyncIssue {
   retryRequested?: boolean;
 }
 
+export type PlannerSyncBlockerKind = 'local-only' | 'sign-in' | 'organization' | 'unreachable' | 'error';
+export interface PlannerSyncBlocker {
+  kind: PlannerSyncBlockerKind;
+  /** One sentence a person can act on ("The server at http://localhost:3747 is not answering."). */
+  message: string;
+  /** When the host first saw this (ISO). */
+  since?: string;
+}
+
 export interface PlannerSyncView {
   label: string;
   pendingCount: number;
   issues: PlannerSyncIssue[];
+  /** Why changes are not moving: what the host learned on its last attempt. */
+  blocker?: PlannerSyncBlocker;
   retrying?: boolean;
   lastSyncedAt?: string;
   onRetry?: () => void;
@@ -122,6 +138,14 @@ export interface PlannerOps {
   openNotesPage?: (itemId: string, title: string, notes: string) => void;
   openRef?: (uri: string) => void;
   openSource?: (url: string) => void;
+  /**
+   * Open the host's connector flow, where a calendar feed is subscribed to
+   * (ADR-060 D4). Omitted by a host with nowhere useful to send the person —
+   * the route then does not appear at all, rather than going nowhere.
+   */
+  subscribeCalendar?: () => void;
+  /** Import a one-off `.ics` export — the host picks the file and stores it. */
+  importCalendar?: () => void;
 }
 
 export interface PlannerSurfaceProps {
@@ -130,6 +154,12 @@ export interface PlannerSurfaceProps {
   today: string;
   sync: PlannerSyncView;
   staleSources?: string[];
+  /**
+   * What just happened, in one line — "Semester 2 imported.", or why it did
+   * not. Something the person set off has to answer them; the alternative is a
+   * click that appears to do nothing.
+   */
+  notice?: string | null;
   driftNote?: string | null;
   refLabels?: Record<string, string>;
   ops: PlannerOps;

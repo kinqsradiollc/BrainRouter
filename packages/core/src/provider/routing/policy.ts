@@ -50,8 +50,16 @@ export function classifyRouterFailure(error: unknown): RouterFailure {
   if (status === 404 || (status === 400 && /unsupported|unknown|not found|does not exist|invalid model/.test(lower))) {
     return { kind: 'model_lockout', retryable: true, status, retryAfterMs, message };
   }
-  if (/context length|context window|maximum context|too many tokens|prompt is too long|tokens? exceed|413/.test(lower)) {
+  if (/context length|context window|maximum context|too many tokens|prompt is too long|tokens? exceed|413|\bcontext_too_large\b/.test(lower)) {
     return { kind: 'context_overflow', retryable: true, status, retryAfterMs, message };
+  }
+  // Provider-native stream error codes (Matilda's `error` event carries a
+  // `code`, which the adapter puts in the message). The platform's own step or
+  // time budget, an upstream outage, a stall: transient, worth another try —
+  // and never retried once text has painted (the stream-started guard above).
+  // `content_blocked` is deliberately absent: a safety refusal is final.
+  if (/\b(request_budget_exceeded|deadline_exceeded|upstream_unavailable|internal_error|stalled|stream_aborted|rate_limited|degenerate_output)\b/.test(lower)) {
+    return { kind: 'provider_retryable', retryable: true, status, retryAfterMs, message };
   }
   if (status === 429 || (typeof status === 'number' && status >= 500) || /timeout|timed out|econnreset|network|fetch failed/i.test(message)) {
     return { kind: 'provider_retryable', retryable: true, status, retryAfterMs, message };

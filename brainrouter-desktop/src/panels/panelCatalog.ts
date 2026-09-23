@@ -17,7 +17,7 @@
 // keeping them out of this union is what stops a new call site opening a tab
 // that nothing renders.
 // `peers` arrives with ADR-034 (messages that arrive) and IS a member.
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs' | 'trajectory' | 'request-trace';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers' | 'runs' | 'trajectory' | 'request-trace' | 'diagrams';
 
 /**
  * ADR-028 G3 — panel groups.
@@ -80,6 +80,7 @@ export const PANEL_DEFS: readonly PanelDef[] = [
   { id: 'attachments', title: 'Attachments', icon: 'file', group: 'knowledge' },
 
   { id: 'atlas', title: 'Atlas', icon: 'atlas', group: 'environment' },
+  { id: 'diagrams', title: 'Diagrams', icon: 'atlas', group: 'knowledge' },
   { id: 'workflows', title: 'Workflows', icon: 'bolt', group: 'work' },
   { id: 'memory', title: 'Saved knowledge', icon: 'pin', group: 'knowledge' },
   { id: 'knowledge', title: 'Project knowledge', icon: 'brain', group: 'knowledge' },

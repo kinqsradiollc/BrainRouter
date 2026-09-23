@@ -54,7 +54,7 @@ Hallmark has one default behaviour and three explicit verbs.
 | `hallmark redesign <target> [--mood <name>]` | Take the target's content and intent, then redesign the visual structure **inside the existing implementation boundaries unless the user explicitly confirms a full rebuild.** New section rhythm, new heading placement, new component voice. Preserve existing routes, component ownership, copy intent, brand, and information architecture; replace only the visual/interaction layer needed for the requested scope. |
 | `hallmark study <screenshot \| URL>` | The user pasted or attached an image of a design they admire, **or** pasted a URL to a live page. Extract the **DNA** — macrostructure, archetypes, type-pairing, colour anchor — and produce a diagnosis report, then optionally rebuild the user's content using the extracted DNA **or** emit a portable `design.md` of the DNA. Detection is automatic: a URL (`http://` / `https://` prefix) routes to URL mode; anything else routes to image mode. **URL mode** reads the page's HTML and CSS via WebFetch — it can name exact fonts and exact colour values, but can't judge rhythm. After the diagnosis, the user has three follow-ups: build with the DNA (handoff to default), lock the DNA into a portable `design.md` (opt-in via "lock the DNA" / "give me a design.md"), or stop at the diagnosis. **Never copies pixels. Refuses template-marketplace URLs. Tighter refusal layer for `design.md` emission than for the diagnosis itself — URL-mode emission requires attestation that the source is the user's own or a public reference for their own brand. Falls back to asking for a screenshot if the URL is auth-walled, a JS-only SPA shell, or otherwise un-readable.** Load [`references/study.md`](references/study.md) before this verb runs. |
 
-If the user types anything that does not clearly map to `audit`, `redesign`, or `study`, treat it as default. If the user attaches an image or pastes a URL without a verb prefix, ask: *"Should I `study` this (extract the DNA), or should I treat it as a reference for a fresh build?"*
+If the user types anything that does not clearly map to `audit`, `redesign`, `study`, or one of the routed verbs below, treat it as default. If the user attaches an image or pastes a URL without a verb prefix, ask: *"Should I `study` this (extract the DNA), or should I treat it as a reference for a fresh build?"*
 
 **Implementation safety rail.** Hallmark is a design skill, not a license to bulldoze a codebase. In any existing project:
 - Never delete production files, route trees, component directories, or an old website unless the user explicitly asks for deletion or approves a file-level plan that lists the deletions.
@@ -63,6 +63,46 @@ If the user types anything that does not clearly map to `audit`, `redesign`, or 
 - Before editing, state the exact files you expect to modify/create/delete. Deletions require explicit confirmation.
 
 The default Design workflow always picks a theme. By default it picks one of the **21 named themes** — the *catalog* — and rotates among them per the diversification rule. There is also a quiet *custom* branch that constructs a one-off OKLCH palette + free-font pairing for the brief; the custom route fires **only when the brief carries a creative-intent signal** (the user names a brand colour, names a multi-attribute vibe the catalog can't carry, or explicitly asks for a custom theme). For vanilla briefs, the user never sees the words "catalog" or "custom" — the catalog runs silently. See Step 1 (signal detection) and Step 2.6 (dispatch); the protocol lives in [`references/custom-theme.md`](references/custom-theme.md).
+
+---
+
+## Routed verbs — `/design <verb>`
+
+Beyond the three hand-typed verbs above, Hallmark is the target of the
+`/design` command in the CLI and the desktop. Each verb is a bounded playbook
+in `references/verbs/<verb>.md`; load that file before doing anything else,
+then follow it. A mode (`--mode persuade|operate|read|experience`) sets the
+verb's defaults — see [`references/modes.md`](references/modes.md) — and a
+world (`--world <id>`) picks the look it routes to — see
+[`references/genres/worlds.md`](references/genres/worlds.md).
+
+| Verb | Edits | What it does | Reference |
+| --- | --- | --- | --- |
+| `critique` | no | two verdicts kept apart — fit against `product.md`, craft against the tells | [`verbs/critique.md`](references/verbs/critique.md) |
+| `audit` | no | ranked anti-pattern punch list with file:line and a one-line fix each | [`verbs/audit.md`](references/verbs/audit.md) |
+| `redesign` | yes | new visual structure inside the existing implementation boundaries | [`verbs/redesign.md`](references/verbs/redesign.md) |
+| `study` | no | extract the DNA of a screenshot or URL into a diagnosis | [`verbs/study.md`](references/verbs/study.md) |
+| `shape` | no | brief → concept: macrostructure, world, type, the one asymmetry, trade-offs | [`verbs/shape.md`](references/verbs/shape.md) |
+| `layout` | yes | grid, section order and rhythm, alignment — the skeleton | [`verbs/layout.md`](references/verbs/layout.md) |
+| `typeset` | yes | one type system: pairing, scale, measure, leading, tokens | [`verbs/typeset.md`](references/verbs/typeset.md) |
+| `colorize` | yes | colour as roles with passing contrast and tokens | [`verbs/colorize.md`](references/verbs/colorize.md) |
+| `animate` | yes | motion that explains a change; reduced motion honoured | [`verbs/animate.md`](references/verbs/animate.md) |
+| `polish` | yes | the last five percent: spacing, alignment, states, detail | [`verbs/polish.md`](references/verbs/polish.md) |
+| `harden` | yes | empty / loading / error / overflow / keyboard / zoom — reality | [`verbs/harden.md`](references/verbs/harden.md) |
+| `onboard` | yes | first-run and zero-data paths that teach by doing | [`verbs/onboard.md`](references/verbs/onboard.md) |
+| `adapt` | yes | breakpoints from content, touch targets, platform fit | [`verbs/adapt.md`](references/verbs/adapt.md) |
+| `optimize` | yes | perceived performance: no shift, matching skeletons, fonts that do not flash | [`verbs/optimize.md`](references/verbs/optimize.md) |
+| `clarify` | yes | words, labels, hierarchy, affordances — the next action is obvious | [`verbs/clarify.md`](references/verbs/clarify.md) |
+| `distill` | yes | fewer elements, same meaning; never deletes routes or data | [`verbs/distill.md`](references/verbs/distill.md) |
+| `bolder` | yes | a stronger point of view without noise | [`verbs/bolder.md`](references/verbs/bolder.md) |
+| `quieter` | yes | lower the volume; hierarchy survives | [`verbs/quieter.md`](references/verbs/quieter.md) |
+| `document` | yes | `design.md` written from what the code actually does | [`verbs/document.md`](references/verbs/document.md) |
+| `product` | yes | `product.md`: audience, jobs, non-goals, vocabulary, feel | [`verbs/product.md`](references/verbs/product.md) |
+
+Every editing verb runs `design_detect` before and after and must not raise
+the count; every non-editing verb reports and touches nothing. The verbs are
+the whole vocabulary — a request that names none of them is the default
+Design workflow, not a new verb.
 
 ---
 

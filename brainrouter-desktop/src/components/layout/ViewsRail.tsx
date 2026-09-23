@@ -127,6 +127,8 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
     { id: 'comprehension' as PanelId, title: 'Understand', hint: '', icon: 'brain', badge: '' },
     { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
     { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '' },
+    // ADR-056 D-A5 — typed diagrams with receipts, beside the map that seeds them.
+    { id: 'diagrams' as PanelId, title: 'Diagrams', hint: '', icon: 'atlas', badge: '' },
     { id: 'prototype' as PanelId, title: 'Prototype', hint: '', icon: 'bolt', badge: '' },
     { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt',
       badge: toolLog.length ? String(toolLog.length) : '' },

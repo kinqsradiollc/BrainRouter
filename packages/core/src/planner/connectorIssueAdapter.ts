@@ -111,6 +111,7 @@ export function connectorIssueToPlannerItem(
       externalId: document.id,
       sourceUrl: document.url,
       fetchedAt,
+      documentKind: document.kind,
     },
     title: { value: title, at },
     ...(estimate !== undefined ? { estimateMinutes: estimate, estimateUpdatedAt: at } : {}),
@@ -154,11 +155,18 @@ export function createConnectorIssueSourceAdapter(input: ConnectorIssueProjectio
  * returns.
  */
 
-export interface PlannerIssueProjectionRequest {
+/**
+ * The runtime's projection hook. It hands over a run's documents WHOLE and the
+ * sink routes them by `kind` — issues here, calendar events through
+ * `connectorEventAdapter` (ADR-060 D3). It was `projectPlannerIssues` until a
+ * second kind existed; a hook named for one of the things it carries is how a
+ * surface ends up projecting events through an issue path nobody re-read.
+ */
+export interface PlannerDocumentProjectionRequest {
   connector: ConnectorRecord;
   documents: readonly ConnectorDocumentRecord[];
 }
 
-export type PlannerIssueProjection = (
-  request: PlannerIssueProjectionRequest,
+export type PlannerDocumentProjection = (
+  request: PlannerDocumentProjectionRequest,
 ) => number | Promise<number>;

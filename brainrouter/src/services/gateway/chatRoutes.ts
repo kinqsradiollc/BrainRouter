@@ -10,6 +10,7 @@ import type { ProviderModelRecord } from '../../providers/modelPolicyStore.js';
 import { resolveRequestUrl } from '../../providers/wireFormat.js';
 import type { ResolvedProviderConfig } from '../../providers/types.js';
 import type { GatewayAuthContext } from './auth.js';
+import { advertisedContextWindow } from './orgContextSettings.js';
 import { selectEdgeDialer, type EgressMode } from './egress/edgeDialerSelection.js';
 import type { EgressTunnelTransport } from './egress/tunnelTransport.js';
 import {
@@ -97,6 +98,12 @@ function shaperAcquire(shaper: RateShaper, res: ExpressResponse, key: string): (
 
 export interface GatewayDataPlaneService {
   listModels(auth: GatewayAuthContext): Promise<ProviderModelRecord[]>;
+  /**
+   * ADR-045 M3 — the org's context-window cap in tokens, or undefined when the
+   * org set none. Optional so existing service stubs need not implement it; the
+   * `/v1/models` route advertises the cap as `context_window` when present.
+   */
+  getContextCapTokens?(orgId: string): Promise<number | undefined>;
   resolveModel(
     auth: GatewayAuthContext,
     publicModelId: string,
@@ -575,7 +582,16 @@ export function registerGatewayDataPlane(
   const shaper = new RateShaper({ ...DEFAULT_SHAPER_BUDGET, ...options.rateShaper });
   app.get('/v1/models', async (_req: Request, res: ExpressResponse) => {
     try {
-      const models = await service.listModels(authContext(res));
+      const auth = authContext(res);
+      const [models, capTokens] = await Promise.all([
+        service.listModels(auth),
+        service.getContextCapTokens ? service.getContextCapTokens(auth.orgId) : Promise.resolve(undefined),
+      ]);
+      // ADR-045 M3 — when the org caps its context window, advertise it as the
+      // standard OpenAI `context_window` field so a well-behaved client sizes
+      // its budget to the org ceiling. Managed models carry no per-model window
+      // today, so the cap IS the advertised window; omitted entirely when unset.
+      const window = advertisedContextWindow(undefined, capTokens);
       res.setHeader('cache-control', 'private, no-store');
       res.json({
         object: 'list',
@@ -584,6 +600,7 @@ export function registerGatewayDataPlane(
           object: 'model',
           created: createdSeconds(model.createdAt),
           owned_by: 'brainrouter',
+          ...(window !== undefined ? { context_window: window } : {}),
         })),
       });
     } catch {

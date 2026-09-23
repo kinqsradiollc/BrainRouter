@@ -10,6 +10,10 @@ import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
 import { readPlan } from '../../task/taskStore.js';
 import { pendingSteeringConstraint } from '../../task/steeringReceiptStore.js';
+import { emitTurnStep, guardStepFromStatus } from './turnPath.js';
+
+/** Hard per-turn ceiling on preamble/promise nudges, across budget resets. */
+const PREAMBLE_GUARD_TOTAL_MAX = 6;
 import {
   mergePendingChildIds,
   unsynthesizedChildIds,
@@ -37,6 +41,10 @@ import {
   buildBudgetCheckpoint,
   isBudgetCheckpoint,
 } from '../guards/turnBudget.js';
+import { buildNoProgressCheckpoint, decideTurnProgress, type ProgressLevel, type ProgressToolCall } from '../guards/progressDecision.js';
+import { decisionPortForSession } from '../../decision/fromKnobs.js';
+import { decisionEntry, recordDecision } from '../../decision/recentDecisions.js';
+import { listRecentDenials } from '../../exec/runtime/recentDenials.js';
 import {
   buildDocsOnlyVerificationNote,
   buildVerificationNudge,
@@ -86,6 +94,11 @@ export class TurnLifecycleCoordinator {
   private readonly planCompletedAtTurnStart: number;
   private budgetCheckpointsFired = 0;
   private preambleGuardFired = 0;
+  // Progress earns another nudge: the preamble/promise budget (2) resets when
+  // the model ran tools since the last nudge — it is not spinning, it is
+  // working in prose-then-tool steps. A hard per-turn total still bounds it.
+  private toolCallsAtLastPreambleGuard = 0;
+  private preambleGuardTotal = 0;
   private fanOutGuardFired = 0;
   private fanOutDifferentiationGuardFired = 0;
   private deliverableGuardFired = 0;
@@ -114,7 +127,7 @@ export class TurnLifecycleCoordinator {
     }
   }
 
-  beginLoop(loopCount: number): string | undefined {
+  async beginLoop(loopCount: number): Promise<string | undefined> {
     if (this.agent.interruptRequested) {
       this.agent.interruptRequested = false;
       const interruptMessage = {
@@ -141,18 +154,71 @@ export class TurnLifecycleCoordinator {
     ) {
       this.budgetCheckpointsFired += 1;
       const used = loopCount - 1;
+      // ADR-061 D3.4 — score the window from OUTSIDE the loop before asking the
+      // model to introspect. On the default `rules` provider this is `some`,
+      // which is the existing prompt, unchanged.
+      const progress = await this.scoreWindowProgress(used);
       const checkpointMessage = {
         role: 'user',
-        content: buildBudgetCheckpoint(used, this.maxLoops - used),
+        content: progress === 'none'
+          ? buildNoProgressCheckpoint(used, this.maxLoops - used, this.recentDenialReasons())
+          : buildBudgetCheckpoint(used, this.maxLoops - used),
       };
       this.agent.chatHistory.push(checkpointMessage);
       this.agent.recordTranscript({ ...checkpointMessage, name: 'guard' });
       this.callbacks.onStatusUpdate(
-        `Tool-budget checkpoint at ${used} calls — reassessing whether to continue`,
+        progress === 'none'
+          ? `Tool-budget checkpoint at ${used} calls — the last window made no progress`
+          : `Tool-budget checkpoint at ${used} calls — reassessing whether to continue`,
       );
     }
     this.callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
     return undefined;
+  }
+
+  /**
+   * The window's own tool results, scored by the decision tier. Reads the tail
+   * of chat history rather than threading state through the loop: the tool
+   * messages ARE the record of what the window did.
+   */
+  private async scoreWindowProgress(used: number): Promise<ProgressLevel> {
+    try {
+      const calls: ProgressToolCall[] = [];
+      for (let i = this.agent.chatHistory.length - 1; i >= 0 && calls.length < 12; i -= 1) {
+        const message = this.agent.chatHistory[i] as {
+          role?: string; name?: string; content?: unknown; isError?: boolean;
+        };
+        if (message?.role !== 'tool') continue;
+        calls.unshift({
+          name: String(message.name ?? 'tool'),
+          result: String(message.content ?? '').slice(0, 400),
+          ...(message.isError ? { isError: true } : {}),
+        });
+      }
+      if (calls.length === 0) return 'some';
+      const { port, maxStateChars } = decisionPortForSession();
+      const scored = await decideTurnProgress(port, calls, { maxStateChars });
+      try {
+        recordDecision(this.agent.workspaceRoot, this.agent.sessionKey, decisionEntry(
+          'checkpoint', 'progress', scored.answer,
+          { outcome: scored.level, threshold: `after ${used} calls` },
+        ));
+      } catch { /* best-effort */ }
+      return scored.level;
+    } catch {
+      // A checkpoint must never be the thing that breaks a turn.
+      return 'some';
+    }
+  }
+
+  /** The last few refusals this session, as the model should read them. */
+  private recentDenialReasons(): string[] {
+    try {
+      return listRecentDenials(this.agent.workspaceRoot, this.agent.sessionKey, 5)
+        .map((denial) => `${denial.tool}: ${denial.reason}`);
+    } catch {
+      return [];
+    }
   }
 
   setPromisedToolsAtCount(count: number): void {
@@ -190,11 +256,20 @@ export class TurnLifecycleCoordinator {
   evaluateTerminalGuards(input: TerminalGuardInput): TerminalGuardResult {
     const content = input.response.content ?? '';
     if (
+      this.preambleGuardFired > 0
+      && this.agent.lastTurnToolCalls > this.toolCallsAtLastPreambleGuard
+      && this.preambleGuardTotal < PREAMBLE_GUARD_TOTAL_MAX
+    ) {
+      this.preambleGuardFired = 0;
+    }
+    if (
       this.preambleGuardFired < 2
       && this.agent.lastTurnToolCalls > 0
       && !content.trim()
     ) {
       this.preambleGuardFired += 1;
+      this.preambleGuardTotal += 1;
+      this.toolCallsAtLastPreambleGuard = this.agent.lastTurnToolCalls;
       this.continueWithGuard(
         emptyAnswerGuardMessage(this.agent.lastTurnToolCalls),
         `Recovery: empty-answer-after-tools (${this.preambleGuardFired}/2) — forcing synthesis`,
@@ -211,6 +286,8 @@ export class TurnLifecycleCoordinator {
       )
     ) {
       this.preambleGuardFired += 1;
+      this.preambleGuardTotal += 1;
+      this.toolCallsAtLastPreambleGuard = this.agent.lastTurnToolCalls;
       this.continueWithGuard(
         stalledPreambleGuardMessage(content),
         `Recovery: preamble-without-action (${this.preambleGuardFired}/2) — forcing continuation`,
@@ -224,6 +301,8 @@ export class TurnLifecycleCoordinator {
       && this.agent.lastTurnToolCalls === this.promisedToolsAtCount
     ) {
       this.preambleGuardFired += 1;
+      this.preambleGuardTotal += 1;
+      this.toolCallsAtLastPreambleGuard = this.agent.lastTurnToolCalls;
       this.promisedToolsAtCount = -1;
       this.continueWithGuard(
         promisedToolsGuardMessage(),
@@ -429,6 +508,9 @@ export class TurnLifecycleCoordinator {
     this.agent.chatHistory.push(guardMessage);
     this.agent.recordTranscript({ ...guardMessage, name: 'guard' });
     this.callbacks.onStatusUpdate(status);
+    // ADR-059 — a guard re-prompting the model is a step of the turn the person
+    // must be able to see afterwards, not just a status line that ticks past.
+    emitTurnStep(this.agent, this.callbacks, guardStepFromStatus(status));
     return true;
   }
 }

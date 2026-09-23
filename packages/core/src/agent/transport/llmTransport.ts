@@ -10,6 +10,8 @@ import { isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSup
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../../provider/providers/definition.js';
 import type { ProviderDefinition } from '../../provider/providers/definition.js';
+import { shapeChatCompletionToLimits, type ShapeableChatBody } from '../../provider/requestLimits.js';
+import { callExternalAgentEngine } from './externalAgentEngine.js';
 import { effortToWireLevel, type EffortLevel } from '../../session/preferences/preferencesStore.js';
 import type { PromptLayers } from '../../prompt/systemPrompt.js';
 import { computePrefixFingerprint } from '../../context/contextRegions.js';
@@ -23,6 +25,9 @@ import {
   type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
 } from './nativeProviders.js';
 import { parseAnthropicMessageStream, parseGeminiStream, type NativeStreamHandlers } from './nativeProviderStream.js';
+import { MatildaSandboxDetourError, buildMatildaChatPayload, matildaConversationIdFor, parseMatildaChatStream } from '../../provider/providers/matilda/nativeChat.js';
+import { createDsmlInterceptor, newToolCallId } from '../../provider/providers/matilda/dsml.js';
+import { readWithStallWatchdog } from './streamStall.js';
 
 export interface ChatCompletionPayload {
   model: string;
@@ -107,7 +112,9 @@ export function supportsReasoningEffortField(config: LLMConfig): boolean {
  * endpoint) — treated as the OpenAI-compatible default downstream.
  */
 export function activeProviderDef(config: LLMConfig): ProviderDefinition | undefined {
-  return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase());
+  // ADR-041 A41-9 — config.sessionKey resolves a session-scoped BYOK provider
+  // first; undefined for an ordinary config, so this is the global path unchanged.
+  return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase(), config.sessionKey);
 }
 
 function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderDefinition['binaryEffortValueMap'] | undefined {
@@ -115,7 +122,7 @@ function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderD
   return undefined;
 }
 
-export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate' | 'matilda-chat' | 'external-agent';
 
 function modelSupportsResponsesFormat(model: string | undefined): boolean {
   const id = normalizeModelName(model ?? '');
@@ -134,13 +141,17 @@ export function resolveRequestFormat(config: LLMConfig, effectiveEndpoint?: stri
   // (see `resolveCliKnobs → normalizeProviderRequestFormat`); an unknown
   // provider key is a no-op, so adding overrides for new providers never
   // throws and an obsolete provider id is silently ignored.
-  const override = getCliKnobs().providerRequestFormat[providerId];
   const builtIn = def?.requestFormat ?? 'chat-completions';
+  // ADR-047 D2 — an engine (external-agent) provider has no HTTP endpoint and its
+  // format is INTRINSIC: a wire-format override cannot turn a subprocess engine
+  // into an HTTP call. Resolve it by provider id, before the override + any gating.
+  if (builtIn === 'external-agent') return 'external-agent';
+  const override = getCliKnobs().providerRequestFormat[providerId];
   const allowedFormat = override ?? builtIn;
   // NATIVE (non-OpenAI-compatible) formats are an explicit opt-in — honor them
   // directly. They carry their own URL/headers/payload (see nativeProviders.ts)
   // and bypass the Responses/Chat gating below entirely.
-  if (allowedFormat === 'anthropic-messages' || allowedFormat === 'gemini-generate') return allowedFormat;
+  if (allowedFormat === 'anthropic-messages' || allowedFormat === 'gemini-generate' || allowedFormat === 'matilda-chat') return allowedFormat;
   if (allowedFormat !== 'responses') return 'chat-completions';
   const builtInEndpoint = def?.endpoint;
   const endpoint = effectiveEndpoint || config.endpoint || builtInEndpoint || 'https://api.openai.com/v1';
@@ -316,14 +327,24 @@ export function effortForTurnSelection(
   mode: { effort: EffortLevel; executionMode?: string },
   _model: string | undefined,
   override: EffortLevel | undefined,
+  perModelEffort?: EffortLevel,
 ): EffortLevel {
+  // A per-run override (a spawned child's fixed effort) always wins. Otherwise a
+  // per-model default (ADR-052 D2) wins over the session effort, so switching
+  // models keeps each model's tuned level.
   if (override) return override;
-  return mode.effort;
+  return perModelEffort ?? mode.effort;
 }
 
 export interface BuildPayloadOptions {
   /** Reasoning-depth preference, when provider supports it. `medium` is a no-op. */
   effort?: EffortLevel;
+  /**
+   * ADR-058 D13 — the calling session, so a native surface that wants a
+   * per-conversation id (Matilda's `conversation_id`) can key it per session.
+   * Optional; auxiliary calls (context prep, learning) leave it unset.
+   */
+  sessionKey?: string;
   /** DESK-6 — abort the in-flight request the instant the user presses Stop. */
   signal?: AbortSignal;
   /**
@@ -672,6 +693,9 @@ export function buildChatCompletionPayload(
   tools: any[],
   options: BuildPayloadOptions = {},
 ): ChatCompletionPayload {
+  // Provider-declared request limits (ProviderDefinition.limits, ADR-058 D12) —
+  // applied at the very end, once the body is fully assembled (see below).
+  const limits = activeProviderDef(config)?.limits;
   const mappedMessages = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
 
   const body: ChatCompletionPayload = {
@@ -718,6 +742,12 @@ export function buildChatCompletionPayload(
       if (value !== undefined) extra[key] = value;
     }
   }
+
+  // ADR-058 D12 — shape to the provider's declared limits LAST, so the shaper
+  // measures the final body: messages capped to `maxMessageChars`, then the tool
+  // list fitted to `maxBodyBytes` by task relevance. The same shaper serves the
+  // server gateway, so every path fronting a constrained provider agrees.
+  if (limits) shapeChatCompletionToLimits(body as unknown as ShapeableChatBody, limits);
 
   return body;
 }
@@ -851,6 +881,16 @@ function buildNativeInput(
   options: BuildPayloadOptions,
 ): NativeBuildInput {
   const mapped = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
+  // A native adapter may speak a result/error distinction on the wire (Matilda's
+  // `[Client tool error: …]`). The chat-completions cleaner drops the runtime's
+  // `isError` verdict — an unknown field would 400 a strict endpoint — so it is
+  // re-attached here, by tool_call_id, for the native build input only.
+  const failedToolCalls = new Set<string>(
+    messages.filter((m: any) => m?.role === 'tool' && m.isError === true && m.tool_call_id).map((m: any) => String(m.tool_call_id)),
+  );
+  if (failedToolCalls.size > 0) {
+    for (const m of mapped) if (m?.role === 'tool' && failedToolCalls.has(String(m.tool_call_id))) m.isError = true;
+  }
   let system = '';
   let rest = mapped;
   if (mapped[0]?.role === 'system') {
@@ -889,6 +929,11 @@ async function callNativeProvider(
   tools: any[],
   options: BuildPayloadOptions,
 ): Promise<NativeOutput> {
+  // ADR-058 D13 — Matilda's native chat endpoint only speaks SSE, so the
+  // non-streaming path consumes the same stream with no delta handlers.
+  if (format === 'matilda-chat') {
+    return callNativeProviderStream(format, config, endpoint, apiKey, messages, tools, options, {});
+  }
   const buildInput = buildNativeInput(format, config, messages, tools, options);
   const body = format === 'anthropic-messages'
     ? buildAnthropicMessagesPayload(buildInput)
@@ -940,17 +985,25 @@ async function callNativeProvider(
     : normalizeGeminiOutput(data, endpoint, config.model);
 }
 
-/** Read a Response body as an async iterable of decoded text chunks (for SSE). */
+/** Read a Response body as an async iterable of decoded text chunks (for SSE).
+ *  Every read is bounded by the stall watchdog (`cli.llmStreamStallMs`): the
+ *  request timeout is cleared at the 200, so this is the only thing that stops a
+ *  silent stream from hanging the turn. */
 async function* readResponseTextChunks(res: Response): AsyncIterable<string> {
   const reader = (res.body as any).getReader();
   const decoder = new TextDecoder();
+  const stallMs = getCliKnobs().llmStreamStallMs;
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readWithStallWatchdog<Uint8Array>(reader, stallMs, 'the provider stream');
       if (done) break;
       if (value) yield decoder.decode(value, { stream: true });
     }
   } finally {
+    // An early exit (the consumer stopped reading — e.g. the Matilda sandbox cut)
+    // must close the connection, not only release the lock: a released reader
+    // leaves the response body streaming into a buffer nobody drains.
+    try { await reader.cancel?.(); } catch { /* already closed */ }
     try { reader.releaseLock?.(); } catch { /* already released */ }
   }
 }
@@ -980,6 +1033,13 @@ async function callNativeProviderStream(
   if (format === 'anthropic-messages') {
     body = buildAnthropicMessagesPayload(buildInput);
     body.stream = true;
+  } else if (format === 'matilda-chat') {
+    // ADR-058 D13 — SSE-only surface; the conversation id is a per-session
+    // grouping key (the server never restores context from it — the full
+    // user+assistant history travels every turn, like the OpenAI path).
+    body = buildMatildaChatPayload(buildInput, {
+      conversationId: matildaConversationIdFor(options.sessionKey, buildInput.messages),
+    });
   } else {
     body = buildGeminiGeneratePayload(buildInput);
     // Gemini streams from a distinct method + SSE framing, not a body flag.
@@ -997,47 +1057,87 @@ async function callNativeProviderStream(
     stream: true,
   });
 
-  const timeoutMs = getCliKnobs().llmTimeoutMs;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
-  const release = await acquireLLMSlot();
-  let res: Response;
-  try {
-    options.beforeProviderRequest?.();
-    res = await fetch(url, { method: 'POST', headers: spec.headers, body: JSON.stringify(body), signal: fetchSignal });
-  } catch (err: any) {
-    if (err?.name === 'AbortError') {
-      if (options.signal?.aborted) throw new InterruptError();
-      throw new Error(`LLM stream request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+  const post = async (payload: unknown): Promise<Response> => {
+    const timeoutMs = getCliKnobs().llmTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    const release = await acquireLLMSlot();
+    let res: Response;
+    try {
+      options.beforeProviderRequest?.();
+      res = await fetch(url, { method: 'POST', headers: spec.headers, body: JSON.stringify(payload), signal: fetchSignal });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        if (options.signal?.aborted) throw new InterruptError();
+        throw new Error(`LLM stream request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+      release();
     }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-    release();
-  }
 
-  if (!res.ok || !res.body) {
-    const errText = res.body ? await readResponseText(res, options.maxResponseBytes) : '';
-    const apiErr: any = new Error(`${format} stream API error: ${res.status} ${res.statusText} - ${errText}`);
-    apiErr.status = res.status;
-    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
-    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
-    throw apiErr;
-  }
+    if (!res.ok || !res.body) {
+      const errText = res.body ? await readResponseText(res, options.maxResponseBytes) : '';
+      const apiErr: any = new Error(`${format} stream API error: ${res.status} ${res.statusText} - ${errText}`);
+      apiErr.status = res.status;
+      const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+      if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+      throw apiErr;
+    }
+    return res;
+  };
 
-  const parse = format === 'anthropic-messages' ? parseAnthropicMessageStream : parseGeminiStream;
-  try {
-    return await parse(readResponseTextChunks(res), handlers, endpoint, config.model);
-  } catch (err: any) {
+  const parse = format === 'anthropic-messages'
+    ? parseAnthropicMessageStream
+    : format === 'matilda-chat'
+      ? parseMatildaChatStream
+      : parseGeminiStream;
+  const mapAbort = (err: any): unknown => {
     // After the 200 the timeout is cleared, so the only signal that can abort the
     // body read is the user's Stop — which rejects reader.read() with a raw
     // AbortError. Map it to InterruptError so the caller PROPAGATES the Stop
     // instead of mistaking it for a stream failure and issuing a second call.
     // (Mirrors the OpenAI-compat path's mid-stream abort guard.)
-    if (err instanceof InterruptError) throw err;
-    if (err?.name === 'AbortError' && options.signal?.aborted) throw new InterruptError();
-    throw err;
+    if (err instanceof InterruptError) return err;
+    if (err?.name === 'AbortError' && options.signal?.aborted) return new InterruptError();
+    return err;
+  };
+
+  if (format === 'matilda-chat') {
+    // ADR-058 D22 — a request that advertised client tools can be routed by the
+    // platform to its own code sandbox instead (measured: every task-shaped
+    // turn), which cannot see the workspace and burns the platform's step
+    // budget. The parser cuts that attempt at the first sandbox tool_start; the
+    // request is then asked ONCE more in the shape the platform routes to the
+    // client tools. The re-ask streams without the cut: whatever it does is the
+    // answer (a partial answer is still kept by the parser).
+    const offeredClientTools = Array.isArray((body as { clientTools?: unknown[] }).clientTools) && (body as { clientTools: unknown[] }).clientTools.length > 0;
+    let res = await post(body);
+    try {
+      return await parseMatildaChatStream(readResponseTextChunks(res), handlers, endpoint, config.model, { cutOnSandboxDetour: offeredClientTools });
+    } catch (err: any) {
+      if (!(err instanceof MatildaSandboxDetourError)) throw mapAbort(err);
+      const reask = buildMatildaChatPayload(buildInput, {
+        conversationId: matildaConversationIdFor(options.sessionKey, buildInput.messages),
+        reask: { assistantText: (err as MatildaSandboxDetourError).textSoFar },
+      });
+      traceEvent('llm_call.matilda_reask', { model: config.model, endpoint, painted: (err as MatildaSandboxDetourError).textSoFar.length });
+      res = await post(reask);
+      try {
+        return await parseMatildaChatStream(readResponseTextChunks(res), handlers, endpoint, config.model);
+      } catch (err2: any) {
+        throw mapAbort(err2);
+      }
+    }
+  }
+
+  const res = await post(body);
+  try {
+    return await parse(readResponseTextChunks(res), handlers, endpoint, config.model);
+  } catch (err: any) {
+    throw mapAbort(err);
   }
 }
 
@@ -1050,6 +1150,13 @@ export async function callOpenAI(
   // Reject malformed or effectively unbounded opt-in limits before contacting
   // a provider. Callers that need the legacy unrestricted behavior omit it.
   assertValidResponseByteLimit(options.maxResponseBytes);
+  // ADR-047 D2 — engine mode: an installed coding-agent CLI drives this turn.
+  // Resolved purely by provider id (no endpoint, no API key), so short-circuit
+  // BEFORE the endpoint normalization + key guard below. Everything past this
+  // point is byte-identical to before for every HTTP provider.
+  if (resolveRequestFormat(config) === 'external-agent') {
+    return callExternalAgentEngine(config, messages, { signal: options.signal });
+  }
   // Normalize the endpoint to a base URL (everything UP TO `/chat/completions`
   // exclusive). Earlier callers stored the full chat-completions URL in
   // `config.endpoint` (e.g. "https://api.openai.com/v1/chat/completions")
@@ -1082,7 +1189,7 @@ export async function callOpenAI(
 
   const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
   // NATIVE formats carry their own URL/headers/payload — hand off and return.
-  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate' || requestFormat === 'matilda-chat') {
     return callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
   }
   const body = requestFormat === 'responses'
@@ -1187,7 +1294,7 @@ export async function callOpenAI(
         if (requestFormat === 'responses') {
           return normalizeResponsesOutput(retryData, endpoint, config.model);
         }
-        return normalizeChatCompletionOutput(retryData, endpoint, config.model);
+        return normalizeChatCompletionOutput(retryData, endpoint, config.model, activeProviderDef(config)?.toolCallMarkup);
       }
     }
     // RECONNECT — attach the structured status + any `Retry-After` so the resilient
@@ -1205,10 +1312,10 @@ export async function callOpenAI(
     return normalizeResponsesOutput(data, endpoint, config.model);
   }
 
-  return normalizeChatCompletionOutput(data, endpoint, config.model);
+  return normalizeChatCompletionOutput(data, endpoint, config.model, activeProviderDef(config)?.toolCallMarkup);
 }
 
-function normalizeChatCompletionOutput(data: any, endpoint: string, model: string) {
+function normalizeChatCompletionOutput(data: any, endpoint: string, model: string, markup?: 'dsml') {
   // Defensive response-shape parsing. Some endpoints (LM Studio with certain
   // models, OpenRouter on specific upstream errors, local vLLM under load,
   // gpt-oss reasoning models with a non-standard envelope) return a 200 OK
@@ -1247,18 +1354,41 @@ function normalizeChatCompletionOutput(data: any, endpoint: string, model: strin
     }
     throw new Error(`OpenAI-compatible endpoint returned an invalid chat completion response: ${JSON.stringify(data).slice(0, 1000)}`);
   }
+  // ADR-058 — a text-markup provider (Matilda's DSML) on the compat wire: lift
+  // any tool-call blocks out of the final content. No-op for every other provider.
+  const lifted = liftMarkupToolCalls(markup, typeof choice.message.content === 'string' ? choice.message.content : '');
   return {
     // Some reasoning models put the visible answer in `message.content` and
     // chain-of-thought in `message.reasoning_content` / `reasoning`. We use
     // content (the canonical user-visible field) but tolerate it being null
     // when there are tool_calls but no prose.
-    content: choice.message.content ?? '',
-    toolCalls: choice.message.tool_calls,
+    content: lifted ? lifted.content : (choice.message.content ?? ''),
+    toolCalls: lifted?.toolCalls.length
+      ? [...(Array.isArray(choice.message.tool_calls) ? choice.message.tool_calls : []), ...lifted.toolCalls]
+      : choice.message.tool_calls,
     usage: data.usage,
     // `length` ⇒ the provider truncated the reply at its token cap (the cut-off
     // symptom). Surfaced as a notice → "raise cli.maxOutputTokens".
-    finishReason: choice.finish_reason,
+    finishReason: lifted?.toolCalls.length ? 'tool_calls' : choice.finish_reason,
   };
+}
+
+/** Non-stream counterpart of the stream interceptor: returns null unless the
+ *  provider declares text tool-call markup, so other providers pay nothing. */
+function liftMarkupToolCalls(
+  markup: 'dsml' | undefined,
+  text: string,
+): { content: string; toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> } | null {
+  if (markup !== 'dsml') return null;
+  let content = '';
+  const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
+  const interceptor = createDsmlInterceptor(
+    (t) => { content += t; },
+    (c) => toolCalls.push({ id: c.id ?? newToolCallId('call_markup'), type: 'function', function: { name: c.name, arguments: c.arguments } }),
+  );
+  interceptor.push(text);
+  interceptor.flush();
+  return { content, toolCalls };
 }
 
 /**
@@ -1283,8 +1413,16 @@ export async function callOpenAIStream(
   handlers: {
     onTextDelta?: (text: string) => void;
     onReasoningDelta?: (text: string) => void;
+    /** ADR-059 — provider-side activity (native adapters only; the OpenAI wire has none). */
+    onProviderActivity?: (activity: { label: string; detail?: string; ok?: boolean }) => void;
   } = {},
 ) {
+  // ADR-047 D2 — engine mode (see callOpenAI). An engine turn is not an SSE
+  // stream; run it and emit the whole answer as ONE text delta so the streaming
+  // consumer paints it, then return the same terminal shape.
+  if (resolveRequestFormat(config) === 'external-agent') {
+    return callExternalAgentEngine(config, messages, { signal: options.signal, onTextDelta: handlers.onTextDelta });
+  }
   const initialDef = activeProviderDef(config);
   const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
   const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
@@ -1317,11 +1455,12 @@ export async function callOpenAIStream(
   // surfaces instead — re-running non-streaming would double-paint. A user Stop is
   // an InterruptError (mapped in callNativeProviderStream) and always propagates,
   // never a fallback that would fire a second call on a cancelled turn.
-  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate' || requestFormat === 'matilda-chat') {
     let paintedAny = false;
     const streamHandlers: NativeStreamHandlers = {
       onTextDelta: (t) => { paintedAny = true; handlers.onTextDelta?.(t); },
       onReasoningDelta: (t) => { paintedAny = true; handlers.onReasoningDelta?.(t); },
+      onProviderActivity: (a) => handlers.onProviderActivity?.(a),
     };
     try {
       return await callNativeProviderStream(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options, streamHandlers);
@@ -1438,6 +1577,16 @@ export async function callOpenAIStream(
   // `length` ⇒ the provider truncated the stream at its token cap. The last
   // non-empty finish_reason in the stream wins.
   let finishReason: string | undefined;
+  // ADR-058 — a provider whose model writes tool calls into its text as markup
+  // (Matilda's DSML) gets its content deltas lifted through the interceptor on
+  // this wire too; every other provider's text is forwarded untouched.
+  const markupCalls: Array<{ name: string; arguments: string; id?: string }> = [];
+  const markup = activeProviderDef(config)?.toolCallMarkup === 'dsml'
+    ? createDsmlInterceptor(
+        (t) => { content += t; handlers.onTextDelta?.(t); },
+        (call) => markupCalls.push(call),
+      )
+    : undefined;
 
   const reader = (res.body as any).getReader();
   const decoder = new TextDecoder();
@@ -1449,7 +1598,9 @@ export async function callOpenAIStream(
       // reading the SSE and stop firing deltas. (The fetch abort also rejects
       // reader.read(), but this is the prompt, deterministic exit.)
       if (options.signal?.aborted) { try { await reader.cancel(); } catch { /* already closed */ } throw new InterruptError(); }
-      const { value, done } = await reader.read();
+      // The request timeout was cleared at the 200; the stall watchdog is what
+      // bounds a body that goes silent (cli.llmStreamStallMs).
+      const { value, done } = await readWithStallWatchdog<Uint8Array>(reader, getCliKnobs().llmStreamStallMs, endpoint);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       // SSE frames are separated by blank lines (`\n\n`). Some servers
@@ -1555,8 +1706,12 @@ export async function callOpenAIStream(
           if (typeof choice.finish_reason === 'string' && choice.finish_reason) finishReason = choice.finish_reason;
           const delta = choice.delta ?? {};
           if (typeof delta.content === 'string' && delta.content.length > 0) {
-            content += delta.content;
-            handlers.onTextDelta?.(delta.content);
+            if (markup) {
+              markup.push(delta.content);
+            } else {
+              content += delta.content;
+              handlers.onTextDelta?.(delta.content);
+            }
           }
           // Reasoning frames (xAI/OpenRouter use `reasoning`, others use `reasoning_content`)
           const r = (typeof delta.reasoning === 'string' ? delta.reasoning : undefined)
@@ -1586,10 +1741,15 @@ export async function callOpenAIStream(
     attempt.finish();
   }
 
+  markup?.flush();
   const toolCalls = [...toolCallsByIndex.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
     .filter((tc) => tc.function.name); // drop incomplete entries
+  if (markupCalls.length > 0) {
+    toolCalls.push(...markupCalls.map((c) => ({ id: c.id ?? newToolCallId('call_markup'), type: 'function', function: { name: c.name, arguments: c.arguments } })));
+    finishReason = 'tool_calls';
+  }
 
   if (requestFormat === 'responses' && finalResponse && (!content || toolCalls.length === 0)) {
     const normalized = normalizeResponsesOutput(finalResponse, endpoint, config.model);

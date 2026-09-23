@@ -1,7 +1,7 @@
-import { load } from 'cheerio';
 import type { CrawlResult, CrawlerOptions } from './types.js';
 import { isAllowedByRobots } from './robots.js';
 import { fetchGuardedBytes, MAX_GUARDED_REDIRECTS } from '../net/guardedFetch.js';
+import { htmlToMarkdown } from './htmlToMarkdown.js';
 
 const hostNextFetchAt = new Map<string, number>();
 
@@ -50,18 +50,18 @@ function regexExtract(html: string, maxContentChars: number): { title: string; t
   return { title, text: cleanText(text, maxContentChars) };
 }
 
-function extractHtml(html: string, maxContentChars: number): { title: string; text: string } {
+/**
+ * Structure-preserving extraction (ADR-044 M1). Walks the DOM to markdown —
+ * tables stay tables, links keep their hrefs, code keeps its fences — instead
+ * of the old `$('body').text()` flatten that fed the model a run of words. The
+ * regex extractor remains the fallback for documents the walker cannot parse
+ * (it never throws, so an empty result is the signal to fall back).
+ */
+function extractHtml(html: string, maxContentChars: number, pageUrl: string): { title: string; text: string } {
   try {
-    const $ = load(html);
-    const title = $('title').first().text().trim();
-    $('script,style,noscript,svg,canvas,template,nav,header,footer,aside').remove();
-    $('br').replaceWith('\n');
-    $('li').each((_, el) => { $(el).prepend('- '); $(el).append('\n'); });
-    $('p,h1,h2,h3,h4,h5,h6,blockquote,pre,tr,section,article,div').each((_, el) => { $(el).append('\n'); });
-    const body = $('body').text() || $.root().text();
-    const text = cleanText(body, maxContentChars);
-    if (!text) return regexExtract(html, maxContentChars);
-    return { title, text };
+    const { title, markdown } = htmlToMarkdown(html, pageUrl, maxContentChars);
+    if (!markdown) return regexExtract(html, maxContentChars);
+    return { title, text: markdown };
   } catch {
     return regexExtract(html, maxContentChars);
   }
@@ -120,7 +120,7 @@ export async function fetchAndExtract(url: string, opts: CrawlerOptions): Promis
   const raw = fetched.bytes.toString('utf8');
   const isHtml = /html|xml/i.test(fetched.contentType) || /<html[\s>]|<!doctype html/i.test(raw);
   const extracted = isHtml
-    ? extractHtml(raw, opts.maxContentChars)
+    ? extractHtml(raw, opts.maxContentChars, fetched.url)
     : { title: '', text: cleanText(raw, opts.maxContentChars) };
   if (!extracted.text) {
     return { ok: false, url: fetched.url, reason: 'unparseable', error: 'No readable text could be extracted.' };

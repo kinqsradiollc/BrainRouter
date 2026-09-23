@@ -125,6 +125,16 @@ export interface PeerSessionSenderEventView {
   sentAt?: number;
 }
 
+/** ADR-059 — a step of the turn path as the runtime reported it. */
+export interface TurnStepView {
+  at: number;
+  type: 'model' | 'provider' | 'guard' | 'end';
+  label: string;
+  detail?: string;
+  ok?: boolean;
+  attempt?: { n: number; max: number };
+}
+
 export type AgentEvent =
   | { kind: 'turn-start'; prompt: string }
   | { kind: 'status'; text: string }
@@ -187,6 +197,9 @@ export type AgentEvent =
   | { kind: 'usage-live'; promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number }
   | { kind: 'session-changed'; sessionKey: string; loadedMessages: number; model: string; running?: boolean }
   | { kind: 'notice'; level: 'info' | 'warn'; message: string }
+  /** ADR-059 — one step of the turn path: a model call, provider-side activity, a
+   *  guardrail re-prompt, or why the turn ended. Tool calls travel on tool-start/end. */
+  | { kind: 'turn-step'; step: TurnStepView }
   | { kind: 'files-changed' }
   | { kind: 'query-result'; id: string; ok: boolean; result?: unknown; error?: string };
 

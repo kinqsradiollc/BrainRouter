@@ -4,12 +4,14 @@
  * complete without making the rest of the page take 98 presses to reach.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DragEvent, FormEvent, KeyboardEvent, ReactElement } from 'react';
+import type { CSSProperties, DragEvent, FormEvent, KeyboardEvent, ReactElement } from 'react';
 
-import type { PlannerBlockView } from './types.js';
+import { ChipPopover } from './ChipPopover.js';
+import type { PlannerBlockView, PlannerItemView } from './types.js';
 import {
   DAY_END_HOUR,
   DAY_START_HOUR,
+  allDayEventsOn,
   dayHeading,
   hourLabels,
   keyboardBlockTime,
@@ -19,6 +21,7 @@ import {
   unscheduledBlocks,
   weekStart,
   weekView,
+  whyBlockTimeIsLocked,
 } from './viewModel.js';
 
 const HOURS = hourLabels();
@@ -27,10 +30,21 @@ const SLOT_HOURS = HOURS.slice(0, -1);
 export interface PlannerCalendarProps {
   blocks: PlannerBlockView[];
   today: string;
-  titleFor: Record<string, string>;
+  /**
+   * Every item the surface holds, by id.
+   *
+   * A title alone was enough while every block was the person's own. A block
+   * that mirrors a meeting also needs to say which calendar it came from, and
+   * to refuse to be dragged — both of which are facts about the ITEM.
+   */
+  itemById: Record<string, PlannerItemView>;
   weekOf: string;
   onWeek: (startDate: string) => void;
   onCreateAt?: (iso: string) => void;
+  /** Subscribe to a calendar feed — the host owns the flow, this only opens it. */
+  onSubscribeCalendar?: () => void;
+  /** Import a one-off `.ics` export — the host picks the file and stores it. */
+  onImportCalendar?: () => void;
   onRescheduleBlock?: (blockId: string, scheduledFor: string) => void;
   onRecordActual?: (blockId: string, actualMinutes: number) => void;
 }
@@ -40,14 +54,18 @@ const BLOCK_DRAG_TYPE = 'application/x-brainrouter-planner-block';
 export function PlannerCalendar({
   blocks,
   today,
-  titleFor,
+  itemById,
   weekOf,
   onWeek,
   onCreateAt,
+  onSubscribeCalendar,
+  onImportCalendar,
   onRescheduleBlock,
   onRecordActual,
 }: PlannerCalendarProps): ReactElement {
   const days = useMemo(() => weekView(blocks, weekOf, today), [blocks, weekOf, today]);
+  const items = useMemo(() => Object.values(itemById), [itemById]);
+  const titleOf = (itemId: string): string => itemById[itemId]?.title ?? itemId;
   const loose = useMemo(() => unscheduledBlocks(blocks), [blocks]);
   const nowPct = nowMarkerPct(new Date());
   const [activeSlot, setActiveSlot] = useState(0);
@@ -111,6 +129,7 @@ export function PlannerCalendar({
           <button type="button" aria-label="Next week" onClick={() => onWeek(shiftWeek(weekOf, 1))}>›</button>
         </div>
         <span className="br-planner-calendar-range">{monthLabel(days[0]!.date, days[6]!.date)}</span>
+        <AddCalendar onSubscribe={onSubscribeCalendar} onImport={onImportCalendar} />
       </header>
 
       {loose.length > 0 ? (
@@ -125,7 +144,7 @@ export function PlannerCalendar({
                 draggable={Boolean(onRescheduleBlock)}
                 onDragStart={(event) => startDrag(event, block.id)}
               >
-                {titleFor[block.itemId] ?? block.itemId}
+                {titleOf(block.itemId)}
                 <span>{block.estimateMinutes}m</span>
                 {block.carriedOver > 2 ? <span>moved {block.carriedOver}×</span> : null}
               </button>
@@ -147,6 +166,26 @@ export function PlannerCalendar({
           );
         })}
       </div>
+
+      {days.some((day) => allDayEventsOn(items, blocks, day.date).length > 0) ? (
+        <div className="br-planner-calendar-allday">
+          <span className="br-planner-calendar-gutter-label">All day</span>
+          {days.map((day) => (
+            <div key={day.date} className={day.isToday ? 'is-today' : ''}>
+              {allDayEventsOn(items, blocks, day.date).map((event) => (
+                <span
+                  key={event.id}
+                  className={`br-planner-calendar-banner${event.completed ? ' is-done' : ''}`}
+                  style={event.provenance?.color ? { '--br-planner-source-color': event.provenance.color } as CSSProperties : undefined}
+                  title={`${event.title}${event.provenance?.source ? ` · ${event.provenance.source}` : ''}`}
+                >
+                  {event.title}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="br-planner-calendar-grid">
         <div className="br-planner-calendar-gutter">
@@ -177,30 +216,38 @@ export function PlannerCalendar({
                 />
               );
             })}
-            {layOutDay(day.blocks).map(({ block, topPct, heightPct, lane, lanes }) => (
-              <button
-                type="button"
-                key={block.id}
-                data-block-id={block.id}
-                className={`br-planner-calendar-event${block.completedAt ? ' is-done' : ''}`}
-                style={{
-                  top: `${topPct}%`,
-                  height: `${heightPct}%`,
-                  left: `${(lane / lanes) * 100}%`,
-                  width: `${(1 / lanes) * 100}%`,
-                }}
-                onClick={() => setSelectedBlockId(block.id)}
-                draggable={Boolean(onRescheduleBlock && !block.completedAt)}
-                onDragStart={(event) => startDrag(event, block.id)}
-                onKeyDown={(event) => moveBlock(event, block)}
-                aria-keyshortcuts={onRescheduleBlock ? 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight' : undefined}
-                aria-label={`${titleFor[block.itemId] ?? block.itemId}, ${clockOf(block.scheduledFor!)} for ${block.estimateMinutes} minutes${onRescheduleBlock ? '. Hold Alt and use arrow keys to move by an hour or a day.' : ''}`}
-                title={`${titleFor[block.itemId] ?? block.itemId}${onRescheduleBlock ? ' · Drag to move; Alt+arrow keys also move it' : ''}`}
-              >
-                <span>{titleFor[block.itemId] ?? block.itemId}</span>
-                <small>{clockOf(block.scheduledFor!)} · {block.estimateMinutes}m</small>
-              </button>
-            ))}
+            {layOutDay(day.blocks).map(({ block, topPct, heightPct, lane, lanes }) => {
+              const owner = itemById[block.itemId];
+              const locked = whyBlockTimeIsLocked(owner);
+              const calendar = locked ? owner?.provenance?.source : undefined;
+              const movable = Boolean(onRescheduleBlock) && !block.completedAt && !locked;
+              return (
+                <button
+                  type="button"
+                  key={block.id}
+                  data-block-id={block.id}
+                  className={`br-planner-calendar-event${block.completedAt ? ' is-done' : ''}${locked ? ' is-source' : ''}`}
+                  style={{
+                    top: `${topPct}%`,
+                    height: `${heightPct}%`,
+                    left: `${(lane / lanes) * 100}%`,
+                    width: `${(1 / lanes) * 100}%`,
+                    ...(owner?.provenance?.color ? { '--br-planner-source-color': owner.provenance.color } as CSSProperties : {}),
+                  }}
+                  onClick={() => setSelectedBlockId(block.id)}
+                  draggable={movable}
+                  onDragStart={(event) => startDrag(event, block.id)}
+                  onKeyDown={(event) => { if (movable) moveBlock(event, block); }}
+                  aria-keyshortcuts={movable ? 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight' : undefined}
+                  aria-label={`${titleOf(block.itemId)}, ${clockOf(block.scheduledFor!)} for ${block.estimateMinutes} minutes${calendar ? `, from ${calendar}` : ''}${movable ? '. Hold Alt and use arrow keys to move by an hour or a day.' : ''}`}
+                  title={locked ?? `${titleOf(block.itemId)}${movable ? ' · Drag to move; Alt+arrow keys also move it' : ''}`}
+                >
+                  <span>{titleOf(block.itemId)}</span>
+                  <small>{clockOf(block.scheduledFor!)} · {block.estimateMinutes}m</small>
+                  {calendar ? <em>{calendar}</em> : null}
+                </button>
+              );
+            })}
             {day.isToday && nowPct !== null ? <div className="br-planner-calendar-now" style={{ top: `${nowPct}%` }} /> : null}
           </div>
         ))}
@@ -210,18 +257,82 @@ export function PlannerCalendar({
         <div className="br-planner-empty br-planner-calendar-empty">
           <strong>No time blocked this week</strong>
           <span>Choose an hour to make room for work; estimates become useful once actual time is recorded.</span>
+          {onSubscribeCalendar || onImportCalendar ? (
+            <span>Add a calendar and the meetings you already have will be here too.</span>
+          ) : null}
         </div>
       ) : null}
       {selectedBlockId ? (
         <BlockDetails
           key={selectedBlockId}
           block={blocks.find((block) => block.id === selectedBlockId)}
-          title={titleFor[blocks.find((block) => block.id === selectedBlockId)?.itemId ?? '']}
+          title={itemById[blocks.find((block) => block.id === selectedBlockId)?.itemId ?? '']?.title}
           onClose={() => setSelectedBlockId(null)}
           onRecordActual={onRecordActual}
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * "Add calendar…" — one control over however many routes the host offers.
+ *
+ * With one route it is a plain button, because a menu of one is a menu that
+ * wastes a click; with two it opens them as a choice. A host that offers
+ * neither gets nothing at all rather than a button that goes nowhere.
+ */
+function AddCalendar({ onSubscribe, onImport }: {
+  onSubscribe?: (() => void) | undefined;
+  onImport?: (() => void) | undefined;
+}): ReactElement | null {
+  const [open, setOpen] = useState(false);
+  const routes = [
+    onSubscribe ? {
+      key: 'subscribe',
+      title: 'Subscribe to a feed…',
+      detail: 'Google, iCloud or Outlook — any .ics or webcal address. Stays up to date.',
+      run: onSubscribe,
+    } : null,
+    onImport ? {
+      key: 'import',
+      title: 'Import an .ics file…',
+      detail: 'A one-off export, such as a term timetable. Read once, never polled.',
+      run: onImport,
+    } : null,
+  ].filter((route): route is { key: string; title: string; detail: string; run: () => void } => route !== null);
+  if (routes.length === 0) return null;
+  if (routes.length === 1) {
+    return (
+      <button type="button" className="br-planner-add-calendar" onClick={routes[0]!.run}>
+        Add calendar…
+      </button>
+    );
+  }
+  return (
+    <ChipPopover
+      open={open}
+      onOpen={setOpen}
+      className="br-planner-calendar-menu"
+      label={(
+        <button
+          type="button"
+          className="br-planner-add-calendar"
+          aria-expanded={open}
+          aria-haspopup="menu"
+          onClick={() => setOpen(!open)}
+        >
+          Add calendar…
+        </button>
+      )}
+    >
+      {routes.map((route) => (
+        <button key={route.key} type="button" onClick={() => { setOpen(false); route.run(); }}>
+          <strong>{route.title}</strong>
+          <small>{route.detail}</small>
+        </button>
+      ))}
+    </ChipPopover>
   );
 }
 

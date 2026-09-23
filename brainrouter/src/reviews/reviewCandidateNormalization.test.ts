@@ -226,6 +226,47 @@ describe("review candidate normalization", () => {
     expect(validateAssuranceFinding(candidates[0]!)).toEqual({ ok: true, issues: [] });
   });
 
+  it("ADR-039 D6 (S4) — renders the WHOLE hop chain in the mechanism, not just source→sink", () => {
+    const candidates = normalizeDeterministicCandidates({
+      run: run(),
+      now: "2026-07-29T00:00:02.000Z",
+      assembly: {
+        revisionSha: "head-1",
+        indexRef: "index-1",
+        packets: [{
+          id: "packet-1",
+          revisionSha: "head-1",
+          program: "security_review",
+          changed: [{ path: "src/req.ts", line: 3 }],
+          context: [],
+          sourceToSinkPaths: [{
+            id: "path-1",
+            mechanism: "data_flow",
+            source: { path: "src/req.ts", line: 3 },
+            sink: { path: "src/net/fetch.ts", line: 9 },
+            evidenceRefs: [],
+            hops: [
+              { path: "src/req.ts", line: 3 },
+              { path: "src/handler.ts", line: 14 },
+              { path: "src/net/fetch.ts", line: 9 },
+            ],
+          }],
+          artifactRefs: [],
+          byteCount: 32,
+          truncated: false,
+          limitationIds: [],
+        }],
+        limitations: [],
+        assembledAt: "2026-07-29T00:00:01.000Z",
+      },
+    });
+    expect(candidates).toHaveLength(1);
+    // The reader sees the full traversal — source → hop → sink — not a two-point summary.
+    expect(candidates[0]?.mechanism).toBe(
+      "data flow: src/req.ts:3 → src/handler.ts:14 → src/net/fetch.ts:9",
+    );
+  });
+
   it("rejects a deterministic assembly from a different revision", () => {
     expect(() => normalizeDeterministicCandidates({
       run: run(),

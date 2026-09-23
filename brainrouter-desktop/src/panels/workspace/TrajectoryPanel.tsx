@@ -15,6 +15,7 @@
  */
 import React from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { usePanelPolling } from '../../lib/panels/usePanelPolling.js';
 
 type RenderIntent = 'terminal' | 'diff' | 'read' | 'search' | 'web' | 'text';
 type Visibility = 'model-visible' | 'log-only' | 'shadowed';
@@ -108,7 +109,7 @@ function EventRow({ ev }: { ev: TrajectoryEvent }): React.ReactElement {
   );
 }
 
-export function TrajectoryPanel(): React.ReactElement {
+export function TrajectoryPanel({ active = true }: { active?: boolean }): React.ReactElement {
   const [records, setRecords] = React.useState<TrajectoryRecord[]>([]);
   const [enabled, setEnabled] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
@@ -118,24 +119,22 @@ export function TrajectoryPanel(): React.ReactElement {
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const refresh = React.useCallback(() => {
+  const refresh = React.useCallback(async (): Promise<void> => {
     setBusy(true);
-    void bridgeQuery<TrajectoryReadResult>('trajectory:read', { limit: 80 }, 10_000)
-      .then((r) => {
-        if (!mounted.current) return;
-        setRecords(Array.isArray(r?.records) ? r.records : []);
-        setEnabled(r?.enabled !== false);
-        setError('');
-      })
-      .catch((err) => { if (mounted.current) setError((err as Error).message || 'Trajectory lookup failed.'); })
-      .finally(() => { if (mounted.current) setBusy(false); });
+    try {
+      const result = await bridgeQuery<TrajectoryReadResult>('trajectory:read', { limit: 80 }, 10_000);
+      if (!mounted.current) return;
+      setRecords(Array.isArray(result?.records) ? result.records : []);
+      setEnabled(result?.enabled !== false);
+      setError('');
+    } catch (error) {
+      if (mounted.current) setError((error as Error).message || 'Trajectory lookup failed.');
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
   }, []);
 
-  React.useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  usePanelPolling({ active, intervalMs: 3_000, refresh });
 
   const stepCount = records.filter((r) => r.kind === 'step').length;
 
@@ -143,7 +142,7 @@ export function TrajectoryPanel(): React.ReactElement {
     <div className="scroll">
       <div className="tasks-section">
         <span>Trajectory · {stepCount} step{stepCount === 1 ? '' : 's'}</span>
-        <button className="tasks-clear" type="button" onClick={refresh} disabled={busy}>
+        <button className="tasks-clear" type="button" onClick={() => void refresh()} disabled={busy}>
           {busy ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>

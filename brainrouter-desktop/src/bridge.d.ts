@@ -37,6 +37,7 @@ declare global {
       /** Folder picker ONLY — returns the picked path; the renderer runs the
        * trust gate and then calls openWorkspace (DESK-5d). */
       addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }>;
+      pickCalendarFile(): Promise<{ canceled: boolean; path?: string }>;
       workspaceRecents(): Promise<{ current: string | null; recents: string[] }>;
       workspaceSessions?(root: string, limit?: number): Promise<{ rows: Array<Record<string, unknown>>; truncated?: boolean; error?: string }>;
       /** Swaps the agent host to this workspace INSIDE the current window.

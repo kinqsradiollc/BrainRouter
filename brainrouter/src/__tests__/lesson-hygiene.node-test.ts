@@ -54,8 +54,12 @@ test("LESSON-HYGIENE sweepStaleLessons is conservative and read-only by default;
     // Make the strong lesson trusted + corroborated so it is never a candidate.
     await engine.recordLesson("u1", "Run the migration before seeding"); // reinforce → conf up, corroborations=2
 
-    // `now` far in the future so the default 120-day window is exceeded.
-    const farFuture = Date.parse("2027-01-01T00:00:00.000Z");
+    // `now` far enough ahead of the lessons' real timestamps that the default
+    // 120-day window is exceeded — RELATIVE to today, not a calendar date: the
+    // former fixed 2027-01-01 silently stopped being "far" once the wall clock
+    // came within 120 days of it, and the suite went red on 2026-09-03 with no
+    // code change.
+    const farFuture = Date.now() + 400 * 24 * 60 * 60 * 1000;
 
     const dryRun = await engine.sweepStaleLessons("u1", { nowMs: farFuture });
     const ids = dryRun.candidates.map((c) => c.recordId);

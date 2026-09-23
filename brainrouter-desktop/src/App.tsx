@@ -11,6 +11,7 @@ import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { UiMap, Story } from '@kinqs/brainrouter-core/browser';
 import { PANEL_DEFS, type PanelId, type SearchHit } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
+import type { DiagramListRow, DiagramReadResult, DiagramDeltaResult } from './lib/diagrams/types.js';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/list/sessionPagination.js';
@@ -25,7 +26,6 @@ import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
 import { type ConfigSnapshot, type UsageHistory } from './settings.js';
 import type { MarketplaceState } from './settings/marketplace/index.js';
-import { installDevBridge } from './devBridge.js';
 import type { AttachmentUpload, PlanItem, PlanView, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { useClosable } from './lib/useClosable.js';
@@ -45,11 +45,12 @@ import { nextBrowserOpenGeneration } from './lib/browser/browserPanelModel.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import { ToolingNotice } from './components/ToolingNotice.js';
-import { ActivityBar, type WorkspaceMode } from './components/layout/ActivityBar.js';
+import { ActivityBar } from './components/layout/ActivityBar.js';
+import { describeModeTransition, type ModeTransition, type WorkspaceMode } from './lib/workspace/modes.js';
+import { STUDY_GENERATE_EVENT } from './study/studyHandoff.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import {
-  bootstrapAppearanceDocument,
   useAppearance,
   useZoom,
   useAppHandlers,
@@ -59,9 +60,12 @@ import {
 import { buildTrackOps } from './App/track/index.js';
 import { buildRenderPanelBody, buildRenderSessionNode, buildRenderRow } from './App/render/index.js';
 import { AppDialogs, MainContent } from './App/layout/index.js';
+import { SplitSessionPane } from './components/chat/SplitSessionPane.js';
+import { defaultSplitSession } from './lib/chat/splitSession.js';
 
-installDevBridge();
-bootstrapAppearanceDocument();
+// Startup side effects (the browser-only dev bridge, the appearance bootstrap
+// that reads it) run in main.tsx's boot sequence, in order, before the first
+// render — not at this module's load, which happens before the bridge exists.
 
 export function App(): React.ReactElement {
   const [draft, setDraft] = useState('');
@@ -175,6 +179,21 @@ export function App(): React.ReactElement {
   // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
   // swaps the whole main surface). Code is the default agentic-coding view.
   const [mode, setMode] = useState<WorkspaceMode>('code');
+  const [modeTransition, setModeTransition] = useState<ModeTransition | null>(null);
+  const requestMode = useCallback((next: WorkspaceMode): void => {
+    const transition = describeModeTransition(mode, next);
+    if (!transition.changed) return;
+    setMode(next);
+    setModeTransition(transition);
+  }, [mode]);
+  // ADR-049 — the Document reader (in Code mode) can hand a reading to Study;
+  // it queues the intent and fires this event. Switch to Study, where StudyView
+  // takes the intent on mount and opens the generate tray preselected.
+  useEffect(() => {
+    const toStudy = (): void => requestMode('study');
+    window.addEventListener(STUDY_GENERATE_EVENT, toStudy);
+    return () => window.removeEventListener(STUDY_GENERATE_EVENT, toStudy);
+  }, [requestMode]);
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
@@ -269,6 +288,11 @@ export function App(): React.ReactElement {
   const [atlasEnriching, setAtlasEnriching] = useState(false); // ATLAS-4b — LLM enrichment in flight
   const [atlasAssessing, setAtlasAssessing] = useState<string | null>(null); // ATLAS-14 — path being assessed
   const [atlasAssessments, setAtlasAssessments] = useState<Record<string, import('./lib/atlas/atlasView.js').AtlasChangeAssessment>>({});
+  // ADR-056 D-A5 — the workspace's diagrams (list, the opened one, its delta) and the file the Diagrams panel asks Atlas to focus.
+  const [diagrams, setDiagrams] = useState<DiagramListRow[]>([]);
+  const [diagramView, setDiagramView] = useState<DiagramReadResult | null>(null);
+  const [diagramDelta, setDiagramDelta] = useState<DiagramDeltaResult | null>(null);
+  const [atlasFocusPath, setAtlasFocusPath] = useState<string | null>(null);
   const [atlasUiMap, setAtlasUiMap] = useState<UiMap | null>(null); // UI-TEST fusion — generated screen map for the Atlas Screens mode
   const [atlasStories, setAtlasStories] = useState<Story[]>([]); // UI Stories — named user journeys for the Atlas Screens mode
   // §a11y-inspect — component reference tags dragged from the Browser panel's
@@ -491,7 +515,7 @@ export function App(): React.ReactElement {
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setMarket,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setDiagrams, setDiagramView, setDiagramDelta, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -548,6 +572,26 @@ export function App(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, inlineDiffs, running],
   );
+
+  // ADR-057 D2 — split chat view: a second, live-viewer pane beside the main chat.
+  const [splitSession, setSplitSession] = useState<string | null>(null);
+  const openSplit = useCallback(() => {
+    setSplitSession((cur) => cur ?? defaultSplitSession(sessions, sessionKeyRef.current));
+  }, [sessions, sessionKeyRef]);
+  const splitPane = splitSession
+    ? (
+      <SplitSessionPane
+        sessionKey={splitSession}
+        sessions={sessions}
+        q={q}
+        openFile={openFile}
+        ensurePanel={ensurePanel}
+        onPick={setSplitSession}
+        onPromote={(key) => { setSplitSession(null); resumeSession(key); }}
+        onClose={() => setSplitSession(null)}
+      />
+    )
+    : null;
 
   const statuses = useMemo(() => new Map(changedFiles.map((f) => [f.path, f.status])), [changedFiles]);
   // T4 — composer/header derived state (sessionTitle, hasConversation, homeMode,
@@ -634,11 +678,19 @@ export function App(): React.ReactElement {
     // The Browser panel wants the UI map but has none yet -> load the manifest;
     // its result lands in atlasUiMap and is mirrored back via localStorage.
     const onLoadUiMap = (): void => { q('q-browser-manifest', 'browser:manifest'); };
+    // ADR-056 D-B5 — the Browser panel's Live Variants asks the agent to write
+    // the variants; run it as a normal turn (the prompt never leads with '/').
+    const onAskAgent = (e: Event): void => {
+      const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      if (typeof prompt === 'string' && prompt.trim() && !prompt.trimStart().startsWith('/')) submit(prompt);
+    };
+    window.addEventListener('br-browser-ask-agent', onAskAgent);
     window.addEventListener('br-browser-savescreenshot', onSaveShot);
     window.addEventListener('br-browser-runresult', onRunResult);
     window.addEventListener('br-browser-openfile', onOpenFile);
     window.addEventListener('br-browser-loaduimap', onLoadUiMap);
     return () => {
+      window.removeEventListener('br-browser-ask-agent', onAskAgent);
       window.removeEventListener('br-browser-savescreenshot', onSaveShot);
       window.removeEventListener('br-browser-runresult', onRunResult);
       window.removeEventListener('br-browser-openfile', onOpenFile);
@@ -673,7 +725,7 @@ export function App(): React.ReactElement {
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
-    review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
+    review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching, diagrams, diagramView, diagramDelta, atlasFocusPath, setAtlasFocusPath,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts,
     // ADR-028 B2 — the Artifacts panel opens scoped to this session and labels
@@ -700,7 +752,7 @@ export function App(): React.ReactElement {
   return (
     <WorkspaceOrgProvider>
     <div className="app">
-      <ActivityBar mode={mode} setMode={setMode} railOpen={railOpen} setRailOpen={setRailOpen} />
+      <ActivityBar mode={mode} onModeChange={requestMode} railOpen={railOpen} setRailOpen={setRailOpen} />
       <Sidebar railAnim={railAnim} railWidth={railWidth} setRailOpen={setRailOpen} setRailWidth={setRailWidth}
         setPaletteOpen={setPaletteOpen} ensurePanel={ensurePanel} setSidePanelOpen={setSidePanelOpen}
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
@@ -726,7 +778,8 @@ export function App(): React.ReactElement {
             horizontal column when it resolves after startup. */}
         <ToolingNotice />
         <MainContent
-        mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
+        mode={mode} setMode={requestMode} modeTransition={modeTransition} workrowRef={workrowRef} track={track} trackOps={trackOps}
+        splitPane={splitPane} splitOn={!!splitSession} onToggleSplit={() => (splitSession ? setSplitSession(null) : openSplit())}
         railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
         sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}

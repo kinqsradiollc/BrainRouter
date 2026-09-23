@@ -12,6 +12,8 @@ import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/hooks';
 import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { listRecentDenials } from '@kinqs/brainrouter-core/exec';
+import { describeDecision, listRecentDecisions } from '@kinqs/brainrouter-core/decision/recent';
+import { assessCalibration, samplesFromDecisions, CALIBRATION_MIN_SAMPLES } from '@kinqs/brainrouter-core/decision/calibration';
 import type { CommandContext } from '../_context.js';
 
 
@@ -60,6 +62,68 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(`    ${chalk.yellow(d.reason)}`);
       }
       console.log(chalk.gray(`\n  Showing the last ${denials.length} (use /recent-denials <n> for more).\n`));
+      return true;
+    }
+    case '/recent-decisions':
+    {
+      // ADR-061 D5 — the System One tier's answers for THIS session: what was
+      // asked, who answered, the probability, and what the gate did with it.
+      // The companion to /recent-denials: that one says a call was blocked,
+      // this one says why the runtime thought so and how sure it was.
+      const nArg = Number.parseInt(args[0] ?? '', 10);
+      const limit = Number.isFinite(nArg) && nArg > 0 ? nArg : 20;
+      const decisions = listRecentDecisions(agent.workspaceRoot, agent.sessionKey, limit);
+      console.log(chalk.bold('\nRecent decisions'));
+      if (decisions.length === 0) {
+        console.log(chalk.green('  (none — nothing has asked the decision tier this session)\n'));
+        return true;
+      }
+      for (const d of decisions) {
+        const when = new Date(d.ts).toLocaleString();
+        console.log(`  ${chalk.gray(when)}  ${chalk.cyan(describeDecision(d))}`);
+      }
+      console.log(chalk.gray(`\n  Showing the last ${decisions.length} (use /recent-decisions <n> for more).\n`));
+      return true;
+    }
+    case '/decision-calibration':
+    {
+      // ADR-061 D7 — does the tier's stated probability track what happened?
+      // The answer is a measured property of THIS workspace, so it is read off
+      // this session's own record, not claimed. `/recent-decisions` shows the
+      // answers; this says whether they are worth believing.
+      const provider = (args[0] ?? getCliKnobs().decisions.provider).trim();
+      const entries = listRecentDecisions(agent.workspaceRoot, agent.sessionKey, 1_000);
+      const { samples, unlabelled } = samplesFromDecisions(entries, provider);
+      const report = assessCalibration(provider, samples, { unlabelled });
+      console.log(chalk.bold(`\nDecision calibration — ${provider}`));
+      if (provider === 'rules') {
+        console.log(chalk.gray('  The rules floor is certain by construction; there is nothing to calibrate.'));
+        console.log(chalk.gray(`  Set cli.decisions.provider to a classifier first.\n`));
+        return true;
+      }
+      const tone = report.verdict === 'calibrated' ? chalk.green
+        : report.verdict === 'uncalibrated' ? chalk.red : chalk.yellow;
+      console.log(`  ${tone(report.summary)}`);
+      if (report.verdict !== 'insufficient') {
+        console.log(chalk.gray('\n  stated → observed, by bucket'));
+        for (const bin of report.bins) {
+          if (bin.samples === 0) continue;
+          const gap = Math.abs(bin.stated - bin.observed);
+          const mark = gap > 0.2 ? chalk.red('✗') : gap > 0.1 ? chalk.yellow('~') : chalk.green('✓');
+          console.log(
+            `    ${mark} ${bin.lower.toFixed(1)}–${bin.upper.toFixed(1)}  `
+            + `said ${bin.stated.toFixed(2)}, was right ${(bin.observed * 100).toFixed(0)}%  `
+            + chalk.gray(`(${bin.samples})`),
+          );
+        }
+      }
+      if (report.unlabelled > 0) {
+        console.log(chalk.gray(
+          `\n  ${report.unlabelled} decision(s) are recorded but unlabelled — only a gate that LEARNS the answer`
+          + '\n  (a command you approved or refused) can grade one, so most stay unlabelled by design.',
+        ));
+      }
+      console.log(chalk.gray(`\n  Needs ${CALIBRATION_MIN_SAMPLES} labelled decisions for a verdict. Usage: /decision-calibration [provider]\n`));
       return true;
     }
     case '/hooks':

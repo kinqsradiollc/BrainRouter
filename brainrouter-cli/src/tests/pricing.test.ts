@@ -139,3 +139,33 @@ test('buildCostSummary handles a zero-token snapshot cleanly', () => {
   assert.equal(summary.sessionCostUsd, 0);
   assert.equal(summary.turnBadge.band, 'mono');
 });
+
+// ADR-052 P2b — the contracted discount multiplier over resolved rates.
+test('a __discount in pricing.json scales cost; per-model overrides still apply', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { discountMultiplier } = await import('../runtime/reporting/pricing.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-pricing-'));
+  const prev = process.env.BRAINROUTER_CONFIG_DIR;
+  process.env.BRAINROUTER_CONFIG_DIR = dir;
+  try {
+    fs.writeFileSync(path.join(dir, 'pricing.json'), JSON.stringify({
+      __discount: 0.5,
+      'gpt-5': { inputCacheHit: 0.125, inputCacheMiss: 1.25, output: 10 },
+    }));
+    _resetPricingCache();
+    assert.equal(discountMultiplier(), 0.5, 'the discount is read from pricing.json');
+    // 1M completion tokens @ $10/Mtok = $10 list; discounted 0.5 → $5.
+    assert.equal(costUsd('gpt-5', { cachedTokens: 0, missedTokens: 0, completionTokens: 1_000_000 }), 5);
+  } finally {
+    if (prev === undefined) delete process.env.BRAINROUTER_CONFIG_DIR; else process.env.BRAINROUTER_CONFIG_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+    _resetPricingCache();
+  }
+});
+
+test('no discount ⇒ multiplier is 1 and cost is list price', () => {
+  _resetPricingCache();
+  assert.equal(costUsd('gpt-5', { cachedTokens: 0, missedTokens: 0, completionTokens: 1_000_000 }), 10);
+});

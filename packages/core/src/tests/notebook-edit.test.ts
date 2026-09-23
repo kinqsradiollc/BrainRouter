@@ -31,6 +31,21 @@ test('replace can change the cell type and normalizes code fields', () => {
   assert.equal(out.cells[1].execution_count, null);
 });
 
+// ADR-051 D2 — a code cell's outputs describe its OLD source; a replace clears them.
+test('replace of a code cell clears its now-stale outputs and execution_count', () => {
+  const out = JSON.parse(applyNotebookEdit(nb(), { editMode: 'replace', cellIndex: 0, source: 'print(42)' }).content);
+  assert.equal(out.cells[0].cell_type, 'code');
+  assert.deepEqual(out.cells[0].outputs, [], 'stale outputs cleared'); // was [{ x: 1 }]
+  assert.equal(out.cells[0].execution_count, null, 'execution_count reset'); // was 3
+});
+
+test('replace turning a code cell into markdown sheds outputs and execution_count', () => {
+  const out = JSON.parse(applyNotebookEdit(nb(), { editMode: 'replace', cellIndex: 0, cellType: 'markdown', source: '# note' }).content);
+  assert.equal(out.cells[0].cell_type, 'markdown');
+  assert.ok(!('outputs' in out.cells[0]), 'markdown cells have no outputs field');
+  assert.ok(!('execution_count' in out.cells[0]), 'markdown cells have no execution_count field');
+});
+
 test('insert adds a cell at the index and shifts the rest', () => {
   const out = JSON.parse(applyNotebookEdit(nb(), { editMode: 'insert', cellIndex: 1, cellType: 'markdown', source: '## new' }).content);
   assert.equal(out.cells.length, 3);

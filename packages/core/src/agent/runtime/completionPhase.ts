@@ -29,8 +29,15 @@ export function normalizeTurnCompletionAnswer(
   input: NormalizeTurnCompletionInput,
 ): NormalizedTurnCompletion {
   if (!input.exitedCleanly) {
+    // ADR-052 D1c — a turn that stops at its budget PRESERVES the work it did and
+    // marks it PARTIAL (with the resume affordance named), instead of discarding
+    // it and returning only the ceiling notice. A delegated agent that ran out of
+    // turns is then visibly partial to its parent, not mistaken for finished.
+    const ceiling = buildBudgetCeilingMessage(input.maxLoops);
     return {
-      answer: buildBudgetCeilingMessage(input.maxLoops),
+      answer: input.answer.trim()
+        ? `${input.answer}\n\n---\n⚠️ PARTIAL — ${ceiling}`
+        : ceiling,
       hitLoopLimit: true,
     };
   }

@@ -15,6 +15,11 @@ export const memoryRecallToolSchema = {
         type: "string",
         description: "A stable identifier for this conversation channel/session."
       },
+      workspaceTags: {
+        type: "array",
+        items: { type: "string" },
+        description: "Every identity of the caller's workspace (folder hash, repo hash). PREFERS them — this session, then this workspace, then untagged, then other workspaces, each hit labelled with scopeMatch — without hiding anything. For a hard filter use filters.workspaceTag. Filled in by the client."
+      },
       query: {
         type: "string",
         description: "The user's query or intent to recall memories for."
@@ -49,6 +54,7 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
     sessionKey: z.string(),
     query: z.string(),
     activeSkill: z.string().optional(),
+    workspaceTags: z.array(z.string()).max(8).optional(),
     filters: z.object({
       types: z.array(z.string()).optional(),
       scenes: z.array(z.string()).optional(),
@@ -73,6 +79,11 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill,
+      // Only when asked: without it the per-turn path is byte-for-byte as it
+      // was, and pays no provenance lookup.
+      ...(params.workspaceTags?.length
+        ? { preferScope: { sessionKey: params.sessionKey, workspaceTags: params.workspaceTags } }
+        : {}),
       // C1 (ADR-016) — the org is ALWAYS server-pinned from validated membership.
       // Explicitly drop any client-supplied `orgId` before injecting the resolved
       // one, so a client can never read another org's shared memory by passing

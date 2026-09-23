@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentImage, ComputerUseAction, ComputerUseActionResult, ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import { loadConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
-import { LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache } from '@kinqs/brainrouter-core/provider';
+import { LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache, extractAdvertisedContext, setManagedModelContext } from '@kinqs/brainrouter-core/provider';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
 import { readWorkspaceEntry } from '../fsRead.js';
@@ -268,6 +268,9 @@ export async function fetchEndpointModels(endpoint: string | undefined, apiKey: 
       ids.push(id);
       registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
     }
+    // ADR-045 M4 — record any gateway-advertised `context_window` so the model
+    // ring / budget clamp to the org cap (inert for a plain endpoint).
+    setManagedModelContext(extractAdvertisedContext(body.data ?? []));
     // LM Studio's thin OpenAI-compat /v1/models omits reasoning vocab; its
     // native /api/v1/models advertises it. Populate the cache (self-guards for
     // non-LM-Studio endpoints) so binary on/off models are detected and never
@@ -353,7 +356,9 @@ export type ReconRow =
         delegationState?: 'accepted' | 'not-started';
       }>;
       ts?: number;
-    };
+    }
+  // ADR-059 — the persisted turn path (a `name: 'turn-path'` system record).
+  | { kind: 'turn-path'; steps: unknown[]; ts?: number };
 
 /** Parse a persisted ISO `timestamp` to epoch ms; undefined when absent/bad. */
 export function entryTs(e: { timestamp?: unknown }): number | undefined {
@@ -364,7 +369,7 @@ export function entryTs(e: { timestamp?: unknown }): number | undefined {
 
 /** Reconstruct user/assistant prose + tool-group rows from OpenAI-format entries. */
 export function reconstructTranscriptRows(
-  entries: Array<{ role?: string; content?: unknown; name?: string; tool_calls?: unknown[]; tool_call_id?: string; isError?: boolean; timestamp?: string }>,
+  entries: Array<{ role?: string; content?: unknown; name?: string; tool_calls?: unknown[]; tool_call_id?: string; isError?: boolean; timestamp?: string; steps?: unknown[] }>,
 ): ReconRow[] {
   const rows: ReconRow[] = [];
   const callMeta = new Map<string, { name: string; args: Record<string, unknown> }>();
@@ -405,6 +410,10 @@ export function reconstructTranscriptRows(
         }
       }
       if (text.trim()) { flush(); rows.push({ kind: 'assistant', text: text.slice(0, 40_000), ts }); }
+    } else if (e.role === 'system' && e.name === 'turn-path') {
+      // ADR-059 — the turn path, kept in order with the prose and tool cards.
+      flush();
+      rows.push({ kind: 'turn-path', steps: Array.isArray(e.steps) ? e.steps : [], ts });
     } else if (e.role === 'tool') {
       const meta = e.tool_call_id ? callMeta.get(e.tool_call_id) : undefined;
       const name = e.name ?? meta?.name ?? 'tool';

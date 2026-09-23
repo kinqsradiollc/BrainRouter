@@ -81,6 +81,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
   addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }> {
     return ipcRenderer.invoke('workspace:add');
   },
+  pickCalendarFile(): Promise<{ canceled: boolean; path?: string }> {
+    return ipcRenderer.invoke('calendar:pick-file');
+  },
   workspaceRecents(): Promise<{ current: string | null; recents: string[] }> {
     return ipcRenderer.invoke('workspace:recents');
   },

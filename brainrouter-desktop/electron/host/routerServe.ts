@@ -57,6 +57,12 @@ export async function startRouterServe(): Promise<{ ok: boolean; error?: string;
       host: knobs.serveHost,
       port: knobs.servePort,
       serveKey: knobs.serveKey || undefined,
+      // ADR-061 D5 — the gateway's route choices are readable where the rest of
+      // its lifecycle already is. Silent on the default `rules` provider.
+      onRouteDecision: (entry) => note(
+        `auto: ${entry.outcome} (${entry.provider}, ${entry.latencyMs}ms)`
+        + (entry.fellBack ? ` — fell back: ${entry.fellBack}` : ''),
+      ),
     });
     state.startedAt = new Date().toISOString();
     state.lastError = null;

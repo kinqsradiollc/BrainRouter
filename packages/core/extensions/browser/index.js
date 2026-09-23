@@ -70,8 +70,16 @@ export async function activate(host) {
     (_args, runtime) => invoke(runtime, { kind: 'tabs.list' }));
   read('browser_get_state', 'Get navigation and lifecycle state for one tab (defaults to the visible tab).', objSchema(tabProps),
     (args, runtime) => invoke(runtime, { kind: 'page.state', tabId: args.tabId }));
-  read('browser_snapshot', 'Capture a bounded semantic snapshot of the visible page with opaque, page-revision-bound element refs.', objSchema({ ...tabProps, maxChars: { type: 'integer', minimum: 1000, maximum: 50000 } }),
-    (args, runtime) => invoke(runtime, { kind: 'page.snapshot', tabId: args.tabId, maxChars: args.maxChars }));
+  read('browser_snapshot', 'Capture a bounded semantic snapshot of the page (interactive nodes with opaque, page-revision-bound refs). scope "page" also returns visible nodes scrolled out of the viewport (flagged inViewport:false) so you need not scroll-and-re-snapshot; open shadow-DOM roots are walked.', objSchema({ ...tabProps, maxChars: { type: 'integer', minimum: 1000, maximum: 200000 }, scope: { type: 'string', enum: ['viewport', 'page'], description: 'viewport (default) or page (include scrolled-out visible nodes).' } }),
+    (args, runtime) => invoke(runtime, { kind: 'page.snapshot', tabId: args.tabId, maxChars: args.maxChars, scope: args.scope }));
+  read('browser_find', 'Locate live-page elements by role, visible text, label, or test-id and return their opaque, page-revision-bound refs. Use it to target by what you SEE (role+name / text / label) instead of guessing a ref; multiple matches are returned as candidates rather than a silent pick.', objSchema({
+    ...tabProps,
+    query: { type: 'string', maxLength: 512, description: 'The role value, visible text, label, or test-id to match (case-insensitive).' },
+    by: { type: 'string', enum: ['role', 'text', 'label', 'testid'], description: 'How to match query. Default text (accessible name / label).' },
+    limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max candidates. Default 20.' },
+    scope: { type: 'string', enum: ['viewport', 'page'], description: 'viewport or page (default page — also finds scrolled-out matches).' },
+  }, ['query']),
+    (args, runtime) => invoke(runtime, { kind: 'page.find', tabId: args.tabId, query: args.query, by: args.by, limit: args.limit, scope: args.scope }), true);
   read('browser_screenshot', 'Capture the current tab as a bounded browser artifact. This is explicit and is not run after normal actions.', objSchema({ ...tabProps, fullPage: { type: 'boolean' } }),
     (args, runtime) => invoke(runtime, { kind: 'page.screenshot', tabId: args.tabId, fullPage: args.fullPage }));
   read('browser_console', 'Read a bounded page-console batch. Sensitive fields are redacted.', objSchema({ ...tabProps, after: { type: 'string', maxLength: 256 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }),
@@ -123,13 +131,14 @@ export async function activate(host) {
     (args, runtime) => invoke(runtime, { kind: 'page.reload', tabId: args.tabId, ignoreCache: args.ignoreCache }));
   network('browser_stop', 'Stop the tab\'s current navigation.', objSchema(tabProps),
     (args, runtime) => invoke(runtime, { kind: 'page.stop', tabId: args.tabId }));
-  network('browser_wait', 'Wait for load state, URL text, page text, or an element ref/test-id, with a bounded timeout.', objSchema({
+  network('browser_wait', 'Wait for load state, URL text, page text, an element ref/test-id, or (human:true) for a human-verification challenge on the tab to CLEAR, with a bounded timeout. When an action fails with a human-verification message, call this with human:true to wait for the person to finish, then continue.', objSchema({
     ...targetProps,
     loadState: { type: 'string', enum: ['domcontentloaded', 'load', 'networkidle'] },
     urlIncludes: { type: 'string', maxLength: 2048 },
     text: { type: 'string', maxLength: 4096 },
-    timeoutMs: { type: 'integer', minimum: 1, maximum: 60000 },
-  }), (args, runtime) => invoke(runtime, { kind: 'page.wait', tabId: args.tabId, loadState: args.loadState, urlIncludes: args.urlIncludes, text: args.text, ref: args.ref, testID: args.testID, timeoutMs: args.timeoutMs }));
+    human: { type: 'boolean', description: 'Wait for a human-verification challenge on the tab to clear (hand-back). Allows a longer timeout.' },
+    timeoutMs: { type: 'integer', minimum: 1, maximum: 600000 },
+  }), (args, runtime) => invoke(runtime, { kind: 'page.wait', tabId: args.tabId, loadState: args.loadState, urlIncludes: args.urlIncludes, text: args.text, ref: args.ref, testID: args.testID, human: args.human, timeoutMs: args.timeoutMs }));
 
   // Visible computer interactions. Shell tier + computer action kind means they
   // inherit the existing local-computer policy and audit boundary.
@@ -142,23 +151,25 @@ export async function activate(host) {
   computer('browser_reorder_tab', 'Move a tab to a zero-based position.', objSchema({ tabId, index: { type: 'integer', minimum: 0, maximum: 999 } }, ['tabId', 'index']),
     (args, runtime) => invoke(runtime, { kind: 'tabs.reorder', tabId: args.tabId, index: args.index }));
 
-  const clickSchema = objSchema({ ...targetProps, button: { type: 'string', enum: ['left', 'middle', 'right'] }, modifiers: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 32 } } });
-  computer('browser_click', 'Click an opaque semantic ref or compatibility test-id.', clickSchema,
-    (args, runtime) => invoke(runtime, { kind: 'page.click', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, button: args.button, modifiers: args.modifiers }));
-  computer('browser_double_click', 'Double-click an opaque semantic ref or compatibility test-id.', clickSchema,
-    (args, runtime) => invoke(runtime, { kind: 'page.doubleClick', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, button: args.button, modifiers: args.modifiers }));
+  const coordX = { type: 'number', minimum: 0, maximum: 100000, description: 'Viewport CSS-pixel x from the last browser_screenshot; a target when no ref/testID is given.' };
+  const coordY = { type: 'number', minimum: 0, maximum: 100000, description: 'Viewport CSS-pixel y from the last browser_screenshot; a target when no ref/testID is given.' };
+  const clickSchema = objSchema({ ...targetProps, x: coordX, y: coordY, button: { type: 'string', enum: ['left', 'middle', 'right'] }, modifiers: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 32 } } });
+  computer('browser_click', 'Click an opaque semantic ref, a compatibility test-id, or a screenshot {x,y} point (a coordinate hit on a credential field is refused).', clickSchema,
+    (args, runtime) => invoke(runtime, { kind: 'page.click', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, x: args.x, y: args.y, button: args.button, modifiers: args.modifiers }));
+  computer('browser_double_click', 'Double-click an opaque semantic ref, a compatibility test-id, or a screenshot {x,y} point.', clickSchema,
+    (args, runtime) => invoke(runtime, { kind: 'page.doubleClick', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, x: args.x, y: args.y, button: args.button, modifiers: args.modifiers }));
   computer('browser_tap', 'Compatibility alias: click an element by UI-map test-id.', objSchema({ ...tabProps, testID }, ['testID']),
     (args, runtime) => invoke(runtime, { kind: 'page.click', tabId: args.tabId, testID: args.testID }));
-  computer('browser_hover', 'Hover an opaque semantic ref or compatibility test-id.', objSchema(targetProps),
-    (args, runtime) => invoke(runtime, { kind: 'page.hover', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision }));
+  computer('browser_hover', 'Hover an opaque semantic ref, a compatibility test-id, or a screenshot {x,y} point.', objSchema({ ...targetProps, x: coordX, y: coordY }),
+    (args, runtime) => invoke(runtime, { kind: 'page.hover', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, x: args.x, y: args.y }));
   computer('browser_type', 'Type bounded text into an opaque ref/test-id; replace defaults to the page manager\'s safe behavior.', objSchema({ ...targetProps, text: { type: 'string', maxLength: 20000 }, replace: { type: 'boolean' } }, ['text']),
     (args, runtime) => invoke(runtime, { kind: 'page.type', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, text: args.text, replace: args.replace }));
   computer('browser_press', 'Press a key or shortcut, optionally targeting an element.', objSchema({ ...targetProps, key: { type: 'string', maxLength: 128 }, modifiers: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 32 } } }, ['key']),
     (args, runtime) => invoke(runtime, { kind: 'page.press', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, key: args.key, modifiers: args.modifiers }));
   computer('browser_scroll', 'Scroll the page or a referenced element by bounded CSS-pixel deltas.', objSchema({ ...targetProps, deltaX: { type: 'number', minimum: -100000, maximum: 100000 }, deltaY: { type: 'number', minimum: -100000, maximum: 100000 } }),
     (args, runtime) => invoke(runtime, { kind: 'page.scroll', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, deltaX: args.deltaX, deltaY: args.deltaY }));
-  computer('browser_drag', 'Drag from one opaque ref to another within the same page revision.', objSchema({ ...tabProps, fromRef: ref, toRef: ref, pageRevision }, ['fromRef', 'toRef']),
-    (args, runtime) => invoke(runtime, { kind: 'page.drag', tabId: args.tabId, fromRef: args.fromRef, toRef: args.toRef, pageRevision: args.pageRevision }));
+  computer('browser_drag', 'Drag between two opaque refs within one page revision, or between two screenshot {x,y} points.', objSchema({ ...tabProps, fromRef: ref, toRef: ref, fromX: coordX, fromY: coordY, toX: coordX, toY: coordY, pageRevision }),
+    (args, runtime) => invoke(runtime, { kind: 'page.drag', tabId: args.tabId, fromRef: args.fromRef, toRef: args.toRef, fromX: args.fromX, fromY: args.fromY, toX: args.toX, toY: args.toY, pageRevision: args.pageRevision }));
   computer('browser_select_option', 'Select one or more bounded option values.', objSchema({ ...targetProps, values: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', maxLength: 1024 } } }, ['values']),
     (args, runtime) => invoke(runtime, { kind: 'page.select', tabId: args.tabId, ref: args.ref, testID: args.testID, pageRevision: args.pageRevision, values: args.values }));
   computer('browser_check', 'Set a checkbox/radio-like control to the requested checked state.', objSchema({ ...targetProps, checked: { type: 'boolean' } }, ['checked']),
@@ -213,5 +224,5 @@ export async function activate(host) {
     return pkg.serializeBrowserControlResult(pkg.normalizeBrowserControlResult({ ok: true, kind: 'flow.run', durationMs: 0, data: { results } }, 'flow.run'));
   });
 
-  host.log(`browser: registered ${39} embedded browser tools`);
+  host.log(`browser: registered ${40} embedded browser tools`);
 }

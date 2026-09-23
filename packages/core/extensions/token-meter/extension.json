@@ -1,0 +1,7 @@
+{
+  "name": "token-meter",
+  "version": "0.4.22",
+  "description": "Soft per-task budget advisory — at turn end, when session spend crosses a threshold of the task's token/USD budget, injects a compact heads-up into the next turn. The only budget signal today is the hard mid-turn throw; this is the early warning before it.",
+  "main": "index.js",
+  "contributes": []
+}

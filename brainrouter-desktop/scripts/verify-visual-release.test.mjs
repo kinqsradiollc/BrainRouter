@@ -16,6 +16,7 @@ const lazyPrefixes = [
   'NotesModeContainer-',
   'MeetingsView-',
   'WorkflowsPanel-',
+  'devBridge-',
 ];
 
 function fixture() {

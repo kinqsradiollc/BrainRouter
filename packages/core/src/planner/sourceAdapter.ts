@@ -24,6 +24,15 @@ export interface SourceFreshness {
   lastError?: string;
   /** How many items came from that last successful read. */
   itemCount: number;
+  /** What to call it in front of a person; `sourceId` when the source had no name. */
+  label?: string;
+  /**
+   * How long this source may go unanswered before saying so, when it refreshes
+   * itself on a cadence (ADR-060 D5: twice that cadence). Absent, the shared
+   * default applies — which suits a source read as part of a turn, not one
+   * polled in the background.
+   */
+  staleAfterMs?: number;
 }
 
 export interface SourceAdapter {
@@ -42,7 +51,7 @@ export const STALE_AFTER_MS = 15 * 60 * 1000;
 
 export function isStale(freshness: SourceFreshness, nowMs: number): boolean {
   if (!freshness.lastFetchedAt) return true;
-  return nowMs - Date.parse(freshness.lastFetchedAt) > STALE_AFTER_MS;
+  return nowMs - Date.parse(freshness.lastFetchedAt) > (freshness.staleAfterMs ?? STALE_AFTER_MS);
 }
 
 /**
@@ -53,18 +62,21 @@ export function isStale(freshness: SourceFreshness, nowMs: number): boolean {
  * what they are looking at.
  */
 export function describeFreshness(freshness: SourceFreshness, nowMs: number): string {
+  const name = freshness.label ?? freshness.sourceId;
   if (freshness.lastError && !freshness.lastFetchedAt) {
-    return `${freshness.sourceId} has never loaded — ${freshness.lastError}`;
+    return `${name} has never loaded — ${freshness.lastError}`;
   }
-  if (!freshness.lastFetchedAt) return `${freshness.sourceId} has not loaded yet.`;
+  if (!freshness.lastFetchedAt) return `${name} has not loaded yet.`;
 
   const ageMs = nowMs - Date.parse(freshness.lastFetchedAt);
   const age = describeAge(ageMs);
   if (freshness.lastError) {
-    return `${freshness.sourceId} is ${age} old — the last refresh failed (${freshness.lastError}).`;
+    return `${name} is ${age} old — the last refresh failed (${freshness.lastError}).`;
   }
-  if (ageMs > STALE_AFTER_MS) return `${freshness.sourceId} is ${age} old.`;
-  return `${freshness.sourceId} is current.`;
+  // The same bar `isStale` uses, so a source cannot be listed as stale and then
+  // described as current.
+  if (ageMs > (freshness.staleAfterMs ?? STALE_AFTER_MS)) return `${name} is ${age} old.`;
+  return `${name} is current.`;
 }
 
 function describeAge(ms: number): string {

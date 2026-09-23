@@ -28,12 +28,19 @@ const OFFER_PHRASES: RegExp[] = [
   /happy to (do|implement|continue|dig|expand)\b/i,
 ];
 
+// The action verbs a promise can carry — the same stems the preamble guard
+// recognises (read/check/look/search/explore…), not only the mutation verbs.
+// A turn that ended "Found it. Let me read it." was accepted as an answer
+// because "read" was not on the list; the person got no file contents.
+const ACTION_VERBS =
+  '(?:start|begin|implement|write|run|fix|read|check|look|search|explor\\w*|investigat\\w*|examin\\w*|inspect|scan|grep|find|fetch|open|dig|verif\\w*|review|analy[sz]\\w*|trac\\w*|take a look)';
+
 const PROMISE_PHRASES: RegExp[] = [
   /\bi['’]ll (now |then |go ahead and )?\w+/i,
   /\bi will (now |then |go ahead and )?\w+/i,
   /\bnext,? i (will|am going to|'ll)\b/i,
-  /\blet me (now )?(start|begin|implement|write|run|fix)\b/i,
-  /\bgoing to (start|begin|implement|write|run|fix)\b/i,
+  new RegExp(`\\blet me (now |just |go ahead and )?${ACTION_VERBS}\\b`, 'i'),
+  new RegExp(`\\bgoing to (now |just )?${ACTION_VERBS}\\b`, 'i'),
 ];
 
 /** The tail window we inspect — deferrals live at the END of a message. */

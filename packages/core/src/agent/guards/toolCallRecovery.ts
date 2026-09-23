@@ -129,6 +129,21 @@ export function synthesizeOrphanResults<T extends ToolCallLike>(
   return synthetic;
 }
 
+/**
+ * ADR-046 D2 — a repair the sanitizer had to perform. Emitted through an
+ * optional observer so callers can report it as an invariant tripwire: every
+ * repair means the "model-visible ⟺ recorded" invariant was already broken
+ * upstream and we are patching the symptom at the last exit. The observer keeps
+ * this module pure (no registry import); callers wire it to the roster.
+ */
+export interface PairingRepair {
+  kind: 'dropped-orphan-result' | 'stripped-idless-calls' | 'synthesized-placeholder' | 'dropped-duplicate-call';
+  toolCallId?: string;
+  toolName?: string;
+  count?: number;
+}
+export type PairingRepairObserver = (repair: PairingRepair) => void;
+
 /** A chat message as it lives in the agent's history / on the wire. */
 export interface ChatMessageLike {
   role: string;
@@ -164,6 +179,7 @@ export interface ChatMessageLike {
  */
 export function sanitizeToolCallPairing<T extends ChatMessageLike>(
   messages: T[] | undefined | null,
+  observe?: PairingRepairObserver,
 ): T[] {
   if (!Array.isArray(messages) || messages.length === 0) return [];
   const out: T[] = [];
@@ -173,9 +189,11 @@ export function sanitizeToolCallPairing<T extends ChatMessageLike>(
     const rawCalls = Array.isArray(m?.tool_calls) ? m.tool_calls : null;
     if (m?.role === 'assistant' && rawCalls && rawCalls.length > 0) {
       // De-dupe, then keep only calls that have a usable string id.
-      const calls = dedupeToolCalls(rawCalls).filter(
-        (c) => typeof c?.id === 'string' && c.id !== '',
-      );
+      const deduped = dedupeToolCalls(rawCalls, (id) =>
+        observe?.({ kind: 'dropped-duplicate-call', toolCallId: id }));
+      const calls = deduped.filter((c) => typeof c?.id === 'string' && c.id !== '');
+      const idlessDropped = deduped.length - calls.length;
+      if (idlessDropped > 0) observe?.({ kind: 'stripped-idless-calls', count: idlessDropped });
       const callIds = new Set(calls.map((c) => c.id));
       // Consume the run of `tool` messages that immediately follow, keeping the
       // first result for each matching call id and dropping the rest (orphans
@@ -189,6 +207,8 @@ export function sanitizeToolCallPairing<T extends ChatMessageLike>(
         if (id && callIds.has(id) && !claimed.has(id)) {
           claimed.add(id);
           matched.push(r);
+        } else {
+          observe?.({ kind: 'dropped-orphan-result', toolCallId: id || undefined });
         }
         j++;
       }
@@ -205,11 +225,14 @@ export function sanitizeToolCallPairing<T extends ChatMessageLike>(
           name: String((r as ChatMessageLike).name ?? 'unknown'),
           content: '',
         }));
-        out.push(...(synthesizeOrphanResults(calls, have) as unknown as T[]));
+        const synthetic = synthesizeOrphanResults(calls, have);
+        for (const s of synthetic) observe?.({ kind: 'synthesized-placeholder', toolCallId: s.tool_call_id, toolName: s.name });
+        out.push(...(synthetic as unknown as T[]));
       }
       i = j;
     } else if (m?.role === 'tool') {
       // A tool result not preceded by an assistant-with-tool_calls → orphan.
+      observe?.({ kind: 'dropped-orphan-result', toolCallId: typeof m?.tool_call_id === 'string' ? m.tool_call_id : undefined });
       i++;
     } else {
       out.push(m);
@@ -217,6 +240,28 @@ export function sanitizeToolCallPairing<T extends ChatMessageLike>(
     }
   }
   return out;
+}
+
+/**
+ * ADR-046 D2 (S4) — the single history→model-request derivation.
+ *
+ * Both the live turn path (`modelInvocationPhase`) and session resume
+ * (`loadHistory`) project their model-visible request through THIS function, so
+ * a resumed session reproduces byte-identical model context to the live turn
+ * that produced it for the same recorded messages — the "model-visible ⟺
+ * recorded" invariant, made structural by sharing one derivation instead of two
+ * parallel ones. Repairs are surfaced through `observe` (the pairing tripwire),
+ * so any content that was not cleanly recorded is reported, not silently fixed.
+ *
+ * It is deliberately a thin, named wrapper: the value is the SINGLE call site
+ * for the projection, asserted by `modelRequestDerivation.test.ts` (both source
+ * files must derive through here) and by the live/resume equality test.
+ */
+export function deriveModelRequest<T extends ChatMessageLike>(
+  recorded: T[] | undefined | null,
+  observe?: PairingRepairObserver,
+): T[] {
+  return sanitizeToolCallPairing(recorded, observe);
 }
 
 /**

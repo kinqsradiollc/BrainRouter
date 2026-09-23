@@ -14,6 +14,8 @@ import {
 } from '../../workspace/workspaceEvents.js';
 import { sessionRowsCacheKey } from '../../session/list/sessionCache.js';
 import { fileFromSummary } from '../../format.js';
+import { toolStartLine, toolEndLine } from '../toolStepLine.js';
+import { appendTurnPathStep, completeToolStep, toolStartStep } from '../turnPathRows.js';
 import { parseArtifactWriteSummary } from '../../artifacts/artifactWriteRow.js';
 import { FOREGROUND_ONLY_KINDS } from '../../../constants.js';
 import { rid } from '../../rid.js';
@@ -37,7 +39,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setDiagrams, setDiagramView, setDiagramDelta, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -141,7 +143,19 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         }
         break;
       case 'assistant-turn-end': flushAssistant(); break;
+      // The tools BrainRouter runs are steps of the turn: show each one inline in
+      // the live thinking stream (start, then its outcome), so a person can follow
+      // what actually happened in order — not only in the tool-calls panel.
+      // ADR-059 — the runtime's own steps (model / provider / guard / end) grow
+      // the turn's Path block in order; tool calls join it below.
+      case 'turn-step': setRows((r) => appendTurnPathStep(r, e.step, rid)); break;
+      case 'tool-start':
+        setReasoningTail((t) => t + toolStartLine(e.tool, e.args));
+        setRows((r) => appendTurnPathStep(r, toolStartStep(e.tool, e.args, e.callId), rid));
+        break;
       case 'tool-end': {
+        setReasoningTail((t) => t + toolEndLine(e.ok, e.summary));
+        setRows((r) => completeToolStep(r, { tool: e.tool, callId: e.callId, ok: e.ok, summary: e.summary }, rid));
         if (!e.ok) turnFailsRef.current += 1;
         const editedFile = fileFromSummary(e.tool, e.summary);
         if (e.ok && editedFile) turnEditsRef.current.set(editedFile, /write|create/i.test(e.tool) ? 'A' : 'M');
@@ -459,7 +473,10 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
           // UI-TEST fusion — the screen map + stories are per-workspace too; clear
           // the old project's and load the NEW workspace's stored ones.
           setAtlasUiMap(null); setAtlasStories([]);
+          // ADR-056 D-A5 — diagrams are per-workspace too.
+          setDiagrams([]); setDiagramView(null); setDiagramDelta(null);
           q('q-atlas', 'atlas-graph');
+          q('q-diagrams', 'diagram-list');
           q('q-browser-manifest', 'browser:manifest');
           q('q-browser-stories', 'browser:list-stories');
           refreshSidebar();

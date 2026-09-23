@@ -34,3 +34,31 @@ export function browserPermissionCheckScopes(permission: string, mediaType?: str
   if (permission === 'media') return mediaType === 'audio' || mediaType === 'video' ? [`media:${mediaType}`] : [];
   return SUPPORTED_SIMPLE_PERMISSIONS.has(permission) ? [permission] : [];
 }
+
+/**
+ * ADR-055 P10 — the prompt-permission values a per-site decision may be
+ * remembered under. These are the `promptPermission` values
+ * `browserPermissionRequestScope` can produce; anything else is never persisted.
+ */
+export const PERSISTABLE_BROWSER_PERMISSIONS: ReadonlySet<string> = new Set([
+  ...SUPPORTED_SIMPLE_PERMISSIONS,
+  'microphone',
+  'camera',
+  'microphone+camera',
+]);
+
+export function isPersistableBrowserPermission(value: string): boolean {
+  return PERSISTABLE_BROWSER_PERMISSIONS.has(value);
+}
+
+/**
+ * The exact grants a remembered prompt decision implies — the reverse of
+ * `browserPermissionRequestScope`, so restoring "allow camera" re-adds
+ * `media:video` (the key Chromium actually checks), not the prompt label.
+ */
+export function browserPermissionGrantsFor(promptPermission: string): string[] {
+  if (promptPermission === 'microphone') return ['media:audio'];
+  if (promptPermission === 'camera') return ['media:video'];
+  if (promptPermission === 'microphone+camera') return ['media:audio', 'media:video'];
+  return SUPPORTED_SIMPLE_PERMISSIONS.has(promptPermission) ? [promptPermission] : [];
+}

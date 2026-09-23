@@ -74,12 +74,13 @@ export function registerPluginCommand(program: Command): void {
           const byName = !isGit && !existsLocal && !looksLikePath;
 
           if (byName) {
-            const r = plugin.installPluginByName(raw, { scope, workspaceRoot, force: options.force, config });
+            const r = await plugin.installPluginByName(raw, { scope, workspaceRoot, force: options.force, config });
             if (!r.ok) return fail(r.error ?? 'install failed');
             const res = r.result!;
             if (!res.ok) return fail(res.error);
-            if (options.json) { process.stdout.write(JSON.stringify({ ...res, marketplace: r.marketplace }) + '\n'); return; }
+            if (options.json) { process.stdout.write(JSON.stringify({ ...res, marketplace: r.marketplace, warning: r.warning }) + '\n'); return; }
             console.log(chalk.green(`Installed "${res.name}" (${scope}) from marketplace "${r.marketplace}" → ${res.installedTo}`));
+            if (r.warning) console.log(chalk.yellow(`  ! ${r.warning}`)); // ADR-047 D4 advisory notice
             for (const w of res.warnings) console.log(chalk.yellow(`  ! ${w}`));
             console.log(chalk.gray(`Enable it with:  brainrouter plugin enable ${res.name}${options.workspace ? ' --workspace' : ''}`));
             return;
@@ -256,7 +257,7 @@ export function registerPluginCommand(program: Command): void {
           const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
           const config = loadOrInitConfig();
           const name = options.all ? undefined : (target ? String(target) : undefined);
-          const results = plugin.updatePlugins({ name, workspaceRoot, config });
+          const results = await plugin.updatePlugins({ name, workspaceRoot, config });
           if (options.json) { process.stdout.write(JSON.stringify(results) + '\n'); return; }
           if (results.length === 0) { console.log(chalk.gray('No plugins installed.')); return; }
           for (const r of results) {

@@ -85,7 +85,7 @@ describe("server connector sync knowledge scope", () => {
       .mockReturnValue([{ id: "runtime-connector-1", checkpoint: { cursor: "next" } }]);
     mocks.createFileConnector.mockReturnValue({ id: "runtime-connector-1" });
     mocks.runConnectorCheckpointCore.mockImplementation(async (_workspace, _connectorId, options) => {
-      const plannerItemsProjected = await options.projectPlannerIssues({
+      const plannerItemsProjected = await options.projectPlannerDocuments({
         connector: { id: "runtime-connector-1", source: "github", name: "GitHub runtime" },
         documents: [syncedDocument],
       });

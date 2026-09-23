@@ -10,9 +10,20 @@ import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../../session/transc
 import { blockGoal, completeGoal } from '../../../goal/store/goalStore.js';
 import { readPlan, updatePlan, formatPlan } from '../../../task/taskStore.js';
 import { applySteeringPlanRevision } from '../../../task/steeringReceiptStore.js';
+import { subscribeIdleNotice } from '../../../session/messaging/idleNotifyStore.js';
 import type { BuiltinToolHandler } from './registry.js';
 
 export const sessionHandlers: Record<string, BuiltinToolHandler> = {
+  // ADR-052 P4.2 — subscribe THIS session to a one-shot notice when another local
+  // session next goes idle, instead of polling it.
+  notify_when_idle: async ({ args, host }) => {
+    const target = String(args.target_session ?? '').trim();
+    if (!target) throw new Error('notify_when_idle requires target_session (the session key to watch).');
+    const ok = subscribeIdleNotice(host.workspaceRoot, target, host.sessionKey, Date.now());
+    return ok
+      ? JSON.stringify({ subscribed: true, target, note: `One message will arrive when ${target} next goes idle.` })
+      : JSON.stringify({ subscribed: false, error: 'invalid target (empty, or the same session)' });
+  },
   mark_chapter: async ({ args, host }) => {
     // CC-P12.3 — persist a chapter marker into the session transcript.
     const title = String(args.title ?? '').trim();

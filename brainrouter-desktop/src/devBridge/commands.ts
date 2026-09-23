@@ -249,6 +249,7 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
       return () => listeners.delete(listener);
     },
     addWorkspace: async () => ({ opened: false, workspaceRoot: '/Users/dev/new-project' }),
+    pickCalendarFile: async () => ({ canceled: false, path: '/Users/dev/Downloads/timetable.ics' }),
     workspaceRecents: async () => ({ current: S.wsCurrent, recents: S.wsRecents }),
     workspaceSessions: async (root: string, limit = 80) => {
       const rows = mergeMeta(root).slice(0, Math.max(1, Math.min(120, Number(limit) || 80)));

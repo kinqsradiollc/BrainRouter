@@ -44,10 +44,10 @@ export interface UpdateResult {
  * maps are name-keyed and never rewritten here). `config` is only consulted for
  * marketplace-sourced plugins (install-by-name resolution).
  */
-export function updatePlugin(
+export async function updatePlugin(
   name: string,
   opts: { scope?: PluginScope; workspaceRoot?: string; config?: Config } = {},
-): UpdateResult {
+): Promise<UpdateResult> {
   const scope = opts.scope ?? 'user';
   const workspaceRoot = opts.workspaceRoot ?? process.cwd();
   const root = pluginInstallRoot(scope, name, workspaceRoot);
@@ -63,7 +63,7 @@ export function updatePlugin(
   // Re-run the ORIGINAL install path (force-overwrites the live copy atomically).
   let result: InstallResult;
   if (record.marketplace) {
-    const r = installPluginByName(name, { scope, workspaceRoot, force: true, config: opts.config });
+    const r = await installPluginByName(name, { scope, workspaceRoot, force: true, config: opts.config });
     if (!r.ok || !r.result) return { ok: false, name, scope, updated: false, fromVersion, fromRevision, error: r.error ?? 'update failed' };
     result = r.result;
   } else {
@@ -94,9 +94,9 @@ export function updatePlugin(
  * Update ALL installed plugins across both scopes (or a single named one). Reads
  * config once for marketplace resolution. Enabled/consent state is preserved.
  */
-export function updatePlugins(
+export async function updatePlugins(
   opts: { name?: string; workspaceRoot?: string; config?: Config } = {},
-): UpdateResult[] {
+): Promise<UpdateResult[]> {
   const workspaceRoot = opts.workspaceRoot ?? process.cwd();
   const config = opts.config ?? loadOrInitConfig();
   const installed = listInstalledPlugins(workspaceRoot);
@@ -105,7 +105,7 @@ export function updatePlugins(
     : installed;
   const results: UpdateResult[] = [];
   for (const p of targets) {
-    results.push(updatePlugin(p.name, { scope: p.scope, workspaceRoot, config }));
+    results.push(await updatePlugin(p.name, { scope: p.scope, workspaceRoot, config }));
   }
   if (opts.name && targets.length === 0) {
     results.push({ ok: false, name: opts.name, scope: 'user', updated: false, error: `plugin "${opts.name}" is not installed` });

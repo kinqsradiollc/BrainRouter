@@ -8,7 +8,8 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, RequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, RequestSchema, RootsListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createClientRootsScope, ROOTS_TIMEOUT_MS, withClientRootsScope } from './clientRoots.js';
 import {
   HOST_LEARNING_REQUEST_METHOD,
   SESSION_MESSAGE_NOTIFICATION_METHOD,
@@ -51,6 +52,7 @@ import {
   memoryCaptureAnnotationToolSchema,
   memoryRecordLessonToolSchema,
   memoryCreateRequirementToolSchema,
+  memoryIngestRepoToolSchema,
 } from '../tools/capture/index.js';
 import {
   memoryGovernanceToolSchemas, handleHostLearningRequest,
@@ -234,6 +236,18 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
     { capabilities: { tools: {} } }
   );
 
+  // Where an ordinary MCP client is working, from the roots it declares — so
+  // another coding agent's memory reads rank its own repository first, as
+  // BrainRouter's CLI and desktop already do (see ./clientRoots.ts). Asked at
+  // most once per connection, bounded, and forgotten when the roots change.
+  const clientRoots = createClientRootsScope(
+    async () => (await server.listRoots(undefined, { timeout: ROOTS_TIMEOUT_MS })).roots,
+    () => Boolean(server.getClientCapabilities()?.roots),
+  );
+  server.setNotificationHandler(RootsListChangedNotificationSchema, async () => {
+    clientRoots.invalidate();
+  });
+
   // ── Tool list ──────────────────────────────────────────────────────────────
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
@@ -362,6 +376,7 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
         },
       },
       memoryCaptureTurnToolSchema,
+      memoryIngestRepoToolSchema,
       memoryRecallToolSchema,
       memoryPersonaToolSchema,
       memoryPersonaRefreshToolSchema,
@@ -481,6 +496,12 @@ function buildMcpServer(registry: Registry, options?: BuildMcpServerOptions): Se
       if (callArgs && typeof callArgs === 'object' && 'userId' in callArgs) {
         (callArgs as Record<string, unknown>).userId = defaultUserId;
       }
+      // Ranking only, never a boundary: the userId pin above is the boundary.
+      request.params.arguments = await withClientRootsScope(
+        request.params.name,
+        request.params.arguments,
+        clientRoots,
+      ) as typeof request.params.arguments;
       // OBSERVABILITY (Phase 4) — time + count the dispatch. The switch is wrapped
       // in an IIFE so each case's `return` flows to one metrics recording point.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

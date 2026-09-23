@@ -46,7 +46,7 @@ class FakeBrowserPort implements BrowserControlPort {
 const READ_TOOLS = [
   'browser_capabilities', 'browser_list_tabs', 'browser_get_state', 'browser_snapshot',
   'browser_screenshot', 'browser_console', 'browser_network', 'browser_downloads',
-  'browser_list_screens', 'browser_get_screen', 'browser_find_element', 'browser_assert_visible',
+  'browser_list_screens', 'browser_get_screen', 'browser_find_element', 'browser_find', 'browser_assert_visible',
 ];
 const NETWORK_TOOLS = [
   'browser_open_tab', 'browser_navigate', 'browser_back', 'browser_forward',

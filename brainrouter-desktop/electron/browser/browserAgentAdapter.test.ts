@@ -15,6 +15,8 @@ function state(): BrowserState {
     closedTabCount: 0,
     surface: { x: 0, y: 0, width: 800, height: 600, visible: true },
     downloads: [], permissionPrompt: null, dialogPrompt: null,
+    bookmarks: [],
+    fullscreenTabId: null,
     capabilities: { nativeTabs: true, sameVisibleTabAutomation: true, downloads: true, permissions: true, semanticSnapshot: true, maxTabs: 50 },
   };
 }
@@ -31,7 +33,7 @@ test('agent browser command mapping targets exact tab/revision and never exposes
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'tabs.open', url: 'https://example.com/', activate: true }), { command: { op: 'create-tab', url: 'https://example.com/', active: true } });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'tabs.open', url: 'https://example.com/' }), { command: { op: 'create-tab', url: 'https://example.com/', active: false } });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'page.click', tabId: 'tab_x_1', ref: 'br:tab_x_1:4:node_1', pageRevision: 4 }), {
-    tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'click', ref: 'br:tab_x_1:4:node_1', target: undefined, button: undefined, modifiers: undefined },
+    tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'click', ref: 'br:tab_x_1:4:node_1', target: undefined, x: undefined, y: undefined, button: undefined, modifiers: undefined },
   });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'page.setFiles', tabId: 'tab_x_1', testId: 'avatar', pageRevision: 4, files: ['fixtures/avatar.png'] }), {
     tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'set-files', ref: undefined, target: 'avatar', files: ['fixtures/avatar.png'] },
@@ -216,4 +218,125 @@ test('screenshot artifact target creation is exclusive and no-follow without lea
     fs.openSync = originalOpen;
     fs.rmSync(parent, { recursive: true, force: true });
   }
+});
+
+// ADR-055 P2 — coordinate targeting maps through to the desktop op.
+test('mapAgentBrowserCommand threads {x,y} for click/hover and coords for drag', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.click', tabId: 'tab_x_1', x: 120, y: 40 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'click', ref: undefined, target: undefined, x: 120, y: 40, button: undefined, modifiers: undefined } },
+  );
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.hover', tabId: 'tab_x_1', x: 5, y: 6 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'hover', ref: undefined, target: undefined, x: 5, y: 6 } },
+  );
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.drag', tabId: 'tab_x_1', fromX: 1, fromY: 2, toX: 3, toY: 4 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', expectedRevision: undefined, command: { op: 'drag', fromRef: undefined, toRef: undefined, fromX: 1, fromY: 2, toX: 3, toY: 4 } },
+  );
+});
+
+// ADR-055 P3 — snapshot scope threads to the desktop op.
+test('mapAgentBrowserCommand threads snapshot scope', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.snapshot', tabId: 'tab_x_1', scope: 'page' } as BrowserControlCommand),
+    { tabId: 'tab_x_1', command: { op: 'snapshot', mode: 'semantic', scope: 'page' } },
+  );
+});
+
+// ADR-055 P4 — page.find threads to the find-nodes op.
+test('mapAgentBrowserCommand maps page.find to find-nodes', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.find', tabId: 'tab_x_1', query: 'Sign in', by: 'text', limit: 5, scope: 'page' } as BrowserControlCommand),
+    { tabId: 'tab_x_1', command: { op: 'find-nodes', query: 'Sign in', by: 'text', limit: 5, scope: 'page' } },
+  );
+});
+
+// ADR-055 P11 — the agent may dismiss but never ACCEPT a certificate dialog.
+test('certificate trust decisions are refused for the agent (accept), allowed to dismiss', async () => {
+  const certState = state();
+  certState.dialogPrompt = { id: 'dlg_1', tabId: 'tab_x_1', kind: 'certificate', message: 'The certificate for example.com is not trusted.' };
+
+  const rejecting = new FakeManager();
+  rejecting.current = certState;
+  const accept = await executeAgentBrowserCommand(rejecting, { id: 'cert-accept', command: { kind: 'dialog.respond', action: 'accept' } }, '/tmp/workspace');
+  assert.equal(accept.ok, false);
+  assert.equal((accept as { error?: { code?: string } }).error?.code, 'permission_denied');
+  assert.equal(rejecting.calls.length, 0, 'a refused certificate accept never reaches the manager');
+
+  const dismissing = new FakeManager();
+  dismissing.current = certState;
+  const dismiss = await executeAgentBrowserCommand(dismissing, { id: 'cert-dismiss', command: { kind: 'dialog.respond', action: 'dismiss' } }, '/tmp/workspace');
+  assert.equal(dismiss.ok, true, 'dismissing a certificate dialog is allowed');
+  assert.equal(dismissing.calls.length, 1);
+});
+
+// ADR-055 P5 — a mutating op returns an action receipt (before/after + observed).
+test('a mutating op returns an action receipt reflecting what changed', async () => {
+  const manager = new FakeManager();
+  manager.current = state();
+  // Simulate a navigation: the execute() mutates the live state object in place.
+  (manager as unknown as { execute: (r: BrowserCommandRequest) => Promise<BrowserCommandResult> }).execute = async (req) => {
+    manager.calls.push(req);
+    manager.current = {
+      ...manager.current,
+      tabs: manager.current.tabs.map((t) => t.id === 'tab_x_1'
+        ? { ...t, url: 'https://example.com/next', title: 'Next', revision: t.revision + 1 }
+        : t),
+    };
+    return { ok: true, requestId: req.id, tabId: 'tab_x_1', revision: 9, value: { url: 'https://example.com/next' } };
+  };
+
+  const result = await executeAgentBrowserCommand(
+    manager,
+    { id: 'nav-1', command: { kind: 'page.navigate', url: 'https://example.com/next', tabId: 'tab_x_1' } },
+    '/tmp/workspace',
+  );
+  assert.equal(result.ok, true);
+  const data = (result as { data?: Record<string, unknown> }).data as { receipt?: any };
+  assert.ok(data.receipt, 'the mutating op carries a receipt');
+  assert.equal(data.receipt.before.url, 'https://example.com/');
+  assert.equal(data.receipt.after.url, 'https://example.com/next');
+  assert.equal(data.receipt.observed.navigated, true);
+  assert.equal(data.receipt.observed.titleChanged, true);
+  assert.equal(data.receipt.observed.revisionChanged, true);
+  assert.equal(data.receipt.observed.tabOpened, false);
+});
+
+test('a read-only op carries NO receipt', async () => {
+  const manager = new FakeManager();
+  const result = await executeAgentBrowserCommand(manager, { id: 'list-r', command: { kind: 'tabs.list' } }, '/tmp/workspace');
+  assert.equal(result.ok, true);
+  const data = (result as { data?: Record<string, unknown> }).data as { receipt?: unknown };
+  assert.equal(data.receipt, undefined);
+});
+
+// ADR-055 P6 — browser_wait{human} resolves when the challenge clears (hand-back).
+test('a human wait resolves once the tab leaves the verification challenge', async () => {
+  const manager = new FakeManager();
+  const base = state();
+  base.tabs = base.tabs.map((t) => t.id === 'tab_x_1' ? { ...t, humanNeeded: true } : t);
+  manager.current = base;
+  let reads = 0;
+  (manager as unknown as { getState: () => BrowserState }).getState = () => {
+    reads += 1;
+    // The person clears the challenge after a couple of polls.
+    if (reads >= 3) manager.current = { ...base, tabs: base.tabs.map((t) => ({ ...t, humanNeeded: false })) };
+    return manager.current;
+  };
+  const result = await executeAgentBrowserCommand(
+    manager,
+    { id: 'wait-h', command: { kind: 'page.wait', tabId: 'tab_x_1', human: true, timeoutMs: 5000 } },
+    '/tmp/workspace',
+  );
+  assert.equal(result.ok, true, 'the wait resolves after the challenge clears');
+  assert.ok(reads >= 3, 'it polled until the challenge cleared');
+});
+
+// ADR-056 D-B1 — page.designAudit threads to the design-audit op (the browser design engine).
+test('mapAgentBrowserCommand maps page.designAudit to design-audit', () => {
+  assert.deepEqual(
+    mapAgentBrowserCommand({ kind: 'page.designAudit', tabId: 'tab_x_1', rules: ['low-contrast'], maxFindings: 40 } as BrowserControlCommand),
+    { tabId: 'tab_x_1', command: { op: 'design-audit', rules: ['low-contrast'], maxFindings: 40 } },
+  );
 });

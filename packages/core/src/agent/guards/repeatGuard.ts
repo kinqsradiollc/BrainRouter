@@ -76,3 +76,103 @@ export function argsDigest(rawArgs: unknown): string {
 export function buildSequenceSignature(calls: ReadonlyArray<{ name: string; args: unknown }>): string {
   return JSON.stringify(calls.map((c) => `${c.name}::${argsDigest(c.args)}`));
 }
+
+/**
+ * The identical-(name,args) window, measured in BATCHES.
+ *
+ * It used to be "the last 12 signatures", written when a tool batch was one or
+ * two calls. A model that issues 5–7 parallel calls per batch evicts its own
+ * evidence within two batches, so re-reading the same three files forever never
+ * reaches a count of three inside the window — and the SEQUENCE guard above
+ * misses it too, because shuffling which files ride together changes the batch
+ * signature every time. Seen live: `read_file AGENT.md` fifteen times in one
+ * turn with neither guard tripping.
+ *
+ * Six batches is short enough that a genuine revisit later is still free, and
+ * wide enough that one parallel batch cannot hide a spin.
+ */
+export const REPEAT_GUARD_WINDOW_BATCHES = 6;
+
+export interface RepeatWindowEntry {
+  signature: string;
+  /** Which tool batch this call belonged to. */
+  batch: number;
+}
+
+/** Drop entries older than the window; mutates in place, like the ring it replaces. */
+export function pruneRepeatWindow(
+  entries: RepeatWindowEntry[],
+  currentBatch: number,
+  windowBatches = REPEAT_GUARD_WINDOW_BATCHES,
+): void {
+  const oldest = currentBatch - windowBatches;
+  while (entries.length > 0 && entries[0]!.batch < oldest) entries.shift();
+}
+
+/** How many times this exact (name,args) call already ran inside the window. */
+export function countRepeatsInWindow(entries: readonly RepeatWindowEntry[], signature: string): number {
+  let count = 0;
+  for (const entry of entries) if (entry.signature === signature) count += 1;
+  return count;
+}
+
+/**
+ * Across TURNS, a counter is the wrong instrument — a content check is right.
+ *
+ * The per-turn window above resets when the turn does, and a real session's
+ * loop does not. One transcript shows `read_file {"path":"AGENT.md"}` issued
+ * 43 times across 13 turns, three or four per turn, with identical results
+ * every time: no per-turn guard can see that, and a session-wide COUNTER would
+ * be wrong to stop it — between two turns the person may well have edited the
+ * file, and re-reading it is exactly right.
+ *
+ * So compare the RESULT instead. If the same call returns byte-identical text
+ * to the last time it ran, say so. When the file changed, the digest changes
+ * and nothing is said. This blocks nothing; it just removes the model's reason
+ * to try again, which is the only thing that was keeping the loop alive.
+ */
+export interface UnchangedResultStore {
+  /** signature → digest of the last result, bounded by insertion order. */
+  seen: Map<string, { digest: string; at: number }>;
+  limit: number;
+}
+
+export function createUnchangedResultStore(limit = 200): UnchangedResultStore {
+  return { seen: new Map(), limit };
+}
+
+/** A cheap, allocation-light digest: length plus a rolling hash of the text. */
+export function resultDigest(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (((hash << 5) + hash) ^ text.charCodeAt(i)) >>> 0;
+  }
+  return `${text.length}:${hash.toString(36)}`;
+}
+
+/**
+ * Record this call's result and, when it is identical to the previous one for
+ * the same (name, args), return the sentence to append to it.
+ */
+export function noteUnchangedResult(
+  store: UnchangedResultStore,
+  signature: string,
+  resultText: string,
+  nowMs: number,
+): string | undefined {
+  const digest = resultDigest(resultText);
+  const previous = store.seen.get(signature);
+  // Refresh insertion order so a signature in active use is not evicted.
+  store.seen.delete(signature);
+  store.seen.set(signature, { digest, at: nowMs });
+  while (store.seen.size > store.limit) {
+    const oldest = store.seen.keys().next();
+    if (oldest.done) break;
+    store.seen.delete(oldest.value);
+  }
+  if (!previous || previous.digest !== digest) return undefined;
+  const seconds = Math.max(1, Math.round((nowMs - previous.at) / 1000));
+  return `\n\n[This is byte-identical to what the same call returned ${seconds}s ago. `
+    + 'Nothing has changed, and calling it again will return this same text. '
+    + 'Use what you already have, or do something different.]';
+}

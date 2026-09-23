@@ -15,6 +15,7 @@ import type {
 import { boundBrowserText } from './protocol.js';
 import { BrowserManagerError } from './browserManagerError.js';
 import type { PersistedPermissionDecision } from './browserWorkspaceStore.js';
+import { isPersistableBrowserPermission, browserPermissionGrantsFor } from './browserPermissionPolicy.js';
 
 type DialogResponse = { accept: boolean; value?: string };
 
@@ -109,7 +110,7 @@ export class BrowserPromptManager {
       origin = rawOrigin || tab.url;
     }
     const decisionKey = `${origin}\n${permission}`;
-    const saved = permission === 'geolocation'
+    const saved = isPersistableBrowserPermission(permission)
       ? this.permissionDecisions.get(decisionKey)
       : undefined;
     if (saved) {
@@ -129,7 +130,7 @@ export class BrowserPromptManager {
           this.permissionGrants.add(`${origin}\n${grant}`);
         }
       }
-      if (remember && permission === 'geolocation') {
+      if (remember && isPersistableBrowserPermission(permission)) {
         this.permissionDecisions.set(
           decisionKey,
           allow ? 'allow' : 'block',
@@ -254,7 +255,8 @@ export class BrowserPromptManager {
   restorePermissions(decisions: PersistedPermissionDecision[]): void {
     for (const row of decisions.slice(0, 200)) {
       if (
-        row?.permission !== 'geolocation'
+        !row?.permission
+        || !isPersistableBrowserPermission(row.permission)
         || (row.decision !== 'allow' && row.decision !== 'block')
       ) {
         continue;
@@ -269,9 +271,13 @@ export class BrowserPromptManager {
       } catch {
         continue;
       }
-      const key = `${origin}\ngeolocation`;
-      this.permissionDecisions.set(key, row.decision);
-      if (row.decision === 'allow') this.permissionGrants.add(key);
+      this.permissionDecisions.set(`${origin}\n${row.permission}`, row.decision);
+      if (row.decision === 'allow') {
+        // Re-add the grants Chromium actually checks (camera -> media:video).
+        for (const grant of browserPermissionGrantsFor(row.permission)) {
+          this.permissionGrants.add(`${origin}\n${grant}`);
+        }
+      }
     }
   }
 
@@ -280,7 +286,7 @@ export class BrowserPromptManager {
       .slice(-200)
       .map(([key, decision]) => ({
         origin: key.slice(0, key.lastIndexOf('\n')),
-        permission: 'geolocation',
+        permission: key.slice(key.lastIndexOf('\n') + 1),
         decision,
       }));
   }

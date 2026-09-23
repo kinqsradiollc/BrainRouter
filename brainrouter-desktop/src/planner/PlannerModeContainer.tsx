@@ -17,6 +17,9 @@ import type {
   PlannerItemView,
   PlannerSyncView,
 } from '@kinqs/brainrouter-ui/planner';
+// The planner's stylesheet travels with this lazy chunk (as notes.css does with
+// Notes): the shell's initial CSS budget is for the shell.
+import '@kinqs/brainrouter-ui/planner.css';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 import { splitTextByWorkspaceRefs } from '@kinqs/brainrouter-core/workspace/references';
 import { createAndCite, plannerItemUri } from '../lib/workspace/crossMode.js';
@@ -50,15 +53,21 @@ const EMPTY: PlannerSnapshot = {
 export function PlannerModeContainer({
   onOpenNotes,
   onOpenRef,
+  onSubscribeCalendar,
 }: {
   /** Leaving for the Notes mode is the shell's to do, not this container's. */
   onOpenNotes?: () => void;
   /** Following a reference leaves this mode, which only the shell can do. */
   onOpenRef?: (uri: string) => void;
+  /** Opening Settings is the shell's too — the calendar control only asks. */
+  onSubscribeCalendar?: () => void;
 } = {}): React.ReactElement {
   const [snapshot, setSnapshot] = useState<PlannerSnapshot>(EMPTY);
   const [refLabels, setRefLabels] = useState<Record<string, string>>({});
   const [retrying, setRetrying] = useState(false);
+  // What the last thing the person set off did. Cleared when they act again, so
+  // it reads as an answer rather than a banner that lives on the page.
+  const [importNote, setImportNote] = useState<string | null>(null);
   const syncInFlight = useRef<Promise<void> | null>(null);
   const syncAgain = useRef(false);
   const now = new Date();
@@ -242,6 +251,24 @@ export function PlannerModeContainer({
 
     openRef: (uri) => onOpenRef?.(uri),
     openSource: (url) => { void bridgeQuery('action:open-external', { url }); },
+    ...(onSubscribeCalendar ? { subscribeCalendar: onSubscribeCalendar } : {}),
+    // ADR-060 D4 — the file dialog is the main process's; storing, creating and
+    // the first run are the host's. This only starts it and reports the answer.
+    importCalendar: () => {
+      void (async () => {
+        setImportNote(null);
+        const picked = await window.brainrouter.pickCalendarFile();
+        if (picked.canceled || !picked.path) return;
+        const result = await bridgeQuery<{ ok: boolean; label?: string; error?: string }>(
+          'action:calendar-import',
+          { path: picked.path },
+        );
+        setImportNote(result?.ok
+          ? `${result.label ?? 'Calendar'} imported.`
+          : result?.error ?? 'That calendar could not be imported.');
+        await refresh();
+      })();
+    },
   };
 
   return (
@@ -256,6 +283,7 @@ export function PlannerModeContainer({
         onRetryIssue: (idempotencyKey) => { void retrySync(idempotencyKey); },
       }}
       staleSources={snapshot.staleSources}
+      notice={importNote}
       driftNote={snapshot.driftNote}
       refLabels={refLabels}
       ops={ops}

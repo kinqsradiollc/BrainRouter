@@ -50,11 +50,14 @@ import { extensionToolOwner, phaseHookContributions } from '../../extension/regi
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
-import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
+import { makeResultHandoff, formatHandoffForModel, formatUnexpandableTruncation, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { NoTTYError } from '../support/prompter.js';
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
-import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatGuard.js';
+import {
+  isSequenceGuardExempt, buildSequenceSignature, noteUnchangedResult,
+  countRepeatsInWindow, pruneRepeatWindow, type RepeatWindowEntry,
+} from '../guards/repeatGuard.js';
 import {
   parseArgumentsOrError, suggestSimilarToolName,
 } from '../guards/toolCallRecovery.js';
@@ -100,6 +103,7 @@ import {
   repairOrphanToolResults,
 } from './toolBatchExecutionPhase.js';
 import { frameToolResultForModel } from './toolResultTrustBoundary.js';
+import { browserScreenshotImageHandoff, type BrowserVisionImage } from '../browser/browserVision.js';
 import {
   finalizeTurnPhase,
   resolveTurnTerminationReason,
@@ -109,11 +113,13 @@ import {
   createProfileStageControllerForTurn,
   describeProfileStageTool,
 } from './profileStageRuntime.js';
+import { TURN_PATH_TRANSCRIPT_NAME, emitTurnStep, renderTurnPath, turnEndLabel } from './turnPath.js';
 import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
 import { beginToolProvenanceBatch, noteToolProvenance } from './contentProvenance.js';
 import { getLearnedItem } from '../../learning/index.js';
 import { learnedTenantForAgent } from './learningPhase.js';
 import { resolveMcpCatalogTool } from '../../mcp/discovery/discovery.js';
+import { designHookAfterWrite } from '../../design/hook.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -131,6 +137,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    this.turnWrittenFiles.clear();
     // CC-hooks parity — drain any additionalContext a prior `stop` /
     // `subagent-stop` hook (or a child's subagent-stop) asked to inject back
     // into the model on THIS turn. Read-and-clear so it fires exactly once.
@@ -786,6 +793,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const fanOutHinted = preparedContext.fanOutHinted;
 
     let loopCount = 0;
+    this.turnPathSteps = []; // ADR-059 — a fresh path per turn
     // ADAPTIVE TOOL BUDGET — the agent should be allowed to FINISH the task,
     // weak model or strong. `maxToolLoops` is NOT a task limiter, it's a
     // checkpoint WINDOW: when the agent has made a full window of tool calls
@@ -835,8 +843,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // Repeat-loop guard: when the model calls the same tool with identical
     // args over and over, the result is by definition the same. Track recent
     // signatures so we can interrupt the loop with corrective feedback.
-    const recentToolSignatures: string[] = [];
+    const recentToolSignatures: RepeatWindowEntry[] = [];
     const REPEAT_GUARD_LIMIT = Math.max(2, getCliKnobs().repeatLoopLimit);
+    // The window is measured in BATCHES (see `repeatGuard.ts`), not calls: a
+    // wide parallel batch used to evict the evidence of its own repeat.
+    let toolBatchIndex = 0;
     // This class of failure is a "doom loop": the same tool
     // pattern repeats even if the arguments keep changing. Keep BrainRouter's
     // threshold higher than a strict identical-input approval guard so
@@ -1021,7 +1032,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     while (loopCount < maxLoops) {
       loopCount++;
       assertReviewedTurnCurrent();
-      const interruptedAnswer = lifecycleCoordinator.beginLoop(loopCount);
+      const interruptedAnswer = await lifecycleCoordinator.beginLoop(loopCount);
       if (interruptedAnswer) return interruptedAnswer;
 
       const invocation = await invokeModelPhase(this, callbacks, allTools);
@@ -1256,6 +1267,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const sequenceSignature = buildSequenceSignature(
         toolCalls.map((tc: any, idx: number) => ({ name: normalizedNames[idx], args: tc.function?.arguments })),
       );
+      toolBatchIndex += 1;
       const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
       recentToolSequences.push(sequenceSignature);
       if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
@@ -1312,7 +1324,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         this.sessionKey,
       );
       const provenanceBatch = beginToolProvenanceBatch(this.sessionProvenance);
-      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
+      const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any; imageMsg?: any }> => {
         this.lastTurnToolCalls += 1;
         const delegationLaunch = registryDelegationLaunchTool(name);
         if (executionIntentBatchViolation) {
@@ -1463,7 +1475,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             const p = typeof args?.path === 'string' ? args.path
               : typeof args?.file === 'string' ? args.file
               : typeof args?.filePath === 'string' ? args.filePath : '';
-            if (p) this.filesWrittenThisTurn.push(p);
+            if (p) {
+              this.filesWrittenThisTurn.push(p);
+              // ADR-056 D-B2 — immediate design check of the one UI file just written.
+              designHookAfterWrite(this, p);
+            }
           }
         } else if (verificationSignal === 'verified') {
           this.verifiedThisTurn = true;
@@ -1473,7 +1489,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // (name, args) call REPEAT_GUARD_LIMIT times in this turn, short-
         // circuit with corrective feedback instead of executing again.
         const signature = `${name}::${(() => { try { return JSON.stringify(args); } catch { return String(args); } })()}`;
-        const repeatCount = recentToolSignatures.filter((s) => s === signature).length;
+        const repeatCount = countRepeatsInWindow(recentToolSignatures, signature);
         if (repeatCount >= REPEAT_GUARD_LIMIT) {
           isError = true;
           resultText = [
@@ -1498,10 +1514,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
         }
-        recentToolSignatures.push(signature);
-        // Keep the window small so the guard only blocks tight loops, not
-        // legitimate revisits separated by other tool calls.
-        if (recentToolSignatures.length > 12) recentToolSignatures.shift();
+        recentToolSignatures.push({ signature, batch: toolBatchIndex });
+        pruneRepeatWindow(recentToolSignatures, toolBatchIndex);
 
         // Lifecycle: pre-tool hook. Non-zero exit (or {decision:deny}) blocks the
         // call — BLOCKING, so it runs for unattended agents too (enforcement).
@@ -1628,6 +1642,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.assertInheritedExecutionAuthorityCurrent();
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
+          // ADR-048 S5 — record written paths for the turn-end blast-radius tap.
+          if (name === 'write_file' || name === 'edit_file' || name === 'notebook_edit') {
+            const written = (args as Record<string, unknown>).path;
+            if (typeof written === 'string' && written.trim()) this.turnWrittenFiles.add(written.trim());
+          } else if (name === 'apply_patch') {
+            const patch = (args as Record<string, unknown>).patch;
+            if (typeof patch === 'string') {
+              for (const m of patch.matchAll(/^\*\*\* (?:Update|Add) File: (.+)$/gm)) {
+                this.turnWrittenFiles.add(m[1]!.trim());
+              }
+            }
+          }
           // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
           // the breakdown can show per-server call counts. `mcp_<server>_<tool>`
           // → serverId; non-MCP tools return undefined and aren't counted.
@@ -1900,6 +1926,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // Browser observations contain page-controlled text. Frame them before
         // compaction, result handoff, and transcript persistence so restored
         // sessions keep the same trust boundary as the live turn.
+        // ADR-055 P1 — attach a browser screenshot the model can SEE. Read from
+        // the (pre-trust-frame, pre-clamp) result path; advisory, never blocks.
+        let browserImageMsg: { role: 'user'; content: string; images: BrowserVisionImage[] } | undefined;
+        if (!this.silent && name === 'browser_screenshot' && getCliKnobs().browser.vision !== 'off') {
+          const shot = browserScreenshotImageHandoff(name, resultText, this.workspaceRoot);
+          if (shot) browserImageMsg = { role: 'user', content: `[Browser screenshot for tool_call ${tc.id} — attached as an image below.]`, images: [shot] };
+        }
         const trustFrame = frameToolResultForModel(name, resultText);
         resultText = trustFrame.content;
 
@@ -1912,23 +1945,44 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         if (compaction.omittedChars > 0) {
           this.memoryMetrics.compactedToolCharsAvoided += compaction.omittedChars;
         }
-        const llmVisibleResult = compaction.requiresResultHandoff
+        // A handoff is only a handoff when the model can call `extract_result`.
+        // That tool is gated by the workspace tool profile, and when the
+        // profile denies it a `resultRef` is a key to a locked door: the text
+        // sits in the cache, the model is TOLD to call a tool that will be
+        // refused, and it re-reads the same file instead. That is the loop.
+        const canExpandResults = resultExpansionTool !== undefined;
+        const llmVisibleResult = compaction.requiresResultHandoff && canExpandResults
           ? attachCompactedResultHandoff(this.resultCache, resultText, compaction.inlineText, { label: name }).content
           : compaction.inlineText;
         const MAX_TOOL_RESULT_CHARS = getCliKnobs().maxToolResultChars;
         let clampedContent = llmVisibleResult;
         if (llmVisibleResult.length > MAX_TOOL_RESULT_CHARS) {
-          // MAS-P5-T2: progressive result handoff. Rather than hard-
-          // truncating (and losing the tail), park the full result in the
-          // session cache and show the model a preview + resultRef it can
-          // expand on demand via extract_result. Full text still lands in
-          // the transcript via recordTranscript below.
-          const { handoff, full } = makeResultHandoff(llmVisibleResult, { previewChars: MAX_TOOL_RESULT_CHARS });
-          this.resultCache.put(handoff.resultRef, full);
-          this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
-          clampedContent = formatHandoffForModel(handoff, { label: name });
+          if (canExpandResults) {
+            // MAS-P5-T2: progressive result handoff. Rather than hard-
+            // truncating (and losing the tail), park the full result in the
+            // session cache and show the model a preview + resultRef it can
+            // expand on demand via extract_result. Full text still lands in
+            // the transcript via recordTranscript below.
+            const { handoff, full } = makeResultHandoff(llmVisibleResult, { previewChars: MAX_TOOL_RESULT_CHARS });
+            this.resultCache.put(handoff.resultRef, full);
+            this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, full.length - handoff.preview.length);
+            clampedContent = formatHandoffForModel(handoff, { label: name });
+          } else {
+            // Nothing to hand off TO. Keep the head and the tail, say the
+            // middle is gone and cannot be fetched, and say what to do instead.
+            clampedContent = formatUnexpandableTruncation(llmVisibleResult, MAX_TOOL_RESULT_CHARS, { label: name });
+            this.memoryMetrics.compactedToolCharsAvoided += Math.max(0, llmVisibleResult.length - clampedContent.length);
+          }
         }
         refreshResultExpansionTool();
+        // Across turns the per-turn window above is blind, and a counter would
+        // be the wrong instrument anyway — a file edited between turns SHOULD
+        // be re-read. Compare the result instead: when it is byte-identical to
+        // last time, say so. Blocks nothing; removes the reason to try again.
+        const unchangedNote = noteUnchangedResult(
+          this.unchangedResults, signature, resultText, Date.now(),
+        );
+        if (unchangedNote) clampedContent = `${clampedContent}${unchangedNote}`;
         const toolMsg = {
           role: 'tool',
           tool_call_id: tc.id,
@@ -1953,7 +2007,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // /transcript. Doing the push here would let parallel batches land
         // in finish order, which the LLM's next turn would see as a
         // non-deterministic trace.
-        return { toolMsg, fullResultText: resultText, systemMsg };
+        return { toolMsg, fullResultText: resultText, systemMsg, imageMsg: browserImageMsg };
       };
 
       // Partition the tool_calls into runs of consecutive parallel-safe
@@ -1990,6 +2044,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.chatHistory.push(systemMsg);
           this.recordTranscript(systemMsg);
         },
+        publishImageMessage: (imageMsg) => {
+          // Full base64 rides chatHistory (like a pasted image); the transcript
+          // keeps only a light placeholder so the on-disk log stays readable.
+          this.chatHistory.push(imageMsg as never);
+          const content = (imageMsg as { content?: unknown })?.content;
+          this.recordTranscript({ role: 'user', content: typeof content === 'string' ? content : '[browser screenshot]' } as never);
+        },
       });
 
       repairOrphanToolResults({
@@ -2007,6 +2068,20 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
 
     assertReviewedTurnCurrent();
+    // ADR-059 — close the path with why the turn ended, then keep it in the
+    // transcript as a record the model never sees (loadHistory replays only
+    // user/assistant/tool roles) so a reopened session shows the same path.
+    emitTurnStep(this, callbacks, {
+      type: 'end',
+      label: turnEndLabel({ exitedCleanly, answered: finalAnswer.trim().length > 0, loopCount, maxLoops }),
+      ok: exitedCleanly,
+    });
+    this.recordTranscript({
+      role: 'system',
+      name: TURN_PATH_TRANSCRIPT_NAME,
+      content: renderTurnPath(this.turnPathSteps),
+      steps: [...this.turnPathSteps],
+    });
     return await finalizeTurnPhase(this, {
       prompt,
       answer: finalAnswer,

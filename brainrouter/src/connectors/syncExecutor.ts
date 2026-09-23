@@ -30,7 +30,7 @@ import {
   ingestConnectorSources,
   type ConnectorSourceStore,
 } from "./knowledgeImport.js";
-import { refreshConnectedIssueDocuments } from "../memory/planner/backend.js";
+import { refreshConnectedEventDocuments, refreshConnectedIssueDocuments } from "../memory/planner/backend.js";
 
 const SERVER_CONNECTORS_ROOT = path.join(
   process.env.BRAINROUTER_HOME ?? path.join(process.env.HOME ?? ".", ".brainrouter"),
@@ -130,20 +130,34 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
       // Inject the sealed DB token — never env/keychain (that's desktop-only).
       oauthToken: () => ({ token: accessToken }),
       githubClient: () => githubTokenClient(accessToken, { apiBase }),
-      projectPlannerIssues: async ({ documents }) => {
+      projectPlannerDocuments: async ({ documents }) => {
         if (!conn.orgId) {
           throw new Error("Connected Planner projection requires an organization-scoped connector.");
         }
         if (!isConnectorSource(conn.source)) {
           throw new Error(`Connected Planner projection does not recognize source ${conn.source}.`);
         }
-        const projected = await refreshConnectedIssueDocuments(conn.orgId, conn.userId, {
+        // ADR-060 D3 — a run carries one kind or the other; routing on the
+        // DOCUMENT rather than on the connector means a source that some day
+        // emits both lands both, instead of projecting events through the
+        // issue path and producing items with no time on them.
+        const scope = {
           connectorId: conn.id,
           source: conn.source,
           sourceLabel: conn.name || conn.source,
-          documents,
-        });
-        return projected.created + projected.updated;
+        };
+        const events = documents.filter((document) => document.kind === "event");
+        const issues = documents.filter((document) => document.kind !== "event");
+        let projected = 0;
+        if (issues.length > 0) {
+          const summary = await refreshConnectedIssueDocuments(conn.orgId, conn.userId, { ...scope, documents: issues });
+          projected += summary.created + summary.updated;
+        }
+        if (events.length > 0) {
+          const summary = await refreshConnectedEventDocuments(conn.orgId, conn.userId, { ...scope, documents: events });
+          projected += summary.created + summary.updated;
+        }
+        return projected;
       },
     });
 

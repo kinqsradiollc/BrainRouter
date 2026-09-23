@@ -157,3 +157,13 @@ test('runTurn: deliverable guard stays quiet when the turn ends on substance', a
     }
   });
 });
+
+test('classifyDeferral: a trailing promise to read/check/look/search is a promise, whatever the message opens with', () => {
+  // The live miss: opens on substance, ends on a promise the runtime accepted as an answer.
+  assert.equal(classifyDeferral('Found it. There are two matches; the likely one is book/blocks/code.py. Let me read it.'), 'promise');
+  assert.equal(classifyDeferral('Two candidates. Let me check the first one.'), 'promise');
+  assert.equal(classifyDeferral("The config lives in src/config. I'm going to look at the loader next."), 'promise');
+  assert.equal(classifyDeferral('Narrowed it to the router. Let me take a look at resolve.ts.'), 'promise');
+  // Explanatory "let me" is not a promise of tool work.
+  assert.equal(classifyDeferral('Let me clarify — the test passes because the key is pinned.'), null);
+});

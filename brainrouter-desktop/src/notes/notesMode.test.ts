@@ -28,6 +28,7 @@ import {
   pendingRefLabel, readOnlyReason, repairNote, sendTargetsFor, visibleBlocks,
   type NoteBlockView,
 } from '@kinqs/brainrouter-ui/notes';
+import { modeForWorkspaceReference, WORKSPACE_MODE_DEFINITIONS } from '../lib/workspace/modes.js';
 
 const sharedNotes = new URL('../../../packages/ui/src/notes/', import.meta.url);
 const sharedAlias: Record<string, string> = {
@@ -62,14 +63,14 @@ const conflict = (field: string, reason: string) => ({
 
 /* ------------------------------------------------------------ reachability */
 
-test('the Notes mode is reachable: the union, the button, the branch and the width all exist', () => {
+test('the Notes mode is reachable: the mode contract, button, branch and width all exist', () => {
   const activityBar = source('../components/layout/ActivityBar.tsx');
-  assert.match(activityBar, /WorkspaceMode = .*'notes'/, 'the mode is not in the WorkspaceMode union');
-  // The buttons map over MODES, not over the union, so a union member with no
-  // row here compiles and renders no button at all.
-  assert.match(activityBar, /\['notes', 'note', 'Notes'\]/, 'no MODES row, so no button renders');
+  assert.equal(modeForWorkspaceReference('notes'), 'notes', 'the reference route does not resolve Notes');
+  assert.ok(WORKSPACE_MODE_DEFINITIONS.some((definition) => definition.id === 'notes' && definition.icon === 'note'), 'the shared mode contract has no Notes definition');
+  assert.match(activityBar, /WORKSPACE_MODE_DEFINITIONS/, 'the mode rail does not render the shared contract');
 
   const mainContent = source('../App/layout/MainContent.tsx');
+  assert.match(mainContent, /modeForWorkspaceReference\(parsed\.ref\.mode\)/, 'workspace references bypass the shared mode route');
   assert.match(mainContent, /mode === 'notes' \?/, 'no branch — the mode chain would fall through to Chat');
   assert.match(mainContent, /<NotesModeContainer/, 'the branch renders something other than the mode');
 
@@ -214,7 +215,10 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   assert.match(blockRow, /<RefChip key=\{uri\}/, 'notes stopped using the shared chip');
   assert.match(
     source('../App/layout/MainContent.tsx'),
-    /<PlannerModeContainer[^\n]*onOpenRef=\{openWorkspaceRef\}/,
+    // Bounded `[\s\S]` rather than `[^\n]` or `[^>]`: the assertion is that THIS
+    // element is given the prop, which stays true when the element grows enough
+    // props to wrap — and an arrow function in a sibling prop contains a `>`.
+    /<PlannerModeContainer[\s\S]{0,300}?onOpenRef=\{openWorkspaceRef\}/,
     'a planner chip has nowhere to open to',
   );
 
