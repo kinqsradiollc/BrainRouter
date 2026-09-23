@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { memoryEngine } from "../../../memory/engine.js";
 import { hasLearnedMemoryMetadata } from "../../../memory/util/learned-record.js";
+// The scope order these reads share with memory_search (see memory/scope.ts).
+import { preferCallerScope } from "../../../memory/scope.js";
 
 const baseUser = { userId: z.string().optional() };
 
@@ -20,56 +22,10 @@ const stringList = z.array(z.string()).optional().default([]);
  */
 const callerScope = {
   workspaceTag: z.string().optional(),
+  /** Every identity of the caller's workspace — see memory/scope.ts. */
+  workspaceTags: z.array(z.string()).max(8).optional(),
   sessionKey: z.string().optional(),
 };
-
-/**
- * Rank by provenance: this session, then this workspace, then records that
- * never carried a workspace, then everything else.
- *
- * PREFER, never hide. These reads used to be a plain user-wide search, so a
- * `handover_note` written in a personal session — "submitted resignation,
- * update LinkedIn" — could outrank the repository the question was about and
- * be injected as authoritative context into a codebase session. Filtering it
- * out entirely would also lose the cross-repo lesson that is occasionally
- * exactly what you want; ordering it last, and marking where it came from,
- * loses neither.
- */
-export type ScopeMatch = "session" | "workspace" | "untagged" | "other-workspace";
-
-/** The two shapes these reads return: FTS rows are snake_case, records camelCase. */
-function provenanceOf(hit: unknown): { workspaceTag?: string | null; sessionKey?: string | null } {
-  const row = (hit ?? {}) as Record<string, unknown>;
-  const pick = (a: string, b: string): string | null | undefined => {
-    const value = row[a] ?? row[b];
-    return typeof value === "string" || value === null ? value : undefined;
-  };
-  return { workspaceTag: pick("workspaceTag", "workspace_tag"), sessionKey: pick("sessionKey", "session_key") };
-}
-
-export function scopeMatchOf(hit: unknown, scope: { workspaceTag?: string; sessionKey?: string }): ScopeMatch {
-  const { workspaceTag, sessionKey } = provenanceOf(hit);
-  if (scope.sessionKey && sessionKey === scope.sessionKey) return "session";
-  if (scope.workspaceTag && workspaceTag === scope.workspaceTag) return "workspace";
-  // A record with no workspace predates tagging (or was captured without a
-  // workspace); it belongs to everywhere, so it sits above another repo's.
-  if (!workspaceTag) return "untagged";
-  return "other-workspace";
-}
-
-const SCOPE_ORDER: Record<ScopeMatch, number> = {
-  session: 0, workspace: 1, untagged: 2, "other-workspace": 3,
-};
-
-export function preferCallerScope<T>(
-  hits: readonly T[],
-  scope: { workspaceTag?: string; sessionKey?: string },
-): Array<T & { scopeMatch: ScopeMatch }> {
-  return hits
-    .map((hit) => ({ ...hit, scopeMatch: scopeMatchOf(hit, scope) }))
-    // Stable within a rank: the search's own relevance order is preserved.
-    .sort((a, b) => SCOPE_ORDER[a.scopeMatch] - SCOPE_ORDER[b.scopeMatch]);
-}
 
 export const memoryEngineeringToolSchemas = [
   {
@@ -135,6 +91,7 @@ export const memoryEngineeringToolSchemas = [
         query: { type: "string" },
         limit: { type: "number" },
         workspaceTag: { type: "string", description: "16-char hash from workspaceTagFromPath — rank this workspace's records first." },
+        workspaceTags: { type: "array", items: { type: "string" }, description: "Every identity of this workspace (folder hash, repo hash) — all of them count as here." },
         sessionKey: { type: "string", description: "Rank this session's own task state above every other." },
       },
     },
@@ -166,7 +123,7 @@ export const memoryEngineeringToolSchemas = [
       type: "object",
       properties: {
         userId: { type: "string" }, query: { type: "string" }, limit: { type: "number" },
-        workspaceTag: { type: "string" }, sessionKey: { type: "string" },
+        workspaceTag: { type: "string" }, workspaceTags: { type: "array", items: { type: "string" } }, sessionKey: { type: "string" },
       },
     },
   },

@@ -102,3 +102,36 @@ describe("workspaceTag recall filter (FED-S1-T3)", () => {
     expect(out.map((r) => r.record_id)).toEqual(["a"]);
   });
 });
+
+describe("a workspace with two identities (ADR-015: folder hash + repo hash)", () => {
+  // One checkout: chat turns carry the folder hash, ingested files the repo
+  // hash. Filtering on only one used to drop the repo's own ingested files
+  // from its own recall — they have a tag, and it was the "wrong" one.
+  const FOLDER = TAG_ALPHA;
+  const REPO = "3333333333333333";
+
+  it("admits a record under EITHER identity and still drops another repo", () => {
+    const records = [fts("chat", FOLDER), fts("ingested", REPO), fts("legacy", null), fts("other", TAG_BETA)];
+    const kept = applyFilters(records, { workspaceTags: [FOLDER, REPO] }).map((r) => r.record_id);
+    expect(kept).toEqual(["chat", "ingested", "legacy"]);
+  });
+
+  it("the single-tag filter is the same filter — it merges with the list", () => {
+    const records = [fts("chat", FOLDER), fts("ingested", REPO), fts("other", TAG_BETA)];
+    const kept = applyFilters(records, { workspaceTag: FOLDER, workspaceTags: [REPO] }).map((r) => r.record_id);
+    expect(kept).toEqual(["chat", "ingested"]);
+  });
+
+  it("an empty identity list does not turn into 'filter everything out'", () => {
+    const records = [fts("a", FOLDER), fts("b", TAG_BETA)];
+    expect(applyFilters(records, { workspaceTags: [] }).map((r) => r.record_id)).toEqual(["a", "b"]);
+    expect(applyFilters(records, { workspaceTags: ["  "] }).map((r) => r.record_id)).toEqual(["a", "b"]);
+  });
+
+  it("uses the lookup for rows that do not carry the tag, as the single filter did", () => {
+    const records = [fts("from-fts", undefined), fts("other-fts", undefined)];
+    const lookup = new Map<string, string | null>([["from-fts", REPO], ["other-fts", TAG_BETA]]);
+    const kept = applyFilters(records, { workspaceTags: [FOLDER, REPO] }, lookup).map((r) => r.record_id);
+    expect(kept).toEqual(["from-fts"]);
+  });
+});

@@ -76,6 +76,20 @@ export interface RecalledMemory {
    * code claims as a hint to re-check, not ground truth. Omitted when fresh.
    */
   staleVsCode?: boolean;
+  /**
+   * Provenance, present only when the caller asked for it (`includeProvenance`)
+   * — it costs one batched lookup. `null` means the record was captured without
+   * a workspace; it belongs everywhere. Lets a search rank the caller's own
+   * workspace and session first without hiding anything.
+   */
+  workspaceTag?: string | null;
+  sessionKey?: string;
+  /**
+   * Where this record came from relative to the caller — present when the
+   * caller passed a scope. `other-workspace` records are ranked last and are
+   * context about somewhere else, not instructions for here.
+   */
+  scopeMatch?: "session" | "workspace" | "untagged" | "other-workspace";
 }
 
 export type MemoryTaskIntent =

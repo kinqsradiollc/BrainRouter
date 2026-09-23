@@ -11,7 +11,8 @@
  * claimed it was "for a repo/session" and its schema had neither parameter.
  */
 import { describe, it, expect } from "vitest";
-import { preferCallerScope, scopeMatchOf, memoryEngineeringToolSchemas } from "./memory-engineering.js";
+import { memoryEngineeringToolSchemas } from "./memory-engineering.js";
+import { preferCallerScope, scopeMatchOf } from "../../../memory/scope.js";
 
 const HERE = { workspaceTag: "ws_orbyn_0001", sessionKey: "sess-orbyn" };
 
@@ -68,5 +69,34 @@ describe("the schema stops promising what it does not do", () => {
     // The old description said "for a repo/session" while accepting neither.
     expect(schema.description).toMatch(/workspaceTag and sessionKey/);
     expect(schema.description).toMatch(/spans every workspace/);
+  });
+});
+
+describe("a workspace with two identities", () => {
+  // One checkout, two tags (ADR-015): chat turns under the folder hash, the
+  // ingested repository under the remote hash. Both are "here".
+  const FOLDER = "ws_folder_hash_0";
+  const REPO = "ws_repo_hash_000";
+
+  it("counts either identity as this workspace", () => {
+    const ranked = preferCallerScope(
+      [ftsRow("elsewhere", "ws_personal_9999"), ftsRow("ingested-file", REPO), ftsRow("chat-turn", FOLDER)],
+      { workspaceTags: [FOLDER, REPO] },
+    );
+    expect(ranked.map((h) => [h.record_id, h.scopeMatch])).toEqual([
+      ["ingested-file", "workspace"],
+      ["chat-turn", "workspace"],
+      ["elsewhere", "other-workspace"],
+    ]);
+  });
+
+  it("merges a single tag with the list rather than one replacing the other", () => {
+    expect(scopeMatchOf(ftsRow("x", REPO), { workspaceTag: FOLDER, workspaceTags: [REPO] })).toBe("workspace");
+    expect(scopeMatchOf(ftsRow("x", FOLDER), { workspaceTag: FOLDER, workspaceTags: [REPO] })).toBe("workspace");
+  });
+
+  it("the engineering reads accept every identity — none is stripped by the schema", () => {
+    const read = memoryEngineeringToolSchemas.find((t) => t.name === "memory_task_state")!;
+    expect(Object.keys((read.inputSchema as { properties: object }).properties)).toContain("workspaceTags");
   });
 });

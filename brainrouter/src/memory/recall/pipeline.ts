@@ -43,7 +43,8 @@ import {
   type RecallLimits,
   type RecallSelection,
 } from "./config.js";
-import { applyFilters, type RecallFilters } from "./filters.js";
+import { hardWorkspaceTags, applyFilters, type RecallFilters } from "./filters.js";
+import { scopeMatchOf, type CallerScope, type ScopeMatch } from "../scope.js";
 
 function effectivePriority(memory: CognitiveFtsResult & { citation_count?: number }, churnCommitCount90d?: number): number {
   // B7 (MEM-CHURN) — shorten the half-life for memories anchored to high-churn
@@ -92,6 +93,20 @@ export class MemoryRecallPipeline {
     /** MEM-19 — force-disable the reranker stage for this call (the benchmark's
      * baseline vs rerank modes). */
     disableReranker?: boolean;
+    /**
+     * Attach each recalled memory's workspace tag and session key, so a caller
+     * can rank by where a record came from instead of filtering it out. Costs
+     * one batched lookup, so it is opt-in and the default path is unchanged.
+     */
+    includeProvenance?: boolean;
+    /**
+     * Where the caller is asking FROM. When set, the final records are ordered
+     * this session → this workspace → untagged → other workspaces, each is
+     * labelled with its `scopeMatch`, and a foreign record says so in the
+     * rendered context. PREFER, never hide: nothing is filtered out, which is
+     * what separates this from `filters.workspaceTag`. Implies provenance.
+     */
+    preferScope?: CallerScope;
   }): Promise<RecallResult> {
     const startTime = Date.now();
     const { userId, sessionKey, query, activeSkill, filters } = params;
@@ -139,7 +154,8 @@ export class MemoryRecallPipeline {
     // cognitive_records is cheap (≤ ftsLimit + vecLimit + filePath ids,
     // typically ~30-50 ids) and keeps the FTS5 contract intact.
     let workspaceTagLookup: Map<string, string | null> | undefined;
-    if (filters?.workspaceTag) {
+    const wantsProvenance = Boolean(params.includeProvenance || params.preferScope);
+    if (hardWorkspaceTags(filters).size > 0 || wantsProvenance) {
       const candidateIds = new Set<string>();
       for (const r of ftsResultsRaw) candidateIds.add(r.record_id);
       for (const r of vecResultsRaw) candidateIds.add(r.record_id);
@@ -483,7 +499,24 @@ export class MemoryRecallPipeline {
     // memories surface first. Stable (V8 sort) → preserves the ranked order
     // inside each group. The "⚠ source changed — verify" annotation (below) is
     // the primary signal; this just stops a stale memory leading the block.
+    // With a caller scope, WHERE a record came from ranks above staleness: a
+    // fresh record from another repository should not lead this repository's
+    // block. Both sorts are stable, so relevance order survives within a tier.
+    const provenanceOf = (record: { record_id: string; workspace_tag?: string | null; session_key?: string }) => ({
+      workspaceTag: record.workspace_tag ?? workspaceTagLookup?.get(record.record_id) ?? null,
+      sessionKey: typeof record.session_key === "string" ? record.session_key : undefined,
+    });
+    const scopeOf = new Map<string, ScopeMatch>();
+    if (params.preferScope) {
+      for (const { record } of topResults) {
+        scopeOf.set(record.record_id, scopeMatchOf(provenanceOf(record as never), params.preferScope));
+      }
+    }
+    const SCOPE_TIER: Record<ScopeMatch, number> = { session: 0, workspace: 1, untagged: 2, "other-workspace": 3 };
     topResults.sort((a, b) => {
+      const ta = SCOPE_TIER[scopeOf.get(a.record.record_id) ?? "untagged"];
+      const tb = SCOPE_TIER[scopeOf.get(b.record.record_id) ?? "untagged"];
+      if (ta !== tb) return ta - tb;
       const sa = refsByRecord.get(a.record.record_id)?.staleVsCode ? 1 : 0;
       const sb = refsByRecord.get(b.record.record_id)?.staleVsCode ? 1 : 0;
       return sa - sb;
@@ -492,7 +525,10 @@ export class MemoryRecallPipeline {
     // 5. Format for context
     const memoryLines = topResults.map(({ record }) => {
       const tag = record.scene_name ? `${record.type}|${record.scene_name}` : record.type;
-      let line = `- [${tag}] ${record.content}`;
+      // The model can only discount a record from another repository if it is
+      // told where the record came from.
+      const foreign = scopeOf.get(record.record_id) === "other-workspace" ? " (another workspace)" : "";
+      let line = `- [${tag}]${foreign} ${record.content}`;
       if (record.skill_tag) {
         line += ` (skill: ${record.skill_tag})`;
       }
@@ -523,6 +559,13 @@ export class MemoryRecallPipeline {
         ...(refs && refs.treeNodeId ? { treeNodeId: refs.treeNodeId } : {}),
         // MEM-ACCURACY — flag records whose source code changed since capture.
         ...(refs && refs.staleVsCode ? { staleVsCode: true } : {}),
+        ...(wantsProvenance
+          ? (() => {
+            const { workspaceTag, sessionKey: recordSession } = provenanceOf(r.record as never);
+            return { workspaceTag, ...(recordSession ? { sessionKey: recordSession } : {}) };
+          })()
+          : {}),
+        ...(scopeOf.has(r.record.record_id) ? { scopeMatch: scopeOf.get(r.record.record_id) } : {}),
       };
     });
     const recallCompression = await applyRecallCompression(recalledCognitiveMemories, {
