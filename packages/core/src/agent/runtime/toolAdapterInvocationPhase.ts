@@ -21,6 +21,8 @@ import {
 import { readPlan } from '../../task/taskStore.js';
 import { readWorkContract } from '../../task/workContractStore.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
+import { applyMemoryScope } from '../../util/agentloop/memoryScope.js';
+import { workspaceMemoryTags } from '../../memory/workspaceScope.js';
 import {
   isChildSynthesisTool,
   resultHasChildOutput,
@@ -287,11 +289,6 @@ async function invokeMcpAdapter(
       `MCP tool dispatch mismatch: authorized "${name}" but resolved "${descriptorName}".`,
     );
   }
-  const mcpArgs = applyFederationIdentity(
-    descriptorName,
-    args,
-    agent.federationSessionKey,
-  ) as Record<string, any>;
   const rawName = String(
     mcpTool?.__rawName ?? agent.rawMcpToolName(name),
   );
@@ -303,9 +300,16 @@ async function invokeMcpAdapter(
     serverId && typeof (agent.mcpClient as any).getStatus === 'function'
       ? (agent.mcpClient as any).getStatus(serverId)
       : undefined;
+  const isBrainRouterServer = !serverId || status?.identity === 'brainrouter';
+  const mcpArgs = applyMemoryScope(
+    rawName,
+    applyFederationIdentity(descriptorName, args, agent.federationSessionKey),
+    () => ({ sessionKey: agent.sessionKey, workspaceTags: workspaceMemoryTags(agent.workspaceRoot) }),
+    isBrainRouterServer,
+  ) as Record<string, any>;
   const isManagedSkillTool =
     ['list_skills', 'get_skill', 'search_skills'].includes(rawName) &&
-    (!serverId || status?.identity === 'brainrouter');
+    isBrainRouterServer;
   const wantsLocalSkill =
     isManagedSkillTool &&
     rawName === 'get_skill' &&

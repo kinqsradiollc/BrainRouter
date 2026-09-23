@@ -3,7 +3,7 @@ import { redactText } from '../session/transcript/sessionStore.js';
 import { callMcpTool, hasMcpTool } from '../mcp/mcpUtils.js';
 import { extractFilePathHints, looksLikeDebugOrRetry } from './briefingTriggers.js';
 import { assessRecallCards } from './memoryPolicy.js';
-import { workspaceTagFromPath } from '@kinqs/brainrouter-types';
+import { workspaceMemoryTags } from './workspaceScope.js';
 
 export interface BriefingInputs {
   mcpClient: McpClientWrapper;
@@ -95,9 +95,15 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
   // a question about a repository with a handover note from an unrelated
   // personal session. It is a hint, not a filter: these reads rank the current
   // workspace and session first and still return everything else.
-  const workspaceTag = workspaceRoot ? workspaceTagFromPath(workspaceRoot) : undefined;
+  //
+  // A checkout has more than one identity — its folder hash for chat turns,
+  // its git-remote hash for an ingested repository — and all of them are
+  // "here". `workspaceTag` (the folder hash, always first) stays for a brain
+  // that reads only the single tag.
+  const workspaceTags = workspaceMemoryTags(workspaceRoot);
   const callerScope = {
-    ...(workspaceTag ? { workspaceTag } : {}),
+    ...(workspaceTags[0] ? { workspaceTag: workspaceTags[0] } : {}),
+    ...(workspaceTags.length > 0 ? { workspaceTags } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
   const maxChars = inputs.maxCharsPerSource ?? 4000;
@@ -127,7 +133,18 @@ export async function buildMemoryBriefing(inputs: BriefingInputs): Promise<Brief
     // was redundant (the brain's chain already handles every stage
     // failure) and could mask real bugs by silently routing to lower-
     // quality FTS rows. Removed in 0.3.9.
-    tasks.push(callSafe('memory_recall', { sessionKey, query, activeSkill }, mcpClient, maxChars, extractRecords));
+    // The main recall was the one read that never learned where it was
+    // asked from, so this repository's records competed on relevance alone
+    // with every other repository's — and the "captured in a DIFFERENT
+    // workspace" note below could never fire. The tags are a preference:
+    // nothing is filtered out.
+    tasks.push(callSafe(
+      'memory_recall',
+      { sessionKey, query, activeSkill, ...(workspaceTags.length > 0 ? { workspaceTags } : {}) },
+      mcpClient,
+      maxChars,
+      extractRecords,
+    ));
   } else if (sourcePlan.includeRecall) {
     skippedSources.push({ source: 'memory_recall', reason: 'tool unavailable' });
   }

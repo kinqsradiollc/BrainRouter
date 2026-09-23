@@ -359,7 +359,7 @@ import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
 // history; the desktop panel reads/records through these thin wrappers — no
 // parallel store. A best-effort memory note is captured + linked, mirroring the CLI.
 import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict } from '@kinqs/brainrouter-core/task';
-import { emitAgentEvent } from '@kinqs/brainrouter-core/memory';
+import { emitAgentEvent, workspaceMemoryTags } from '@kinqs/brainrouter-core/memory';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import {
   listRequirements,
@@ -2011,15 +2011,29 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // connected?" error when the MCP isn't available.
       'memory-search': async (args) => {
         try {
-          const result = await mcpClient.callTool('memory_search', { query: typeof args.query === 'string' ? args.query : '' });
+          // The panel is not a chat, so it has no session. It must still SEND
+          // one: a brain that predates optional sessions rejects the call
+          // outright — which is why this panel never returned a result — and
+          // the desktop may be talking to a remote brain on an older version.
+          // An empty key is what "no session" already means to recall: it
+          // simply cannot see another session's private records.
+          const result = await mcpClient.callTool('memory_search', {
+            query: typeof args.query === 'string' ? args.query : '',
+            sessionKey: '',
+            workspaceTags: workspaceMemoryTags(workspaceRoot),
+          });
           const text = typeof result === 'string'
             ? result
             : ((result as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? JSON.stringify(result));
           try {
             const parsed = JSON.parse(text) as unknown;
+            // memory_search's canonical key is `recalledCognitiveMemories`; the
+            // others are kept for older or foreign servers. Reading only those
+            // meant this panel found zero records in every successful answer.
             const records = Array.isArray(parsed)
               ? parsed
-              : ((parsed as { records?: unknown[]; results?: unknown[]; memories?: unknown[] })?.records
+              : ((parsed as { recalledCognitiveMemories?: unknown[] })?.recalledCognitiveMemories
+                ?? (parsed as { records?: unknown[] })?.records
                 ?? (parsed as { results?: unknown[] })?.results
                 ?? (parsed as { memories?: unknown[] })?.memories
                 ?? []);
@@ -4827,7 +4841,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           case 'recall': {
             if (!rest) return { lines: [`Usage: /${cmd} <query>`] };
             try {
-              const result = await mcpClient.callTool(cmd === 'memory' ? 'memory_search' : 'cognitive_recall', { query: rest });
+              const result = await mcpClient.callTool(
+                cmd === 'memory' ? 'memory_search' : 'cognitive_recall',
+                cmd === 'memory'
+                  ? { query: rest, sessionKey: '', workspaceTags: workspaceMemoryTags(workspaceRoot) }
+                  : { query: rest },
+              );
               const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
               return { lines: text.split('\n').slice(0, 50) };
             } catch (err) {

@@ -14,6 +14,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
+import { workspaceMemoryTags } from '@kinqs/brainrouter-core/memory';
 import { extractMemories, renderMemoryCards } from '../../../memory/formatters.js';
 import { consolidateMemories } from '../../../memory/consolidation.js';
 import { scanWorkspaceSources } from '../../../memory/sourceManifest.js';
@@ -41,7 +42,13 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       }
       const query = args.join(' ').trim();
       if (!query) { console.log(chalk.red('\nUsage: /memory <query>   ·   /memory verify [--apply]\n')); return true; }
-      await printMemoryCards(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey }, `Memory search · "${query}"`);
+      // This workspace's records first, labelled; other workspaces still appear.
+      await printMemoryCards(
+        mcpClient,
+        'memory_search',
+        { query, sessionKey: agent.sessionKey, workspaceTags: workspaceMemoryTags(agent.workspaceRoot) },
+        `Memory search · "${query}"`,
+      );
       return true;
     }
     case '/recall': {
@@ -418,7 +425,13 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         // it returns full CognitiveRecord shapes including citationCount
         // and neverCitedCount.
         const query = args.slice(1).join(' ').trim() || '*';
-        const res = await callMcpTool<any>(mcpClient, 'memory_search', { query, sessionKey: agent.sessionKey });
+        // The list shows up to 20, so ask for 20 — the search used to return 5.
+        const res = await callMcpTool<any>(mcpClient, 'memory_search', {
+          query,
+          sessionKey: agent.sessionKey,
+          workspaceTags: workspaceMemoryTags(agent.workspaceRoot),
+          limit: 20,
+        });
         if (res.isError) {
           console.log(chalk.red(`\nmemory_search failed: ${res.text || '(no message)'}\n`));
           return true;
