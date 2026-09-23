@@ -7,3 +7,4 @@ export * from './briefing.js';
 export * from './briefingTriggers.js';
 export * from './memoryEvents.js';
 export * from './memoryPolicy.js';
+export * from './workspaceScope.js';

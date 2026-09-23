@@ -80,3 +80,37 @@ test('a briefing made only of this workspace\'s own records says nothing extra',
   ]);
   assert.ok(!/DIFFERENT workspace/.test(result.block), 'no warning when there is nothing to warn about');
 });
+
+test('the main recall — the one read that never knew where it was asked from — now does', async () => {
+  // Every other source learned its workspace in an earlier fix; memory_recall
+  // went out with the question alone, so this repository's records competed
+  // on relevance with every other repository's, and the DIFFERENT-workspace
+  // note above could never fire because nothing ever labelled a recall hit.
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  await buildMemoryBriefing({
+    mcpClient: fakeClient(calls),
+    mcpTools: TOOLS,
+    sessionKey: SESSION,
+    workspaceRoot: WORKSPACE,
+    query: 'tell me about the current state of Orbyn',
+    sourcePlan: {
+      includeCoreIdentity: false, includeRecall: true, includeWorkingContext: false,
+      includeTaskState: true, includeExplainRecall: false,
+      includeVulnerabilityIntelligence: false, includeFailedAttempts: false,
+      fileHistoryPaths: [],
+    },
+  });
+  const recall = calls.find((c) => c.name === 'memory_recall');
+  assert.ok(recall, 'memory_recall was not called');
+  assert.equal(recall.args.sessionKey, SESSION);
+  const tags = recall.args.workspaceTags as string[];
+  assert.ok(Array.isArray(tags) && tags.includes(workspaceTagFromPath(WORKSPACE)!), 'recall asked blind');
+  // A preference, sent as such: the hard filter would hide other workspaces.
+  assert.equal((recall.args.filters as Record<string, unknown> | undefined)?.workspaceTag, undefined);
+
+  // The engineering reads get every identity, and keep the single tag for an
+  // older brain that only reads that.
+  const taskState = calls.find((c) => c.name === 'memory_task_state')!;
+  assert.deepEqual(taskState.args.workspaceTags, tags);
+  assert.equal(taskState.args.workspaceTag, tags[0]);
+});
