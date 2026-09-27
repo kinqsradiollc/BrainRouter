@@ -66,7 +66,7 @@
   },
   "dependencies": {
     "@kinqs/brainrouter-mcp-server": "^0.4.21",
-    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   }
